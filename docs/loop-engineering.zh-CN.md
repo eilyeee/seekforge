@@ -95,8 +95,9 @@ sequenceDiagram
 仍携带用于诊断和续跑提示的常规输出尾部。
 
 每次完成的迭代还会记录有界可观测字段：耗时、成本与 Token 增量、变更的相对路径、回滚状态和
-标准化失败类别。卡住/循环恢复会把该类别映射为确定策略（隔离测试、修复编译或 lint、验证环境、
-缩小范围或重新规划），而不是重复同一条泛化提示。
+标准化失败类别。卡住/循环恢复只会从该类别的安全策略集合中选择（隔离测试、修复编译或 lint、
+验证环境、缩小范围或重新规划）。工作区内会有界记录每种策略是否带来诊断进展；至少积累两条
+观察后才可调整偏好，而且绝不会影响权限、审批、验证或预算。
 
 会话 id 和累计的 provider 用量在其事件到达时即做检查点。迭代计数器只在
 agent 运行完成后才前进，因此崩溃后可以恢复被中断的迭代而不消耗迭代额度，
@@ -217,6 +218,9 @@ seekforge loop-cleanup <worktree-name> [--force]
   变更的相对路径前缀选择阶段；增量结果通过后仍会执行完整流水线，因而只能降低中间成本，
   不会削弱最终门禁。缓存的增量证据只在这次紧接的转换内有效，任何可观察工作区变化都会使其失效。
   必需阶段失败会停止流水线；Core API 阶段可设置 `required: false`。
+- 自动发现验证计划会计算内部 package 的传递依赖闭包，因此修改共享库也会选中依赖方测试。
+  阶段结果会标记完整、直接、依赖或缓存选择，并保留有界命中路径；任何增量通过仍必须随后执行
+  完整流水线，不能削弱最终门禁。
 - `--flaky-retries 0..5` 会在编辑前重跑失败阶段，之后通过时记录 `verify.flaky`；
   `--stable-passes 1..5` 要求完整流水线连续通过。
 - `--stuck-recoveries 0..5` 会在返回 `no_progress` 前做有界的重新诊断并改用不同策略；
@@ -236,6 +240,8 @@ seekforge loop-cleanup <worktree-name> [--force]
   的交付事务会保留。两种调度器都默认关闭。`loop-prune` 暴露同样的保留规则，并可选择删除干净、
   已完成 merge 交付的 Loop worktree。整棵 worktree 的清理会在持有工作区 guard 时重新核验，
   并先删除 checkout 而不是先删除已跟踪状态，从而保持原子性。
+- `loop-evidence <id>` 与 `GET /api/loops/:id/evidence` 会生成一份有界的
+  「需求 → 验收证据 → 验证器 → 迭代 → 交付」报告；发生交付后还会包含不可变 revision、hash 或 URL。
 - `loop-dag <file>` 会持久化 JSON 依赖图检查点；`--resume` 与 `--dag-id` 可恢复已完成节点。
   就绪节点按权重分配剩余成本/Token 预算，并支持优先级、有界重试及
   `skip_dependents` / `continue` / `stop` 失败策略。节点可通过嵌套 `all` / `any` / `not`
@@ -243,8 +249,14 @@ seekforge loop-cleanup <worktree-name> [--force]
   结构化依赖输出。声明的 `outputPaths` 必须是节点工作区内的普通文件，并作为产物元数据发布。
   审批会在节点执行开始前以 `approved` 状态写入检查点，因此崩溃恢复不会重复询问，也不会丢失审计。
   完成驱动调度会在任一槽位空闲时立即补位，无需等待无关的慢节点。`--rerun` 会让选中节点及全部下游失效，
-  `--approve` 可通过声明的审批门。并行图要求不同的物理工作区；解析后的工作区
+  `--approve` 可通过声明的审批门。并行图要求不同的物理工作区；`--managed-worktrees` 会为每个
+  节点创建并保留独立 Git worktree/分支，checkpoint 通过节点的修改，并把已通过依赖分支合入下游
+  节点工作区。顶层 `fanIn` 对象（`verifyCommand` 与可选 `maxIterations`）会把成功的汇点分支（关闭依赖
+  集成时则为全部节点）合入保留的集成 worktree，再对组合后的代码树执行最终有界 Loop 门禁。
+  托管路径会重新核验物理绑定，且解析后的全部工作区
   身份会进入持久 DAG 指纹，因此节点改换 checkout 后 `--resume` 会拒绝旧结果，而不会错误复用。
+- Core 的 `runSpeculativeLoop` 只允许运行两个或三个修复策略，共享一个必填成本上限并使用隔离工作区，
+  最终选择成本最低的通过候选。它不会自动发布或合并候选，交付仍是独立的显式操作。
 - `--deliver checkpoint|merge|patch|pr` 在通过后从保留 worktree 显式交付；`pr` 会推送
   Loop 分支，并通过 `gh` 创建草稿 PR。交付模式、状态、尝试次数、错误和最终产物都会写入
   Loop 状态。若验证通过后交付失败，可用 `loop-deliver <id>` 直接重试而无需重新运行 Agent；
@@ -261,11 +273,13 @@ seekforge loop-cleanup <worktree-name> [--force]
   重新运行冻结的本地流水线，checkpoint 并推送不可变 revision，然后再次等待 CI。
   CI 策略、修复次数、已检查 revision 与失败都会持久化；之后的 `loop-deliver --wait-ci` 会续接
   同一策略，不带 CI 闭环的重试会被拒绝。检查等待与修复推送都支持协作式取消。
+  checks 等待与失败日志获取已使用 provider 中立的 CI 适配器；CLI 当前提供 GitHub `gh` 实现。
   只有 checks 真实失败且需要修复后，才会初始化 Agent 凭据、工作区授权与 MCP 修复工具；绿色 checks
   不需要这些依赖。
 - REST Loop 列表支持 `status`、`q`、`limit` 与 `after`；活跃 Loop 可接受
   `POST /api/loops/:id/control`，`/api/loop-dags` 暴露持久图状态。Prometheus 输出增加 Loop 总数、
-  活跃数、成本、Token 与验证次数聚合。Desktop 增加筛选、轮询、历史分页、CI 状态、安全边界控制与 DAG 摘要；
+  活跃数、成本、Token 与验证次数聚合。Desktop 增加筛选、轮询、历史分页、CI 状态、验证选择/耗时、
+  验收证据、迭代时间线、fan-in 与 DAG 节点状态，以及安全边界控制；
   当查询或所选 Loop 已变化时，会丢弃迟到的筛选与历史响应。
 - WebSocket 客户端可发送 `loop.pause`、`loop.control.resume` 与 `loop.steer`；控制只在安全
   的迭代边界生效。

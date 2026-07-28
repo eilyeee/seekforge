@@ -97,6 +97,9 @@ export type TaskExecution = {
   iterations?: number;
   maxIterations?: number;
   resumed?: boolean;
+  verifyRuns?: number;
+  recoveryAttempts?: number;
+  flaky?: boolean;
   steps?: ExecutionStep[];
 };
 
@@ -555,6 +558,8 @@ async function runLoopTaskMode(
   if (!created.deps) throw new Error(`task ${task.id}: loop runner requires createAgent() to expose AgentCoreDeps`);
   const run = opts.runLoop ?? runAutoLoop;
   const resume = opts.resumeLoop ?? resumeAutoLoop;
+  const lifecycleController = config.interruptAfterEvent ? new AbortController() : undefined;
+  let lifecycleInterrupted = false;
   const initial = await run(created.deps, {
     task: taskText(task.task, suffix),
     workspace: dir,
@@ -577,6 +582,18 @@ async function runLoopTaskMode(
     ...(config.rollbackOnRegression !== undefined ? { rollbackOnRegression: config.rollbackOnRegression } : {}),
     ...(config.adaptiveBudget !== undefined ? { adaptiveBudget: config.adaptiveBudget } : {}),
     ...(config.requirementMode ? { requirementMode: config.requirementMode } : {}),
+    ...(lifecycleController
+      ? {
+          signal: lifecycleController.signal,
+          abortStatus: "interrupted" as const,
+          onEvent: (event) => {
+            if (!lifecycleInterrupted && event.type === config.interruptAfterEvent) {
+              lifecycleInterrupted = true;
+              lifecycleController.abort();
+            }
+          },
+        }
+      : {}),
   });
   let final: LoopResult = initial;
   let statePassed = config.resume === undefined || initial.status === config.resume.expectedInitialStatus;
@@ -616,6 +633,9 @@ async function runLoopTaskMode(
       iterations: final.iterations,
       maxIterations: config.maxIterations + (config.resume?.additionalIterations ?? 0),
       resumed: config.resume !== undefined,
+      verifyRuns: final.verifyRuns,
+      recoveryAttempts: final.recoveryAttempts,
+      flaky: final.flaky,
     },
     ...(!statePassed
       ? {

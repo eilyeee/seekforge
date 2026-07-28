@@ -220,6 +220,11 @@ function parseVerificationPlan(value: unknown): LoopVerificationStage[] | null {
       item.command.length > 8_192 ||
       (item.required !== undefined && typeof item.required !== "boolean") ||
       (item.cacheable !== undefined && typeof item.cacheable !== "boolean") ||
+      (item.dependencyPaths !== undefined &&
+        (!Array.isArray(item.dependencyPaths) ||
+          item.dependencyPaths.length === 0 ||
+          item.dependencyPaths.length > 64 ||
+          !item.dependencyPaths.every((path) => Array.isArray(item.paths) && item.paths.includes(path)))) ||
       (item.timeoutMs !== undefined && (!isSafeInteger(item.timeoutMs) || item.timeoutMs <= 0)) ||
       (item.paths !== undefined &&
         (!Array.isArray(item.paths) ||
@@ -247,6 +252,7 @@ function parseVerificationPlan(value: unknown): LoopVerificationStage[] | null {
       ...(typeof item.required === "boolean" ? { required: item.required } : {}),
       ...(typeof item.timeoutMs === "number" ? { timeoutMs: item.timeoutMs } : {}),
       ...(Array.isArray(item.paths) ? { paths: item.paths as string[] } : {}),
+      ...(Array.isArray(item.dependencyPaths) ? { dependencyPaths: item.dependencyPaths as string[] } : {}),
       ...(typeof item.cacheable === "boolean" ? { cacheable: item.cacheable } : {}),
     });
   }
@@ -268,7 +274,16 @@ function parseStageResults(value: unknown): LoopStageResult[] | null {
       item.attempts <= 0 ||
       typeof item.flaky !== "boolean" ||
       !isSafeInteger(item.durationMs) ||
-      item.durationMs < 0
+      item.durationMs < 0 ||
+      (item.selection !== undefined &&
+        item.selection !== "full" &&
+        item.selection !== "direct" &&
+        item.selection !== "dependency" &&
+        item.selection !== "cached") ||
+      (item.matchedPaths !== undefined &&
+        (!Array.isArray(item.matchedPaths) ||
+          item.matchedPaths.length > 16 ||
+          item.matchedPaths.some((path) => typeof path !== "string" || path.length > 512)))
     )
       return null;
     result.push(item as LoopStageResult);

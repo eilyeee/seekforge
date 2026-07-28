@@ -1,4 +1,5 @@
 import {
+  buildLoopEvidenceReport,
   discoverLoopVerificationPlan,
   enqueueLoopControl,
   isRecord,
@@ -142,6 +143,12 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
     } else {
       sendJson(res, 200, readLoopHistory(workspace, loopId, { afterSeq: after, limit }));
     }
+    return true;
+  }
+  if (method === "GET" && segs[3] === "evidence" && segs.length === 4) {
+    const state = loadLoopState(workspace, loopId);
+    if (!state) sendApiError(res, 404, "not_found", `unknown loop: ${loopId}`);
+    else sendJson(res, 200, buildLoopEvidenceReport(state));
     return true;
   }
   if (method === "POST" && segs[3] === "priority" && segs.length === 4) {

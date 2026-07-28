@@ -10,6 +10,7 @@
         "failing-test-fix",
         "guarded-no-delete",
         "json-config-edit",
+        "loop-interrupt-resume",
         "loop-resume-two-stage",
         "loop-verify-green",
         "memory-rejection-lifecycle",

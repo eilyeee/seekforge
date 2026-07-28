@@ -10,6 +10,7 @@ import { join, posix } from "node:path";
 import {
   MAX_LOOP_ITERATIONS,
   MEMORY_CANDIDATE_TYPES,
+  type LoopEvent,
   type LoopStatus,
   type LoopVerificationStage,
   type LoopRequirementMode,
@@ -64,6 +65,8 @@ export type LoopTaskConfig = {
   rollbackOnRegression?: boolean;
   adaptiveBudget?: boolean;
   requirementMode?: LoopRequirementMode;
+  /** Deterministic lifecycle interruption used by resilience fixtures. */
+  interruptAfterEvent?: LoopEvent["type"];
   resume?: LoopResumeConfig;
 };
 
@@ -116,6 +119,16 @@ const LOOP_STATUSES = new Set<LoopStatus>([
   "budget",
   "cancelled",
   "verify_error",
+  "agent_error",
+  "interrupted",
+  "requirements_pending",
+]);
+const INTERRUPTIBLE_LOOP_EVENTS = new Set<LoopEvent["type"]>([
+  "iteration.start",
+  "run.completed",
+  "verify",
+  "loop.snapshot",
+  "requirements.completed",
 ]);
 const MEMORY_STAT_FIELDS = new Set<MemoryStatField>([
   "totalApprovedFacts",
@@ -333,6 +346,15 @@ function parseLoop(value: unknown, where: string): LoopTaskConfig {
     }
     loop.requirementMode = value.requirementMode;
   }
+  if (value.interruptAfterEvent !== undefined) {
+    if (
+      typeof value.interruptAfterEvent !== "string" ||
+      !INTERRUPTIBLE_LOOP_EVENTS.has(value.interruptAfterEvent as LoopEvent["type"])
+    ) {
+      throw new Error(`${where}.interruptAfterEvent must be a supported lifecycle boundary`);
+    }
+    loop.interruptAfterEvent = value.interruptAfterEvent as LoopEvent["type"];
+  }
   if (value.verificationPlan !== undefined) {
     if (
       !Array.isArray(value.verificationPlan) ||
@@ -354,6 +376,11 @@ function parseLoop(value: unknown, where: string): LoopTaskConfig {
         raw.command.length > 8_192 ||
         (raw.required !== undefined && typeof raw.required !== "boolean") ||
         (raw.cacheable !== undefined && typeof raw.cacheable !== "boolean") ||
+        (raw.dependencyPaths !== undefined &&
+          (!Array.isArray(raw.dependencyPaths) ||
+            raw.dependencyPaths.length === 0 ||
+            raw.dependencyPaths.length > 64 ||
+            raw.dependencyPaths.some((path) => !Array.isArray(raw.paths) || !raw.paths.includes(path)))) ||
         (raw.paths !== undefined &&
           (!Array.isArray(raw.paths) ||
             raw.paths.length === 0 ||
@@ -381,6 +408,7 @@ function parseLoop(value: unknown, where: string): LoopTaskConfig {
         ...(typeof raw.required === "boolean" ? { required: raw.required } : {}),
         ...(typeof raw.timeoutMs === "number" ? { timeoutMs: raw.timeoutMs } : {}),
         ...(Array.isArray(raw.paths) ? { paths: raw.paths as string[] } : {}),
+        ...(Array.isArray(raw.dependencyPaths) ? { dependencyPaths: raw.dependencyPaths as string[] } : {}),
         ...(typeof raw.cacheable === "boolean" ? { cacheable: raw.cacheable } : {}),
       };
     });
@@ -418,6 +446,9 @@ function parseLoop(value: unknown, where: string): LoopTaskConfig {
       throw new Error(`${where}.resume must add iterations or a budget dimension`);
     }
     loop.resume = resume;
+  }
+  if (loop.interruptAfterEvent !== undefined && loop.resume === undefined) {
+    throw new Error(`${where}.interruptAfterEvent requires resume configuration`);
   }
   return loop;
 }

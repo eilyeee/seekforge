@@ -2476,6 +2476,49 @@ interpret it as an ordinary nonzero exit and persist a domain failure.
   retryable state distinct from a real external-check failure.
 - **Caught:** cancelled `gh` CI watches were recorded as failed checks or missing logs.
 
+## 204. Acquire coordination before provisioning derived workspaces
+
+Deterministic names do not make worktree creation race-free, and a matching Git
+branch does not prove its checkout still occupies the managed path expected by
+the orchestration state.
+
+- **Do:** derive the scheduler identity without mutation, acquire its lease first,
+  then provision; on resume bind both branch identity and the exact physical path.
+- **Caught:** managed Loop DAG worktrees were created before the DAG lease and
+  resumed by branch name alone, allowing concurrent creation or path rebinding.
+
+## 205. Invalidate derived aggregate evidence with its inputs
+
+A persisted fan-in, summary, or aggregate verification is valid only for the
+exact node results and orchestration policy that produced it. Rerunning an input
+or changing integration policy makes the old aggregate stale.
+
+- **Do:** include behavior-affecting policy in the durable fingerprint and clear
+  aggregate evidence whenever any contributing result is invalidated.
+- **Caught:** Loop DAG `rerunFrom` retained a passed fan-in, while the dependency
+  integration switch was absent from the resume fingerprint.
+
+## 206. Failed aggregate work still consumes shared budgets
+
+Accounting only after a successful terminal check drops the cost of failed or
+exhausted aggregate repair, so later work can exceed the advertised shared cap.
+
+- **Do:** charge usage immediately after the bounded child returns, preserve its
+  result on either status, and isolate observer callback failures from completion.
+- **Caught:** failed Loop DAG fan-in runs were omitted from persisted cost/token
+  totals, and a throwing `onFanIn` observer could discard the completed checkpoint.
+
+## 207. Overlapping path prefixes require most-specific classification
+
+The first matching prefix may be a broad parent while a later, narrower prefix
+carries the actual dependency or ownership meaning. Selection remains executable
+but its explanation and policy classification become wrong.
+
+- **Do:** normalize all candidates, choose the longest matching path boundary,
+  then apply direct/dependency classification to that most-specific prefix.
+- **Caught:** Loop verification could label a dependency edit as direct when a
+  broader direct prefix appeared before the nested dependency prefix.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

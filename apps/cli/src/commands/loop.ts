@@ -1,5 +1,6 @@
 import {
   acquireLoopLifecycleLeaseWithPreemption,
+  buildLoopEvidenceReport,
   MAX_LOOP_ITERATIONS,
   WorktreeGitError,
   checkpointWorktree,
@@ -50,15 +51,8 @@ import { dim, fail, green, red } from "../colors.js";
 import { loadConfig } from "../config.js";
 import { t } from "../i18n.js";
 import { ensureWorkspaceAuthorized } from "./run.js";
-import {
-  buildCiRepairPrompt,
-  buildFailedRunListArgs,
-  buildFailedRunLogArgs,
-  buildPrChecksArgs,
-  CI_LOG_FEEDBACK_LIMIT,
-  isNoChecksReported,
-  PR_CHECKS_TIMEOUT_MS,
-} from "../resolve.js";
+import { buildCiRepairPrompt, PR_CHECKS_TIMEOUT_MS } from "../resolve.js";
+import { createGitHubCiProvider, type LoopCiProvider } from "../ci-provider.js";
 import {
   cleanupLoopWorktree,
   createLoopWorktree,
@@ -468,6 +462,18 @@ export async function loopHistoryCommand(loopId: string, opts: { after?: number;
   }
 }
 
+export async function loopEvidenceCommand(loopId: string): Promise<void> {
+  try {
+    const workspace = await findLoopWorkspace(loopId, false);
+    const state = workspace ? loadLoopState(workspace, loopId) : null;
+    if (!state) throw new Error(`Persisted loop not found or invalid: ${loopId}`);
+    console.log(JSON.stringify(buildLoopEvidenceReport(state), null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
 export async function loopRecoverCommand(): Promise<void> {
   try {
     const recovered = (await loopWorkspaces()).flatMap((workspace) => recoverInterruptedLoops(workspace));
@@ -733,6 +739,7 @@ export async function loopDagCommand(
     dagId?: string;
     resume?: boolean;
     maxConcurrency?: number;
+    managedWorktrees?: boolean;
     approve?: string[];
     rerun?: string[];
   },
@@ -765,8 +772,33 @@ export async function loopDagCommand(
     return;
   }
   const nodeWorkspaces = new Map<string, string>();
+  let fanIn: { verifyCommand: string; maxIterations?: number } | undefined;
   let nodes: LoopDagNode[];
   try {
+    const rawFanIn = (value as Record<string, unknown>).fanIn;
+    if (rawFanIn !== undefined) {
+      if (
+        typeof rawFanIn !== "object" ||
+        rawFanIn === null ||
+        Array.isArray(rawFanIn) ||
+        typeof (rawFanIn as Record<string, unknown>).verifyCommand !== "string"
+      ) {
+        throw new Error("Loop DAG fanIn requires a verifyCommand");
+      }
+      const candidate = rawFanIn as Record<string, unknown>;
+      if (
+        candidate.maxIterations !== undefined &&
+        (!Number.isSafeInteger(candidate.maxIterations) ||
+          (candidate.maxIterations as number) < 1 ||
+          (candidate.maxIterations as number) > 5)
+      ) {
+        throw new Error("Loop DAG fanIn maxIterations must be 1 to 5");
+      }
+      fanIn = {
+        verifyCommand: candidate.verifyCommand as string,
+        ...(typeof candidate.maxIterations === "number" ? { maxIterations: candidate.maxIterations } : {}),
+      };
+    }
     nodes = (value as { nodes: unknown[] }).nodes.map((node): LoopDagNode => {
       if (typeof node !== "object" || node === null || Array.isArray(node))
         throw new Error("Loop DAG nodes must be objects");
@@ -875,6 +907,8 @@ export async function loopDagCommand(
       workspace,
       nodes,
       maxConcurrency: opts.maxConcurrency ?? 1,
+      ...(opts.managedWorktrees ? { managedWorktrees: true } : {}),
+      ...(fanIn ? { fanIn } : {}),
       ...(opts.dagId ? { dagId: opts.dagId } : {}),
       ...(opts.resume ? { resume: true } : {}),
       ...(opts.rerun?.length ? { rerunFrom: opts.rerun } : {}),
@@ -891,6 +925,8 @@ export async function loopDagCommand(
       ...(opts.maxDurationSeconds !== undefined ? { maxDurationMs: Math.round(opts.maxDurationSeconds * 1_000) } : {}),
       signal: controller.signal,
       onNodeEvent: (nodeId, event) => console.log(`[${nodeId}] ${formatLoopEvent(event)}`),
+      onFanIn: (result) =>
+        console.log(`[fan-in] ${result.status} · ${result.branch}${result.error ? ` · ${result.error}` : ""}`),
     });
     console.log(
       results.map((result) => `${result.id}\t${result.status}${result.reason ? `\t${result.reason}` : ""}`).join("\n"),
@@ -1159,6 +1195,7 @@ export type LoopCiClosureOptions = {
   signal: AbortSignal;
   repairAttempts: number;
   updateCi: (update: Partial<LoopDeliveryCiState>) => void;
+  ciProvider?: LoopCiProvider;
 };
 
 type LoopCiRepairContext = {
@@ -1246,57 +1283,32 @@ async function runGh(
   return result;
 }
 
-async function failedCiLog(workspace: string, branch: string, signal: AbortSignal): Promise<string | undefined> {
-  const listed = await runGh(workspace, buildFailedRunListArgs(branch), 30_000, signal);
-  if (listed.status !== 0) return undefined;
-  let value: unknown;
-  try {
-    value = JSON.parse(listed.stdout) as unknown;
-  } catch {
-    return undefined;
-  }
-  if (!Array.isArray(value) || value.length === 0 || typeof value[0] !== "object" || value[0] === null) {
-    return undefined;
-  }
-  const runId = (value[0] as Record<string, unknown>).databaseId;
-  if (!Number.isSafeInteger(runId) || (runId as number) <= 0) return undefined;
-  const logs = await runGh(
-    workspace,
-    buildFailedRunLogArgs(runId as number),
-    60_000,
-    signal,
-    CI_LOG_FEEDBACK_LIMIT * 4,
-  );
-  if (logs.status !== 0 || logs.stdout.trim() === "") return undefined;
-  return logs.stdout.slice(0, CI_LOG_FEEDBACK_LIMIT);
-}
-
 export async function closeLoopPrCi(options: LoopCiClosureOptions): Promise<LoopDeliveryResult> {
   const url = options.delivered.evidence?.url;
   const branch = options.delivered.evidence?.branch;
   if (!url || !branch) throw new Error("Loop PR delivery lacks CI-check evidence");
   let delivered = options.delivered;
   let repairAttempts = options.repairAttempts;
+  const ciProvider =
+    options.ciProvider ??
+    createGitHubCiProvider((args, timeoutMs, maxBuffer, signal) =>
+      runGh(options.workspace, args, timeoutMs, signal, maxBuffer),
+    );
   try {
     for (;;) {
       options.signal.throwIfAborted();
-      const checks = await runGh(
-        options.workspace,
-        buildPrChecksArgs(url),
-        PR_CHECKS_TIMEOUT_MS + 5_000,
-        options.signal,
-      );
-      if (checks.status === 0 || isNoChecksReported(`${checks.stdout}\n${checks.stderr}`)) {
+      const checks = await ciProvider.waitForRequiredChecks(url, options.signal);
+      if (checks.status === "passed") {
         options.updateCi({ status: "passed", revision: delivered.evidence?.revision, url, error: undefined });
         return delivered;
       }
-      if ((checks.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
+      if (checks.status === "timed_out") {
         throw new Error(`Timed out waiting for pull request checks after ${PR_CHECKS_TIMEOUT_MS / 60_000} minutes`);
       }
       if (repairAttempts >= options.maxRepairs) {
         throw new Error(`Pull request checks failed after ${repairAttempts} repair attempt(s)`);
       }
-      const log = await failedCiLog(options.workspace, branch, options.signal);
+      const log = await ciProvider.failedLog(branch, options.signal);
       if (!log) throw new Error("Pull request checks failed and no bounded failed-step log was available");
       const repairContext = await options.getRepairContext();
       repairAttempts++;

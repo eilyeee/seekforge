@@ -1,10 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatResponse } from "@seekforge/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AgentCoreDeps } from "../../src/agent/loop.js";
 import { listLoopDagStates, loadLoopDagState, runLoopDag } from "../../src/agent/loop-dag.js";
+import { listGitWorktrees } from "../../src/worktree.js";
 
 const usage = { promptTokens: 1, completionTokens: 1, cacheHitTokens: 0, costUsd: 0.001 };
 const deps: AgentCoreDeps = {
@@ -113,7 +115,239 @@ describe("runLoopDag", () => {
         nodes: [{ id: "a", task: "a", verifyCommand: "test" }],
       }),
     ).rejects.toThrow(/positive safe integer/);
+    await expect(
+      runLoopDag(deps, {
+        workspace,
+        managedWorktrees: { integrateDependencies: "yes" } as never,
+        nodes: [{ id: "a", task: "a", verifyCommand: "test" }],
+      }),
+    ).rejects.toThrow(/managedWorktrees configuration is invalid/);
+    await expect(
+      runLoopDag(deps, {
+        workspace,
+        fanIn: null as never,
+        nodes: [{ id: "a", task: "a", verifyCommand: "test" }],
+      }),
+    ).rejects.toThrow(/fanIn configuration is invalid/);
   });
+
+  it("creates isolated managed worktrees and integrates dependency commits", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-managed-"));
+    workspaces.push(workspace);
+    writeFileSync(join(workspace, "base.txt"), "base\n");
+    execFileSync("git", ["init", "-q"], { cwd: workspace });
+    execFileSync("git", ["config", "user.email", "loop-test@seekforge.local"], { cwd: workspace });
+    execFileSync("git", ["config", "user.name", "Loop Test"], { cwd: workspace });
+    execFileSync("git", ["add", "-A"], { cwd: workspace });
+    execFileSync("git", ["commit", "-q", "-m", "base"], { cwd: workspace });
+    let fanInStatus = "";
+    const results = await runLoopDag(deps, {
+      workspace,
+      persist: false,
+      maxConcurrency: 2,
+      managedWorktrees: true,
+      fanIn: { verifyCommand: "test -f produced.txt", maxIterations: 1 },
+      onFanIn: (result) => {
+        fanInStatus = result.status;
+      },
+      nodes: [
+        {
+          id: "producer",
+          task: "produce",
+          verifyCommand: "custom",
+          options: {
+            verify: async (nodeWorkspace) => {
+              writeFileSync(join(nodeWorkspace, "produced.txt"), "ready\n");
+              return { code: 0, output: "ok" };
+            },
+          },
+        },
+        {
+          id: "consumer",
+          task: "consume",
+          verifyCommand: "custom",
+          dependsOn: ["producer"],
+          options: {
+            verify: async (nodeWorkspace) => ({
+              code: existsSync(join(nodeWorkspace, "produced.txt")) ? 0 : 1,
+              output: "dependency checked",
+            }),
+          },
+        },
+      ],
+    });
+    expect(results.map((result) => result.status)).toEqual(["passed", "passed"]);
+    expect(fanInStatus).toBe("passed");
+    expect(results[0]?.output?.artifacts?.some((artifact) => artifact.startsWith("seekforge/"))).toBe(true);
+    expect(await listGitWorktrees(workspace)).toHaveLength(4);
+  }, 30_000);
+
+  it("fan-in merges every node when dependency integration is disabled and isolates observer failures", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-fanin-"));
+    workspaces.push(workspace);
+    writeFileSync(join(workspace, "base.txt"), "base\n");
+    execFileSync("git", ["init", "-q"], { cwd: workspace });
+    execFileSync("git", ["config", "user.email", "loop-test@seekforge.local"], { cwd: workspace });
+    execFileSync("git", ["config", "user.name", "Loop Test"], { cwd: workspace });
+    execFileSync("git", ["add", "-A"], { cwd: workspace });
+    execFileSync("git", ["commit", "-q", "-m", "base"], { cwd: workspace });
+    const results = await runLoopDag(deps, {
+      workspace,
+      persist: false,
+      managedWorktrees: { integrateDependencies: false },
+      fanIn: { verifyCommand: "test -f upstream.txt && test -f downstream.txt", maxIterations: 1 },
+      onFanIn: () => {
+        throw new Error("observer failure");
+      },
+      nodes: [
+        {
+          id: "upstream",
+          task: "upstream",
+          verifyCommand: "custom",
+          options: {
+            verify: async (nodeWorkspace) => {
+              writeFileSync(join(nodeWorkspace, "upstream.txt"), "upstream\n");
+              return { code: 0, output: "ok" };
+            },
+          },
+        },
+        {
+          id: "downstream",
+          task: "downstream",
+          verifyCommand: "custom",
+          dependsOn: ["upstream"],
+          options: {
+            verify: async (nodeWorkspace) => {
+              writeFileSync(join(nodeWorkspace, "downstream.txt"), "downstream\n");
+              return { code: 0, output: "ok" };
+            },
+          },
+        },
+      ],
+    });
+    expect(results.map((result) => result.status)).toEqual(["passed", "passed"]);
+  }, 30_000);
+
+  it("invalidates passed fan-in evidence when rerunning nodes", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-fanin-resume-"));
+    const moved = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-fanin-moved-"));
+    workspaces.push(workspace, moved);
+    writeFileSync(join(workspace, "base.txt"), "base\n");
+    execFileSync("git", ["init", "-q"], { cwd: workspace });
+    execFileSync("git", ["config", "user.email", "loop-test@seekforge.local"], { cwd: workspace });
+    execFileSync("git", ["config", "user.name", "Loop Test"], { cwd: workspace });
+    execFileSync("git", ["add", "-A"], { cwd: workspace });
+    execFileSync("git", ["commit", "-q", "-m", "base"], { cwd: workspace });
+    let fanInRuns = 0;
+    const nodes = [
+      {
+        id: "node",
+        task: "node",
+        verifyCommand: "custom",
+        verifierId: "node-v1",
+        options: { verify: async () => ({ code: 0, output: "ok" }) },
+      },
+    ];
+    const common = {
+      workspace,
+      dagId: "fanin-rerun",
+      managedWorktrees: true,
+      fanIn: { verifyCommand: "true", maxIterations: 1 },
+      nodes,
+      onFanIn: () => {
+        fanInRuns++;
+      },
+    };
+    await runLoopDag(deps, common);
+    await runLoopDag(deps, { ...common, resume: true, rerunFrom: ["node"] });
+    expect(fanInRuns).toBe(2);
+    expect(loadLoopDagState(workspace, "fanin-rerun")?.fanIn?.status).toBe("passed");
+    const integration = (await listGitWorktrees(workspace)).find((entry) => entry.branch.includes("integration"));
+    expect(integration).toBeDefined();
+    execFileSync("git", ["worktree", "move", integration!.path, join(moved, "integration")], { cwd: workspace });
+    await expect(runLoopDag(deps, { ...common, resume: true })).rejects.toThrow(/outside its expected path/);
+  }, 30_000);
+
+  it("accounts for failed fan-in work and preserves its bounded result", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-fanin-budget-"));
+    workspaces.push(workspace);
+    writeFileSync(join(workspace, "base.txt"), "base\n");
+    execFileSync("git", ["init", "-q"], { cwd: workspace });
+    execFileSync("git", ["config", "user.email", "loop-test@seekforge.local"], { cwd: workspace });
+    execFileSync("git", ["config", "user.name", "Loop Test"], { cwd: workspace });
+    execFileSync("git", ["add", "-A"], { cwd: workspace });
+    execFileSync("git", ["commit", "-q", "-m", "base"], { cwd: workspace });
+    await runLoopDag(deps, {
+      workspace,
+      dagId: "fanin-budget",
+      managedWorktrees: true,
+      fanIn: { verifyCommand: "false", maxIterations: 1 },
+      nodes: [
+        {
+          id: "node",
+          task: "node",
+          verifyCommand: "custom",
+          verifierId: "node-v1",
+          options: { verify: async () => ({ code: 0, output: "ok" }) },
+        },
+      ],
+    });
+    const state = loadLoopDagState(workspace, "fanin-budget");
+    expect(state?.fanIn?.status).toBe("failed");
+    expect(state?.fanIn?.result?.status).not.toBe("passed");
+    expect(state?.spentCost).toBe(state?.fanIn?.result?.costUsd);
+    expect(state?.spentCost).toBeGreaterThan(0);
+  }, 30_000);
+
+  it("binds managed resumes to the exact worktree path and configuration", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-managed-resume-"));
+    const moved = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-moved-"));
+    workspaces.push(workspace, moved);
+    writeFileSync(join(workspace, "base.txt"), "base\n");
+    execFileSync("git", ["init", "-q"], { cwd: workspace });
+    execFileSync("git", ["config", "user.email", "loop-test@seekforge.local"], { cwd: workspace });
+    execFileSync("git", ["config", "user.name", "Loop Test"], { cwd: workspace });
+    execFileSync("git", ["add", "-A"], { cwd: workspace });
+    execFileSync("git", ["commit", "-q", "-m", "base"], { cwd: workspace });
+    const nodes = [
+      {
+        id: "node",
+        task: "node",
+        verifyCommand: "custom",
+        verifierId: "node-v1",
+        options: { verify: async () => ({ code: 0, output: "ok" }) },
+      },
+    ];
+    await runLoopDag(deps, {
+      workspace,
+      dagId: "managed-resume",
+      managedWorktrees: { integrateDependencies: true },
+      nodes,
+    });
+    await expect(
+      runLoopDag(deps, {
+        workspace,
+        dagId: "managed-resume",
+        managedWorktrees: { integrateDependencies: false },
+        nodes,
+        resume: true,
+      }),
+    ).rejects.toThrow(/does not match/);
+
+    const managed = (await listGitWorktrees(workspace)).find((entry) => entry.branch.includes("managed-resume"));
+    expect(managed).toBeDefined();
+    const movedPath = join(moved, "node");
+    execFileSync("git", ["worktree", "move", managed!.path, movedPath], { cwd: workspace });
+    await expect(
+      runLoopDag(deps, {
+        workspace,
+        dagId: "managed-resume",
+        managedWorktrees: { integrateDependencies: true },
+        nodes,
+        resume: true,
+      }),
+    ).rejects.toThrow(/outside its expected path/);
+  }, 30_000);
 
   it("persists completed nodes and resumes without rerunning them", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-"));

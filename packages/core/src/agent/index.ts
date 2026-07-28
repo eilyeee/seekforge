@@ -99,6 +99,7 @@ export {
   type LoopDagNodeResult,
   type LoopDagNodeOutput,
   type LoopDagOptions,
+  type LoopDagFanInResult,
   type PersistedLoopDagState,
 } from "./loop-dag.js";
 export {
@@ -114,12 +115,27 @@ export {
   type LoopRecoveryStrategy,
   type LoopVerificationStage,
   type LoopStageResult,
+  type LoopVerificationDecision,
   type LoopIterationSnapshot,
 } from "./auto-loop.js";
 export {
   discoverLoopVerificationPlan,
   type DiscoveredLoopVerificationPlan,
 } from "./loop-verification-plan.js";
+export { buildLoopEvidenceReport, type LoopEvidenceReport } from "./loop-evidence.js";
+export {
+  runSpeculativeLoop,
+  type LoopSpeculationCandidate,
+  type LoopSpeculationOptions,
+  type LoopSpeculationResult,
+} from "./loop-speculation.js";
+export {
+  defaultLoopRecoveryStrategy,
+  readLoopRecoveryObservations,
+  recordLoopRecoveryObservation,
+  selectLoopRecoveryStrategy,
+  type LoopRecoveryObservation,
+} from "./loop-recovery-policy.js";
 export {
   isLoopRequirementMode,
   parseLoopAcceptanceReview,

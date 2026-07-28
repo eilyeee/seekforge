@@ -6,6 +6,14 @@ import { runAutoLoop, type LoopOptions, type LoopResult, type LoopStatus } from 
 import { acquireSessionLeaseWithPreemption } from "./session-lease.js";
 import { isRecord } from "../util/guards.js";
 import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
+import {
+  checkpointWorktree,
+  createWorktree,
+  listGitWorktrees,
+  mergeWorktree,
+  removeWorktree,
+  worktreeSlug,
+} from "../worktree.js";
 
 export type LoopDagFailurePolicy = "skip_dependents" | "continue" | "stop";
 export type LoopDagCondition =
@@ -78,6 +86,11 @@ export type LoopDagOptions = {
   maxDurationMs?: number;
   signal?: AbortSignal;
   workspaceForNode?: (node: LoopDagNode) => string;
+  /** Create one retained Git worktree per node when explicit workspaces are absent. */
+  managedWorktrees?: boolean | { integrateDependencies?: boolean };
+  /** Merge successful sink branches into an integration worktree and verify the combined tree. */
+  fanIn?: { verifyCommand: string; maxIterations?: number };
+  onFanIn?: (result: LoopDagFanInResult) => void;
   /** Nodes to invalidate together with every downstream dependent when resuming. */
   rerunFrom?: string[];
   approveNode?: (
@@ -90,6 +103,17 @@ export type LoopDagOptions = {
   onNodeEvent?: (nodeId: string, event: Parameters<NonNullable<LoopOptions["onEvent"]>>[0]) => void;
 };
 
+export type LoopDagFanInResult = {
+  status: "passed" | "failed";
+  workspace: string;
+  branch: string;
+  updatedAt: string;
+  result?: LoopResult;
+  error?: string;
+};
+
+type ManagedNodeWorktree = { path: string; branch: string; created: boolean };
+
 export type PersistedLoopDagState = {
   schemaVersion: 1;
   dagId: string;
@@ -100,6 +124,7 @@ export type PersistedLoopDagState = {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  fanIn?: LoopDagFanInResult;
 };
 
 const DAG_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -143,9 +168,81 @@ function dagFingerprint(nodes: readonly LoopDagNode[], workspaces: ReadonlyMap<s
     .digest("hex");
 }
 
+function parseFanIn(value: unknown): LoopDagFanInResult | undefined | null {
+  if (value === undefined) return undefined;
+  if (
+    !isRecord(value) ||
+    (value.status !== "passed" && value.status !== "failed") ||
+    typeof value.workspace !== "string" ||
+    typeof value.branch !== "string" ||
+    !value.branch.startsWith("seekforge/") ||
+    typeof value.updatedAt !== "string" ||
+    !Number.isFinite(Date.parse(value.updatedAt)) ||
+    (value.error !== undefined && (typeof value.error !== "string" || value.error.length > 8_192))
+  ) {
+    return null;
+  }
+  const result = value.result === undefined ? undefined : parseLoopResult(value.result);
+  if (value.result !== undefined && result === null) return null;
+  return {
+    status: value.status,
+    workspace: value.workspace,
+    branch: value.branch,
+    updatedAt: value.updatedAt,
+    ...(result ? { result } : {}),
+    ...(typeof value.error === "string" ? { error: value.error } : {}),
+  };
+}
+
 function dagStatePath(dagId: string): string {
   if (!DAG_ID_RE.test(dagId)) throw new Error(`Loop DAG id must be safe: ${dagId}`);
   return `.seekforge/loop-dags/${dagId}.json`;
+}
+
+function managedWorktreeSlug(seed: string, nodeId: string): string {
+  const suffix = createHash("sha256").update(`${seed}:${nodeId}`).digest("hex").slice(0, 10);
+  const prefix = worktreeSlug(`dag-${seed}-${nodeId}`).slice(0, 52).replace(/-+$/, "");
+  return `${prefix}-${suffix}`;
+}
+
+function managedWorktreePath(workspace: string, seed: string, nodeId: string): string {
+  return join(realpathSync.native(workspace), ".seekforge", "worktrees", managedWorktreeSlug(seed, nodeId));
+}
+
+async function prepareManagedWorktrees(
+  workspace: string,
+  nodes: readonly LoopDagNode[],
+  seed: string,
+  resume: boolean,
+): Promise<Map<string, ManagedNodeWorktree>> {
+  const existing = resume ? await listGitWorktrees(workspace) : [];
+  const byBranch = new Map(existing.map((entry) => [entry.branch, entry.path]));
+  const result = new Map<string, ManagedNodeWorktree>();
+  try {
+    for (const node of nodes) {
+      const slug = managedWorktreeSlug(seed, node.id);
+      const branch = `seekforge/${slug}`;
+      const retained = byBranch.get(branch);
+      if (retained) {
+        const physical = realpathSync.native(retained);
+        const expected = managedWorktreePath(workspace, seed, node.id);
+        if (physical !== expected) {
+          throw new Error(`Managed Loop DAG worktree is outside its expected path for node ${node.id}: ${physical}`);
+        }
+        result.set(node.id, { path: physical, branch, created: false });
+        continue;
+      }
+      if (resume) throw new Error(`Managed Loop DAG worktree is missing for node ${node.id}: ${branch}`);
+      const created = await createWorktree(workspace, slug);
+      result.set(node.id, { ...created, path: realpathSync.native(created.path), created: true });
+    }
+    return result;
+  } catch (error) {
+    for (const entry of [...result.values()].reverse()) {
+      if (entry.created) await removeWorktree(workspace, entry.path, entry.branch).catch(() => undefined);
+    }
+    throw error;
+  }
 }
 
 function parseLoopResult(value: unknown): LoopResult | null {
@@ -198,6 +295,8 @@ function parseDagState(raw: string, dagId: string, fingerprint?: string): Persis
   )
     return null;
   const results: LoopDagNodeResult[] = [];
+  const fanIn = parseFanIn(value.fanIn);
+  if (fanIn === null) return null;
   const ids = new Set<string>();
   for (const item of value.results) {
     if (
@@ -264,7 +363,7 @@ function parseDagState(raw: string, dagId: string, fingerprint?: string): Persis
         : {}),
     });
   }
-  return { ...(value as PersistedLoopDagState), results };
+  return { ...(value as PersistedLoopDagState), results, ...(fanIn ? { fanIn } : {}) };
 }
 
 export function loadLoopDagState(workspace: string, dagId: string): PersistedLoopDagState | null {
@@ -467,7 +566,40 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
     throw new RangeError("Loop DAG maxDurationMs must be a positive safe integer");
   }
   if (concurrency > 1 && !options.workspaceForNode) {
-    throw new Error("Concurrent Loop DAG nodes require workspaceForNode isolation");
+    if (!options.managedWorktrees) {
+      throw new Error("Concurrent Loop DAG nodes require workspaceForNode isolation or managedWorktrees");
+    }
+  }
+  if (options.workspaceForNode && options.managedWorktrees) {
+    throw new Error("Loop DAG managedWorktrees cannot be combined with workspaceForNode");
+  }
+  if (
+    options.managedWorktrees !== undefined &&
+    typeof options.managedWorktrees !== "boolean" &&
+    (!isRecord(options.managedWorktrees) ||
+      (options.managedWorktrees.integrateDependencies !== undefined &&
+        typeof options.managedWorktrees.integrateDependencies !== "boolean"))
+  ) {
+    throw new Error("Loop DAG managedWorktrees configuration is invalid");
+  }
+  if (options.fanIn !== undefined) {
+    if (!isRecord(options.fanIn)) throw new Error("Loop DAG fanIn configuration is invalid");
+    if (!options.managedWorktrees) throw new Error("Loop DAG fanIn requires managedWorktrees");
+    if (
+      typeof options.fanIn.verifyCommand !== "string" ||
+      !options.fanIn.verifyCommand.trim() ||
+      options.fanIn.verifyCommand.length > 8_192
+    ) {
+      throw new Error("Loop DAG fanIn verifyCommand is invalid");
+    }
+    if (
+      options.fanIn.maxIterations !== undefined &&
+      (!Number.isSafeInteger(options.fanIn.maxIterations) ||
+        options.fanIn.maxIterations < 1 ||
+        options.fanIn.maxIterations > 5)
+    ) {
+      throw new Error("Loop DAG fanIn maxIterations must be 1 to 5");
+    }
   }
   if (options.rerunFrom !== undefined) {
     if (!options.resume) throw new Error("Loop DAG rerunFrom requires resume");
@@ -486,21 +618,41 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
       throw new Error(`Persisted Loop DAG node with a custom verifier requires verifierId: ${node.id}`);
     }
   }
+  const managedSeed =
+    options.dagId ??
+    createHash("sha256")
+      .update(JSON.stringify({ nodes: options.nodes, fanIn: options.fanIn }))
+      .digest("hex")
+      .slice(0, 16);
   const nodeWorkspaces = new Map(
-    options.nodes.map((node) => [node.id, realpathSync.native(options.workspaceForNode?.(node) ?? options.workspace)]),
+    options.nodes.map((node) => [
+      node.id,
+      options.managedWorktrees
+        ? managedWorktreePath(options.workspace, managedSeed, node.id)
+        : realpathSync.native(options.workspaceForNode?.(node) ?? options.workspace),
+    ]),
   );
   if (concurrency > 1 && new Set(nodeWorkspaces.values()).size !== nodeWorkspaces.size) {
     throw new Error("Concurrent Loop DAG nodes must resolve to distinct workspaces");
   }
-  const fingerprint = dagFingerprint(options.nodes, nodeWorkspaces);
+  const fingerprint = createHash("sha256")
+    .update(dagFingerprint(options.nodes, nodeWorkspaces))
+    .update(JSON.stringify({ fanIn: options.fanIn, managedWorktrees: options.managedWorktrees ?? false }))
+    .digest("hex");
   const dagId = options.dagId ?? `dag-${fingerprint.slice(0, 16)}`;
   if (!DAG_ID_RE.test(dagId)) throw new Error(`Loop DAG id must be safe: ${dagId}`);
-  const lease = persistenceEnabled
-    ? await acquireSessionLeaseWithPreemption(options.workspace, `loop-dag-${dagId}`, {
-        ...(options.signal ? { signal: options.signal } : {}),
-      })
-    : undefined;
+  const lease =
+    persistenceEnabled || options.managedWorktrees
+      ? await acquireSessionLeaseWithPreemption(options.workspace, `loop-dag-${dagId}`, {
+          ...(options.signal ? { signal: options.signal } : {}),
+        })
+      : undefined;
   try {
+    const managedWorktrees = options.managedWorktrees
+      ? await prepareManagedWorktrees(options.workspace, options.nodes, managedSeed, options.resume === true)
+      : undefined;
+    const integrateDependencies =
+      typeof options.managedWorktrees !== "object" || options.managedWorktrees.integrateDependencies !== false;
     const now = new Date().toISOString();
     let checkpoint: PersistedLoopDagState = {
       schemaVersion: 1,
@@ -518,6 +670,18 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
       const restored = parseDagState(raw, dagId, fingerprint);
       if (!restored) throw new Error(`Persisted Loop DAG is invalid or does not match: ${dagId}`);
       checkpoint = restored;
+      if (checkpoint.fanIn && options.managedWorktrees) {
+        const slug = managedWorktreeSlug(managedSeed, "integration");
+        const branch = `seekforge/${slug}`;
+        const retained = (await listGitWorktrees(options.workspace)).find((entry) => entry.branch === branch);
+        if (!retained || checkpoint.fanIn.branch !== branch) {
+          throw new Error(`Managed Loop DAG integration worktree is missing: ${branch}`);
+        }
+        const physical = realpathSync.native(retained.path);
+        if (physical !== managedWorktreePath(options.workspace, managedSeed, "integration")) {
+          throw new Error(`Managed Loop DAG integration worktree is outside its expected path: ${physical}`);
+        }
+      }
     }
     const results = new Map(checkpoint.results.map((result) => [result.id, result]));
     const approvals = new Map<string, NonNullable<LoopDagNodeResult["approval"]>>();
@@ -544,6 +708,7 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
         results.delete(id);
         approvals.delete(id);
       }
+      checkpoint = { ...checkpoint, fanIn: undefined, completedAt: undefined };
     }
     const pending = new Set([...byId.keys()].filter((id) => !results.has(id)));
     let spentCost = [...results.values()].reduce((sum, result) => sum + (result.result?.costUsd ?? 0), 0);
@@ -602,6 +767,21 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         options.signal?.throwIfAborted();
         try {
+          if (managedWorktrees && options.managedWorktrees !== false) {
+            if (integrateDependencies) {
+              for (const dependency of node.dependsOn ?? []) {
+                if (results.get(dependency)?.status !== "passed") continue;
+                const source = managedWorktrees.get(dependency);
+                if (!source) continue;
+                const merged = await mergeWorktree(workspace, source.path, source.branch);
+                if ("conflict" in merged) {
+                  throw new Error(
+                    `dependency integration conflict from ${dependency}: ${merged.files.slice(0, 32).join(", ")}`,
+                  );
+                }
+              }
+            }
+          }
           const attemptCost = remainingCost === undefined ? undefined : remainingCost - nodeCost;
           const attemptTokens = remainingTokens === undefined ? undefined : remainingTokens - nodeTokens;
           const attemptDuration =
@@ -637,7 +817,12 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
           nodeTokens += lastResult.tokensUsed ?? 0;
           const cumulativeResult = { ...lastResult, costUsd: nodeCost, tokensUsed: nodeTokens };
           if (lastResult.status === "passed") {
-            const artifacts = collectArtifacts(workspace, node.outputPaths);
+            const managed = managedWorktrees?.get(id);
+            if (managed) await checkpointWorktree(workspace, `chore: checkpoint Loop DAG node ${id}`);
+            const artifacts = [
+              ...(collectArtifacts(workspace, node.outputPaths) ?? []),
+              ...(managed ? [managed.branch] : []),
+            ];
             return {
               id,
               status: "passed",
@@ -649,7 +834,7 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
                 costUsd: cumulativeResult.costUsd,
                 tokensUsed: cumulativeResult.tokensUsed ?? 0,
                 iterations: cumulativeResult.iterations,
-                ...(artifacts ? { artifacts } : {}),
+                ...(artifacts.length > 0 ? { artifacts } : {}),
               },
               attempts: attempt,
               ...(approval ? { approval } : {}),
@@ -830,10 +1015,106 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
       for (const id of pending) results.set(id, { id, status: "skipped", reason: "DAG stopped after node failure" });
       pending.clear();
     }
-    persist(!approvalPending);
-    return options.nodes.map(
+    const orderedResults: LoopDagNodeResult[] = options.nodes.map(
       (node) => results.get(node.id) ?? { id: node.id, status: "skipped", reason: "not scheduled" },
     );
+    let fanInPassed = options.fanIn === undefined || checkpoint.fanIn?.status === "passed";
+    if (
+      options.fanIn &&
+      !fanInPassed &&
+      !approvalPending &&
+      orderedResults.every((result) => result.status === "passed")
+    ) {
+      const slug = managedWorktreeSlug(managedSeed, "integration");
+      const branch = `seekforge/${slug}`;
+      const retained = (await listGitWorktrees(options.workspace)).find((entry) => entry.branch === branch);
+      const expectedIntegrationPath = managedWorktreePath(options.workspace, managedSeed, "integration");
+      const integration = retained
+        ? { path: realpathSync.native(retained.path), branch }
+        : await createWorktree(options.workspace, slug).then((created) => ({
+            ...created,
+            path: realpathSync.native(created.path),
+          }));
+      if (integration.path !== expectedIntegrationPath) {
+        throw new Error(`Managed Loop DAG integration worktree is outside its expected path: ${integration.path}`);
+      }
+      let fanIn: LoopDagFanInResult;
+      let fanInLoopResult: LoopResult | undefined;
+      try {
+        if (retained) {
+          await checkpointWorktree(integration.path, "chore: checkpoint prior Loop DAG integration attempt");
+        }
+        const dependedOn = new Set(options.nodes.flatMap((node) => node.dependsOn ?? []));
+        const sources = integrateDependencies
+          ? options.nodes.filter((node) => !dependedOn.has(node.id))
+          : options.nodes;
+        for (const node of sources) {
+          const source = managedWorktrees?.get(node.id);
+          if (!source) continue;
+          const merged = await mergeWorktree(integration.path, source.path, source.branch);
+          if ("conflict" in merged) {
+            throw new Error(`fan-in conflict from ${node.id}: ${merged.files.slice(0, 32).join(", ")}`);
+          }
+        }
+        const remainingCost =
+          options.costBudgetUsd === undefined ? undefined : Math.max(0, options.costBudgetUsd - spentCost);
+        const remainingTokens =
+          options.tokenBudget === undefined ? undefined : Math.max(0, options.tokenBudget - spentTokens);
+        const remainingDuration =
+          options.maxDurationMs === undefined ? undefined : options.maxDurationMs - (Date.now() - startedAt);
+        if (
+          (remainingCost !== undefined && remainingCost <= 0) ||
+          (remainingTokens !== undefined && remainingTokens <= 0) ||
+          (remainingDuration !== undefined && remainingDuration <= 0)
+        ) {
+          throw new Error("shared DAG budget exhausted before fan-in verification");
+        }
+        fanInLoopResult = await runAutoLoop(deps, {
+          task: "Verify and, if necessary, repair the combined Loop DAG integration without weakening its gate.",
+          workspace: integration.path,
+          verifyCommand: options.fanIn.verifyCommand,
+          maxIterations: options.fanIn.maxIterations ?? 1,
+          maxNoProgressRecoveries: 0,
+          approvalMode: "acceptEdits",
+          persist: false,
+          ...(remainingCost !== undefined && remainingCost > 0 ? { costBudgetUsd: remainingCost } : {}),
+          ...(remainingTokens !== undefined && remainingTokens > 0 ? { tokenBudget: remainingTokens } : {}),
+          ...(remainingDuration !== undefined ? { maxDurationMs: Math.floor(remainingDuration) } : {}),
+          ...(options.signal ? { signal: options.signal } : {}),
+        });
+        spentCost += fanInLoopResult.costUsd;
+        spentTokens += fanInLoopResult.tokensUsed ?? 0;
+        if (fanInLoopResult.status !== "passed") {
+          throw new Error(`fan-in verification ended with ${fanInLoopResult.status}`);
+        }
+        await checkpointWorktree(integration.path, "chore: checkpoint Loop DAG integration");
+        fanIn = {
+          status: "passed",
+          workspace: integration.path,
+          branch: integration.branch,
+          updatedAt: new Date().toISOString(),
+          result: fanInLoopResult,
+        };
+        fanInPassed = true;
+      } catch (error) {
+        fanIn = {
+          status: "failed",
+          workspace: integration.path,
+          branch: integration.branch,
+          updatedAt: new Date().toISOString(),
+          ...(fanInLoopResult ? { result: fanInLoopResult } : {}),
+          error: (error instanceof Error ? error.message : String(error)).slice(0, 8_192),
+        };
+      }
+      checkpoint = { ...checkpoint, fanIn };
+      try {
+        options.onFanIn?.(fanIn);
+      } catch {
+        /* observability only */
+      }
+    }
+    persist(!approvalPending && fanInPassed);
+    return orderedResults;
   } finally {
     lease?.release();
   }

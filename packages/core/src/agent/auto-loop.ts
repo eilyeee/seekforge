@@ -60,6 +60,11 @@ import {
   type LoopRequirementMode,
   type LoopRequirementSpec,
 } from "./loop-requirements.js";
+import {
+  defaultLoopRecoveryStrategy,
+  recordLoopRecoveryObservation,
+  selectLoopRecoveryStrategy,
+} from "./loop-recovery-policy.js";
 
 export type LoopStatus =
   | "passed" // verification command exited 0
@@ -100,6 +105,8 @@ export type LoopVerificationStage = {
   timeoutMs?: number;
   /** Relative file or directory prefixes that select this stage after an edit. */
   paths?: string[];
+  /** Subset of paths pulled in through an internal package dependency. */
+  dependencyPaths?: string[];
   /** Reuse a successful path-scoped result within the same iteration's full fallback pass. */
   cacheable?: boolean;
 };
@@ -112,6 +119,15 @@ export type LoopStageResult = {
   attempts: number;
   flaky: boolean;
   durationMs: number;
+  selection?: "full" | "direct" | "dependency" | "cached";
+  matchedPaths?: string[];
+};
+
+export type LoopVerificationDecision = {
+  stageId: string;
+  action: "run" | "skip" | "reuse";
+  reason: "full" | "direct" | "dependency" | "unaffected" | "cache_hit";
+  matchedPaths: string[];
 };
 
 export type LoopIterationSnapshot = {
@@ -290,17 +306,6 @@ function verificationFailureCategory(diagnostics: VerifyDiagnostics, output: str
   return "unknown";
 }
 
-function recoveryStrategy(category: LoopFailureCategory): LoopRecoveryStrategy {
-  if (category === "test") return "isolate_test";
-  if (category === "compile") return "repair_compile";
-  if (category === "lint") return "repair_lint";
-  if (category === "environment" || category === "permission" || category === "network") {
-    return "validate_environment";
-  }
-  if (category === "timeout") return "reduce_scope";
-  return "replan";
-}
-
 function recoveryInstruction(strategy: LoopRecoveryStrategy): string {
   switch (strategy) {
     case "isolate_test":
@@ -335,21 +340,44 @@ function isVerificationPathPrefix(value: unknown): value is string {
   return typeof value === "string" && normalizeVerificationPath(value) !== null;
 }
 
-function verificationStageMatches(
+function verificationStageDecision(
   workspace: string,
   stage: LoopVerificationStage,
   changedPaths: ReadonlySet<string>,
-): boolean {
-  if (!stage.paths?.length) return true;
+): LoopVerificationDecision {
+  if (!stage.paths?.length) {
+    return { stageId: stage.id, action: "run", reason: "full", matchedPaths: [] };
+  }
   const prefixes = stage.paths.map(normalizeVerificationPath).filter((value): value is string => value !== null);
+  const dependencyPrefixes = new Set(
+    (stage.dependencyPaths ?? []).map(normalizeVerificationPath).filter((value): value is string => value !== null),
+  );
+  const direct: string[] = [];
+  const dependency: string[] = [];
   for (const changedPath of changedPaths) {
     const candidate = normalizeVerificationPath(
       isAbsolute(changedPath) ? relative(workspace, changedPath) : changedPath,
     );
-    if (candidate === null) return true;
-    if (prefixes.some((prefix) => candidate === prefix || candidate.startsWith(`${prefix}/`))) return true;
+    if (candidate === null) {
+      return { stageId: stage.id, action: "run", reason: "full", matchedPaths: [] };
+    }
+    const matchedPrefix = prefixes
+      .filter((prefix) => candidate === prefix || candidate.startsWith(`${prefix}/`))
+      .sort((left, right) => right.length - left.length)[0];
+    if (matchedPrefix) (dependencyPrefixes.has(matchedPrefix) ? dependency : direct).push(candidate);
   }
-  return false;
+  if (direct.length > 0) {
+    return { stageId: stage.id, action: "run", reason: "direct", matchedPaths: [...new Set(direct)].slice(0, 16) };
+  }
+  if (dependency.length > 0) {
+    return {
+      stageId: stage.id,
+      action: "run",
+      reason: "dependency",
+      matchedPaths: [...new Set(dependency)].slice(0, 16),
+    };
+  }
+  return { stageId: stage.id, action: "skip", reason: "unaffected", matchedPaths: [] };
 }
 
 function diagnosticAggregate(value: string): string {
@@ -577,6 +605,17 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
           if (!isVerificationPathPrefix(path)) {
             throw new Error(`Loop verification stage path is invalid: ${stage.id}/${String(path)}`);
           }
+        }
+      }
+      if (stage.dependencyPaths !== undefined) {
+        if (
+          !Array.isArray(stage.dependencyPaths) ||
+          stage.dependencyPaths.length === 0 ||
+          stage.dependencyPaths.length > 64 ||
+          stage.dependencyPaths.some((path) => !isVerificationPathPrefix(path)) ||
+          stage.dependencyPaths.some((path) => !stage.paths?.includes(path))
+        ) {
+          throw new Error(`Loop verification stage dependency paths are invalid: ${stage.id}`);
         }
       }
       if (stage.cacheable !== undefined && typeof stage.cacheable !== "boolean") {
@@ -1037,9 +1076,18 @@ async function runAutoLoopWithLease(
     let failedDiagnostics = "";
     let failedCode = 0;
     for (const stage of verificationPlan) {
-      if (changedPaths !== undefined && !verificationStageMatches(opts.workspace, stage, changedPaths)) {
-        skippedStageIds.push(stage.id);
-        continue;
+      let decision: LoopVerificationDecision = {
+        stageId: stage.id,
+        action: "run",
+        reason: "full",
+        matchedPaths: [],
+      };
+      if (changedPaths !== undefined) {
+        decision = verificationStageDecision(opts.workspace, stage, changedPaths);
+        if (decision.action === "skip") {
+          skippedStageIds.push(stage.id);
+          continue;
+        }
       }
       let completed: LoopStageResult | undefined;
       let diagnostics = "";
@@ -1047,8 +1095,9 @@ async function runAutoLoopWithLease(
       if (cached) {
         const currentFingerprint = await fingerprinter.fingerprint({ forceAll: true });
         if (currentFingerprint !== null && currentFingerprint === cached.workspaceFingerprint) {
-          stages.push(cached.result);
-          emit({ type: "verify.stage.completed", iteration, result: cached.result });
+          const reused = { ...cached.result, selection: "cached" as const };
+          stages.push(reused);
+          emit({ type: "verify.stage.completed", iteration, result: reused });
           continue;
         }
       }
@@ -1060,6 +1109,11 @@ async function runAutoLoopWithLease(
         if (completed.code === 0 || attempt > flakyRetries) break;
       }
       if (!completed) throw new Error(`verification stage ended without a result: ${stage.id}`);
+      completed = {
+        ...completed,
+        selection: decision.reason === "dependency" ? "dependency" : decision.reason === "direct" ? "direct" : "full",
+        ...(decision.matchedPaths.length > 0 ? { matchedPaths: decision.matchedPaths } : {}),
+      };
       if (completed.code === 0 && completed.attempts > 1) {
         completed = { ...completed, flaky: true };
         flakyObserved = true;
@@ -1327,6 +1381,14 @@ async function runAutoLoopWithLease(
     emit({ type: "loop.snapshot", snapshot: initialSnapshot });
   }
   const progressFingerprints: string[] = [];
+  let pendingRecovery:
+    | {
+        category: Exclude<LoopFailureCategory, "none">;
+        strategy: LoopRecoveryStrategy;
+        diagnosticsFingerprint: string;
+        failedTests: number;
+      }
+    | undefined;
   recordProgressFingerprint(
     progressFingerprints,
     previousWorkspace === null
@@ -1523,7 +1585,33 @@ async function runAutoLoopWithLease(
       changedPaths: observedChangedPaths,
       failureCategory: v.code === 0 ? "none" : verificationFailureCategory(diagnostics, verifyDiagnostics),
     };
-    if (rollbackOnRegression && sessionId && previousSnapshot && snapshot.failedTests > previousSnapshot.failedTests) {
+    const regressionDetected =
+      rollbackOnRegression &&
+      Boolean(sessionId) &&
+      previousSnapshot !== undefined &&
+      snapshot.failedTests > previousSnapshot.failedTests;
+    if (pendingRecovery) {
+      try {
+        recordLoopRecoveryObservation(opts.workspace, {
+          category: pendingRecovery.category,
+          strategy: pendingRecovery.strategy,
+          succeeded:
+            !regressionDetected &&
+            (v.code === 0 ||
+              diagnostics.failedTests.length < pendingRecovery.failedTests ||
+              diagnostics.fingerprint !== pendingRecovery.diagnosticsFingerprint),
+          recordedAt: new Date().toISOString(),
+        });
+      } catch (error) {
+        emit({
+          type: "loop.warning",
+          warning: "observer",
+          message: `Recovery outcome could not be recorded: ${error instanceof Error ? error.message : String(error)}`,
+        });
+      }
+      pendingRecovery = undefined;
+    }
+    if (regressionDetected && sessionId && previousSnapshot) {
       const rewind = rewindSessionToTurn(opts.workspace, sessionId, rollbackTurnIndex);
       if (rollbackTurnIndex === 0) {
         sessionId = "";
@@ -1629,10 +1717,22 @@ async function runAutoLoopWithLease(
       if (recoveryAttempts < maxNoProgressRecoveries) {
         recoveryAttempts++;
         const reason = cyclePeriod !== null ? "cycle" : "stuck";
-        const category = snapshot.failureCategory ?? "unknown";
+        const category =
+          snapshot.failureCategory === undefined || snapshot.failureCategory === "none"
+            ? "unknown"
+            : snapshot.failureCategory;
         const repeatedCategory = snapshots.slice(0, -1).some((item) => item.failureCategory === category);
-        const baseStrategy = recoveryStrategy(category);
-        const strategy = repeatedCategory && baseStrategy !== "replan" ? "replan" : baseStrategy;
+        const strategy = selectLoopRecoveryStrategy(
+          opts.workspace,
+          category,
+          repeatedCategory ? defaultLoopRecoveryStrategy(category) : undefined,
+        );
+        pendingRecovery = {
+          category,
+          strategy,
+          diagnosticsFingerprint: diagnostics.fingerprint,
+          failedTests: diagnostics.failedTests.length,
+        };
         emit({ type: "loop.recovery", iteration: i, attempt: recoveryAttempts, reason, category, strategy });
         persist({ recoveryAttempts }, true);
         steeringGuidance.push(

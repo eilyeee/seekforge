@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### round 69: dependency-aware and isolated Loop operations
+- Added dependency-closure verification selection with explainable stage outcomes,
+  bounded workspace recovery learning, lifecycle interruption evals, and hosted-CI fixtures.
+- Added managed DAG worktrees, downstream dependency integration, verified fan-in,
+  and bounded speculative repair candidate selection without implicit publication.
+- Added provider-neutral CI closure adapters, requirement-to-delivery evidence reports,
+  CLI/REST surfaces, and Desktop verification, acceptance, timeline, and DAG views.
+- Bound managed DAG provisioning to its coordination lease and physical paths,
+  invalidated stale fan-in evidence, and accounted failed integration usage.
+
 ### round 68: Loop boundary hardening
 - Bound incremental verification reuse to an unchanged workspace fingerprint and
   preserved the authoritative full gate across later passes and rollback.

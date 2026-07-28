@@ -391,6 +391,54 @@ describe("runTask", () => {
     expect(result.metrics.costUsd).toBe(0.02);
   });
 
+  it("fault-injects a lifecycle interruption and reports Loop reliability metrics", async () => {
+    const fx = fixture({ "file.txt": "ok" });
+    let aborted = false;
+    const result = await runTask(
+      makeTask({
+        runner: "loop",
+        loop: {
+          verifyCommand: "npm test",
+          maxIterations: 1,
+          expectedStatus: "passed",
+          interruptAfterEvent: "run.completed",
+          resume: { expectedInitialStatus: "interrupted", additionalIterations: 1 },
+        },
+        checks: [{ type: "file_contains", path: "file.txt", pattern: "ok" }],
+      }),
+      {
+        fixturesDir: fx.fixturesDir,
+        createAgent: () => ({ agent: { async *runTask() {} }, deps: {} as AgentCoreDeps }),
+        runLoop: async (_deps, options) => {
+          options.onEvent?.({ type: "run.completed", iteration: 1, costUsd: 0.01 });
+          aborted = options.signal?.aborted === true;
+          return {
+            status: "interrupted",
+            iterations: 1,
+            costUsd: 0.01,
+            sessionId: "s1",
+            finalVerify: { code: 1, output: "interrupted" },
+            loopId: "loop-fault",
+          };
+        },
+        resumeLoop: async () => ({
+          status: "passed",
+          iterations: 1,
+          costUsd: 0.02,
+          sessionId: "s1",
+          finalVerify: { code: 0, output: "green" },
+          loopId: "loop-fault",
+          verifyRuns: 3,
+          recoveryAttempts: 1,
+          flaky: false,
+        }),
+      },
+    );
+    expect(aborted).toBe(true);
+    expect(result.success).toBe(true);
+    expect(result.execution).toMatchObject({ verifyRuns: 3, recoveryAttempts: 1, flaky: false });
+  });
+
   it("binds session_scenario resume steps to the prior session and applies memory lifecycle actions", async () => {
     const fx = fixture({ "file.txt": "ok" });
     const inputs: Array<{ task: string; resumeSessionId?: string }> = [];

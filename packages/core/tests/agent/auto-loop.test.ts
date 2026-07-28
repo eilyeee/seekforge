@@ -321,6 +321,7 @@ describe("runAutoLoop", () => {
 
   it("selects path-scoped stages incrementally but requires a full pipeline before success", async () => {
     const commands: string[] = [];
+    const events: LoopEvent[] = [];
     let verifies = 0;
     const provider = alwaysDone("flash");
     provider.chat = async (): Promise<ChatResponse> => {
@@ -348,15 +349,29 @@ describe("runAutoLoop", () => {
           return verifies === 1 ? { code: 1, output: "initial failure" } : { code: 0, output: "ok" };
         }),
         verificationPlan: [
-          { id: "cli", command: "test-cli", paths: ["apps/cli"], cacheable: true },
+          {
+            id: "cli",
+            command: "test-cli",
+            paths: ["apps", "apps/cli"],
+            dependencyPaths: ["apps/cli"],
+            cacheable: true,
+          },
           { id: "server", command: "test-server", paths: ["apps/server/**"] },
           { id: "all", command: "test-all" },
         ],
         maxIterations: 1,
+        onEvent: (event) => events.push(event),
       },
     );
     expect(result.status).toBe("passed");
     expect(commands).toEqual(["test-cli", "test-cli", "test-all", "test-server", "test-all"]);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "verify.stage.completed",
+        iteration: 1,
+        result: expect.objectContaining({ id: "cli", selection: "dependency" }),
+      }),
+    );
   });
 
   it("invalidates an incremental verification cache entry when a later stage changes the workspace", async () => {

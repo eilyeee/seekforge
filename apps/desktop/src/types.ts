@@ -91,6 +91,40 @@ export type LoopStateSummary = {
 };
 
 export type LoopHistoryEntry = { seq: number; ts: string; event: { type: string; [key: string]: unknown } };
+export type LoopEvidenceReport = {
+  schemaVersion: 1;
+  loopId: string;
+  generatedAt: string;
+  status: string;
+  criteria: Array<{
+    id: string;
+    text: string;
+    requirementIds: string[];
+    status: "met" | "unmet" | "unknown";
+    evidence: string[];
+  }>;
+  verification: Array<{
+    id: string;
+    command: string;
+    required: boolean;
+    code?: number;
+    attempts?: number;
+    durationMs?: number;
+    flaky?: boolean;
+    selection?: "full" | "direct" | "dependency" | "cached";
+    matchedPaths?: string[];
+  }>;
+  iterations: Array<{
+    iteration: number;
+    ts: string;
+    failedTests: number;
+    durationMs?: number;
+    costUsd?: number;
+    tokensUsed?: number;
+    failureCategory?: string;
+    rolledBack?: boolean;
+  }>;
+};
 export type LoopPruneResult = { candidates: string[]; removed: string[]; skipped: string[] };
 export type LoopDagSummary = {
   dagId: string;
@@ -99,6 +133,7 @@ export type LoopDagSummary = {
   updatedAt: string;
   completedAt?: string;
   results: Array<{ id: string; status: string; reason?: string }>;
+  fanIn?: { status: "passed" | "failed"; branch: string; workspace: string; error?: string };
 };
 
 export type AgentImportResult = {

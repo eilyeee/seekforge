@@ -264,6 +264,12 @@ describe("loop management API", () => {
     expect(await jsonOf(history)).toEqual([
       expect.objectContaining({ seq: 1, event: { type: "iteration.start", iteration: 1 } }),
     ]);
+    const evidence = await authed("/api/loops/rest-loop/evidence");
+    expect(await jsonOf(evidence)).toMatchObject({
+      schemaVersion: 1,
+      loopId: "rest-loop",
+      verification: [{ id: "verify", command: "npm run build", required: true }],
+    });
   });
 
   it("queues safe-boundary controls only for a live Loop owner", async () => {

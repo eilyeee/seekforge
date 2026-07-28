@@ -235,6 +235,11 @@ export const api = {
         ws,
       ),
     ),
+  loopEvidence: (id: string, ws?: string) =>
+    request<import("../types").LoopEvidenceReport>(
+      "GET",
+      withWorkspace(`/api/loops/${encodeURIComponent(id)}/evidence`, ws),
+    ),
   loopRecover: (limit = 3, ws?: string) =>
     request<LoopStateSummary[]>("POST", withWorkspace("/api/loops/recover", ws), { limit }),
   loopPrune: (input: { maxAgeDays?: number; maxTerminalCount?: number; dryRun?: boolean }, ws?: string) =>

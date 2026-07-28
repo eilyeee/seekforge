@@ -60,6 +60,13 @@ function workspacePackageStages(
   workspace: string,
   manager: "pnpm" | "yarn" | "bun" | "npm",
 ): DiscoveredLoopVerificationPlan | undefined {
+  type WorkspacePackage = {
+    relativePath: string;
+    name?: string;
+    hasTest: boolean;
+    dependencyNames: string[];
+  };
+  const packages: WorkspacePackage[] = [];
   const stages: LoopVerificationStage[] = [];
   const sources: string[] = [];
   for (const parent of ["apps", "packages"]) {
@@ -89,33 +96,66 @@ function workspacePackageStages(
       } catch {
         continue;
       }
-      if (
-        !isRecord(parsed) ||
-        !isRecord(parsed.scripts) ||
-        typeof parsed.scripts.test !== "string" ||
-        parsed.scripts.test.trim() === ""
-      )
-        continue;
-      const selector = `./${relativePath}`;
-      const command =
-        manager === "pnpm"
-          ? `pnpm --filter ${selector} test`
-          : manager === "npm"
-            ? `npm --workspace ${relativePath} test`
-            : manager === "bun"
-              ? `bun --filter ${selector} test`
-              : typeof parsed.name === "string" && parsed.name.trim()
-                ? `yarn workspace ${parsed.name} test`
-                : undefined;
-      if (!command) continue;
-      stages.push({
-        id: `test-${relativePath.replaceAll("/", "-")}`,
-        command,
-        paths: [relativePath],
-        cacheable: true,
+      if (!isRecord(parsed)) continue;
+      const dependencyNames = new Set<string>();
+      for (const field of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
+        const values = parsed[field];
+        if (!isRecord(values)) continue;
+        for (const dependency of Object.keys(values)) dependencyNames.add(dependency);
+      }
+      packages.push({
+        relativePath,
+        ...(typeof parsed.name === "string" && parsed.name.trim() ? { name: parsed.name.trim() } : {}),
+        hasTest:
+          isRecord(parsed.scripts) && typeof parsed.scripts.test === "string" && parsed.scripts.test.trim() !== "",
+        dependencyNames: [...dependencyNames].sort(),
       });
-      sources.push(`${relativePath}/package.json`);
     }
+  }
+  const byName = new Map<string, WorkspacePackage[]>();
+  for (const entry of packages) {
+    if (!entry.name) continue;
+    byName.set(entry.name, [...(byName.get(entry.name) ?? []), entry]);
+  }
+  const dependencyPathsFor = (entry: WorkspacePackage): string[] => {
+    const visited = new Set<string>();
+    const visit = (current: WorkspacePackage): void => {
+      for (const dependencyName of current.dependencyNames) {
+        for (const dependency of byName.get(dependencyName) ?? []) {
+          if (dependency.relativePath === entry.relativePath || visited.has(dependency.relativePath)) continue;
+          visited.add(dependency.relativePath);
+          if (visited.size >= 63) return;
+          visit(dependency);
+        }
+      }
+    };
+    visit(entry);
+    return [...visited].sort();
+  };
+  for (const entry of packages) {
+    if (!entry.hasTest || stages.length >= MAX_WORKSPACE_STAGES) continue;
+    const relativePath = entry.relativePath;
+    const selector = `./${relativePath}`;
+    const command =
+      manager === "pnpm"
+        ? `pnpm --filter ${selector} test`
+        : manager === "npm"
+          ? `npm --workspace ${relativePath} test`
+          : manager === "bun"
+            ? `bun --filter ${selector} test`
+            : entry.name
+              ? `yarn workspace ${entry.name} test`
+              : undefined;
+    if (!command) continue;
+    const dependencyPaths = dependencyPathsFor(entry);
+    stages.push({
+      id: `test-${relativePath.replaceAll("/", "-")}`,
+      command,
+      paths: [relativePath, ...dependencyPaths],
+      ...(dependencyPaths.length > 0 ? { dependencyPaths } : {}),
+      cacheable: true,
+    });
+    sources.push(`${relativePath}/package.json`);
   }
   return stages.length > 0 ? { stages, sources } : undefined;
 }

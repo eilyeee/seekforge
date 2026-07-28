@@ -18,6 +18,7 @@ import {
   loopCommand,
   loopDeleteCommand,
   loopDeliverCommand,
+  loopEvidenceCommand,
   loopDagCommand,
   loopListCommand,
   loopHistoryCommand,
@@ -558,6 +559,7 @@ program
   .option("--rerun <node-id>", "on resume, invalidate this node and all downstream nodes", collect, [])
   .option("--approve <node-id>", "approve a requiresApproval node for this run", collect, [])
   .option("--max-concurrency <n>", "parallel nodes (2-8 require distinct node workspace fields)", parsePositiveInt, 1)
+  .option("--managed-worktrees", "automatically create and retain one isolated Git worktree per node")
   .option("-y, --yes", "authorize the workspace without prompting")
   .option("-m, --model <model>", "override model")
   .option("--profile <name>", "use a named config profile")
@@ -575,6 +577,7 @@ program
         dagId?: string;
         resume?: boolean;
         maxConcurrency?: number;
+        managedWorktrees?: boolean;
         rerun?: string[];
         approve?: string[];
       },
@@ -589,6 +592,7 @@ program
         dagId: opts.dagId,
         resume: opts.resume,
         maxConcurrency: opts.maxConcurrency,
+        managedWorktrees: opts.managedWorktrees,
         rerun: opts.rerun,
         approve: opts.approve,
       });
@@ -649,6 +653,11 @@ program
   .option("--limit <n>", "maximum events (1-2000)", parsePositiveInt)
   .description("replay persisted Loop events as JSONL")
   .action((loopId: string, opts: { after?: number; limit?: number }) => loopHistoryCommand(loopId, opts));
+program
+  .command("loop-evidence")
+  .argument("<loop-id>")
+  .description("print requirement, verification, iteration, and delivery evidence as JSON")
+  .action(loopEvidenceCommand);
 program
   .command("loop-recover")
   .description("mark orphaned running or paused loops as interrupted and resumable")

@@ -13,6 +13,30 @@ permissions:
   contents: read
 
 jobs:
+  loop-lifecycle:
+    name: Loop lifecycle + DAG isolation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: pnpm/action-setup@0609f0983b7a228f052f81ef4c3d6510cae254ad # v4
+        with:
+          version: 10.16.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Exercise interruption recovery, dependency planning, and managed worktree fan-in
+        run: >-
+          pnpm exec vitest run
+          packages/core/tests/agent/auto-loop.test.ts
+          packages/core/tests/agent/loop-verification-plan.test.ts
+          packages/core/tests/agent/loop-recovery-policy.test.ts
+          packages/core/tests/agent/loop-dag.test.ts
+          packages/core/tests/agent/loop-speculation.test.ts
+          packages/eval-harness/tests/task-runner.test.ts
+
   server-e2e:
     name: Server REST + WebSocket E2E
     runs-on: ubuntu-latest

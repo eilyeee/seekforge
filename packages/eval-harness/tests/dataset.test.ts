@@ -9,7 +9,7 @@ import { assertFixturesExist, loadTasks, validateCheck, validateTask } from "../
 describe("evals/ dataset", () => {
   const tasks = loadTasks(tasksDir);
 
-  it("contains the sixty-two expected tasks", () => {
+  it("contains the sixty-three expected tasks", () => {
     expect(tasks.map((t) => t.id)).toEqual([
       "add-function",
       "add-missing-tests",
@@ -45,6 +45,7 @@ describe("evals/ dataset", () => {
       "hard-thread-actor",
       "json-config-edit",
       "large-context-nav",
+      "loop-interrupt-resume",
       "loop-resume-two-stage",
       "loop-verify-green",
       "memory-convention-recall",

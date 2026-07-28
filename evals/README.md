@@ -63,9 +63,9 @@ pnpm --filter @seekforge/eval-harness eval -- --suite nightly --junit evals/repo
 
 | Suite | Tasks | Default samples | Intended use |
 | --- | ---: | ---: | --- |
-| `smoke` | 14 representative tasks | 1 | quick model/config check |
-| `nightly` | all 62 tasks | 3 | weekly regression and efficiency gate |
-| `release` | all 62 tasks | 5 | release qualification with tighter gates |
+| `smoke` | 15 representative tasks | 1 | quick model/config and Loop lifecycle check |
+| `nightly` | all 63 tasks | 3 | weekly regression and efficiency gate |
+| `release` | all 63 tasks | 5 | release qualification with tighter gates |
 
 Use `--repeat <n>` (1 to 20) to override the sample count and `--task a,b` to narrow the
 chosen suite. `--require-api-key` turns a missing provider key into a non-zero

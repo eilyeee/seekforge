@@ -20,7 +20,7 @@ not a promise of API stability.
 | Capability | Status | Current boundary / next step |
 | --- | --- | --- |
 | Core agent loop, CLI, TUI, session traces, permissions | Production-ready foundation | Continue boundary regression testing and real-project dogfooding. |
-| Autonomous Loop engineering | Implemented, maturing | Automatic frozen verification plans, adaptive failure recovery, per-iteration observability, DAG conditions/resources/approval/rerun, CI closure, and cross-surface management ship; expand real-provider and hosted-CI fixtures. |
+| Autonomous Loop engineering | Implemented, maturing | Dependency-aware verification, bounded recovery learning, managed DAG worktrees/fan-in, evidence reports, speculative candidates, CI adapters, and lifecycle fixtures ship; expand real-provider/host adapters and real-project coverage. |
 | Desktop and local web workbench | Implemented, maturing | Native macOS, Linux, and Windows package builds ship; updater/platform signing and clean-install smoke tests still require release credentials. |
 | DeepSeek provider and cost accounting | Production-ready foundation | Main, compaction, and memory-extraction calls share accounting; preserve provider-specific token/cache semantics. |
 | Provider presets / OpenAI-compatible endpoints | Implemented, maturing | Add compatibility fixtures per provider; do not claim identical tool/thinking behavior. |

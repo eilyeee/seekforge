@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api";
 import { LatestRequest } from "../../views/async-coordination";
 import { useT } from "../../lib/i18n";
-import type { LoopDagSummary, LoopHistoryEntry, LoopStateSummary } from "../../types";
+import type { LoopDagSummary, LoopEvidenceReport, LoopHistoryEntry, LoopStateSummary } from "../../types";
 import { Badge, Button } from "../ui";
 
 type Props = { running: boolean; onResume: (opts: { loopId: string }) => void };
@@ -12,6 +12,7 @@ export function LoopManager({ running, onResume }: Props) {
   const [loops, setLoops] = useState<LoopStateSummary[]>([]);
   const [selected, setSelected] = useState<string>();
   const [history, setHistory] = useState<LoopHistoryEntry[]>([]);
+  const [evidence, setEvidence] = useState<LoopEvidenceReport>();
   const [dags, setDags] = useState<LoopDagSummary[]>([]);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("");
@@ -60,10 +61,15 @@ export function LoopManager({ running, onResume }: Props) {
     selectedRef.current = loopId;
     setSelected(loopId);
     setHistory([]);
+    setEvidence(undefined);
     try {
-      const nextHistory = await api.loopHistory(loopId, 0, 100);
+      const [nextHistory, nextEvidence] = await Promise.all([
+        api.loopHistory(loopId, 0, 100),
+        api.loopEvidence(loopId),
+      ]);
       if (historyRequests.current.isCurrent(request) && selectedRef.current === loopId) {
         setHistory(nextHistory);
+        setEvidence(nextEvidence);
         setError("");
       }
     } catch (caught) {
@@ -132,6 +138,7 @@ export function LoopManager({ running, onResume }: Props) {
         historyRequests.current.invalidate();
         setSelected(undefined);
         setHistory([]);
+        setEvidence(undefined);
       }
       await refresh();
     } catch (caught) {
@@ -244,27 +251,81 @@ export function LoopManager({ running, onResume }: Props) {
         ))}
       </div>
       {selected && (
-        <div className="mt-2 max-h-48 overflow-auto rounded bg-surface p-2 font-mono text-2xs text-secondary">
-          {history.length === 0
-            ? t("chat.loop.manager.noHistory")
-            : history.map((entry) => (
-                <div key={entry.seq}>
-                  {entry.seq} · {entry.ts} · {entry.event.type}
-                </div>
-              ))}
-          {history.length > 0 && history.length % 100 === 0 && (
-            <Button size="sm" variant="ghost" onClick={() => void loadMoreHistory()}>
-              {t("chat.loop.manager.loadMore")}
-            </Button>
+        <div className="mt-2 rounded border border-subtle bg-surface p-2 text-xs text-secondary">
+          {evidence && (
+            <div className="mb-2 grid gap-2 md:grid-cols-3">
+              <section>
+                <p className="font-medium text-primary">{t("chat.loop.manager.verification")}</p>
+                {evidence.verification.map((stage) => (
+                  <div key={stage.id} className="mt-1 flex items-center gap-1">
+                    <Badge tone={stage.code === 0 ? "ok" : stage.code === undefined ? "neutral" : "danger"}>
+                      {stage.code === undefined ? "pending" : stage.code === 0 ? "pass" : `exit ${stage.code}`}
+                    </Badge>
+                    <span className="font-mono">{stage.id}</span>
+                    <span className="text-tertiary">
+                      {stage.selection ?? "full"} · {stage.durationMs ?? 0}ms
+                    </span>
+                  </div>
+                ))}
+              </section>
+              <section>
+                <p className="font-medium text-primary">{t("chat.loop.manager.criteria")}</p>
+                {evidence.criteria.length === 0 && <p className="mt-1 text-tertiary">—</p>}
+                {evidence.criteria.map((criterion) => (
+                  <div key={criterion.id} className="mt-1">
+                    <Badge tone={criterion.status === "met" ? "ok" : "neutral"}>{criterion.status}</Badge>{" "}
+                    {criterion.id} · {criterion.text}
+                    {criterion.evidence.length > 0 && (
+                      <p className="truncate font-mono text-2xs text-tertiary">{criterion.evidence.join(" · ")}</p>
+                    )}
+                  </div>
+                ))}
+              </section>
+              <section>
+                <p className="font-medium text-primary">{t("chat.loop.manager.timeline")}</p>
+                {evidence.iterations.map((iteration) => (
+                  <div key={`${iteration.iteration}-${iteration.ts}`} className="mt-1">
+                    #{iteration.iteration} · {iteration.failureCategory ?? "none"} · {iteration.durationMs ?? 0}ms · $
+                    {(iteration.costUsd ?? 0).toFixed(4)}
+                    {iteration.rolledBack ? " · rollback" : ""}
+                  </div>
+                ))}
+              </section>
+            </div>
           )}
+          <p className="font-medium text-primary">{t("chat.loop.manager.history")}</p>
+          <div className="mt-1 max-h-48 overflow-auto font-mono text-2xs">
+            {history.length === 0
+              ? t("chat.loop.manager.noHistory")
+              : history.map((entry) => (
+                  <div key={entry.seq}>
+                    {entry.seq} · {entry.ts} · {entry.event.type}
+                  </div>
+                ))}
+            {history.length > 0 && history.length % 100 === 0 && (
+              <Button size="sm" variant="ghost" onClick={() => void loadMoreHistory()}>
+                {t("chat.loop.manager.loadMore")}
+              </Button>
+            )}
+          </div>
         </div>
       )}
       {dags.length > 0 && (
         <div className="mt-2 text-xs text-secondary">
           {dags.map((dag) => (
-            <div key={dag.dagId}>
+            <div key={dag.dagId} className="mt-1 rounded border border-subtle p-2">
               {dag.dagId} · {dag.completedAt ? t("chat.loop.manager.completed") : t("chat.loop.manager.active")} ·{" "}
               {dag.results.length} nodes · ${dag.spentCost.toFixed(4)}
+              {dag.fanIn && (
+                <Badge tone={dag.fanIn.status === "passed" ? "ok" : "danger"}>fan-in: {dag.fanIn.status}</Badge>
+              )}
+              <div className="mt-1 flex flex-wrap gap-1">
+                {dag.results.map((node) => (
+                  <Badge key={node.id} tone={node.status === "passed" ? "ok" : "neutral"}>
+                    {node.id}: {node.status}
+                  </Badge>
+                ))}
+              </div>
             </div>
           ))}
         </div>

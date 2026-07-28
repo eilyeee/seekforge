@@ -86,6 +86,32 @@ describe("discoverLoopVerificationPlan", () => {
     });
   });
 
+  it("runs dependent package tests when an internal dependency changes", () => {
+    const root = mkdtempSync(join(tmpdir(), "seekforge-loop-plan-"));
+    roots.push(root);
+    mkdirSync(join(root, "packages", "lib"), { recursive: true });
+    mkdirSync(join(root, "apps", "web"), { recursive: true });
+    writeFileSync(join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    writeFileSync(join(root, "package.json"), JSON.stringify({ private: true }));
+    writeFileSync(
+      join(root, "packages", "lib", "package.json"),
+      JSON.stringify({ name: "@demo/lib", scripts: { test: "vitest" } }),
+    );
+    writeFileSync(
+      join(root, "apps", "web", "package.json"),
+      JSON.stringify({
+        name: "@demo/web",
+        scripts: { test: "vitest" },
+        dependencies: { "@demo/lib": "workspace:*" },
+      }),
+    );
+    const plan = discoverLoopVerificationPlan(root);
+    expect(plan.stages.find((stage) => stage.id === "test-apps-web")).toMatchObject({
+      paths: ["apps/web", "packages/lib"],
+      dependencyPaths: ["packages/lib"],
+    });
+  });
+
   it("caps the complete plan while retaining every authoritative root gate", () => {
     const root = mkdtempSync(join(tmpdir(), "seekforge-loop-plan-"));
     roots.push(root);
