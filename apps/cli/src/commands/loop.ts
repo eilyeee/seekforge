@@ -40,8 +40,6 @@ import {
   saveLoopState,
   setLoopPriority,
   worktreeChangedPathsSince,
-  type LoopDagNode,
-  type LoopDagCondition,
   type LoopEvent,
   type LoopDeliveryMode,
   type LoopDeliveryEvidence,
@@ -63,6 +61,8 @@ import { t } from "../i18n.js";
 import { ensureWorkspaceAuthorized } from "./run.js";
 import { buildCiRepairPrompt, PR_CHECKS_TIMEOUT_MS } from "../resolve.js";
 import { createGitHubCiProvider, type LoopCiProvider } from "../ci-provider.js";
+import { parseLoopDagInput, parseLoopSpeculationInput } from "../loop-input.js";
+import { withLoopAgentRuntime } from "../loop-runtime.js";
 import {
   cleanupLoopWorktree,
   createLoopWorktree,
@@ -356,7 +356,7 @@ export async function loopCommand(task: string, opts: LoopOptions): Promise<void
       return;
     }
   }
-  await executeLoop(task, opts, worktree?.path ?? basePath, undefined, preflight);
+  await executeLoop({ kind: "start", task, opts }, worktree?.path ?? basePath, preflight);
 }
 
 type ResumeAutoLoop = (
@@ -384,7 +384,9 @@ export function coreResumeAutoLoop(): ResumeAutoLoop {
 
 export async function loopResumeCommand(loopId: string, opts: LoopResumeOptions): Promise<void> {
   const workspace = await findLoopWorkspace(loopId);
-  if (workspace) await executeLoop(loopId, opts, workspace, coreResumeAutoLoop());
+  if (workspace) {
+    await executeLoop({ kind: "resume", loopId, opts, resume: coreResumeAutoLoop() }, workspace);
+  }
 }
 
 export function resumeExtensionOptions(opts: LoopResumeOptions): {
@@ -563,96 +565,49 @@ export async function loopSpeculateCommand(
     process.exitCode = 1;
     return;
   }
-  let input: unknown;
+  let input: ReturnType<typeof parseLoopSpeculationInput>;
   try {
-    input = JSON.parse(raw) as unknown;
-  } catch {
-    fail(`Loop speculation file is not valid JSON: ${file}`);
-    process.exitCode = 1;
-    return;
-  }
-  if (
-    typeof input !== "object" ||
-    input === null ||
-    Array.isArray(input) ||
-    typeof (input as Record<string, unknown>).task !== "string" ||
-    !((input as Record<string, unknown>).task as string).trim() ||
-    ((input as Record<string, unknown>).task as string).length > 64 * 1024 ||
-    typeof (input as Record<string, unknown>).verifyCommand !== "string" ||
-    !((input as Record<string, unknown>).verifyCommand as string).trim() ||
-    ((input as Record<string, unknown>).verifyCommand as string).length > 8_192 ||
-    !Array.isArray((input as Record<string, unknown>).candidates) ||
-    ((input as Record<string, unknown>).candidates as unknown[]).length < 2 ||
-    ((input as Record<string, unknown>).candidates as unknown[]).length > 3
-  ) {
-    fail("Loop speculation requires task, verifyCommand, and candidates");
-    process.exitCode = 1;
-    return;
-  }
-  const record = input as Record<string, unknown>;
-  let candidates: Array<{ id: string; guidance: string }>;
-  try {
-    candidates = (record.candidates as unknown[]).map((candidate) => {
-      if (
-        typeof candidate !== "object" ||
-        candidate === null ||
-        Array.isArray(candidate) ||
-        typeof (candidate as Record<string, unknown>).id !== "string" ||
-        typeof (candidate as Record<string, unknown>).guidance !== "string"
-      ) {
-        throw new Error("Each Loop speculation candidate requires string id and guidance fields");
-      }
-      return {
-        id: (candidate as Record<string, unknown>).id as string,
-        guidance: (candidate as Record<string, unknown>).guidance as string,
-      };
-    });
+    input = parseLoopSpeculationInput(JSON.parse(raw) as unknown);
   } catch (error) {
-    fail(error instanceof Error ? error.message : String(error));
+    fail(
+      error instanceof SyntaxError
+        ? `Loop speculation file is not valid JSON: ${file}`
+        : error instanceof Error
+          ? error.message
+          : String(error),
+    );
     process.exitCode = 1;
     return;
   }
   const preflight = await preflightLoop(workspace, opts);
   if (!preflight) return;
-  const mcp = await prepareMcp(preflight.config, workspace);
-  const { deps, dispose } = createCliAgentDeps({
-    config: preflight.config,
-    workspace,
-    pluginContributions: mcp.pluginContributions,
-    model: preflight.model,
-    mcpToolSpecs: mcp.specs,
-    confirm: async () => false,
-    extractMemory: true,
-    subagents: loadAgentDefinitions(workspace, mcp.pluginContributions),
-  });
-  const controller = new AbortController();
-  const onSigint = () => controller.abort();
-  process.on("SIGINT", onSigint);
   try {
-    const result = await runSpeculativeLoop(deps, {
-      workspace,
-      task: record.task as string,
-      verifyCommand: record.verifyCommand as string,
-      candidates,
-      costBudgetUsd: opts.budget,
-      tokenBudget: opts.tokenBudget,
-      maxDurationMs: opts.maxDurationSeconds === undefined ? undefined : Math.round(opts.maxDurationSeconds * 1_000),
-      maxIterations: opts.maxIterations,
-      managedWorktrees: true,
-      speculationId: opts.speculationId,
-      persist: true,
-      resume: opts.resume,
-      signal: controller.signal,
-    });
-    console.log(JSON.stringify(result.state ?? result, null, 2));
-    if (!result.winner) process.exitCode = 1;
+    await withLoopAgentRuntime(
+      { config: preflight.config, workspace, model: preflight.model, extractMemory: true },
+      async ({ deps, controller }) => {
+        const result = await runSpeculativeLoop(deps, {
+          workspace,
+          task: input.task,
+          verifyCommand: input.verifyCommand,
+          candidates: input.candidates,
+          costBudgetUsd: opts.budget,
+          tokenBudget: opts.tokenBudget,
+          maxDurationMs:
+            opts.maxDurationSeconds === undefined ? undefined : Math.round(opts.maxDurationSeconds * 1_000),
+          maxIterations: opts.maxIterations,
+          managedWorktrees: true,
+          speculationId: opts.speculationId,
+          persist: true,
+          resume: opts.resume,
+          signal: controller.signal,
+        });
+        console.log(JSON.stringify(result.state ?? result, null, 2));
+        if (!result.winner) process.exitCode = 1;
+      },
+    );
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
-  } finally {
-    process.removeListener("SIGINT", onSigint);
-    dispose();
-    mcp.dispose();
   }
 }
 
@@ -893,22 +848,6 @@ export async function loopDeliverCommand(
   }
 }
 
-function parseLoopDagCondition(value: unknown, depth = 0): LoopDagCondition {
-  if (depth > 8 || typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("Loop DAG condition is invalid or too deeply nested");
-  }
-  const condition = value as Record<string, unknown>;
-  if (typeof condition.nodeId === "string" && (condition.status === "passed" || condition.status === "failed")) {
-    return { nodeId: condition.nodeId, status: condition.status };
-  }
-  if (condition.not !== undefined) return { not: parseLoopDagCondition(condition.not, depth + 1) };
-  const key = condition.all !== undefined ? "all" : condition.any !== undefined ? "any" : undefined;
-  if (!key || !Array.isArray(condition[key]) || condition[key].length === 0 || condition[key].length > 32) {
-    throw new Error("Loop DAG condition must contain nodeId/status, all, any, or not");
-  }
-  return { [key]: condition[key].map((child) => parseLoopDagCondition(child, depth + 1)) } as LoopDagCondition;
-}
-
 export async function loopDagCommand(
   file: string,
   opts: {
@@ -929,202 +868,66 @@ export async function loopDagCommand(
   },
 ): Promise<void> {
   const workspace = process.cwd();
-  const preflight = await preflightLoop(workspace, opts);
-  if (!preflight) return;
   const raw = readFileIfExists(resolve(workspace, file), 512 * 1024);
   if (raw === undefined) {
     fail(`Loop DAG file not found: ${file}`);
     process.exitCode = 1;
     return;
   }
-  let value: unknown;
+  let parsed: ReturnType<typeof parseLoopDagInput>;
   try {
-    value = JSON.parse(raw) as unknown;
-  } catch {
-    fail(`Loop DAG file is not valid JSON: ${file}`);
-    process.exitCode = 1;
-    return;
-  }
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    Array.isArray(value) ||
-    !Array.isArray((value as { nodes?: unknown }).nodes)
-  ) {
-    fail("Loop DAG must be an object with a nodes array");
-    process.exitCode = 1;
-    return;
-  }
-  const nodeWorkspaces = new Map<string, string>();
-  let fanIn: { verifyCommand: string; maxIterations?: number } | undefined;
-  let nodes: LoopDagNode[];
-  try {
-    const rawFanIn = (value as Record<string, unknown>).fanIn;
-    if (rawFanIn !== undefined) {
-      if (
-        typeof rawFanIn !== "object" ||
-        rawFanIn === null ||
-        Array.isArray(rawFanIn) ||
-        typeof (rawFanIn as Record<string, unknown>).verifyCommand !== "string"
-      ) {
-        throw new Error("Loop DAG fanIn requires a verifyCommand");
-      }
-      const candidate = rawFanIn as Record<string, unknown>;
-      if (
-        candidate.maxIterations !== undefined &&
-        (!Number.isSafeInteger(candidate.maxIterations) ||
-          (candidate.maxIterations as number) < 1 ||
-          (candidate.maxIterations as number) > 5)
-      ) {
-        throw new Error("Loop DAG fanIn maxIterations must be 1 to 5");
-      }
-      fanIn = {
-        verifyCommand: candidate.verifyCommand as string,
-        ...(typeof candidate.maxIterations === "number" ? { maxIterations: candidate.maxIterations } : {}),
-      };
-    }
-    nodes = (value as { nodes: unknown[] }).nodes.map((node): LoopDagNode => {
-      if (typeof node !== "object" || node === null || Array.isArray(node))
-        throw new Error("Loop DAG nodes must be objects");
-      const item = node as Record<string, unknown>;
-      if (typeof item.id !== "string" || typeof item.task !== "string" || typeof item.verifyCommand !== "string") {
-        throw new Error("Each Loop DAG node requires string id, task, and verifyCommand fields");
-      }
-      if (
-        item.dependsOn !== undefined &&
-        (!Array.isArray(item.dependsOn) || !item.dependsOn.every((id) => typeof id === "string"))
-      ) {
-        throw new Error(`Loop DAG node ${item.id} dependsOn must be a string array`);
-      }
-      if (item.workspace !== undefined) {
-        if (typeof item.workspace !== "string" || item.workspace.trim() === "") {
-          throw new Error(`Loop DAG node ${item.id} workspace must be a non-empty path`);
-        }
-        nodeWorkspaces.set(item.id, resolve(workspace, item.workspace));
-      }
-      for (const [name, candidate] of [
-        ["priority", item.priority],
-        ["maxRetries", item.maxRetries],
-      ] as const) {
-        if (candidate !== undefined && !Number.isSafeInteger(candidate)) {
-          throw new Error(`Loop DAG node ${item.id} ${name} must be an integer`);
-        }
-      }
-      if (
-        item.budgetWeight !== undefined &&
-        (typeof item.budgetWeight !== "number" || !Number.isFinite(item.budgetWeight))
-      ) {
-        throw new Error(`Loop DAG node ${item.id} budgetWeight must be a number`);
-      }
-      if (
-        item.failurePolicy !== undefined &&
-        item.failurePolicy !== "skip_dependents" &&
-        item.failurePolicy !== "continue" &&
-        item.failurePolicy !== "stop"
-      ) {
-        throw new Error(`Loop DAG node ${item.id} failurePolicy is invalid`);
-      }
-      if (
-        item.resources !== undefined &&
-        (!Array.isArray(item.resources) || !item.resources.every((resource) => typeof resource === "string"))
-      ) {
-        throw new Error(`Loop DAG node ${item.id} resources must be a string array`);
-      }
-      if (
-        item.condition !== undefined &&
-        (typeof item.condition !== "object" || item.condition === null || Array.isArray(item.condition))
-      ) {
-        throw new Error(`Loop DAG node ${item.id} condition is invalid`);
-      }
-      if (item.requiresApproval !== undefined && typeof item.requiresApproval !== "boolean") {
-        throw new Error(`Loop DAG node ${item.id} requiresApproval must be boolean`);
-      }
-      if (item.consumeDependencyOutputs !== undefined && typeof item.consumeDependencyOutputs !== "boolean") {
-        throw new Error(`Loop DAG node ${item.id} consumeDependencyOutputs must be boolean`);
-      }
-      if (item.outputPaths !== undefined && !Array.isArray(item.outputPaths)) {
-        throw new Error(`Loop DAG node ${item.id} outputPaths must be a string array`);
-      }
-      return {
-        id: item.id,
-        task: item.task,
-        verifyCommand: item.verifyCommand,
-        ...(Array.isArray(item.dependsOn) ? { dependsOn: item.dependsOn as string[] } : {}),
-        ...(typeof item.priority === "number" ? { priority: item.priority } : {}),
-        ...(typeof item.budgetWeight === "number" ? { budgetWeight: item.budgetWeight } : {}),
-        ...(typeof item.maxRetries === "number" ? { maxRetries: item.maxRetries } : {}),
-        ...(typeof item.failurePolicy === "string"
-          ? { failurePolicy: item.failurePolicy as "skip_dependents" | "continue" | "stop" }
-          : {}),
-        ...(Array.isArray(item.resources) ? { resources: item.resources as string[] } : {}),
-        ...(item.condition ? { condition: parseLoopDagCondition(item.condition) } : {}),
-        ...(typeof item.requiresApproval === "boolean" ? { requiresApproval: item.requiresApproval } : {}),
-        ...(typeof item.consumeDependencyOutputs === "boolean"
-          ? { consumeDependencyOutputs: item.consumeDependencyOutputs }
-          : {}),
-        ...(Array.isArray(item.outputPaths) ? { outputPaths: item.outputPaths as string[] } : {}),
-      };
-    });
+    parsed = parseLoopDagInput(JSON.parse(raw) as unknown, workspace);
   } catch (error) {
-    fail(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-    return;
-  }
-  const { config, model } = preflight;
-  const mcp = await prepareMcp(config, workspace);
-  const { deps, dispose } = createCliAgentDeps({
-    config,
-    workspace,
-    pluginContributions: mcp.pluginContributions,
-    model,
-    mcpToolSpecs: mcp.specs,
-    confirm: async () => false,
-    extractMemory: true,
-    subagents: loadAgentDefinitions(workspace, mcp.pluginContributions),
-  });
-  const controller = new AbortController();
-  const onSigint = () => controller.abort();
-  process.on("SIGINT", onSigint);
-  try {
-    const approvedNodes = new Set(opts.approve ?? []);
-    const results = await runLoopDag(deps, {
-      workspace,
-      nodes,
-      maxConcurrency: opts.maxConcurrency ?? 1,
-      ...(opts.managedWorktrees ? { managedWorktrees: true } : {}),
-      ...(opts.managedWorktreeLimit !== undefined ? { managedWorktreeLimit: opts.managedWorktreeLimit } : {}),
-      ...(opts.predictiveBudget ? { predictiveBudget: true } : {}),
-      ...(fanIn ? { fanIn } : {}),
-      ...(opts.dagId ? { dagId: opts.dagId } : {}),
-      ...(opts.resume ? { resume: true } : {}),
-      ...(opts.rerun?.length ? { rerunFrom: opts.rerun } : {}),
-      approveNode: (node) => approvedNodes.has(node.id),
-      ...(nodeWorkspaces.size > 0
-        ? {
-            workspaceForNode: (node) => {
-              return nodeWorkspaces.get(node.id) ?? workspace;
-            },
-          }
-        : {}),
-      ...(opts.budget !== undefined ? { costBudgetUsd: opts.budget } : {}),
-      ...(opts.tokenBudget !== undefined ? { tokenBudget: opts.tokenBudget } : {}),
-      ...(opts.maxDurationSeconds !== undefined ? { maxDurationMs: Math.round(opts.maxDurationSeconds * 1_000) } : {}),
-      signal: controller.signal,
-      onNodeEvent: (nodeId, event) => console.log(`[${nodeId}] ${formatLoopEvent(event)}`),
-      onFanIn: (result) =>
-        console.log(`[fan-in] ${result.status} · ${result.branch}${result.error ? ` · ${result.error}` : ""}`),
-    });
-    console.log(
-      results.map((result) => `${result.id}\t${result.status}${result.reason ? `\t${result.reason}` : ""}`).join("\n"),
+    fail(
+      error instanceof SyntaxError
+        ? `Loop DAG file is not valid JSON: ${file}`
+        : error instanceof Error
+          ? error.message
+          : String(error),
     );
-    if (results.some((result) => result.status !== "passed")) process.exitCode = 1;
+    process.exitCode = 1;
+    return;
+  }
+  const preflight = await preflightLoop(workspace, opts);
+  if (!preflight) return;
+  const { nodes, nodeWorkspaces, fanIn } = parsed;
+  const { config, model } = preflight;
+  try {
+    await withLoopAgentRuntime({ config, workspace, model, extractMemory: true }, async ({ deps, controller }) => {
+      const approvedNodes = new Set(opts.approve ?? []);
+      const results = await runLoopDag(deps, {
+        workspace,
+        nodes,
+        maxConcurrency: opts.maxConcurrency ?? 1,
+        ...(opts.managedWorktrees ? { managedWorktrees: true } : {}),
+        ...(opts.managedWorktreeLimit !== undefined ? { managedWorktreeLimit: opts.managedWorktreeLimit } : {}),
+        ...(opts.predictiveBudget ? { predictiveBudget: true } : {}),
+        ...(fanIn ? { fanIn } : {}),
+        ...(opts.dagId ? { dagId: opts.dagId } : {}),
+        ...(opts.resume ? { resume: true } : {}),
+        ...(opts.rerun?.length ? { rerunFrom: opts.rerun } : {}),
+        approveNode: (node) => approvedNodes.has(node.id),
+        ...(nodeWorkspaces.size > 0 ? { workspaceForNode: (node) => nodeWorkspaces.get(node.id) ?? workspace } : {}),
+        ...(opts.budget !== undefined ? { costBudgetUsd: opts.budget } : {}),
+        ...(opts.tokenBudget !== undefined ? { tokenBudget: opts.tokenBudget } : {}),
+        ...(opts.maxDurationSeconds !== undefined
+          ? { maxDurationMs: Math.round(opts.maxDurationSeconds * 1_000) }
+          : {}),
+        signal: controller.signal,
+        onNodeEvent: (nodeId, event) => console.log(`[${nodeId}] ${formatLoopEvent(event)}`),
+        onFanIn: (result) =>
+          console.log(`[fan-in] ${result.status} · ${result.branch}${result.error ? ` · ${result.error}` : ""}`),
+      });
+      console.log(
+        results
+          .map((result) => `${result.id}\t${result.status}${result.reason ? `\t${result.reason}` : ""}`)
+          .join("\n"),
+      );
+      if (results.some((result) => result.status !== "passed")) process.exitCode = 1;
+    });
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
-  } finally {
-    process.removeListener("SIGINT", onSigint);
-    dispose();
-    mcp.dispose();
   }
 }
 
@@ -1157,17 +960,15 @@ export async function loopCleanupCommand(name: string, opts: { force?: boolean }
   }
 }
 
-async function executeLoop(
-  taskOrLoopId: string,
-  opts: LoopOptions | LoopResumeOptions,
-  projectPath: string,
-  resume?: ResumeAutoLoop,
-  prepared?: LoopPreflight,
-): Promise<void> {
-  const preflight = prepared ?? (await preflightLoop(projectPath, opts));
+type PreparedLoopRequest =
+  | { kind: "start"; task: string; opts: LoopOptions }
+  | { kind: "resume"; loopId: string; opts: LoopResumeOptions; resume: ResumeAutoLoop };
+
+async function executeLoop(request: PreparedLoopRequest, projectPath: string, prepared?: LoopPreflight): Promise<void> {
+  const preflight = prepared ?? (await preflightLoop(projectPath, request.opts));
   if (!preflight) return;
   const { config, model } = preflight;
-  await runPreparedLoop(taskOrLoopId, opts, projectPath, config, model, resume);
+  await runPreparedLoop(request, projectPath, config, model);
 }
 
 type LoopPreflight = { config: ReturnType<typeof loadConfig>; model: string | undefined };
@@ -1205,153 +1006,125 @@ async function preflightLoop(
 }
 
 async function runPreparedLoop(
-  taskOrLoopId: string,
-  opts: LoopOptions | LoopResumeOptions,
+  request: PreparedLoopRequest,
   projectPath: string,
   config: ReturnType<typeof loadConfig>,
   model: string | undefined,
-  resume?: ResumeAutoLoop,
 ): Promise<void> {
+  const { opts } = request;
   // The loop is inherently autonomous: it must apply edits without a human in
   // the loop. We always run in acceptEdits. Without -y we still proceed (that
   // is the sensible default for a "drive to green" command) but print a note.
   if (!opts.yes) console.error(dim(t("cmd.loop.autoApproveNote")));
 
-  // Spawn MCP servers first so their tool specs make it into the dispatcher.
-  const mcp = await prepareMcp(config, projectPath);
-
-  // Build the SAME deps run/repl use (provider, dispatcher, runtime, allowlist,
-  // permission rules, hooks, sandbox, planModel/escalation, subagents). The
-  // loop never prompts, so confirm denies anything not already permitted.
-  const { deps, dispose } = createCliAgentDeps({
-    config,
-    workspace: projectPath,
-    pluginContributions: mcp.pluginContributions,
-    model,
-    mcpToolSpecs: mcp.specs,
-    confirm: async () => false,
-    extractMemory: true,
-    subagents: loadAgentDefinitions(projectPath, mcp.pluginContributions),
-  });
-
-  // Ctrl-C: cooperative stop — abort the signal so the loop returns "cancelled"
-  // and the trace is kept (mirrors run.ts). A second press force-exits.
-  const controller = new AbortController();
-  const onSigint = () => {
-    if (controller.signal.aborted) process.exit(130);
-    console.error(t("render.cancelling"));
-    controller.abort();
-  };
-  process.on("SIGINT", onSigint);
-
   try {
-    let verificationPlan = resume ? undefined : verificationPlanFromOptions(opts as LoopOptions);
-    let verifyCommand = resume ? undefined : (opts as LoopOptions).verify;
-    if (!resume && (opts as LoopOptions).autoVerify) {
-      const discovered = discoverLoopVerificationPlan(projectPath);
-      verificationPlan = discovered.stages;
-      verifyCommand = discovered.stages[0]!.command;
-      console.error(
-        dim(
-          `Discovered verification plan from ${discovered.sources.join(", ")}: ${discovered.stages
-            .map((stage) => stage.id)
-            .join(" → ")}`,
-        ),
-      );
-    }
-    const common = {
-      ...(model ? { model } : {}),
-      ...(config.planModel ? { planModel: config.planModel } : {}),
-      ...(config.escalateOnFailure ? { escalateOnFailure: true } : {}),
-      signal: controller.signal,
-      onEvent: (event: LoopEvent) => printEvent(event),
-    };
-    const result = resume
-      ? await resume(deps, taskOrLoopId, {
-          workspace: projectPath,
-          ...resumeExtensionOptions(opts as LoopResumeOptions),
-          ...common,
-        })
-      : await runAutoLoop(deps, {
-          task: taskOrLoopId,
-          workspace: projectPath,
-          verifyCommand: verifyCommand ?? "",
-          ...(verificationPlan ? { verificationPlan } : {}),
-          ...((opts as LoopOptions).stablePasses !== undefined
-            ? { stablePasses: (opts as LoopOptions).stablePasses }
-            : {}),
-          ...((opts as LoopOptions).flakyRetries !== undefined
-            ? { flakyRetries: (opts as LoopOptions).flakyRetries }
-            : {}),
-          ...((opts as LoopOptions).noProgressRecoveries !== undefined
-            ? { maxNoProgressRecoveries: (opts as LoopOptions).noProgressRecoveries }
-            : {}),
-          ...((opts as LoopOptions).rollbackOnRegression ? { rollbackOnRegression: true } : {}),
-          ...((opts as LoopOptions).adaptiveBudget ? { adaptiveBudget: true } : {}),
-          ...((opts as LoopOptions).priority !== undefined ? { priority: (opts as LoopOptions).priority } : {}),
-          maxIterations: (opts as LoopOptions).maxIters ?? 8,
-          ...((opts as LoopOptions).budget !== undefined ? { costBudgetUsd: (opts as LoopOptions).budget } : {}),
-          ...((opts as LoopOptions).tokenBudget !== undefined
-            ? { tokenBudget: (opts as LoopOptions).tokenBudget }
-            : {}),
-          ...((opts as LoopOptions).maxDurationSeconds !== undefined
-            ? { maxDurationMs: Math.round((opts as LoopOptions).maxDurationSeconds! * 1_000) }
-            : {}),
-          ...((opts as LoopOptions).maxVerifyRuns !== undefined
-            ? { maxVerifyRuns: (opts as LoopOptions).maxVerifyRuns }
-            : {}),
-          ...((opts as LoopOptions).verifyTimeoutSeconds !== undefined
-            ? { verifyTimeoutMs: Math.round((opts as LoopOptions).verifyTimeoutSeconds! * 1_000) }
-            : {}),
-          ...((opts as LoopOptions).agentTimeoutSeconds !== undefined
-            ? { agentTimeoutMs: Math.round((opts as LoopOptions).agentTimeoutSeconds! * 1_000) }
-            : {}),
-          ...((opts as LoopOptions).agentRetries !== undefined
-            ? { maxAgentRetries: (opts as LoopOptions).agentRetries }
-            : {}),
-          approvalMode: "acceptEdits",
-          ...((opts as LoopOptions).requirements ? { requirementMode: (opts as LoopOptions).requirements } : {}),
-          ...common,
-        });
-    // Distinct exit code: requirements_pending is a deliberate pause awaiting
-    // approval, not a failure — scripts resume with --approve-requirements
-    // rather than treating it like an exhausted/failed loop.
-    const exitCode = loopExitCode(result.status);
-    if (result.status === "passed" && (opts as LoopOptions).deliver) {
-      const loopOpts = opts as LoopOptions;
-      const deliveryOptions: LoopDeliveryOptions = {};
-      if (loopOpts.deliver === "pr" && loopOpts.waitCi) {
-        deliveryOptions.ciPolicy = {
-          maxRepairs: loopOpts.ciRepairs ?? 0,
-          repairBudgetUsd: loopOpts.ciRepairBudget ?? 1,
+    await withLoopAgentRuntime(
+      {
+        config,
+        workspace: projectPath,
+        model,
+        extractMemory: true,
+        forceOnSecondSigint: true,
+        onCancel: () => console.error(t("render.cancelling")),
+      },
+      async ({ deps, controller }) => {
+        const common = {
+          ...(model ? { model } : {}),
+          ...(config.planModel ? { planModel: config.planModel } : {}),
+          ...(config.escalateOnFailure ? { escalateOnFailure: true } : {}),
+          signal: controller.signal,
+          onEvent: (event: LoopEvent) => printEvent(event),
         };
-        deliveryOptions.beforeFinalize = async (delivered, state, updateCi) =>
-          closeLoopPrCi({
+        let result: LoopResult;
+        if (request.kind === "resume") {
+          result = await request.resume(deps, request.loopId, {
             workspace: projectPath,
-            delivered,
-            state,
-            getRepairContext: async () => ({
-              deps: { ...deps, extractMemory: false },
-              sandbox: config.sandbox,
-            }),
-            maxRepairs: loopOpts.ciRepairs ?? 0,
-            repairBudgetUsd: loopOpts.ciRepairBudget ?? 1,
-            signal: controller.signal,
-            repairAttempts: state.delivery?.ci?.repairAttempts ?? 0,
-            updateCi,
+            ...resumeExtensionOptions(request.opts),
+            ...common,
           });
-      }
-      const delivered = await runLoopDelivery(projectPath, result.loopId ?? "loop", loopOpts.deliver!, deliveryOptions);
-      console.log(delivered.message);
-    }
-    if (exitCode !== undefined) process.exitCode = exitCode;
+        } else {
+          const loopOpts = request.opts;
+          let verificationPlan = verificationPlanFromOptions(loopOpts);
+          let verifyCommand = loopOpts.verify;
+          if (loopOpts.autoVerify) {
+            const discovered = discoverLoopVerificationPlan(projectPath);
+            verificationPlan = discovered.stages;
+            verifyCommand = discovered.stages[0]!.command;
+            console.error(
+              dim(
+                `Discovered verification plan from ${discovered.sources.join(", ")}: ${discovered.stages
+                  .map((stage) => stage.id)
+                  .join(" → ")}`,
+              ),
+            );
+          }
+          result = await runAutoLoop(deps, {
+            task: request.task,
+            workspace: projectPath,
+            verifyCommand: verifyCommand ?? "",
+            ...(verificationPlan ? { verificationPlan } : {}),
+            ...(loopOpts.stablePasses !== undefined ? { stablePasses: loopOpts.stablePasses } : {}),
+            ...(loopOpts.flakyRetries !== undefined ? { flakyRetries: loopOpts.flakyRetries } : {}),
+            ...(loopOpts.noProgressRecoveries !== undefined
+              ? { maxNoProgressRecoveries: loopOpts.noProgressRecoveries }
+              : {}),
+            ...(loopOpts.rollbackOnRegression ? { rollbackOnRegression: true } : {}),
+            ...(loopOpts.adaptiveBudget ? { adaptiveBudget: true } : {}),
+            ...(loopOpts.priority !== undefined ? { priority: loopOpts.priority } : {}),
+            maxIterations: loopOpts.maxIters ?? 8,
+            ...(loopOpts.budget !== undefined ? { costBudgetUsd: loopOpts.budget } : {}),
+            ...(loopOpts.tokenBudget !== undefined ? { tokenBudget: loopOpts.tokenBudget } : {}),
+            ...(loopOpts.maxDurationSeconds !== undefined
+              ? { maxDurationMs: Math.round(loopOpts.maxDurationSeconds * 1_000) }
+              : {}),
+            ...(loopOpts.maxVerifyRuns !== undefined ? { maxVerifyRuns: loopOpts.maxVerifyRuns } : {}),
+            ...(loopOpts.verifyTimeoutSeconds !== undefined
+              ? { verifyTimeoutMs: Math.round(loopOpts.verifyTimeoutSeconds * 1_000) }
+              : {}),
+            ...(loopOpts.agentTimeoutSeconds !== undefined
+              ? { agentTimeoutMs: Math.round(loopOpts.agentTimeoutSeconds * 1_000) }
+              : {}),
+            ...(loopOpts.agentRetries !== undefined ? { maxAgentRetries: loopOpts.agentRetries } : {}),
+            approvalMode: "acceptEdits",
+            ...(loopOpts.requirements ? { requirementMode: loopOpts.requirements } : {}),
+            ...common,
+          });
+        }
+        const exitCode = loopExitCode(result.status);
+        if (request.kind === "start" && result.status === "passed" && request.opts.deliver) {
+          const loopOpts = request.opts;
+          const deliveryMode = request.opts.deliver;
+          const deliveryOptions: LoopDeliveryOptions = {};
+          if (loopOpts.deliver === "pr" && loopOpts.waitCi) {
+            deliveryOptions.ciPolicy = {
+              maxRepairs: loopOpts.ciRepairs ?? 0,
+              repairBudgetUsd: loopOpts.ciRepairBudget ?? 1,
+            };
+            deliveryOptions.beforeFinalize = async (delivered, state, updateCi) =>
+              closeLoopPrCi({
+                workspace: projectPath,
+                delivered,
+                state,
+                getRepairContext: async () => ({
+                  deps: { ...deps, extractMemory: false },
+                  sandbox: config.sandbox,
+                }),
+                maxRepairs: loopOpts.ciRepairs ?? 0,
+                repairBudgetUsd: loopOpts.ciRepairBudget ?? 1,
+                signal: controller.signal,
+                repairAttempts: state.delivery?.ci?.repairAttempts ?? 0,
+                updateCi,
+              });
+          }
+          const delivered = await runLoopDelivery(projectPath, result.loopId ?? "loop", deliveryMode, deliveryOptions);
+          console.log(delivered.message);
+        }
+        if (exitCode !== undefined) process.exitCode = exitCode;
+      },
+    );
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
     process.exitCode = 1;
-  } finally {
-    process.removeListener("SIGINT", onSigint);
-    dispose();
-    mcp.dispose();
   }
 }
 

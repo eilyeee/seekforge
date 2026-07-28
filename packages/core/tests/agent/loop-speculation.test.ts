@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatResponse } from "@seekforge/shared";
@@ -29,6 +29,26 @@ describe("runSpeculativeLoop", () => {
   const roots: string[] = [];
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it("sorts persisted offset timestamps by their epoch", () => {
+    const root = mkdtempSync(join(tmpdir(), "seekforge-speculate-state-"));
+    roots.push(root);
+    const directory = join(root, ".seekforge", "loop-speculations");
+    mkdirSync(directory, { recursive: true });
+    const state = (speculationId: string, updatedAt: string) => ({
+      schemaVersion: 1,
+      speculationId,
+      fingerprint: "b".repeat(64),
+      status: "running",
+      createdAt: "2025-12-31T00:00:00.000Z",
+      updatedAt,
+      candidates: [],
+    });
+    writeFileSync(join(directory, "offset-old.json"), JSON.stringify(state("offset-old", "2026-01-01T00:30:00+01:00")));
+    writeFileSync(join(directory, "utc-new.json"), JSON.stringify(state("utc-new", "2026-01-01T00:00:00Z")));
+
+    expect(listLoopSpeculationStates(root).map((item) => item.speculationId)).toEqual(["utc-new", "offset-old"]);
   });
 
   it("selects the lowest-cost passing isolated candidate", async () => {

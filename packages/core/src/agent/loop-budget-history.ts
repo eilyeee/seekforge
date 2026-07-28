@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isRecord } from "../util/guards.js";
 import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 
@@ -22,6 +23,12 @@ const HISTORY_PATH = ".seekforge/loop-budget-history.json";
 const MAX_BYTES = 128 * 1024;
 const MAX_OBSERVATIONS = 256;
 const KEY_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,191}$/;
+
+export function loopBudgetObservationKey(nodeId: string, verifyCommand: string): string {
+  const key = `${nodeId}:${createHash("sha256").update(verifyCommand).digest("hex").slice(0, 16)}`;
+  if (!KEY_RE.test(key)) throw new Error("Loop budget observation key is invalid");
+  return key;
+}
 
 export function readLoopBudgetHistory(workspace: string): LoopBudgetObservation[] {
   let raw: string | undefined;

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### round 71: Loop maintainability and boundary consolidation
+- Split Loop persistence, history, leases, managed worktrees, budget policy,
+  verification selection, evidence formatting, CLI lifecycle/input parsing,
+  REST resources, and Desktop views into focused modules.
+- Centralized Loop REST DTOs in `@seekforge/shared`, reduced unrelated Desktop
+  operation blocking, and avoided repeated DAG budget-history reads.
+- Fixed offset-timestamp ordering and rejected malformed managed fan-in branch
+  provenance, with focused regression coverage.
+
 ### round 70: operational Loop intelligence
 - Added context-weighted recovery learning, predictive DAG budget allocation,
   multi-ecosystem verification discovery, and occurrence-based lifecycle eval metrics.

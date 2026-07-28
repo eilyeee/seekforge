@@ -47,6 +47,17 @@ flowchart LR
 - 会话 JSONL 仍然是 agent 对话和工具 trace 的事实来源（source of truth）。
   Loop 状态指向该会话；它不重复存储 trace。
 
+实现层明确保持以下边界：
+
+- `loop-state` 负责已验证的状态编解码与原子存储；`loop-history`、`loop-lease`、
+  `loop-state-paths` 分别负责 JSONL 回放、生命周期协调与路径身份。
+- `loop-managed-worktree` 是 DAG 与推演执行共享的唯一分支/路径绑定层。预算预测、验证选择与
+  面向模型的工具结果整形均为纯策略模块；验证清单检测器也与计划组合逻辑分离。
+- CLI JSON 解码和进程生命周期设置位于命令处理器之外；REST 的 DAG/推演路由和 Desktop 的
+  列表/详情/资源视图按领域拆分。Server/Desktop 的 Loop 响应类型统一来自
+  `@seekforge/shared`，不再由客户端手工镜像。
+- 证据构建、完整性比较与 JSON/SARIF/JUnit 格式化彼此独立，新增导出格式不会改变已签名报告。
+
 ### 运行时序
 
 ```mermaid

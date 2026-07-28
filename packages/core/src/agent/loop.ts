@@ -97,6 +97,7 @@ import { acquireSessionLeaseWithPreemption } from "./session-lease.js";
 import { createDispatchTools } from "./dispatch-tools.js";
 import { abortablePromise, onAbortOnce } from "../util/abort.js";
 import type { PluginContributions } from "../plugins/index.js";
+import { toolResultForModel } from "./agent-tool-result.js";
 
 /**
  * Run-local handoff between providers and agent event streams. One bus is
@@ -372,37 +373,6 @@ function buildReflectionNudge(reason = "a tool call that already failed earlier 
  * one noisy server cannot flood the transcript.
  */
 const MAX_STREAMED_CHUNKS_PER_CALL = 200;
-
-function toolResultForModel(result: ToolResult, maxChars: number): string {
-  const payload = result.ok ? { ok: true, data: result.data } : { ok: false, error: result.error };
-  const text = JSON.stringify(payload);
-  if (text.length <= maxChars) return text;
-  const fit = (render: (preview: string) => string): string => {
-    let low = 0;
-    let high = text.length;
-    let best = render("");
-    while (low <= high) {
-      const middle = Math.floor((low + high) / 2);
-      const candidate = render(truncateHeadTail(text, middle).text);
-      if (candidate.length <= maxChars) {
-        best = candidate;
-        low = middle + 1;
-      } else {
-        high = middle - 1;
-      }
-    }
-    return best;
-  };
-  if (result.ok) {
-    return fit((preview) => JSON.stringify({ ok: true, data: { truncated: true, preview } }));
-  }
-  return fit((message) =>
-    JSON.stringify({
-      ok: false,
-      error: { code: (result.error?.code ?? "tool_error").slice(0, 40), message, truncated: true },
-    }),
-  );
-}
 
 /** Appends a user-supplied system-prompt suffix (CLI --append-system-prompt). */
 function appendUserPrompt(base: string, append?: string): string {

@@ -2,8 +2,13 @@ import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { join, sep } from "node:path";
 import { isRecord } from "../util/guards.js";
 import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
-import { isWorktreeDirty, listGitWorktrees, mergeWorktree, removeWorktree } from "../worktree.js";
+import { isWorktreeDirty, listGitWorktrees, removeWorktree } from "../worktree.js";
 import { loadLoopDagState } from "./loop-dag.js";
+import {
+  acquireManagedLoopWorktreeLease,
+  promoteManagedLoopWorktree,
+  resolveManagedLoopWorktree,
+} from "./loop-managed-worktree.js";
 import { acquireSessionLease, isSessionRunActive } from "./session-lease.js";
 
 export type LoopDagResourceReport = {
@@ -67,14 +72,6 @@ function directoryBytes(path: string, root: string, budget = 100_000): { bytes: 
   return { bytes, truncated: false };
 }
 
-function managedWorktreePath(workspace: string, path: string, branch: string): { root: string; physical: string } {
-  const expectedRoot = join(realpathSync.native(workspace), ".seekforge", "worktrees");
-  const root = realpathSync.native(expectedRoot);
-  const physical = realpathSync.native(path);
-  if (!physical.startsWith(`${root}${sep}`)) throw new Error(`Loop DAG worktree escapes the managed root: ${branch}`);
-  return { root, physical };
-}
-
 export async function inspectLoopDagResources(workspace: string, dagId: string): Promise<LoopDagResourceReport> {
   const { completed, branches } = branchesFor(workspace, dagId);
   if (branches.length === 0) {
@@ -94,7 +91,7 @@ export async function inspectLoopDagResources(workspace: string, dagId: string):
   for (const branch of branches) {
     const entry = entries.find((item) => item.branch === branch);
     if (!entry) continue;
-    const { root, physical } = managedWorktreePath(workspace, entry.path, branch);
+    const { root, physical } = resolveManagedLoopWorktree(workspace, entry.path, branch);
     const measured = directoryBytes(physical, root);
     truncated ||= measured.truncated;
     worktrees.push({ branch, path: physical, bytes: measured.bytes });
@@ -135,7 +132,7 @@ export async function pruneLoopDagResources(
   const lease = acquireSessionLease(workspace, `loop-dag-${dagId}`);
   let resourceLease: ReturnType<typeof acquireSessionLease> | undefined;
   try {
-    resourceLease = acquireSessionLease(workspace, "loop-dag-managed-worktrees");
+    resourceLease = acquireManagedLoopWorktreeLease(workspace);
     const { branches } = branchesFor(workspace, dagId);
     if (!options.force && !isArchived(workspace, dagId))
       throw new Error(`Loop DAG must be archived before pruning: ${dagId}`);
@@ -148,7 +145,7 @@ export async function pruneLoopDagResources(
     for (const branch of branches) {
       const entry = entries.find((item) => item.branch === branch);
       if (!entry) continue;
-      const { physical } = managedWorktreePath(workspace, entry.path, branch);
+      const { physical } = resolveManagedLoopWorktree(workspace, entry.path, branch);
       if (await isWorktreeDirty(physical)) {
         retained.push(branch);
         continue;
@@ -172,9 +169,7 @@ export async function promoteLoopDagResult(
   target: string,
 ): Promise<{ dagId: string; target: string; branch: string }> {
   const lease = acquireSessionLease(workspace, `loop-dag-${dagId}`);
-  let resourceLease: ReturnType<typeof acquireSessionLease> | undefined;
   try {
-    resourceLease = acquireSessionLease(workspace, "loop-dag-managed-worktrees");
     const state = loadLoopDagState(workspace, dagId);
     if (!state) throw new Error(`Persisted Loop DAG not found: ${dagId}`);
     const branch =
@@ -184,14 +179,9 @@ export async function promoteLoopDagResult(
           : undefined
         : state.results.find((item) => item.id === target && item.status === "passed")?.output?.managedBranch;
     if (!branch) throw new Error(`Loop DAG target is not promotable: ${target}`);
-    const entry = (await listGitWorktrees(workspace)).find((item) => item.branch === branch);
-    if (!entry) throw new Error(`Loop DAG worktree is missing: ${branch}`);
-    const { physical } = managedWorktreePath(workspace, entry.path, branch);
-    const merged = await mergeWorktree(workspace, physical, branch);
-    if ("conflict" in merged) throw new Error(`Loop DAG promotion conflict: ${merged.files.slice(0, 32).join(", ")}`);
+    await promoteManagedLoopWorktree(workspace, branch, "Loop DAG promotion conflict");
     return { dagId, target, branch };
   } finally {
-    resourceLease?.release();
     lease.release();
   }
 }

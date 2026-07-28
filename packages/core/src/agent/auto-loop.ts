@@ -10,7 +10,7 @@
  */
 import type { AgentError, ApprovalMode } from "@seekforge/shared";
 import { randomUUID } from "node:crypto";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { resolve, sep } from "node:path";
 import { ToolError } from "../tools/errors.js";
 import { runShellCommand } from "../tools/run-command.js";
 import {
@@ -65,6 +65,8 @@ import {
   recordLoopRecoveryObservation,
   selectLoopRecoveryStrategy,
 } from "./loop-recovery-policy.js";
+import { currentLoopBudgetReason, forecastLoopBudgetReason } from "./loop-budget-policy.js";
+import { isVerificationPathPrefix, selectLoopVerificationStage } from "./loop-verification-selection.js";
 
 export type LoopStatus =
   | "passed" // verification command exited 0
@@ -321,63 +323,6 @@ function recoveryInstruction(strategy: LoopRecoveryStrategy): string {
     case "replan":
       return "Re-read the failing area, challenge the current diagnosis, and choose a materially different approach before editing.";
   }
-}
-
-function normalizeVerificationPath(value: string): string | null {
-  if (value.length === 0 || value.length > 512 || value.includes("\0")) return null;
-  const normalized = value.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
-  if (
-    normalized === "" ||
-    normalized.startsWith("/") ||
-    /^[A-Za-z]:\//.test(normalized) ||
-    normalized.split("/").some((part) => part === "" || part === "." || part === "..")
-  )
-    return null;
-  return normalized.endsWith("/**") ? normalized.slice(0, -3) : normalized;
-}
-
-function isVerificationPathPrefix(value: unknown): value is string {
-  return typeof value === "string" && normalizeVerificationPath(value) !== null;
-}
-
-function verificationStageDecision(
-  workspace: string,
-  stage: LoopVerificationStage,
-  changedPaths: ReadonlySet<string>,
-): LoopVerificationDecision {
-  if (!stage.paths?.length) {
-    return { stageId: stage.id, action: "run", reason: "full", matchedPaths: [] };
-  }
-  const prefixes = stage.paths.map(normalizeVerificationPath).filter((value): value is string => value !== null);
-  const dependencyPrefixes = new Set(
-    (stage.dependencyPaths ?? []).map(normalizeVerificationPath).filter((value): value is string => value !== null),
-  );
-  const direct: string[] = [];
-  const dependency: string[] = [];
-  for (const changedPath of changedPaths) {
-    const candidate = normalizeVerificationPath(
-      isAbsolute(changedPath) ? relative(workspace, changedPath) : changedPath,
-    );
-    if (candidate === null) {
-      return { stageId: stage.id, action: "run", reason: "full", matchedPaths: [] };
-    }
-    const matchedPrefix = prefixes
-      .filter((prefix) => candidate === prefix || candidate.startsWith(`${prefix}/`))
-      .sort((left, right) => right.length - left.length)[0];
-    if (matchedPrefix) (dependencyPrefixes.has(matchedPrefix) ? dependency : direct).push(candidate);
-  }
-  if (direct.length > 0) {
-    return { stageId: stage.id, action: "run", reason: "direct", matchedPaths: [...new Set(direct)].slice(0, 16) };
-  }
-  if (dependency.length > 0) {
-    return {
-      stageId: stage.id,
-      action: "run",
-      reason: "dependency",
-      matchedPaths: [...new Set(dependency)].slice(0, 16),
-    };
-  }
-  return { stageId: stage.id, action: "skip", reason: "unaffected", matchedPaths: [] };
 }
 
 function diagnosticAggregate(value: string): string {
@@ -903,28 +848,12 @@ async function runAutoLoopWithLease(
   const finishAbort = (finalVerify: { code: number; output: string } = abortedVerify): LoopResult =>
     finish(abortStatus, finalVerify);
   const elapsedMs = (): number => priorElapsedMs + (Date.now() - runStartedAt);
-  const currentBudgetReason = (pendingCost = 0, pendingTokens = 0): LoopBudgetReason | null => {
-    if (costBudgetUsd !== undefined && costUsd + pendingCost >= costBudgetUsd) return "cost";
-    if (tokenBudget !== undefined && tokensUsed + pendingTokens >= tokenBudget) return "tokens";
-    if (maxDurationMs !== undefined && elapsedMs() >= maxDurationMs) return "duration";
-    if (maxVerifyRuns !== undefined && verifyRuns >= maxVerifyRuns) return "verify_runs";
-    return null;
-  };
-  const forecastBudgetReason = (): LoopBudgetReason | null => {
-    if (!adaptiveBudget) return null;
-    const recent = snapshots.filter((snapshot) => snapshot.iteration > 0).slice(-3);
-    if (recent.length === 0) return null;
-    const conservative = (values: number[]): number => Math.max(...values.filter((value) => value > 0), 0);
-    const forecastCost = conservative(recent.map((snapshot) => snapshot.costUsd ?? 0));
-    const forecastTokens = conservative(recent.map((snapshot) => snapshot.tokensUsed ?? 0));
-    const forecastDuration = conservative(recent.map((snapshot) => snapshot.durationMs ?? 0));
-    if (costBudgetUsd !== undefined && forecastCost > 0 && costUsd + forecastCost >= costBudgetUsd) return "cost";
-    if (tokenBudget !== undefined && forecastTokens > 0 && tokensUsed + forecastTokens >= tokenBudget) return "tokens";
-    if (maxDurationMs !== undefined && forecastDuration > 0 && elapsedMs() + forecastDuration >= maxDurationMs) {
-      return "duration";
-    }
-    return null;
-  };
+  const budgetLimits = { costBudgetUsd, tokenBudget, maxDurationMs, maxVerifyRuns };
+  const budgetUsage = () => ({ costUsd, tokensUsed, elapsedMs: elapsedMs(), verifyRuns });
+  const currentBudgetReason = (pendingCost = 0, pendingTokens = 0): LoopBudgetReason | null =>
+    currentLoopBudgetReason(budgetUsage(), budgetLimits, { costUsd: pendingCost, tokens: pendingTokens });
+  const forecastBudgetReason = (): LoopBudgetReason | null =>
+    adaptiveBudget ? forecastLoopBudgetReason(budgetUsage(), budgetLimits, snapshots) : null;
   const applyControl = async (iteration: number): Promise<void> => {
     let pausedEventSent = false;
     for (;;) {
@@ -1083,7 +1012,7 @@ async function runAutoLoopWithLease(
         matchedPaths: [],
       };
       if (changedPaths !== undefined) {
-        decision = verificationStageDecision(opts.workspace, stage, changedPaths);
+        decision = selectLoopVerificationStage(opts.workspace, stage, changedPaths);
         if (decision.action === "skip") {
           skippedStageIds.push(stage.id);
           continue;

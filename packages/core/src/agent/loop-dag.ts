@@ -3,8 +3,13 @@ import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { AgentCoreDeps } from "./loop.js";
 import { runAutoLoop, type LoopOptions, type LoopResult, type LoopStatus } from "./auto-loop.js";
-import { predictLoopBudgetWeight, recordLoopBudgetObservation } from "./loop-budget-history.js";
-import { acquireSessionLease, acquireSessionLeaseWithPreemption } from "./session-lease.js";
+import {
+  loopBudgetObservationKey,
+  predictLoopBudgetWeight,
+  recordLoopBudgetObservation,
+} from "./loop-budget-history.js";
+import { acquireManagedLoopWorktreeLease, MANAGED_LOOP_BRANCH_RE } from "./loop-managed-worktree.js";
+import { type acquireSessionLease, acquireSessionLeaseWithPreemption } from "./session-lease.js";
 import { isRecord } from "../util/guards.js";
 import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 import {
@@ -135,7 +140,6 @@ export type PersistedLoopDagState = {
 };
 
 const DAG_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-const MANAGED_BRANCH_RE = /^seekforge\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const DAG_STATE_LIMIT = 1024 * 1024;
 const LOOP_STATUSES = new Set<LoopStatus>([
   "passed",
@@ -183,7 +187,7 @@ function parseFanIn(value: unknown): LoopDagFanInResult | undefined | null {
     (value.status !== "passed" && value.status !== "failed") ||
     typeof value.workspace !== "string" ||
     typeof value.branch !== "string" ||
-    !value.branch.startsWith("seekforge/") ||
+    !MANAGED_LOOP_BRANCH_RE.test(value.branch) ||
     typeof value.updatedAt !== "string" ||
     !Number.isFinite(Date.parse(value.updatedAt)) ||
     (value.error !== undefined && (typeof value.error !== "string" || value.error.length > 8_192))
@@ -347,7 +351,7 @@ function parseDagState(raw: string, dagId: string, fingerprint?: string): Persis
       (outputValue.iterations as number) >= 0 &&
       (outputValue.loopId === undefined || typeof outputValue.loopId === "string") &&
       (outputValue.managedBranch === undefined ||
-        (typeof outputValue.managedBranch === "string" && MANAGED_BRANCH_RE.test(outputValue.managedBranch))) &&
+        (typeof outputValue.managedBranch === "string" && MANAGED_LOOP_BRANCH_RE.test(outputValue.managedBranch))) &&
       (outputValue.artifacts === undefined ||
         (Array.isArray(outputValue.artifacts) &&
           outputValue.artifacts.length <= 64 &&
@@ -401,7 +405,7 @@ export function listLoopDagStates(workspace: string): PersistedLoopDagState[] {
           return [];
         }
       })
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+      .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
@@ -532,6 +536,24 @@ function validateNode(node: LoopDagNode, byId: ReadonlyMap<string, LoopDagNode>)
   }
 }
 
+/** Rejects dependency cycles before leases, checkpoints, or worktrees are created. */
+export function assertLoopDagAcyclic(nodes: readonly Pick<LoopDagNode, "id" | "dependsOn">[]): void {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (id: string): void => {
+    if (visited.has(id)) return;
+    if (visiting.has(id)) throw new Error("Loop DAG contains a dependency cycle");
+    visiting.add(id);
+    for (const dependency of byId.get(id)?.dependsOn ?? []) {
+      if (byId.has(dependency)) visit(dependency);
+    }
+    visiting.delete(id);
+    visited.add(id);
+  };
+  for (const node of nodes) visit(node.id);
+}
+
 function dependencyAllowsContinuation(node: LoopDagNode | undefined, result: LoopDagNodeResult | undefined): boolean {
   return result?.status === "passed" || (result?.status === "failed" && node?.failurePolicy === "continue");
 }
@@ -559,6 +581,7 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
     byId.set(node.id, node);
   }
   for (const node of options.nodes) validateNode(node, byId);
+  assertLoopDagAcyclic(options.nodes);
   const concurrency = options.maxConcurrency ?? 1;
   if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 8) {
     throw new RangeError("Loop DAG maxConcurrency must be an integer from 1 to 8");
@@ -681,7 +704,7 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
   let managedResourceLease: ReturnType<typeof acquireSessionLease> | undefined;
   try {
     if (options.managedWorktrees) {
-      managedResourceLease = acquireSessionLease(options.workspace, "loop-dag-managed-worktrees");
+      managedResourceLease = acquireManagedLoopWorktreeLease(options.workspace);
     }
     if (options.managedWorktrees && options.managedWorktreeLimit !== undefined) {
       const existing = await listGitWorktrees(options.workspace);
@@ -1027,16 +1050,17 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
       const schedulingWeight = (id: string): number => {
         const node = byId.get(id)!;
         if (!options.predictiveBudget) return node.budgetWeight ?? 1;
-        const key = `${node.id}:${createHash("sha256").update(node.verifyCommand).digest("hex").slice(0, 16)}`;
+        const key = loopBudgetObservationKey(node.id, node.verifyCommand);
         return predictLoopBudgetWeight(options.workspace, key, node.budgetWeight ?? 1).weight;
       };
-      const totalWeight = ready.reduce((sum, id) => sum + schedulingWeight(id), 0);
+      const schedulingWeights = new Map(ready.map((id) => [id, schedulingWeight(id)]));
+      const totalWeight = [...schedulingWeights.values()].reduce((sum, weight) => sum + weight, 0);
       const alreadyReservedCost = [...running.values()].reduce((sum, entry) => sum + entry.reservedCost, 0);
       const alreadyReservedTokens = [...running.values()].reduce((sum, entry) => sum + entry.reservedTokens, 0);
       for (const id of ready) {
         const node = byId.get(id)!;
         const approval = approvals.get(id);
-        const weightShare = totalWeight > 0 ? schedulingWeight(id) / totalWeight : 0;
+        const weightShare = totalWeight > 0 ? (schedulingWeights.get(id) ?? 0) / totalWeight : 0;
         const remainingCost =
           options.costBudgetUsd === undefined
             ? undefined
@@ -1067,7 +1091,7 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
         const node = byId.get(settled.id)!;
         try {
           recordLoopBudgetObservation(options.workspace, {
-            key: `${node.id}:${createHash("sha256").update(node.verifyCommand).digest("hex").slice(0, 16)}`,
+            key: loopBudgetObservationKey(node.id, node.verifyCommand),
             costUsd: settled.result.result.costUsd,
             tokens: settled.result.result.tokensUsed ?? 0,
             durationMs: settled.result.result.elapsedMs ?? 0,

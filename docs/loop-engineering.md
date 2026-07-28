@@ -49,6 +49,22 @@ The two persisted stores have different ownership:
 - Session JSONL remains the source of truth for the agent conversation and tool
   trace. Loop state points to that session; it does not duplicate the trace.
 
+The implementation keeps these boundaries explicit:
+
+- `loop-state` owns the validated state codec and atomic store, while
+  `loop-history`, `loop-lease`, and `loop-state-paths` own JSONL replay,
+  lifecycle coordination, and path identity respectively.
+- `loop-managed-worktree` is the single branch/path binding layer shared by DAG
+  and speculative execution. Budget forecasts, verification selection, and
+  model-facing tool-result shaping are pure policy modules. Verification
+  manifest detectors are separate from plan composition.
+- CLI JSON decoding and process lifecycle setup live outside command handlers;
+  REST DAG/speculation routes and Desktop list/detail/resource views are split by
+  domain. Server/Desktop Loop response types come from `@seekforge/shared`
+  instead of client-side mirrors.
+- Evidence construction, integrity comparison, and JSON/SARIF/JUnit formatting
+  are separate so adding an export format cannot change the signed report.
+
 ### Run sequence
 
 ```mermaid

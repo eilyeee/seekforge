@@ -61,99 +61,20 @@ export type {
   LoopStatus,
   LoopResult,
   LoopEvent,
+  LoopPersistedStatus,
+  LoopDeliverySummary,
+  LoopStateSummary,
+  LoopHistoryEntry,
+  LoopEvidenceReport,
+  LoopPruneResult,
+  LoopDagSummary,
+  LoopDagResourceReport,
+  LoopSpeculationSummary,
   ModelInfo,
   ApiErrorCode,
 } from "@seekforge/shared";
 
 import type { AgentInfo } from "@seekforge/shared";
-
-export type LoopStateSummary = {
-  loopId: string;
-  status: string;
-  task: string;
-  workspace: string;
-  iterations: number;
-  maxIterations: number;
-  costUsd: number;
-  tokensUsed?: number;
-  elapsedMs?: number;
-  verifyRuns?: number;
-  priority?: number;
-  updatedAt: string;
-  delivery?: {
-    mode: string;
-    status: string;
-    phase?: string;
-    artifact?: string;
-    error?: string;
-    ci?: { status: "pending" | "passed" | "failed"; repairAttempts: number; maxRepairs: number; error?: string };
-  };
-};
-
-export type LoopHistoryEntry = { seq: number; ts: string; event: { type: string; [key: string]: unknown } };
-export type LoopEvidenceReport = {
-  schemaVersion: 1;
-  loopId: string;
-  generatedAt: string;
-  status: string;
-  usage: { costUsd: number; tokensUsed: number; iterations: number };
-  criteria: Array<{
-    id: string;
-    text: string;
-    requirementIds: string[];
-    status: "met" | "unmet" | "unknown";
-    evidence: string[];
-  }>;
-  verification: Array<{
-    id: string;
-    command: string;
-    required: boolean;
-    code?: number;
-    attempts?: number;
-    durationMs?: number;
-    flaky?: boolean;
-    selection?: "full" | "direct" | "dependency" | "cached";
-    matchedPaths?: string[];
-  }>;
-  iterations: Array<{
-    iteration: number;
-    ts: string;
-    failedTests: number;
-    durationMs?: number;
-    costUsd?: number;
-    tokensUsed?: number;
-    failureCategory?: string;
-    rolledBack?: boolean;
-  }>;
-  integrity: { algorithm: "sha256"; digest: string; revision?: string };
-};
-export type LoopPruneResult = { candidates: string[]; removed: string[]; skipped: string[] };
-export type LoopDagSummary = {
-  dagId: string;
-  spentCost: number;
-  spentTokens: number;
-  updatedAt: string;
-  completedAt?: string;
-  results: Array<{ id: string; status: string; reason?: string }>;
-  fanIn?: { status: "passed" | "failed"; branch: string; workspace: string; error?: string };
-};
-export type LoopDagResourceReport = {
-  dagId: string;
-  completed: boolean;
-  archived: boolean;
-  active: boolean;
-  totalBytes: number;
-  truncated: boolean;
-  worktrees: Array<{ branch: string; path: string; bytes: number }>;
-};
-export type LoopSpeculationSummary = {
-  schemaVersion: 1;
-  speculationId: string;
-  status: "running" | "completed" | "failed" | "promoted";
-  updatedAt: string;
-  winnerId?: string;
-  candidates: Array<{ id: string; status: string; costUsd: number; iterations: number; branch?: string }>;
-};
 
 export type AgentImportResult = {
   ok: true;

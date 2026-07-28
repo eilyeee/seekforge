@@ -94,6 +94,7 @@ export {
   listLoopDagStates,
   loadLoopDagState,
   runLoopDag,
+  assertLoopDagAcyclic,
   type LoopDagNode,
   type LoopDagCondition,
   type LoopDagNodeResult,

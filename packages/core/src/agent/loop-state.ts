@@ -1,38 +1,17 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { AgentError } from "@seekforge/shared";
-import {
-  appendFileSync,
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readdirSync,
-  realpathSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { execFileSync } from "node:child_process";
-import { dirname, isAbsolute, join, resolve } from "node:path";
-import type {
-  LoopEvent,
-  LoopIterationSnapshot,
-  LoopStageResult,
-  LoopStatus,
-  LoopVerificationStage,
-} from "./auto-loop.js";
+import { existsSync, readdirSync, rmSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
+import type { LoopIterationSnapshot, LoopStageResult, LoopStatus, LoopVerificationStage } from "./auto-loop.js";
 import {
   DEFAULT_LOOP_AGENT_RETRIES,
   DEFAULT_LOOP_AGENT_TIMEOUT_MS,
   DEFAULT_LOOP_VERIFY_TIMEOUT_MS,
-  LOOP_LOG_FLUSH_INTERVAL_MS,
   MAX_LOOP_ITERATIONS,
-  MAX_LOOP_LOG_BYTES,
   MAX_LOOP_LOG_SEGMENTS,
 } from "./loop-constants.js";
-import { resolveForWrite, resolveInsideWorkspace } from "../tools/sandbox.js";
-import { FileTooLargeError, readUtf8FileBoundedSync } from "../util/fs.js";
+import { resolveForWrite } from "../tools/sandbox.js";
+import { FileTooLargeError } from "../util/fs.js";
 import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 import { isRecord } from "../util/guards.js";
 import {
@@ -43,13 +22,38 @@ import {
   type LoopRequirementMode,
   type LoopRequirementSpec,
 } from "./loop-requirements.js";
+import { acquireWorkspaceSessionGuard, type SessionLease } from "./session-lease.js";
 import {
-  acquireSessionLease,
-  acquireSessionLeaseWithPreemption,
-  acquireWorkspaceSessionGuard,
-  isSessionRunActive,
-  type SessionLease,
-} from "./session-lease.js";
+  LOOP_ID_RE,
+  isValidLoopId,
+  loopLogFile,
+  loopStateFile as loopFile,
+  loopStateRoot as loopsRoot,
+  requireLoopWorkspace as requireWorkspace,
+} from "./loop-state-paths.js";
+import {
+  acquireLoopLease,
+  acquireLoopLifecycleLease,
+  isLoopDeliveryActive,
+  isLoopLeaseActive,
+  isLoopLifecycleActive,
+  type LoopLease,
+} from "./loop-lease.js";
+
+export { appendLoopLog, createLoopLogWriter, readLoopHistory } from "./loop-history.js";
+export type { LoopHistoryEntry, LoopLogWriter } from "./loop-history.js";
+export {
+  acquireLoopDeliveryLease,
+  acquireLoopLease,
+  acquireLoopLifecycleLease,
+  acquireLoopLifecycleLeaseWithPreemption,
+  hasActiveLoopLease,
+  isLoopDeliveryActive,
+  isLoopLeaseActive,
+  isLoopLifecycleActive,
+} from "./loop-lease.js";
+export type { LoopLease } from "./loop-lease.js";
+export { isValidLoopId } from "./loop-state-paths.js";
 
 export type PersistedLoopStatus = "running" | "paused" | LoopStatus;
 export type LoopVerifyResult = { code: number; output: string };
@@ -182,11 +186,11 @@ export type CreateLoopStateInput = Pick<LoopState, "task" | "workspace" | "verif
   priority?: number;
 };
 
-const LOOP_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const LOOP_DELIVERY_MODES = new Set<LoopDeliveryMode>(["checkpoint", "merge", "patch", "pr"]);
 const LOOP_DELIVERY_STATUSES = new Set<LoopDeliveryStatus>(["running", "delivered", "failed"]);
 const LOOP_DELIVERY_PHASES = new Set<LoopDeliveryPhase>(["prepared", "action_completed", "finalized"]);
 const MAX_LOOP_DELIVERY_DETAIL_LENGTH = 8_192;
+const MAX_LOOP_STATE_BYTES = 1024 * 1024;
 const LOOP_STATUSES = new Set<PersistedLoopStatus>([
   "running",
   "paused",
@@ -204,6 +208,17 @@ const LOOP_STATUSES = new Set<PersistedLoopStatus>([
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const isSafeInteger = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value);
 const isIsoDate = (value: unknown): value is string => typeof value === "string" && Number.isFinite(Date.parse(value));
+
+function compactLoopSnapshots(state: LoopState): LoopState {
+  if (!state.snapshots?.length) return state;
+  return {
+    ...state,
+    snapshots: state.snapshots.map((snapshot) => ({
+      ...snapshot,
+      stageResults: snapshot.stageResults.map((stage) => ({ ...stage, command: "", output: "" })),
+    })),
+  };
+}
 
 function parseVerificationPlan(value: unknown): LoopVerificationStage[] | null {
   if (!Array.isArray(value) || value.length === 0 || value.length > 16) return null;
@@ -456,479 +471,6 @@ function parseDelivery(value: unknown): LoopDeliveryState | null {
     ...(ci ? { ci } : {}),
     ...(typeof value.error === "string" ? { error: value.error } : {}),
   };
-}
-
-export function isValidLoopId(loopId: string): boolean {
-  return LOOP_ID_RE.test(loopId);
-}
-
-function requireWorkspace(workspace: string): string {
-  if (!isAbsolute(workspace)) throw new Error("Loop workspace must be an absolute path");
-  const absolute = resolve(workspace);
-  try {
-    return realpathSync.native(absolute);
-  } catch {
-    return absolute;
-  }
-}
-
-const loopsRoot = (workspace: string): string =>
-  resolveInsideWorkspace(requireWorkspace(workspace), join(".seekforge", "loops"));
-function loopFile(workspace: string, loopId: string): string {
-  if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
-  return resolveForWrite(requireWorkspace(workspace), join(".seekforge", "loops", `${loopId}.json`));
-}
-function loopLogFile(workspace: string, loopId: string): string {
-  if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
-  return resolveForWrite(requireWorkspace(workspace), join(".seekforge", "loops", `${loopId}.log`));
-}
-
-/**
- * Append one loop event to `.seekforge/loops/<id>.log` as a timestamped JSONL
- * line. Unlike the state JSON (a snapshot, overwritten each save) this is an
- * append-only history of the run, so a resumed loop keeps accumulating into the
- * same file. Best-effort observability: callers swallow failures because losing
- * a log line must never abort the loop, and a broken `.seekforge/loops` write is
- * already surfaced through the state-persistence warning.
- */
-export function appendLoopLog(workspace: string, loopId: string, event: LoopEvent): void {
-  const writer = createLoopLogWriter(workspace, loopId);
-  writer.append(event);
-  writer.flush();
-}
-
-export type LoopLogWriter = {
-  append: (event: LoopEvent) => void;
-  flush: () => void;
-  close: () => void;
-};
-
-export type LoopHistoryEntry = { seq: number; ts: string; event: LoopEvent };
-
-const loopLogSegments = (target: string): string[] =>
-  Array.from({ length: MAX_LOOP_LOG_SEGMENTS }, (_, index) => (index === 0 ? target : `${target}.${index}`)).reverse();
-
-function lastLoopSequence(target: string): number {
-  let cursor = 0;
-  for (const file of loopLogSegments(target)) {
-    let raw: string;
-    try {
-      raw = readUtf8FileBoundedSync(file, MAX_LOOP_LOG_BYTES);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-      break;
-    }
-    for (const line of raw.split("\n")) {
-      if (!line) continue;
-      try {
-        const row = JSON.parse(line) as unknown;
-        if (!isRecord(row)) break;
-        cursor = isSafeInteger(row.seq) && row.seq > cursor ? row.seq : cursor + 1;
-      } catch {
-        break;
-      }
-    }
-  }
-  return cursor;
-}
-
-/** Reads the bounded current + rotated Loop JSONL history in chronological order. */
-export function readLoopHistory(
-  workspace: string,
-  loopId: string,
-  options: { afterSeq?: number; limit?: number } = {},
-): LoopHistoryEntry[] {
-  const target = loopLogFile(workspace, loopId);
-  const afterSeq = Number.isSafeInteger(options.afterSeq) && options.afterSeq! >= 0 ? options.afterSeq! : 0;
-  const limit = Number.isSafeInteger(options.limit) ? Math.max(1, Math.min(options.limit!, 2_000)) : 500;
-  const eventTypes = new Set([
-    "iteration.start",
-    "run.completed",
-    "verify.output",
-    "verify",
-    "verify.stage.started",
-    "verify.stage.completed",
-    "verify.flaky",
-    "loop.paused",
-    "loop.resumed",
-    "loop.steered",
-    "loop.recovery",
-    "loop.snapshot",
-    "loop.rollback",
-    "requirements.started",
-    "requirements.completed",
-    "requirements.reviewed",
-    "loop.warning",
-    "loop.done",
-  ]);
-  const result: LoopHistoryEntry[] = [];
-  let cursor = 0;
-  for (const file of loopLogSegments(target)) {
-    let raw: string;
-    try {
-      raw = readUtf8FileBoundedSync(file, MAX_LOOP_LOG_BYTES);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-      break;
-    }
-    for (const line of raw.split("\n")) {
-      if (!line) continue;
-      let row: unknown;
-      try {
-        row = JSON.parse(line) as unknown;
-      } catch {
-        break;
-      }
-      if (!isRecord(row) || !isIsoDate(row.ts) || typeof row.type !== "string" || !eventTypes.has(row.type)) break;
-      cursor = isSafeInteger(row.seq) && row.seq > cursor ? row.seq : cursor + 1;
-      if (cursor <= afterSeq) continue;
-      const { ts, seq: _seq, ...event } = row;
-      result.push({ seq: cursor, ts: ts as string, event: event as LoopEvent });
-      if (result.length >= limit) return result;
-    }
-  }
-  return result;
-}
-
-/** Batches event writes and rotates bounded log segments before appending. */
-export function createLoopLogWriter(workspace: string, loopId: string): LoopLogWriter {
-  const target = loopLogFile(workspace, loopId);
-  let pending = "";
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let closed = false;
-  let sequence = lastLoopSequence(target);
-
-  const rotate = (incomingBytes: number): void => {
-    let currentBytes = 0;
-    try {
-      currentBytes = statSync(target).size;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    if (currentBytes === 0 || currentBytes + incomingBytes <= MAX_LOOP_LOG_BYTES) return;
-    for (let segment = MAX_LOOP_LOG_SEGMENTS - 1; segment >= 1; segment--) {
-      const source = segment === 1 ? target : `${target}.${segment - 1}`;
-      const destination = `${target}.${segment}`;
-      try {
-        rmSync(destination, { force: true });
-        renameSync(source, destination);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-    }
-  };
-
-  const flush = (): void => {
-    if (timer !== undefined) clearTimeout(timer);
-    timer = undefined;
-    if (pending === "") return;
-    const batch = pending;
-    pending = "";
-    mkdirSync(dirname(target), { recursive: true });
-    rotate(Buffer.byteLength(batch));
-    appendFileSync(target, batch, { encoding: "utf8", mode: 0o600 });
-  };
-
-  const schedule = (): void => {
-    if (timer !== undefined) return;
-    timer = setTimeout(() => {
-      try {
-        flush();
-      } catch {
-        // Scheduled observability writes are best-effort and cannot fail the loop.
-      }
-    }, LOOP_LOG_FLUSH_INTERVAL_MS);
-    timer.unref?.();
-  };
-
-  return {
-    append: (event) => {
-      if (closed) return;
-      pending += `${JSON.stringify({ seq: ++sequence, ts: new Date().toISOString(), ...event })}\n`;
-      if (Buffer.byteLength(pending) >= 64 * 1024) flush();
-      else schedule();
-    },
-    flush,
-    close: () => {
-      if (closed) return;
-      closed = true;
-      flush();
-    },
-  };
-}
-
-const activeLeases = new Set<string>();
-
-export type LoopLease = { release: () => void };
-
-const leaseKey = (workspace: string, loopId: string): string => `${requireWorkspace(workspace)}\0${loopId}`;
-
-function deliveryLeaseId(loopId: string): string {
-  if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
-  return `loop-delivery-${createHash("sha256").update(loopId).digest("hex").slice(0, 32)}`;
-}
-
-/** Cross-process lease for run, delivery, and deletion lifecycle changes. */
-export function acquireLoopLifecycleLease(workspace: string, loopId: string, workspaceGuard?: SessionLease): LoopLease {
-  return acquireSessionLease(workspace, deliveryLeaseId(loopId), workspaceGuard);
-}
-
-/** Foreground lifecycle acquisition that preempts idle recovery and waits for it to yield. */
-export function acquireLoopLifecycleLeaseWithPreemption(
-  workspace: string,
-  loopId: string,
-  options: { signal?: AbortSignal; workspaceGuard?: SessionLease } = {},
-): Promise<LoopLease> {
-  return acquireSessionLeaseWithPreemption(workspace, deliveryLeaseId(loopId), options);
-}
-
-/** Returns whether a run, delivery, or deletion currently owns this Loop lifecycle. */
-export function isLoopLifecycleActive(workspace: string, loopId: string): boolean {
-  return isSessionRunActive(workspace, deliveryLeaseId(loopId));
-}
-
-/** @deprecated Use acquireLoopLifecycleLease. */
-export const acquireLoopDeliveryLease = acquireLoopLifecycleLease;
-
-/** @deprecated Use isLoopLifecycleActive. */
-export const isLoopDeliveryActive = isLoopLifecycleActive;
-
-function leaseFile(workspace: string, loopId: string): string {
-  if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
-  return resolveForWrite(requireWorkspace(workspace), join(".seekforge", "loops", `.${loopId}.lock`));
-}
-
-type LockSnapshot = { content: string; alive: boolean };
-const MALFORMED_LOCK_GRACE_MS = 30_000;
-const MAX_LOOP_LOCK_BYTES = 16 * 1024;
-const MAX_LOOP_STATE_BYTES = 1024 * 1024;
-
-function compactLoopSnapshots(state: LoopState): LoopState {
-  if (!state.snapshots?.length) return state;
-  return {
-    ...state,
-    snapshots: state.snapshots.map((snapshot) => ({
-      ...snapshot,
-      stageResults: snapshot.stageResults.map((stage) => ({ ...stage, command: "", output: "" })),
-    })),
-  };
-}
-const MAX_PROC_STAT_BYTES = 64 * 1024;
-
-function processIdentity(pid: number): string | undefined {
-  try {
-    if (process.platform === "linux") {
-      const stat = readUtf8FileBoundedSync(`/proc/${pid}/stat`, MAX_PROC_STAT_BYTES);
-      const closeParen = stat.lastIndexOf(")");
-      const fields = stat.slice(closeParen + 2).split(" ");
-      return fields[19] ? `linux:${fields[19]}` : undefined;
-    }
-    if (process.platform === "darwin" || process.platform === "freebsd") {
-      const started = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" }).trim();
-      if (started) return `${process.platform}:${started}`;
-    }
-  } catch {
-    // Fall through to the current-process identity when OS inspection is unavailable.
-  }
-  if (pid === process.pid) return `portable:${Math.floor((Date.now() - process.uptime() * 1_000) / 1_000)}`;
-  return undefined;
-}
-
-const selfProcessIdentity = processIdentity(process.pid);
-
-function readLockSnapshot(target: string): LockSnapshot {
-  let content: string;
-  try {
-    content = readUtf8FileBoundedSync(target, MAX_LOOP_LOCK_BYTES);
-  } catch (error) {
-    if (!(error instanceof FileTooLargeError)) throw error;
-    const stat = statSync(target);
-    return {
-      content: `oversized:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`,
-      alive: Date.now() - stat.mtimeMs < MALFORMED_LOCK_GRACE_MS,
-    };
-  }
-  let owner: Record<string, unknown>;
-  try {
-    const parsed = JSON.parse(content) as unknown;
-    if (!isRecord(parsed)) {
-      return { content, alive: Date.now() - statSync(target).mtimeMs < MALFORMED_LOCK_GRACE_MS };
-    }
-    owner = parsed;
-  } catch {
-    return { content, alive: Date.now() - statSync(target).mtimeMs < MALFORMED_LOCK_GRACE_MS };
-  }
-  if (
-    !Number.isInteger(owner.pid) ||
-    (owner.pid as number) <= 0 ||
-    typeof owner.token !== "string" ||
-    (owner.createdAt !== undefined &&
-      (typeof owner.createdAt !== "string" || !Number.isFinite(Date.parse(owner.createdAt))))
-  ) {
-    return { content, alive: Date.now() - statSync(target).mtimeMs < MALFORMED_LOCK_GRACE_MS };
-  }
-  try {
-    process.kill(owner.pid as number, 0);
-    if (typeof owner.processIdentity === "string") {
-      const currentIdentity = processIdentity(owner.pid as number);
-      if (currentIdentity !== undefined && currentIdentity !== owner.processIdentity) return { content, alive: false };
-    }
-    return { content, alive: true };
-  } catch (error) {
-    return { content, alive: (error as NodeJS.ErrnoException).code !== "ESRCH" };
-  }
-}
-
-function removeStaleLock(target: string, expectedContent: string): boolean {
-  try {
-    if (readLockSnapshot(target).content !== expectedContent) return false;
-    rmSync(target);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    return true;
-  }
-}
-
-/** Returns whether a live process-local or filesystem lease owns this loop. */
-export function isLoopLeaseActive(workspace: string, loopId: string): boolean {
-  if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
-  if (activeLeases.has(leaseKey(workspace, loopId))) return true;
-  const target = leaseFile(workspace, loopId);
-  try {
-    return readLockSnapshot(target).alive;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
-  }
-}
-
-/** Returns whether any live Loop lease exists in this workspace. */
-export function hasActiveLoopLease(workspace: string): boolean {
-  const prefix = `${requireWorkspace(workspace)}\0`;
-  if ([...activeLeases].some((key) => key.startsWith(prefix))) return true;
-  let names: string[];
-  try {
-    names = readdirSync(loopsRoot(workspace));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
-  }
-  for (const name of names) {
-    const match = /^\.(.+)\.lock$/.exec(name);
-    if (!match?.[1]) continue;
-    if (!isValidLoopId(match[1])) return true;
-    if (isLoopLeaseActive(workspace, match[1])) return true;
-  }
-  return false;
-}
-
-/**
- * Acquires a process- and filesystem-wide lease. A dead PID is stale; release
- * verifies its random token so an old owner can never remove a successor lock.
- */
-export function acquireLoopLease(workspace: string, loopId: string, persist: boolean): LoopLease {
-  if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
-  const key = leaseKey(workspace, loopId);
-  if (activeLeases.has(key)) throw new Error(`Loop is already running: ${loopId}`);
-  activeLeases.add(key);
-  if (!persist)
-    return {
-      release: () => {
-        activeLeases.delete(key);
-      },
-    };
-
-  try {
-    const target = leaseFile(workspace, loopId);
-    mkdirSync(dirname(target), { recursive: true });
-    const token = randomUUID();
-    const payload = JSON.stringify({
-      version: 1,
-      pid: process.pid,
-      token,
-      createdAt: new Date().toISOString(),
-      ...(selfProcessIdentity ? { processIdentity: selfProcessIdentity } : {}),
-    });
-    const recoveryTarget = `${target}.recovery`;
-    for (let attempt = 0; attempt < 6; attempt++) {
-      if (existsSync(recoveryTarget)) {
-        const recovery = readLockSnapshot(recoveryTarget);
-        if (recovery.alive) throw new Error(`Loop lease recovery is already running: ${loopId}`);
-        removeStaleLock(recoveryTarget, recovery.content);
-        continue;
-      }
-      try {
-        const fd = openSync(target, "wx", 0o600);
-        try {
-          writeFileSync(fd, payload, "utf8");
-        } catch (error) {
-          try {
-            closeSync(fd);
-          } finally {
-            rmSync(target, { force: true });
-          }
-          throw error;
-        }
-        closeSync(fd);
-        if (existsSync(recoveryTarget)) {
-          try {
-            const owner = JSON.parse(readUtf8FileBoundedSync(target, MAX_LOOP_LOCK_BYTES)) as { token?: unknown };
-            if (owner.token === token) rmSync(target);
-          } catch {
-            /* A recovery contender replaced or removed this candidate. */
-          }
-          continue;
-        }
-        return {
-          release: () => {
-            activeLeases.delete(key);
-            try {
-              const owner = JSON.parse(readUtf8FileBoundedSync(target, MAX_LOOP_LOCK_BYTES)) as { token?: unknown };
-              if (owner.token === token) rmSync(target);
-            } catch {
-              /* A missing/replaced lock no longer belongs to this lease. */
-            }
-          },
-        };
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        const snapshot = readLockSnapshot(target);
-        if (snapshot.alive) throw new Error(`Loop is already running: ${loopId}`);
-        let recoveryFd: number;
-        try {
-          recoveryFd = openSync(recoveryTarget, "wx", 0o600);
-        } catch (recoveryError) {
-          if ((recoveryError as NodeJS.ErrnoException).code === "EEXIST") continue;
-          throw recoveryError;
-        }
-        try {
-          writeFileSync(recoveryFd, payload, "utf8");
-        } finally {
-          closeSync(recoveryFd);
-        }
-        try {
-          const current = readLockSnapshot(target);
-          if (!current.alive && current.content === snapshot.content) removeStaleLock(target, current.content);
-        } catch (recoveryError) {
-          if ((recoveryError as NodeJS.ErrnoException).code !== "ENOENT") throw recoveryError;
-        } finally {
-          try {
-            const owner = JSON.parse(readUtf8FileBoundedSync(recoveryTarget, MAX_LOOP_LOCK_BYTES)) as {
-              token?: unknown;
-            };
-            if (owner.token === token) rmSync(recoveryTarget);
-          } catch {
-            /* A missing/replaced recovery marker no longer belongs to this process. */
-          }
-        }
-      }
-    }
-    throw new Error(`Could not acquire loop lease: ${loopId}`);
-  } catch (error) {
-    activeLeases.delete(key);
-    throw error;
-  }
 }
 
 function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState | null {

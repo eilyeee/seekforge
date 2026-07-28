@@ -27,6 +27,9 @@ written as "recent → keep" silently takes the *else* branch on unparseable inp
   `NaN >= cutoff` false, so an unknown-age memory fact was silently archived.
 - **Also caught:** session metadata accepted offset timestamps but sorted their
   source strings; parse epochs before `keepLast` chooses what pruning retains.
+- **Also caught:** Loop DAG and speculation summaries sorted valid offset
+  timestamps lexicographically, so recency order could be wrong. Compare parsed
+  epochs and retain deterministic tie behavior.
 
 ## 2. Prefix matching needs a separator boundary
 
@@ -2528,6 +2531,9 @@ from a prefix can make archive, merge, or prune act on an unrelated checkout.
   physical path under the exact managed root immediately before every mutation.
 - **Caught:** Loop DAG resource cleanup inferred branches from user-declared
   artifact paths beginning with `seekforge/`.
+- **Also caught:** Loop DAG fan-in accepted any string starting with
+  `seekforge/` as managed provenance. Validate the complete managed branch
+  grammar before resolving or promoting its worktree.
 
 ## 209. Repository-wide quotas require repository-wide coordination
 
@@ -2579,6 +2585,16 @@ only to enumerate or mutate them; the workspace may validly lack that backend.
   database, network, or managed-root resources that are unnecessary for the case.
 - **Caught:** inspecting or pruning a completed non-managed Loop DAG failed because
   it still invoked `git worktree list` in a non-Git workspace.
+
+## 214. Validate complete topology before provisioning derived state
+
+Field-valid graph nodes can still form a dependency cycle. Discovering the cycle
+inside the scheduler is too late if leases, checkpoints, or worktrees already exist.
+
+- **Do:** run a complete acyclic-topology check after node/reference validation
+  and before the first lifecycle acquisition, persisted write, or resource creation.
+- **Caught:** Loop DAG cycle detection ran only after runtime initialization and
+  its initial checkpoint, so an invalid graph could leave durable side effects.
 
 ---
 

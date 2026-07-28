@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatResponse } from "@seekforge/shared";
@@ -27,6 +27,33 @@ describe("runLoopDag", () => {
   const workspaces: string[] = [];
   afterEach(() => {
     for (const workspace of workspaces.splice(0)) rmSync(workspace, { recursive: true, force: true });
+  });
+
+  it("rejects malformed fan-in branch provenance and sorts offset timestamps by epoch", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-state-"));
+    workspaces.push(workspace);
+    const directory = join(workspace, ".seekforge", "loop-dags");
+    mkdirSync(directory, { recursive: true });
+    const state = (dagId: string, updatedAt: string, branch?: string) => ({
+      schemaVersion: 1,
+      dagId,
+      fingerprint: "a".repeat(64),
+      spentCost: 0,
+      spentTokens: 0,
+      results: [],
+      createdAt: "2025-12-31T00:00:00.000Z",
+      updatedAt,
+      ...(branch ? { fanIn: { status: "passed", workspace, branch, updatedAt: "2026-01-01T00:00:00.000Z" } } : {}),
+    });
+    writeFileSync(
+      join(directory, "invalid-fan.json"),
+      JSON.stringify(state("invalid-fan", "2026-01-01T00:00:00Z", "seekforge/a/b")),
+    );
+    writeFileSync(join(directory, "offset-old.json"), JSON.stringify(state("offset-old", "2026-01-01T00:30:00+01:00")));
+    writeFileSync(join(directory, "utc-new.json"), JSON.stringify(state("utc-new", "2026-01-01T00:00:00Z")));
+
+    expect(loadLoopDagState(workspace, "invalid-fan")).toBeNull();
+    expect(listLoopDagStates(workspace).map((item) => item.dagId)).toEqual(["utc-new", "offset-old"]);
   });
 
   it("runs ready dependencies and skips descendants of failures", async () => {
@@ -88,12 +115,14 @@ describe("runLoopDag", () => {
     await expect(
       runLoopDag(deps, {
         workspace,
+        dagId: "cycle-before-side-effects",
         nodes: [
           { id: "a", task: "a", verifyCommand: "test", dependsOn: ["b"] },
           { id: "b", task: "b", verifyCommand: "test", dependsOn: ["a"] },
         ],
       }),
     ).rejects.toThrow(/cycle/);
+    expect(loadLoopDagState(workspace, "cycle-before-side-effects")).toBeNull();
     await expect(
       runLoopDag(deps, {
         workspace,

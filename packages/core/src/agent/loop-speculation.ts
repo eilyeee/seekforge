@@ -3,10 +3,10 @@ import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { join, sep } from "node:path";
 import { isRecord } from "../util/guards.js";
 import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
-import { listGitWorktrees, mergeWorktree } from "../worktree.js";
 import type { AgentCoreDeps } from "./loop.js";
 import { runLoopDag, type LoopDagOptions, type LoopDagNodeResult } from "./loop-dag.js";
 import type { LoopOptions } from "./auto-loop.js";
+import { MANAGED_LOOP_BRANCH_RE, promoteManagedLoopWorktree } from "./loop-managed-worktree.js";
 import { acquireSessionLease } from "./session-lease.js";
 
 export type LoopSpeculationCandidate = { id: string; guidance: string };
@@ -60,7 +60,6 @@ export type LoopSpeculationState = {
 
 const SPECULATION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,55}$/;
 const CANDIDATE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-const MANAGED_BRANCH_RE = /^seekforge\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const STATE_BYTES = 256 * 1024;
 const statePath = (id: string): string => `.seekforge/loop-speculations/${id}.json`;
 
@@ -115,7 +114,7 @@ export function loadLoopSpeculationState(workspace: string, speculationId: strin
       item.costUsd < 0 ||
       !Number.isSafeInteger(item.iterations) ||
       (item.iterations as number) < 0 ||
-      (item.branch !== undefined && (typeof item.branch !== "string" || !MANAGED_BRANCH_RE.test(item.branch)))
+      (item.branch !== undefined && (typeof item.branch !== "string" || !MANAGED_LOOP_BRANCH_RE.test(item.branch)))
     )
       return null;
     candidateIds.add(item.id);
@@ -157,20 +156,11 @@ export function listLoopSpeculationStates(workspace: string): LoopSpeculationSta
         const state = loadLoopSpeculationState(workspace, entry.name.slice(0, -5));
         return state ? [state] : [];
       })
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+      .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
-}
-
-function managedSpeculationWorktree(workspace: string, path: string, branch: string): string {
-  const root = realpathSync.native(join(realpathSync.native(workspace), ".seekforge", "worktrees"));
-  const physical = realpathSync.native(path);
-  if (!physical.startsWith(`${root}${sep}`)) {
-    throw new Error(`Loop speculation worktree escapes the managed root: ${branch}`);
-  }
-  return physical;
 }
 
 /** Runs two or three bounded repair strategies in physically isolated workspaces. */
@@ -309,23 +299,16 @@ export async function runSpeculativeLoop(
 
 export async function promoteLoopSpeculation(workspace: string, speculationId: string): Promise<LoopSpeculationState> {
   const lease = acquireSessionLease(workspace, `loop-speculation-${speculationId}`);
-  let resourceLease: ReturnType<typeof acquireSessionLease> | undefined;
   try {
     const state = loadLoopSpeculationState(workspace, speculationId);
     if (!state || (state.status !== "completed" && state.status !== "promoted") || !state.winnerId) {
       throw new Error(`Loop speculation has no promotable winner: ${speculationId}`);
     }
     if (state.status === "promoted") return state;
-    resourceLease = acquireSessionLease(workspace, "loop-dag-managed-worktrees");
     const winner = state.candidates.find((item) => item.id === state.winnerId);
     if (!winner?.branch || winner.status !== "passed")
       throw new Error(`Loop speculation winner is invalid: ${state.winnerId}`);
-    const entry = (await listGitWorktrees(workspace)).find((item) => item.branch === winner.branch);
-    if (!entry) throw new Error(`Loop speculation winner worktree is missing: ${winner.branch}`);
-    const physical = managedSpeculationWorktree(workspace, entry.path, entry.branch);
-    const merged = await mergeWorktree(workspace, physical, entry.branch);
-    if ("conflict" in merged)
-      throw new Error(`Loop speculation promotion conflict: ${merged.files.slice(0, 32).join(", ")}`);
+    await promoteManagedLoopWorktree(workspace, winner.branch, "Loop speculation promotion conflict");
     const promoted: LoopSpeculationState = {
       ...state,
       status: "promoted",
@@ -335,7 +318,6 @@ export async function promoteLoopSpeculation(workspace: string, speculationId: s
     saveState(workspace, promoted);
     return promoted;
   } finally {
-    resourceLease?.release();
     lease.release();
   }
 }
