@@ -174,8 +174,9 @@ seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick
 - `--verify <cmd>`：成功 = 该命令以 0 退出。
 - `--auto-verify`：从根目录 `package.json`、`Cargo.toml`、`go.mod` 或 pytest 配置发现
   已识别阶段。它只选择固定命令或具名脚本，把结果冻结进 Loop 状态，不把清单脚本文本插值成
-  生成的 shell 命令。对于 `apps/*` 与 `packages/*` 工作区，还会加入有界、按路径选择的包测试阶段；
-  同一迭代中成功的增量阶段可在强制完整回退验证时复用一次。
+  生成的 shell 命令。对于 `apps/*` 与 `packages/*` 工作区，即使根 package 没有已识别脚本也会
+  加入按路径选择的包测试阶段。合并后的计划最多 16 个阶段，并保留根目录与生态门禁。增量阶段的
+  成功结果只允许在紧接着的完整回退验证中复用，且完整工作区指纹必须保持不变。
 - `--requirements quick|analyze|confirm`：`quick` 保留仅验证命令的行为；
   `analyze` 先只读分析仓库并做验收；`confirm` 会持久化规格并以
   `requirements_pending` 暂停，等待显式批准。批准只作用于从持久化状态加载的
@@ -214,7 +215,8 @@ seekforge loop-cleanup <worktree-name> [--force]
 
 - 重复传入 `--verify-stage <id[@路径,...]=命令>` 可组成有序验证流水线。编辑轮次会按
   变更的相对路径前缀选择阶段；增量结果通过后仍会执行完整流水线，因而只能降低中间成本，
-  不会削弱最终门禁。必需阶段失败会停止流水线；Core API 阶段可设置 `required: false`。
+  不会削弱最终门禁。缓存的增量证据只在这次紧接的转换内有效，任何可观察工作区变化都会使其失效。
+  必需阶段失败会停止流水线；Core API 阶段可设置 `required: false`。
 - `--flaky-retries 0..5` 会在编辑前重跑失败阶段，之后通过时记录 `verify.flaky`；
   `--stable-passes 1..5` 要求完整流水线连续通过。
 - `--stuck-recoveries 0..5` 会在返回 `no_progress` 前做有界的重新诊断并改用不同策略；
@@ -239,6 +241,7 @@ seekforge loop-cleanup <worktree-name> [--force]
   `skip_dependents` / `continue` / `stop` 失败策略。节点可通过嵌套 `all` / `any` / `not`
   条件按依赖结果分支，要求带持久 actor/reason 审计的显式审批，锁定具名独占资源，并消费有界
   结构化依赖输出。声明的 `outputPaths` 必须是节点工作区内的普通文件，并作为产物元数据发布。
+  审批会在节点执行开始前以 `approved` 状态写入检查点，因此崩溃恢复不会重复询问，也不会丢失审计。
   完成驱动调度会在任一槽位空闲时立即补位，无需等待无关的慢节点。`--rerun` 会让选中节点及全部下游失效，
   `--approve` 可通过声明的审批门。并行图要求不同的物理工作区；解析后的工作区
   身份会进入持久 DAG 指纹，因此节点改换 checkout 后 `--resume` 会拒绝旧结果，而不会错误复用。
@@ -258,9 +261,12 @@ seekforge loop-cleanup <worktree-name> [--force]
   重新运行冻结的本地流水线，checkpoint 并推送不可变 revision，然后再次等待 CI。
   CI 策略、修复次数、已检查 revision 与失败都会持久化；之后的 `loop-deliver --wait-ci` 会续接
   同一策略，不带 CI 闭环的重试会被拒绝。检查等待与修复推送都支持协作式取消。
+  只有 checks 真实失败且需要修复后，才会初始化 Agent 凭据、工作区授权与 MCP 修复工具；绿色 checks
+  不需要这些依赖。
 - REST Loop 列表支持 `status`、`q`、`limit` 与 `after`；活跃 Loop 可接受
   `POST /api/loops/:id/control`，`/api/loop-dags` 暴露持久图状态。Prometheus 输出增加 Loop 总数、
-  活跃数、成本、Token 与验证次数聚合。Desktop 增加筛选、轮询、历史分页、CI 状态、安全边界控制与 DAG 摘要。
+  活跃数、成本、Token 与验证次数聚合。Desktop 增加筛选、轮询、历史分页、CI 状态、安全边界控制与 DAG 摘要；
+  当查询或所选 Loop 已变化时，会丢弃迟到的筛选与历史响应。
 - WebSocket 客户端可发送 `loop.pause`、`loop.control.resume` 与 `loop.steer`；控制只在安全
   的迭代边界生效。
 - 顶层 CLI 的 `loop-pause`、`loop-continue` 与 `loop-steer` 可以控制另一个仍存活的

@@ -192,8 +192,10 @@ seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick
   `Cargo.toml`, `go.mod`, or pytest configuration. It freezes fixed commands or
   named scripts in Loop state and never interpolates manifest script bodies
   into a generated shell command. For `apps/*` and `packages/*` workspaces it
-  also adds bounded, path-scoped package test stages; successful incremental
-  stages may be reused once by the same iteration's mandatory full fallback.
+  also adds path-scoped package test stages even when the root package has no
+  recognized script. The combined plan is capped at 16 while retaining root and
+  ecosystem gates. A successful incremental stage may be reused only by the
+  same immediate full fallback while a complete workspace fingerprint is unchanged.
 - `--requirements quick|analyze|confirm`: `quick` keeps verifier-only behavior;
   `analyze` performs read-only repository analysis and acceptance review;
   `confirm` persists the specification and stops with `requirements_pending`
@@ -242,6 +244,8 @@ seekforge loop-cleanup <worktree-name> [--force]
   pipeline. Path-scoped stages are selected by changed relative path prefixes
   during edit iterations. Any incremental pass is followed by a full pipeline
   before success, so selection can reduce work but cannot weaken the final gate.
+  Cached incremental evidence is scoped to that immediate transition and
+  invalidated by any observed workspace change.
   Required stages stop the pipeline; Core API stages may set `required: false`.
 - `--flaky-retries 0..5` reruns a failed stage before editing and records a
   `verify.flaky` event when it later passes. `--stable-passes 1..5` requires
@@ -280,6 +284,8 @@ seekforge loop-cleanup <worktree-name> [--force]
   approval with durable actor/reason audit, lock named exclusive resources, and
   consume bounded structured dependency outputs. Declared `outputPaths` must be
   regular files inside the node workspace and are published as artifact metadata.
+  An approval is checkpointed as `approved` before node execution begins, so a
+  crash resumes the authorized node without asking again or losing the audit.
   Completion-driven scheduling immediately fills a free slot instead of waiting
   for an unrelated slow batch peer. `--rerun` invalidates a
   selected node and all descendants; `--approve` crosses a declared gate.
@@ -313,11 +319,14 @@ seekforge loop-cleanup <worktree-name> [--force]
   The CI policy, repair count, checked revision, and failure are durable; a later
   `loop-deliver --wait-ci` resumes the same policy, while retrying without CI
   closure is rejected. Check waits and repair pushes are cooperatively cancellable.
+  Agent credentials, workspace authorization, and MCP repair tools are initialized
+  only after a failed check actually requires a repair; green checks need none of them.
 - REST Loop listing supports `status`, `q`, `limit`, and `after`; active Loops
   accept `POST /api/loops/:id/control`, and `/api/loop-dags` exposes durable graph
   state. Prometheus output includes aggregate Loop count, activity, cost, tokens,
   and verifier runs. Desktop adds filtering, polling, history paging, CI state,
-  safe-boundary controls, and DAG summaries.
+  safe-boundary controls, and DAG summaries; late filter or history responses are
+  discarded when their query or selected Loop is no longer current.
 - WebSocket clients can send `loop.pause`, `loop.control.resume`, and
   `loop.steer`; controls take effect only at safe iteration boundaries.
 - The top-level `loop-pause`, `loop-continue`, and `loop-steer` CLI commands can

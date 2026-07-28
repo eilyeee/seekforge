@@ -11,6 +11,7 @@ export type DiscoveredLoopVerificationPlan = {
 
 const PACKAGE_JSON_LIMIT = 1024 * 1024;
 const MAX_WORKSPACE_STAGES = 12;
+const MAX_VERIFICATION_STAGES = 16;
 
 function hasRegularRootFile(workspace: string, name: string): boolean {
   try {
@@ -126,34 +127,29 @@ function workspacePackageStages(
  */
 export function discoverLoopVerificationPlan(workspace: string): DiscoveredLoopVerificationPlan {
   const root = realpathSync.native(workspace);
-  const stages: LoopVerificationStage[] = [];
-  const sources: string[] = [];
+  const authoritativeStages: LoopVerificationStage[] = [];
+  const authoritativeSources: string[] = [];
   const packagePlan = packageStages(root);
   if (packagePlan) {
-    const workspacePlan = workspacePackageStages(root, packageManager(root));
-    if (workspacePlan) {
-      stages.push(...workspacePlan.stages);
-      sources.push(...workspacePlan.sources);
-    }
-    stages.push(...packagePlan.stages.slice(0, 16 - stages.length));
-    sources.push(...packagePlan.sources);
+    authoritativeStages.push(...packagePlan.stages);
+    authoritativeSources.push(...packagePlan.sources);
   }
   if (hasRegularRootFile(root, "Cargo.toml")) {
-    stages.push({ id: "cargo-fmt", command: "cargo fmt --check" });
-    stages.push({ id: "cargo-test", command: "cargo test --workspace" });
-    sources.push("Cargo.toml");
+    authoritativeStages.push({ id: "cargo-fmt", command: "cargo fmt --check" });
+    authoritativeStages.push({ id: "cargo-test", command: "cargo test --workspace" });
+    authoritativeSources.push("Cargo.toml");
   }
   if (hasRegularRootFile(root, "go.mod")) {
-    stages.push({ id: "go-test", command: "go test ./..." });
-    sources.push("go.mod");
+    authoritativeStages.push({ id: "go-test", command: "go test ./..." });
+    authoritativeSources.push("go.mod");
   }
   if (
     hasRegularRootFile(root, "pyproject.toml") ||
     hasRegularRootFile(root, "pytest.ini") ||
     hasRegularRootFile(root, "setup.cfg")
   ) {
-    stages.push({ id: "pytest", command: "python -m pytest" });
-    sources.push(
+    authoritativeStages.push({ id: "pytest", command: "python -m pytest" });
+    authoritativeSources.push(
       hasRegularRootFile(root, "pyproject.toml")
         ? "pyproject.toml"
         : hasRegularRootFile(root, "pytest.ini")
@@ -161,6 +157,14 @@ export function discoverLoopVerificationPlan(workspace: string): DiscoveredLoopV
           : "setup.cfg",
     );
   }
+  const workspacePlan = hasRegularRootFile(root, "package.json")
+    ? workspacePackageStages(root, packageManager(root))
+    : undefined;
+  const authoritative = authoritativeStages.slice(0, MAX_VERIFICATION_STAGES);
+  const workspaceCapacity = Math.max(0, MAX_VERIFICATION_STAGES - authoritative.length);
+  const workspaceStages = workspacePlan?.stages.slice(0, workspaceCapacity) ?? [];
+  const stages = [...workspaceStages, ...authoritative];
+  const sources = [...(workspacePlan?.sources.slice(0, workspaceStages.length) ?? []), ...authoritativeSources];
   if (stages.length === 0) {
     throw new Error("Could not discover a Loop verification plan from root project manifests");
   }

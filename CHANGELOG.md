@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### round 68: Loop boundary hardening
+- Bound incremental verification reuse to an unchanged workspace fingerprint and
+  preserved the authoritative full gate across later passes and rollback.
+- Persisted DAG approval before execution, repaired monorepo verification discovery
+  and stage caps, and made CI repair dependencies lazy and cancellation-aware.
+- Guarded Desktop Loop list/history responses by request generation, expanded
+  regression coverage, and documented the new boundary classes.
+
 ### round 67: durable completion-driven Loop orchestration
 - Made PR/CI delivery policy and repair progress durable and cooperatively cancellable,
   so retries cannot bypass an unfinished CI closure.

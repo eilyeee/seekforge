@@ -655,15 +655,11 @@ export async function loopDeliverCommand(
     }
     const maxRepairs = existingCi?.maxRepairs ?? opts.ciRepairs ?? 0;
     const repairBudgetUsd = existingCi?.repairBudgetUsd ?? opts.ciRepairBudget ?? 1;
-    let deps: Parameters<typeof runAutoLoop>[0] | undefined;
-    let sandbox = loadConfig(workspace).sandbox;
-    if (waitCi && maxRepairs > (existingCi?.repairAttempts ?? 0)) {
+    let repairContext: LoopCiRepairContext | undefined;
+    const getRepairContext = async (): Promise<LoopCiRepairContext> => {
+      if (repairContext) return repairContext;
       const preflight = await preflightLoop(workspace, opts);
-      if (!preflight) {
-        process.exitCode = 1;
-        return;
-      }
-      sandbox = preflight.config.sandbox;
+      if (!preflight) throw new Error("CI repair prerequisites were not satisfied");
       const mcp = await prepareMcp(preflight.config, workspace);
       disposeMcp = mcp.dispose;
       const created = createCliAgentDeps({
@@ -676,9 +672,10 @@ export async function loopDeliverCommand(
         extractMemory: false,
         subagents: loadAgentDefinitions(workspace, mcp.pluginContributions),
       });
-      deps = created.deps;
       dispose = created.dispose;
-    }
+      repairContext = { deps: created.deps, sandbox: preflight.config.sandbox };
+      return repairContext;
+    };
     const deliveryOptions: LoopDeliveryOptions = waitCi
       ? {
           ciPolicy: { maxRepairs, repairBudgetUsd },
@@ -687,8 +684,7 @@ export async function loopDeliverCommand(
               workspace,
               delivered,
               state: current,
-              deps,
-              sandbox,
+              getRepairContext,
               maxRepairs,
               repairBudgetUsd,
               signal: controller.signal,
@@ -1112,8 +1108,10 @@ async function runPreparedLoop(
             workspace: projectPath,
             delivered,
             state,
-            deps: { ...deps, extractMemory: false },
-            sandbox: config.sandbox,
+            getRepairContext: async () => ({
+              deps: { ...deps, extractMemory: false },
+              sandbox: config.sandbox,
+            }),
             maxRepairs: loopOpts.ciRepairs ?? 0,
             repairBudgetUsd: loopOpts.ciRepairBudget ?? 1,
             signal: controller.signal,
@@ -1135,7 +1133,7 @@ async function runPreparedLoop(
   }
 }
 
-type LoopDeliveryResult = {
+export type LoopDeliveryResult = {
   artifact: string;
   message: string;
   branch?: string;
@@ -1151,12 +1149,11 @@ type LoopDeliveryOptions = {
   ) => Promise<LoopDeliveryResult>;
 };
 
-type LoopCiClosureOptions = {
+export type LoopCiClosureOptions = {
   workspace: string;
   delivered: LoopDeliveryResult;
   state: LoopState;
-  deps?: Parameters<typeof runAutoLoop>[0];
-  sandbox: ReturnType<typeof loadConfig>["sandbox"];
+  getRepairContext: () => Promise<LoopCiRepairContext>;
   maxRepairs: number;
   repairBudgetUsd: number;
   signal: AbortSignal;
@@ -1164,9 +1161,14 @@ type LoopCiClosureOptions = {
   updateCi: (update: Partial<LoopDeliveryCiState>) => void;
 };
 
+type LoopCiRepairContext = {
+  deps: Parameters<typeof runAutoLoop>[0];
+  sandbox: ReturnType<typeof loadConfig>["sandbox"];
+};
+
 type ExternalCommandResult = { status: number | null; stdout: string; stderr: string; error?: Error };
 
-function runExternalCommand(
+export function runExternalCommand(
   command: string,
   args: string[],
   workspace: string,
@@ -1240,6 +1242,7 @@ async function runGh(
   if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
     throw new Error("GitHub CLI (gh) is required");
   }
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ABORT_ERR") throw result.error;
   return result;
 }
 
@@ -1268,7 +1271,7 @@ async function failedCiLog(workspace: string, branch: string, signal: AbortSigna
   return logs.stdout.slice(0, CI_LOG_FEEDBACK_LIMIT);
 }
 
-async function closeLoopPrCi(options: LoopCiClosureOptions): Promise<LoopDeliveryResult> {
+export async function closeLoopPrCi(options: LoopCiClosureOptions): Promise<LoopDeliveryResult> {
   const url = options.delivered.evidence?.url;
   const branch = options.delivered.evidence?.branch;
   if (!url || !branch) throw new Error("Loop PR delivery lacks CI-check evidence");
@@ -1295,7 +1298,7 @@ async function closeLoopPrCi(options: LoopCiClosureOptions): Promise<LoopDeliver
       }
       const log = await failedCiLog(options.workspace, branch, options.signal);
       if (!log) throw new Error("Pull request checks failed and no bounded failed-step log was available");
-      if (!options.deps) throw new Error("CI repair requires configured agent credentials");
+      const repairContext = await options.getRepairContext();
       repairAttempts++;
       options.updateCi({
         status: "pending",
@@ -1305,7 +1308,7 @@ async function closeLoopPrCi(options: LoopCiClosureOptions): Promise<LoopDeliver
         error: undefined,
       });
       let injectedCiFailure = false;
-      const repaired = await runAutoLoop(options.deps, {
+      const repaired = await runAutoLoop(repairContext.deps, {
         task: buildCiRepairPrompt(log),
         workspace: options.workspace,
         verifyCommand: options.state.verifyCommand,
@@ -1325,7 +1328,7 @@ async function closeLoopPrCi(options: LoopCiClosureOptions): Promise<LoopDeliver
             return { code: 1, output: log };
           }
           const result = await runShellCommand(command, workspace, options.state.verifyTimeoutMs ?? 120_000, {
-            sandbox: options.sandbox,
+            sandbox: repairContext.sandbox,
             workspace,
             signal,
             onOutput,
@@ -1360,8 +1363,12 @@ async function closeLoopPrCi(options: LoopCiClosureOptions): Promise<LoopDeliver
       };
     }
   } catch (error) {
+    const cancelled =
+      options.signal.aborted ||
+      (error instanceof Error &&
+        (error.name === "AbortError" || (error as NodeJS.ErrnoException).code === "ABORT_ERR"));
     options.updateCi({
-      status: "failed",
+      status: cancelled ? "pending" : "failed",
       repairAttempts,
       revision: delivered.evidence?.revision,
       url,

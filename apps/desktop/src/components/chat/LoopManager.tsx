@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api";
+import { LatestRequest } from "../../views/async-coordination";
 import { useT } from "../../lib/i18n";
 import type { LoopDagSummary, LoopHistoryEntry, LoopStateSummary } from "../../types";
 import { Badge, Button } from "../ui";
@@ -16,23 +17,38 @@ export function LoopManager({ running, onResume }: Props) {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const refreshRequests = useRef(new LatestRequest());
+  const historyRequests = useRef(new LatestRequest());
+  const selectedRef = useRef<string>();
   const refresh = useCallback(async () => {
+    const request = refreshRequests.current.begin();
     setBusy(true);
     try {
       const [nextLoops, nextDags] = await Promise.all([
         api.loops({ q: query || undefined, status: status || undefined, limit: 100 }),
         api.loopDags(),
       ]);
-      setLoops(nextLoops);
-      setDags(nextDags);
-      setError("");
+      if (refreshRequests.current.isCurrent(request)) {
+        setLoops(nextLoops);
+        setDags(nextDags);
+        setError("");
+      }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      if (refreshRequests.current.isCurrent(request)) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
     } finally {
-      setBusy(false);
+      if (refreshRequests.current.isCurrent(request)) setBusy(false);
     }
   }, [query, status]);
   useEffect(() => void refresh(), [refresh]);
+  useEffect(
+    () => () => {
+      refreshRequests.current.invalidate();
+      historyRequests.current.invalidate();
+    },
+    [],
+  );
   useEffect(() => {
     if (!running && !selected) return;
     const timer = window.setInterval(() => void refresh(), 5_000);
@@ -40,18 +56,38 @@ export function LoopManager({ running, onResume }: Props) {
   }, [refresh, running, selected]);
 
   const inspect = async (loopId: string) => {
+    const request = historyRequests.current.begin();
+    selectedRef.current = loopId;
     setSelected(loopId);
+    setHistory([]);
     try {
-      setHistory(await api.loopHistory(loopId, 0, 100));
-      setError("");
+      const nextHistory = await api.loopHistory(loopId, 0, 100);
+      if (historyRequests.current.isCurrent(request) && selectedRef.current === loopId) {
+        setHistory(nextHistory);
+        setError("");
+      }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      if (historyRequests.current.isCurrent(request) && selectedRef.current === loopId) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
     }
   };
   const loadMoreHistory = async () => {
-    if (!selected) return;
-    const next = await api.loopHistory(selected, history.at(-1)?.seq ?? 0, 100);
-    setHistory((current) => [...current, ...next]);
+    const loopId = selectedRef.current;
+    if (!loopId) return;
+    const cursor = history.at(-1)?.seq ?? 0;
+    const request = historyRequests.current.begin();
+    try {
+      const next = await api.loopHistory(loopId, cursor, 100);
+      if (historyRequests.current.isCurrent(request) && selectedRef.current === loopId) {
+        setHistory((current) => [...current, ...next]);
+        setError("");
+      }
+    } catch (caught) {
+      if (historyRequests.current.isCurrent(request) && selectedRef.current === loopId) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    }
   };
   const control = async (loopId: string, operation: "pause" | "resume" | "steer") => {
     const message = operation === "steer" ? window.prompt(t("chat.loop.manager.steerPrompt"))?.trim() : undefined;
@@ -91,7 +127,9 @@ export function LoopManager({ running, onResume }: Props) {
     setBusy(true);
     try {
       await api.loopDelete(loopId);
-      if (selected === loopId) {
+      if (selectedRef.current === loopId) {
+        selectedRef.current = undefined;
+        historyRequests.current.invalidate();
         setSelected(undefined);
         setHistory([]);
       }

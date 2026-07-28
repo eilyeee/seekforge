@@ -66,6 +66,49 @@ describe("discoverLoopVerificationPlan", () => {
     });
   });
 
+  it("discovers child package tests when the root package has no recognized scripts", () => {
+    const root = mkdtempSync(join(tmpdir(), "seekforge-loop-plan-"));
+    roots.push(root);
+    mkdirSync(join(root, "apps", "web"), { recursive: true });
+    writeFileSync(join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    writeFileSync(join(root, "package.json"), JSON.stringify({ private: true }));
+    writeFileSync(join(root, "apps", "web", "package.json"), JSON.stringify({ scripts: { test: "vitest" } }));
+    expect(discoverLoopVerificationPlan(root)).toEqual({
+      stages: [
+        {
+          id: "test-apps-web",
+          command: "pnpm --filter ./apps/web test",
+          paths: ["apps/web"],
+          cacheable: true,
+        },
+      ],
+      sources: ["apps/web/package.json"],
+    });
+  });
+
+  it("caps the complete plan while retaining every authoritative root gate", () => {
+    const root = mkdtempSync(join(tmpdir(), "seekforge-loop-plan-"));
+    roots.push(root);
+    writeFileSync(join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ scripts: { typecheck: "tsc", lint: "lint", test: "test", build: "build" } }),
+    );
+    for (let index = 0; index < 12; index++) {
+      const directory = join(root, "packages", `p${String(index).padStart(2, "0")}`);
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, "package.json"), JSON.stringify({ scripts: { test: "vitest" } }));
+    }
+    writeFileSync(join(root, "Cargo.toml"), "[workspace]\n");
+    writeFileSync(join(root, "go.mod"), "module example.test/demo\n");
+    writeFileSync(join(root, "pyproject.toml"), "[tool.pytest.ini_options]\n");
+    const plan = discoverLoopVerificationPlan(root);
+    expect(plan.stages).toHaveLength(16);
+    expect(plan.stages.map((stage) => stage.id)).toEqual(
+      expect.arrayContaining(["typecheck", "lint", "test", "build", "cargo-fmt", "cargo-test", "go-test", "pytest"]),
+    );
+  });
+
   it("does not let symlinked root markers select executable verification", () => {
     const root = mkdtempSync(join(tmpdir(), "seekforge-loop-plan-"));
     const outside = mkdtempSync(join(tmpdir(), "seekforge-loop-plan-outside-"));

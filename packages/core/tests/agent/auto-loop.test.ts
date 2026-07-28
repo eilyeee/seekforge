@@ -348,8 +348,55 @@ describe("runAutoLoop", () => {
           return verifies === 1 ? { code: 1, output: "initial failure" } : { code: 0, output: "ok" };
         }),
         verificationPlan: [
-          { id: "cli", command: "test-cli", paths: ["apps/cli"] },
+          { id: "cli", command: "test-cli", paths: ["apps/cli"], cacheable: true },
           { id: "server", command: "test-server", paths: ["apps/server/**"] },
+          { id: "all", command: "test-all" },
+        ],
+        maxIterations: 1,
+      },
+    );
+    expect(result.status).toBe("passed");
+    expect(commands).toEqual(["test-cli", "test-cli", "test-all", "test-server", "test-all"]);
+  });
+
+  it("invalidates an incremental verification cache entry when a later stage changes the workspace", async () => {
+    const commands: string[] = [];
+    let cliChecks = 0;
+    let allChecks = 0;
+    const provider = alwaysDone("flash");
+    provider.chat = async (): Promise<ChatResponse> => {
+      provider.chats++;
+      if (provider.chats === 1) {
+        return {
+          content: "editing cli",
+          toolCalls: [{ id: "edit-cache", name: "apply_patch", argumentsJson: '{"path":"apps/cli/src/a.ts"}' }],
+          usage: USAGE,
+          finishReason: "tool_calls",
+        };
+      }
+      return text("done");
+    };
+    const dispatcher: ToolDispatcher = {
+      list: () => [{ name: "apply_patch", description: "edit", parameters: {} }],
+      execute: async () => ({ ok: true, meta: { path: "apps/cli/src/a.ts" } }),
+    };
+    const result = await runAutoLoop(
+      { provider, dispatcher, confirm: async () => true },
+      {
+        ...baseOpts(workspace, async (_workspace, command) => {
+          commands.push(command);
+          if (command === "test-cli") {
+            cliChecks++;
+            return cliChecks === 1 ? { code: 1, output: "initial failure" } : { code: 0, output: "ok" };
+          }
+          if (command === "test-all" && ++allChecks === 1) {
+            writeFileSync(join(workspace, "verification-mutated.txt"), "changed\n");
+          }
+          return { code: 0, output: "ok" };
+        }),
+        verificationPlan: [
+          { id: "cli", command: "test-cli", paths: ["apps/cli"], cacheable: true },
+          { id: "server", command: "test-server", paths: ["apps/server"] },
           { id: "all", command: "test-all" },
         ],
         maxIterations: 1,

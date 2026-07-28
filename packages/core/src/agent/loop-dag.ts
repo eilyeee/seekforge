@@ -55,7 +55,7 @@ export type LoopDagNode = {
 
 export type LoopDagNodeResult = {
   id: string;
-  status: "passed" | "failed" | "skipped" | "waiting_approval";
+  status: "passed" | "failed" | "skipped" | "waiting_approval" | "approved";
   result?: LoopResult;
   output?: LoopDagNodeOutput;
   reason?: string;
@@ -208,7 +208,8 @@ function parseDagState(raw: string, dagId: string, fingerprint?: string): Persis
       (item.status !== "passed" &&
         item.status !== "failed" &&
         item.status !== "skipped" &&
-        item.status !== "waiting_approval") ||
+        item.status !== "waiting_approval" &&
+        item.status !== "approved") ||
       (item.reason !== undefined && (typeof item.reason !== "string" || item.reason.length > 8_192)) ||
       (item.attempts !== undefined && (!Number.isSafeInteger(item.attempts) || (item.attempts as number) <= 0)) ||
       (item.approval !== undefined &&
@@ -218,7 +219,8 @@ function parseDagState(raw: string, dagId: string, fingerprint?: string): Persis
           (item.approval.actor !== undefined &&
             (typeof item.approval.actor !== "string" || item.approval.actor.length > 256)) ||
           (item.approval.reason !== undefined &&
-            (typeof item.approval.reason !== "string" || item.approval.reason.length > 2_048))))
+            (typeof item.approval.reason !== "string" || item.approval.reason.length > 2_048)))) ||
+      (item.status === "approved" && item.approval === undefined)
     )
       return null;
     const result = item.result === undefined ? undefined : parseLoopResult(item.result);
@@ -432,7 +434,7 @@ function dependencyAllowsNode(
   result: LoopDagNodeResult | undefined,
 ): boolean {
   if (node.condition && conditionReferences(node.condition)?.includes(dependency)) {
-    return result !== undefined && result.status !== "waiting_approval";
+    return result !== undefined && result.status !== "waiting_approval" && result.status !== "approved";
   }
   return dependencyAllowsContinuation(dependencyNode, result);
 }
@@ -518,11 +520,13 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
       checkpoint = restored;
     }
     const results = new Map(checkpoint.results.map((result) => [result.id, result]));
+    const approvals = new Map<string, NonNullable<LoopDagNodeResult["approval"]>>();
     for (const id of results.keys()) {
       if (!byId.has(id)) throw new Error(`Persisted Loop DAG contains an unknown node: ${id}`);
     }
     for (const [id, result] of results) {
-      if (result.status === "waiting_approval") results.delete(id);
+      if (result.status === "approved" && result.approval) approvals.set(id, result.approval);
+      if (result.status === "waiting_approval" || result.status === "approved") results.delete(id);
     }
     if (options.rerunFrom?.length) {
       const invalidated = new Set(options.rerunFrom);
@@ -536,7 +540,10 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
           }
         }
       }
-      for (const id of invalidated) results.delete(id);
+      for (const id of invalidated) {
+        results.delete(id);
+        approvals.delete(id);
+      }
     }
     const pending = new Set([...byId.keys()].filter((id) => !results.has(id)));
     let spentCost = [...results.values()].reduce((sum, result) => sum + (result.result?.costUsd ?? 0), 0);
@@ -549,7 +556,11 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
         spentCost,
         spentTokens,
         results: options.nodes.flatMap((node) => {
-          const result = results.get(node.id);
+          const result =
+            results.get(node.id) ??
+            (approvals.has(node.id)
+              ? { id: node.id, status: "approved" as const, approval: approvals.get(node.id)! }
+              : undefined);
           return result ? [result] : [];
         }),
         updatedAt: new Date().toISOString(),
@@ -685,7 +696,10 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
           const node = byId.get(id)!;
           if (node.condition) {
             const conditionRefs = conditionReferences(node.condition) ?? [];
-            const conditionResolved = conditionRefs.every((dependency) => results.has(dependency));
+            const conditionResolved = conditionRefs.every((dependency) => {
+              const result = results.get(dependency);
+              return result?.status === "passed" || result?.status === "failed" || result?.status === "skipped";
+            });
             if (conditionResolved && !conditionMatches(node.condition, results)) {
               results.set(id, { id, status: "skipped", reason: "condition not met" });
               pending.delete(id);
@@ -743,24 +757,24 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
       }
       for (const id of [...ready]) {
         const node = byId.get(id)!;
-        if (!node.requiresApproval) continue;
+        if (!node.requiresApproval || approvals.has(id)) continue;
         const decision = await options.approveNode?.(node, results);
         const approved = decision === true || (isRecord(decision) && decision.approved === true);
         if (approved) {
           const approvedAt = new Date().toISOString();
-          results.set(id, {
-            id,
-            status: "waiting_approval",
-            approval: {
-              approvedAt,
-              ...(isRecord(decision) && typeof decision.actor === "string"
-                ? { actor: decision.actor.slice(0, 256) }
-                : {}),
-              ...(isRecord(decision) && typeof decision.reason === "string"
-                ? { reason: decision.reason.slice(0, 2_048) }
-                : {}),
-            },
+          approvals.set(id, {
+            approvedAt,
+            ...(isRecord(decision) && typeof decision.actor === "string"
+              ? { actor: decision.actor.slice(0, 256) }
+              : {}),
+            ...(isRecord(decision) && typeof decision.reason === "string"
+              ? { reason: decision.reason.slice(0, 2_048) }
+              : {}),
           });
+          // Approval authorizes the side effect and must be durable before the
+          // node can start. A resume reuses this exact approval instead of
+          // prompting again or silently widening it.
+          persist(false);
           continue;
         }
         results.set(id, { id, status: "waiting_approval", reason: "explicit approval required" });
@@ -779,7 +793,7 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
       const alreadyReservedTokens = [...running.values()].reduce((sum, entry) => sum + entry.reservedTokens, 0);
       for (const id of ready) {
         const node = byId.get(id)!;
-        const approval = results.get(id)?.approval;
+        const approval = approvals.get(id);
         const weightShare = totalWeight > 0 ? (node.budgetWeight ?? 1) / totalWeight : 0;
         const remainingCost =
           options.costBudgetUsd === undefined
@@ -803,6 +817,7 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
         [...running].map(([id, entry]) => entry.promise.then((result) => ({ id, result }))),
       );
       running.delete(settled.id);
+      approvals.delete(settled.id);
       results.set(settled.id, settled.result);
       spentCost += settled.result.result?.costUsd ?? 0;
       spentTokens += settled.result.result?.tokensUsed ?? 0;

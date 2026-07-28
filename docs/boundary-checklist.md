@@ -2415,6 +2415,67 @@ workspace after execution.
   the physical target, and prove it remains beneath the physical workspace root.
 - **Caught:** Loop DAG dependency outputs had no validated file-artifact contract.
 
+## 198. Cached verification evidence is bound to the verified state
+
+A stage id and iteration identify an invocation slot, not the workspace contents
+that passed. Reusing that result after another verifier or rollback changes files
+can bypass the authoritative full gate.
+
+- **Do:** scope reuse to one incremental-to-full transition, bind it to a complete
+  workspace fingerprint, and disable reuse when the fingerprint is uncertain or changed.
+- **Caught:** Auto-Loop verification cached only by iteration and stage id, so a
+  rollback could reuse success from the rejected workspace.
+
+## 199. Persist authorization before starting the authorized side effect
+
+An in-memory approval followed immediately by execution has a crash window: the
+side effect may start while durable state still says approval is pending.
+
+- **Do:** persist a distinct approved-but-not-completed state first, restore it
+  without prompting again, and replace it only with the terminal execution result.
+- **Caught:** Loop DAG approval was not checkpointed before node execution and
+  resume deleted every waiting record, allowing duplicate approval or execution.
+
+## 200. Discovery output must independently satisfy the consumer contract
+
+One root detector failing to produce a command must not suppress valid child
+detectors, and independently bounded sources can still overflow a shared limit.
+
+- **Do:** run applicable discovery roots independently, reserve capacity for
+  authoritative global gates, and enforce the final consumer limit after combining.
+- **Caught:** monorepo package tests required a recognized root script, while
+  package, Cargo, Go, and Python stages together could exceed Loop's 16-stage cap.
+
+## 201. Optional repair prerequisites are lazy dependencies
+
+A configured repair policy does not prove repair will be needed. Loading provider
+credentials, trust prompts, MCP processes, or profiles before observing failure can
+break a successful no-repair path and create unrelated side effects.
+
+- **Do:** evaluate the external gate first and initialize repair-only dependencies
+  only after a failed result is eligible for repair.
+- **Caught:** `loop-deliver --wait-ci` eagerly initialized Agent/MCP configuration
+  even when PR checks were already green.
+
+## 202. Every async UI commit is bound to the selected resource generation
+
+Filtering, polling, selecting, and paging can overlap. Request order is not response
+order, so an old success, error, or `finally` can overwrite the current resource.
+
+- **Do:** give each independent request stream a latest-generation token, capture
+  the selected resource id, and guard success, failure, append, and busy cleanup.
+- **Caught:** Desktop Loop management could show an older filter result or append
+  history from a previously selected Loop.
+
+## 203. Cancellation errors remain control flow across wrapper layers
+
+Returning an abort inside a generic command-result envelope lets the next wrapper
+interpret it as an ordinary nonzero exit and persist a domain failure.
+
+- **Do:** rethrow cancellation before interpreting command status and keep durable
+  retryable state distinct from a real external-check failure.
+- **Caught:** cancelled `gh` CI watches were recorded as failed checks or missing logs.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

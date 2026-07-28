@@ -1017,10 +1017,11 @@ async function runAutoLoopWithLease(
     }
   };
 
-  const verificationCache = new Map<string, LoopStageResult>();
+  const fingerprinter = createWorkspaceFingerprinter(opts.workspace);
   const executeVerify = async (
     iteration: number,
     changedPaths?: ReadonlySet<string>,
+    verificationCache?: Map<string, { result: LoopStageResult; workspaceFingerprint: string }>,
   ): Promise<
     | {
         kind: "result";
@@ -1042,15 +1043,14 @@ async function runAutoLoopWithLease(
       }
       let completed: LoopStageResult | undefined;
       let diagnostics = "";
-      const cacheKey = `${iteration}:${stage.id}`;
-      const cached =
-        changedPaths === undefined && stablePasses === 1 && stage.cacheable
-          ? verificationCache.get(cacheKey)
-          : undefined;
+      const cached = changedPaths === undefined && stage.cacheable ? verificationCache?.get(stage.id) : undefined;
       if (cached) {
-        stages.push(cached);
-        emit({ type: "verify.stage.completed", iteration, result: cached });
-        continue;
+        const currentFingerprint = await fingerprinter.fingerprint({ forceAll: true });
+        if (currentFingerprint !== null && currentFingerprint === cached.workspaceFingerprint) {
+          stages.push(cached.result);
+          emit({ type: "verify.stage.completed", iteration, result: cached.result });
+          continue;
+        }
       }
       for (let attempt = 1; attempt <= flakyRetries + 1; attempt++) {
         const captured = await executeStage(iteration, stage, attempt);
@@ -1066,8 +1066,11 @@ async function runAutoLoopWithLease(
         emit({ type: "verify.flaky", iteration, stageId: stage.id, attempts: completed.attempts });
       }
       stages.push(completed);
-      if (completed.code === 0 && changedPaths !== undefined && stage.cacheable) {
-        verificationCache.set(cacheKey, completed);
+      if (completed.code === 0 && changedPaths !== undefined && stage.cacheable && verificationCache) {
+        const workspaceFingerprint = await fingerprinter.fingerprint({ forceAll: true });
+        if (workspaceFingerprint !== null) {
+          verificationCache.set(stage.id, { result: completed, workspaceFingerprint });
+        }
       }
       emit({ type: "verify.stage.completed", iteration, result: completed });
       if (completed.code !== 0 && stage.required !== false) {
@@ -1091,7 +1094,11 @@ async function runAutoLoopWithLease(
     iteration: number,
     changedPaths?: ReadonlySet<string>,
   ): ReturnType<typeof executeVerify> => {
-    let captured = await executeVerify(iteration, changedPaths);
+    // Results are reusable only inside this incremental-to-full transition and
+    // only while an authoritative workspace fingerprint remains unchanged.
+    // Never carry them into a later stable pass, rollback, or iteration.
+    const verificationCache = new Map<string, { result: LoopStageResult; workspaceFingerprint: string }>();
+    let captured = await executeVerify(iteration, changedPaths, verificationCache);
     if (captured.kind === "budget") return captured;
     if (captured.result.code === 0 && captured.skippedStageIds.length > 0) {
       emit({
@@ -1099,7 +1106,7 @@ async function runAutoLoopWithLease(
         warning: "observer",
         message: `Incremental verification skipped ${captured.skippedStageIds.join(", ")}; running the full pipeline before accepting success.`,
       });
-      captured = await executeVerify(iteration);
+      captured = await executeVerify(iteration, undefined, verificationCache);
       if (captured.kind === "budget") return captured;
     }
     passStreak = captured.result.code === 0 ? Math.min(stablePasses, passStreak + 1) : 0;
@@ -1305,7 +1312,6 @@ async function runAutoLoopWithLease(
   let lastVerify = preVerify;
   let previousDiagnostics = parseVerifyDiagnostics(preVerifyDiagnostics);
   let previousAcceptance = acceptanceFingerprint(acceptanceReview);
-  const fingerprinter = createWorkspaceFingerprinter(opts.workspace);
   let previousWorkspace = await fingerprinter.fingerprint();
   if (snapshots.length === 0 && iterations === 0) {
     const initialSnapshot: LoopIterationSnapshot = {

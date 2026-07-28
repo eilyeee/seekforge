@@ -6,7 +6,16 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,12 +30,14 @@ import {
 } from "@seekforge/core";
 import {
   coreResumeAutoLoop,
+  closeLoopPrCi,
   formatLoopEvent,
   formatLoopState,
   formatSummary,
   loopExitCode,
   outputTail,
   runLoopDelivery,
+  runExternalCommand,
   resumeExtensionOptions,
   verificationPlanFromOptions,
 } from "../commands/loop.js";
@@ -67,6 +78,112 @@ test("verificationPlanFromOptions validates and orders repeated stages", () => {
   );
   assert.throws(() => verificationPlanFromOptions({ verify: "test", verifyStages: ["verify=again"] }), /duplicate/);
   assert.throws(() => verificationPlanFromOptions({ verify: "test", verifyStages: ["bad/id=test"] }), /Invalid/);
+});
+
+test("external command cancellation remains a distinct control-flow error", async () => {
+  const controller = new AbortController();
+  const resultPromise = runExternalCommand(
+    process.execPath,
+    ["-e", "setInterval(() => {}, 1000)"],
+    process.cwd(),
+    10_000,
+    64 * 1024,
+    controller.signal,
+  );
+  setTimeout(() => controller.abort(), 25);
+  const result = await resultPromise;
+  assert.equal((result.error as NodeJS.ErrnoException | undefined)?.code, "ABORT_ERR");
+});
+
+test("green PR checks do not initialize CI repair dependencies", async () => {
+  if (process.platform === "win32") return;
+  const bin = mkdtempSync(resolve(tmpdir(), "seekforge-loop-gh-"));
+  const gh = resolve(bin, "gh");
+  const previousPath = process.env.PATH;
+  try {
+    writeFileSync(gh, "#!/bin/sh\nexit 0\n");
+    chmodSync(gh, 0o755);
+    process.env.PATH = `${bin}:${previousPath ?? ""}`;
+    const workspace = bin;
+    let prepared = false;
+    const updates: Array<Record<string, unknown>> = [];
+    const controller = new AbortController();
+    const delivered = {
+      artifact: "https://example.test/pr/1",
+      evidence: { url: "https://example.test/pr/1", branch: "topic" },
+      message: "ready",
+    };
+    const result = await closeLoopPrCi({
+      workspace,
+      delivered,
+      state: createLoopState({
+        loopId: "lazy-ci",
+        task: "lazy",
+        workspace,
+        verifyCommand: "true",
+        maxIterations: 1,
+      }),
+      getRepairContext: async () => {
+        prepared = true;
+        throw new Error("repair context should not be requested");
+      },
+      maxRepairs: 1,
+      repairBudgetUsd: 1,
+      signal: controller.signal,
+      repairAttempts: 0,
+      updateCi: (update) => updates.push(update),
+    });
+    assert.equal(result, delivered);
+    assert.equal(prepared, false);
+    assert.equal(updates.at(-1)?.status, "passed");
+  } finally {
+    process.env.PATH = previousPath;
+    rmSync(bin, { recursive: true, force: true });
+  }
+});
+
+test("cancelled PR check watches remain resumable instead of failed", async () => {
+  if (process.platform === "win32") return;
+  const bin = mkdtempSync(resolve(tmpdir(), "seekforge-loop-gh-"));
+  const gh = resolve(bin, "gh");
+  const previousPath = process.env.PATH;
+  try {
+    writeFileSync(gh, "#!/bin/sh\nsleep 10\n");
+    chmodSync(gh, 0o755);
+    process.env.PATH = `${bin}:${previousPath ?? ""}`;
+    const workspace = bin;
+    const updates: Array<Record<string, unknown>> = [];
+    const controller = new AbortController();
+    const closure = closeLoopPrCi({
+      workspace,
+      delivered: {
+        artifact: "https://example.test/pr/1",
+        evidence: { url: "https://example.test/pr/1", branch: "topic" },
+        message: "ready",
+      },
+      state: createLoopState({
+        loopId: "cancel-ci",
+        task: "cancel",
+        workspace,
+        verifyCommand: "true",
+        maxIterations: 1,
+      }),
+      getRepairContext: async () => {
+        throw new Error("repair context should not be requested");
+      },
+      maxRepairs: 0,
+      repairBudgetUsd: 1,
+      signal: controller.signal,
+      repairAttempts: 0,
+      updateCi: (update) => updates.push(update),
+    });
+    setTimeout(() => controller.abort(), 25);
+    await assert.rejects(closure, /cancelled/);
+    assert.equal(updates.at(-1)?.status, "pending");
+  } finally {
+    process.env.PATH = previousPath;
+    rmSync(bin, { recursive: true, force: true });
+  }
 });
 
 // --- formatLoopEvent --------------------------------------------------------

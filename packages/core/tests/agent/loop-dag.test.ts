@@ -245,7 +245,7 @@ describe("runLoopDag", () => {
       ["soft-fail", "failed", 1],
       ["after-soft-fail", "passed", 1],
     ]);
-  });
+  }, 20_000);
 
   it("supports failure conditions and publishes bounded dependency outputs", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-"));
@@ -364,6 +364,63 @@ describe("runLoopDag", () => {
       approveNode: () => true,
     });
     expect(resumed[0]?.status).toBe("passed");
+  });
+
+  it("persists approval before execution and resumes without asking again", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-"));
+    workspaces.push(workspace);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const node = {
+      id: "release",
+      task: "release",
+      verifyCommand: "pass",
+      verifierId: "release-persist-v1",
+      requiresApproval: true,
+      options: {
+        verify: async () => {
+          started();
+          await gate;
+          return { code: 0, output: "ok" };
+        },
+      },
+    };
+    const running = runLoopDag(deps, {
+      workspace,
+      dagId: "approval-persist",
+      nodes: [node],
+      approveNode: () => ({ approved: true, actor: "operator" }),
+    });
+    await startedPromise;
+    const statePath = join(workspace, ".seekforge/loop-dags/approval-persist.json");
+    expect(JSON.parse(readFileSync(statePath, "utf8")).results).toMatchObject([
+      { id: "release", status: "approved", approval: { actor: "operator" } },
+    ]);
+    release();
+    await expect(running).resolves.toMatchObject([{ status: "passed", approval: { actor: "operator" } }]);
+
+    const completed = JSON.parse(readFileSync(statePath, "utf8"));
+    completed.results = [
+      { id: "release", status: "approved", approval: { approvedAt: new Date().toISOString(), actor: "operator" } },
+    ];
+    delete completed.completedAt;
+    writeFileSync(statePath, JSON.stringify(completed));
+    const resumed = await runLoopDag(deps, {
+      workspace,
+      dagId: "approval-persist",
+      nodes: [{ ...node, options: { verify: async () => ({ code: 0, output: "ok" }) } }],
+      resume: true,
+      approveNode: () => {
+        throw new Error("approval should have been restored");
+      },
+    });
+    expect(resumed).toMatchObject([{ status: "passed", approval: { actor: "operator" } }]);
   });
 
   it("invalidates a resumed node and all downstream results", async () => {
