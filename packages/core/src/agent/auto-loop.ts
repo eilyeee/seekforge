@@ -1387,6 +1387,10 @@ async function runAutoLoopWithLease(
         strategy: LoopRecoveryStrategy;
         diagnosticsFingerprint: string;
         failedTests: number;
+        framework?: string;
+        stageId?: string;
+        startedAt: number;
+        startingCostUsd: number;
       }
     | undefined;
   recordProgressFingerprint(
@@ -1601,6 +1605,13 @@ async function runAutoLoopWithLease(
               diagnostics.failedTests.length < pendingRecovery.failedTests ||
               diagnostics.fingerprint !== pendingRecovery.diagnosticsFingerprint),
           recordedAt: new Date().toISOString(),
+          context: {
+            ...(pendingRecovery.framework ? { framework: pendingRecovery.framework } : {}),
+            ...(pendingRecovery.stageId ? { stageId: pendingRecovery.stageId } : {}),
+          },
+          costUsd: Math.max(0, costUsd - pendingRecovery.startingCostUsd),
+          durationMs: Math.max(0, Date.now() - pendingRecovery.startedAt),
+          diagnosticDelta: pendingRecovery.failedTests - diagnostics.failedTests.length,
         });
       } catch (error) {
         emit({
@@ -1726,12 +1737,24 @@ async function runAutoLoopWithLease(
           opts.workspace,
           category,
           repeatedCategory ? defaultLoopRecoveryStrategy(category) : undefined,
+          {
+            ...(diagnostics.framework !== "unknown" ? { framework: diagnostics.framework } : {}),
+            ...(lastStageResults.find((stage) => stage.code !== 0)?.id
+              ? { stageId: lastStageResults.find((stage) => stage.code !== 0)!.id }
+              : {}),
+          },
         );
         pendingRecovery = {
           category,
           strategy,
           diagnosticsFingerprint: diagnostics.fingerprint,
           failedTests: diagnostics.failedTests.length,
+          ...(diagnostics.framework !== "unknown" ? { framework: diagnostics.framework } : {}),
+          ...(lastStageResults.find((stage) => stage.code !== 0)?.id
+            ? { stageId: lastStageResults.find((stage) => stage.code !== 0)!.id }
+            : {}),
+          startedAt: Date.now(),
+          startingCostUsd: costUsd,
         };
         emit({ type: "loop.recovery", iteration: i, attempt: recoveryAttempts, reason, category, strategy });
         persist({ recoveryAttempts }, true);

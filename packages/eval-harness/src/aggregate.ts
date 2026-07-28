@@ -14,6 +14,11 @@ export type AggregateMetrics = {
   cacheHitTokens: number;
   totalTokens: number;
   durationMs: number;
+  durationP95Ms: number;
+  loopResumes: number;
+  loopVerifyRuns: number;
+  loopRecoveryAttempts: number;
+  loopLifecycleEvents: number;
   costUsd: number;
   costPerSuccessUsd: number | null;
   tokensPerSuccess: number | null;
@@ -49,6 +54,8 @@ function summarizeSamples(results: TaskResult[]): AggregateMetrics {
     );
   }, 0);
   const costUsd = results.reduce((sum, result) => sum + metric(result.metrics.costUsd), 0);
+  const durations = results.map((result) => metric(result.metrics.durationMs)).sort((a, b) => a - b);
+  const durationP95Ms = durations.length === 0 ? 0 : durations[Math.ceil(durations.length * 0.95) - 1]!;
   return {
     samples,
     successes,
@@ -63,6 +70,11 @@ function summarizeSamples(results: TaskResult[]): AggregateMetrics {
     cacheHitTokens,
     totalTokens,
     durationMs: results.reduce((sum, result) => sum + metric(result.metrics.durationMs), 0),
+    durationP95Ms,
+    loopResumes: results.filter((result) => result.execution?.runner === "loop" && result.execution.resumed).length,
+    loopVerifyRuns: results.reduce((sum, result) => sum + metric(result.execution?.verifyRuns), 0),
+    loopRecoveryAttempts: results.reduce((sum, result) => sum + metric(result.execution?.recoveryAttempts), 0),
+    loopLifecycleEvents: results.reduce((sum, result) => sum + metric(result.execution?.lifecycleEvents), 0),
     costUsd,
     costPerSuccessUsd: successes === 0 ? null : costUsd / successes,
     tokensPerSuccess: successes === 0 ? null : totalTokens / successes,

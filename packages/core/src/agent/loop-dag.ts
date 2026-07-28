@@ -3,7 +3,8 @@ import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { AgentCoreDeps } from "./loop.js";
 import { runAutoLoop, type LoopOptions, type LoopResult, type LoopStatus } from "./auto-loop.js";
-import { acquireSessionLeaseWithPreemption } from "./session-lease.js";
+import { predictLoopBudgetWeight, recordLoopBudgetObservation } from "./loop-budget-history.js";
+import { acquireSessionLease, acquireSessionLeaseWithPreemption } from "./session-lease.js";
 import { isRecord } from "../util/guards.js";
 import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 import {
@@ -29,6 +30,8 @@ export type LoopDagNodeOutput = {
   tokensUsed: number;
   iterations: number;
   artifacts?: string[];
+  /** Exact retained branch created by managedWorktrees; never inferred from user-declared artifacts. */
+  managedBranch?: string;
 };
 
 export type LoopDagNode = {
@@ -84,10 +87,14 @@ export type LoopDagOptions = {
   costBudgetUsd?: number;
   tokenBudget?: number;
   maxDurationMs?: number;
+  /** Reweight ready-node shares from bounded historical cost/duration observations. */
+  predictiveBudget?: boolean;
   signal?: AbortSignal;
   workspaceForNode?: (node: LoopDagNode) => string;
   /** Create one retained Git worktree per node when explicit workspaces are absent. */
   managedWorktrees?: boolean | { integrateDependencies?: boolean };
+  /** Refuse provisioning when managed SeekForge worktrees would exceed this repository-wide count. */
+  managedWorktreeLimit?: number;
   /** Merge successful sink branches into an integration worktree and verify the combined tree. */
   fanIn?: { verifyCommand: string; maxIterations?: number };
   onFanIn?: (result: LoopDagFanInResult) => void;
@@ -128,6 +135,7 @@ export type PersistedLoopDagState = {
 };
 
 const DAG_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const MANAGED_BRANCH_RE = /^seekforge\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const DAG_STATE_LIMIT = 1024 * 1024;
 const LOOP_STATUSES = new Set<LoopStatus>([
   "passed",
@@ -338,6 +346,8 @@ function parseDagState(raw: string, dagId: string, fingerprint?: string): Persis
       Number.isSafeInteger(outputValue.iterations) &&
       (outputValue.iterations as number) >= 0 &&
       (outputValue.loopId === undefined || typeof outputValue.loopId === "string") &&
+      (outputValue.managedBranch === undefined ||
+        (typeof outputValue.managedBranch === "string" && MANAGED_BRANCH_RE.test(outputValue.managedBranch))) &&
       (outputValue.artifacts === undefined ||
         (Array.isArray(outputValue.artifacts) &&
           outputValue.artifacts.length <= 64 &&
@@ -565,6 +575,9 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
   ) {
     throw new RangeError("Loop DAG maxDurationMs must be a positive safe integer");
   }
+  if (options.predictiveBudget !== undefined && typeof options.predictiveBudget !== "boolean") {
+    throw new Error("Loop DAG predictiveBudget must be boolean");
+  }
   if (concurrency > 1 && !options.workspaceForNode) {
     if (!options.managedWorktrees) {
       throw new Error("Concurrent Loop DAG nodes require workspaceForNode isolation or managedWorktrees");
@@ -581,6 +594,17 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
         typeof options.managedWorktrees.integrateDependencies !== "boolean"))
   ) {
     throw new Error("Loop DAG managedWorktrees configuration is invalid");
+  }
+  if (
+    options.managedWorktreeLimit !== undefined &&
+    (!Number.isSafeInteger(options.managedWorktreeLimit) ||
+      options.managedWorktreeLimit < 1 ||
+      options.managedWorktreeLimit > 256)
+  ) {
+    throw new Error("Loop DAG managedWorktreeLimit must be 1 to 256");
+  }
+  if (options.managedWorktreeLimit !== undefined && !options.managedWorktrees) {
+    throw new Error("Loop DAG managedWorktreeLimit requires managedWorktrees");
   }
   if (options.fanIn !== undefined) {
     if (!isRecord(options.fanIn)) throw new Error("Loop DAG fanIn configuration is invalid");
@@ -637,7 +661,14 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
   }
   const fingerprint = createHash("sha256")
     .update(dagFingerprint(options.nodes, nodeWorkspaces))
-    .update(JSON.stringify({ fanIn: options.fanIn, managedWorktrees: options.managedWorktrees ?? false }))
+    .update(
+      JSON.stringify({
+        fanIn: options.fanIn,
+        managedWorktrees: options.managedWorktrees ?? false,
+        managedWorktreeLimit: options.managedWorktreeLimit,
+        predictiveBudget: options.predictiveBudget ?? false,
+      }),
+    )
     .digest("hex");
   const dagId = options.dagId ?? `dag-${fingerprint.slice(0, 16)}`;
   if (!DAG_ID_RE.test(dagId)) throw new Error(`Loop DAG id must be safe: ${dagId}`);
@@ -647,7 +678,26 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
           ...(options.signal ? { signal: options.signal } : {}),
         })
       : undefined;
+  let managedResourceLease: ReturnType<typeof acquireSessionLease> | undefined;
   try {
+    if (options.managedWorktrees) {
+      managedResourceLease = acquireSessionLease(options.workspace, "loop-dag-managed-worktrees");
+    }
+    if (options.managedWorktrees && options.managedWorktreeLimit !== undefined) {
+      const existing = await listGitWorktrees(options.workspace);
+      const branches = new Set(existing.map((entry) => entry.branch));
+      const required = [
+        ...options.nodes.map((node) => `seekforge/${managedWorktreeSlug(managedSeed, node.id)}`),
+        ...(options.fanIn ? [`seekforge/${managedWorktreeSlug(managedSeed, "integration")}`] : []),
+      ];
+      const managedCount = existing.filter((entry) => entry.branch.startsWith("seekforge/")).length;
+      const missing = required.filter((branch) => !branches.has(branch)).length;
+      if (managedCount + missing > options.managedWorktreeLimit) {
+        throw new Error(
+          `Loop DAG managed worktree limit would be exceeded: ${managedCount} existing + ${missing} required > ${options.managedWorktreeLimit}`,
+        );
+      }
+    }
     const managedWorktrees = options.managedWorktrees
       ? await prepareManagedWorktrees(options.workspace, options.nodes, managedSeed, options.resume === true)
       : undefined;
@@ -835,6 +885,7 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
                 tokensUsed: cumulativeResult.tokensUsed ?? 0,
                 iterations: cumulativeResult.iterations,
                 ...(artifacts.length > 0 ? { artifacts } : {}),
+                ...(managed ? { managedBranch: managed.branch } : {}),
               },
               attempts: attempt,
               ...(approval ? { approval } : {}),
@@ -973,13 +1024,19 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
           continue;
         }
       }
-      const totalWeight = ready.reduce((sum, id) => sum + (byId.get(id)?.budgetWeight ?? 1), 0);
+      const schedulingWeight = (id: string): number => {
+        const node = byId.get(id)!;
+        if (!options.predictiveBudget) return node.budgetWeight ?? 1;
+        const key = `${node.id}:${createHash("sha256").update(node.verifyCommand).digest("hex").slice(0, 16)}`;
+        return predictLoopBudgetWeight(options.workspace, key, node.budgetWeight ?? 1).weight;
+      };
+      const totalWeight = ready.reduce((sum, id) => sum + schedulingWeight(id), 0);
       const alreadyReservedCost = [...running.values()].reduce((sum, entry) => sum + entry.reservedCost, 0);
       const alreadyReservedTokens = [...running.values()].reduce((sum, entry) => sum + entry.reservedTokens, 0);
       for (const id of ready) {
         const node = byId.get(id)!;
         const approval = approvals.get(id);
-        const weightShare = totalWeight > 0 ? (node.budgetWeight ?? 1) / totalWeight : 0;
+        const weightShare = totalWeight > 0 ? schedulingWeight(id) / totalWeight : 0;
         const remainingCost =
           options.costBudgetUsd === undefined
             ? undefined
@@ -1006,6 +1063,21 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
       results.set(settled.id, settled.result);
       spentCost += settled.result.result?.costUsd ?? 0;
       spentTokens += settled.result.result?.tokensUsed ?? 0;
+      if (options.predictiveBudget && settled.result.result) {
+        const node = byId.get(settled.id)!;
+        try {
+          recordLoopBudgetObservation(options.workspace, {
+            key: `${node.id}:${createHash("sha256").update(node.verifyCommand).digest("hex").slice(0, 16)}`,
+            costUsd: settled.result.result.costUsd,
+            tokens: settled.result.result.tokensUsed ?? 0,
+            durationMs: settled.result.result.elapsedMs ?? 0,
+            passed: settled.result.status === "passed",
+            recordedAt: new Date().toISOString(),
+          });
+        } catch {
+          /* advisory scheduling history only */
+        }
+      }
       if (settled.result.status === "failed" && byId.get(settled.id)?.failurePolicy === "stop") {
         stopRequested = true;
       }
@@ -1116,6 +1188,7 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
     persist(!approvalPending && fanInPassed);
     return orderedResults;
   } finally {
+    managedResourceLease?.release();
     lease?.release();
   }
 }

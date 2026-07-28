@@ -1,6 +1,8 @@
 import {
   acquireLoopLifecycleLeaseWithPreemption,
+  archiveLoopDagResources,
   buildLoopEvidenceReport,
+  compareLoopEvidence,
   MAX_LOOP_ITERATIONS,
   WorktreeGitError,
   checkpointWorktree,
@@ -8,15 +10,21 @@ import {
   createWorktreePatch,
   discoverLoopVerificationPlan,
   enqueueLoopControl,
+  exportLoopEvidence,
   hasCompleteLoopDeliveryEvidence,
   isWorktreeDirty,
   isLoopLeaseActive,
   isLoopDeliveryActive,
+  inspectLoopDagResources,
   killProcessTree,
   listGitWorktrees,
   mergeWorktree,
   listLoopStates,
+  listLoopSpeculationStates,
   loadLoopState,
+  promoteLoopDagResult,
+  promoteLoopSpeculation,
+  pruneLoopDagResources,
   readLoopHistory,
   recoverInterruptedLoops,
   pruneLoopStates,
@@ -27,6 +35,7 @@ import {
   resumeAutoLoop,
   runAutoLoop,
   runLoopDag,
+  runSpeculativeLoop,
   runShellCommand,
   saveLoopState,
   setLoopPriority,
@@ -38,6 +47,7 @@ import {
   type LoopDeliveryEvidence,
   type LoopDeliveryCiState,
   type LoopResult,
+  type LoopEvidenceFormat,
   type LoopState,
   type LoopRequirementMode,
 } from "@seekforge/core";
@@ -462,15 +472,187 @@ export async function loopHistoryCommand(loopId: string, opts: { after?: number;
   }
 }
 
-export async function loopEvidenceCommand(loopId: string): Promise<void> {
+export async function loopEvidenceCommand(
+  loopId: string,
+  opts: { format?: LoopEvidenceFormat; compare?: string } = {},
+): Promise<void> {
   try {
     const workspace = await findLoopWorkspace(loopId, false);
     const state = workspace ? loadLoopState(workspace, loopId) : null;
     if (!state) throw new Error(`Persisted loop not found or invalid: ${loopId}`);
-    console.log(JSON.stringify(buildLoopEvidenceReport(state), null, 2));
+    const report = buildLoopEvidenceReport(state);
+    if (opts.compare) {
+      const otherWorkspace = await findLoopWorkspace(opts.compare, false);
+      const other = otherWorkspace ? loadLoopState(otherWorkspace, opts.compare) : null;
+      if (!other) throw new Error(`Persisted comparison Loop not found or invalid: ${opts.compare}`);
+      console.log(JSON.stringify(compareLoopEvidence(report, buildLoopEvidenceReport(other)), null, 2));
+      return;
+    }
+    console.log(exportLoopEvidence(report, opts.format ?? "json").trimEnd());
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
+  }
+}
+
+export async function loopDagResourcesCommand(
+  dagId: string,
+  operation: "inspect" | "archive" | "prune" | "promote",
+  opts: { dryRun?: boolean; force?: boolean; target?: string } = {},
+): Promise<void> {
+  try {
+    const workspace = process.cwd();
+    const result =
+      operation === "inspect"
+        ? await inspectLoopDagResources(workspace, dagId)
+        : operation === "archive"
+          ? archiveLoopDagResources(workspace, dagId)
+          : operation === "prune"
+            ? await pruneLoopDagResources(workspace, dagId, { dryRun: opts.dryRun, force: opts.force })
+            : await promoteLoopDagResult(workspace, dagId, opts.target ?? "fan-in");
+    console.log(JSON.stringify(result, null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+export async function loopSpeculationListCommand(): Promise<void> {
+  try {
+    const states = listLoopSpeculationStates(process.cwd());
+    console.log(
+      states.length === 0
+        ? "No persisted Loop speculations."
+        : states
+            .map((state) => `${state.speculationId}\t${state.status}\t${state.winnerId ?? "-"}\t${state.updatedAt}`)
+            .join("\n"),
+    );
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+export async function loopSpeculationPromoteCommand(speculationId: string): Promise<void> {
+  try {
+    console.log(JSON.stringify(await promoteLoopSpeculation(process.cwd(), speculationId), null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+export async function loopSpeculateCommand(
+  file: string,
+  opts: {
+    budget: number;
+    tokenBudget?: number;
+    maxDurationSeconds?: number;
+    maxIterations?: number;
+    speculationId?: string;
+    resume?: boolean;
+    yes?: boolean;
+    model?: string;
+    profile?: string;
+  },
+): Promise<void> {
+  const workspace = process.cwd();
+  const raw = readFileIfExists(resolve(workspace, file), 256 * 1024);
+  if (raw === undefined) {
+    fail(`Loop speculation file not found: ${file}`);
+    process.exitCode = 1;
+    return;
+  }
+  let input: unknown;
+  try {
+    input = JSON.parse(raw) as unknown;
+  } catch {
+    fail(`Loop speculation file is not valid JSON: ${file}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (
+    typeof input !== "object" ||
+    input === null ||
+    Array.isArray(input) ||
+    typeof (input as Record<string, unknown>).task !== "string" ||
+    !((input as Record<string, unknown>).task as string).trim() ||
+    ((input as Record<string, unknown>).task as string).length > 64 * 1024 ||
+    typeof (input as Record<string, unknown>).verifyCommand !== "string" ||
+    !((input as Record<string, unknown>).verifyCommand as string).trim() ||
+    ((input as Record<string, unknown>).verifyCommand as string).length > 8_192 ||
+    !Array.isArray((input as Record<string, unknown>).candidates) ||
+    ((input as Record<string, unknown>).candidates as unknown[]).length < 2 ||
+    ((input as Record<string, unknown>).candidates as unknown[]).length > 3
+  ) {
+    fail("Loop speculation requires task, verifyCommand, and candidates");
+    process.exitCode = 1;
+    return;
+  }
+  const record = input as Record<string, unknown>;
+  let candidates: Array<{ id: string; guidance: string }>;
+  try {
+    candidates = (record.candidates as unknown[]).map((candidate) => {
+      if (
+        typeof candidate !== "object" ||
+        candidate === null ||
+        Array.isArray(candidate) ||
+        typeof (candidate as Record<string, unknown>).id !== "string" ||
+        typeof (candidate as Record<string, unknown>).guidance !== "string"
+      ) {
+        throw new Error("Each Loop speculation candidate requires string id and guidance fields");
+      }
+      return {
+        id: (candidate as Record<string, unknown>).id as string,
+        guidance: (candidate as Record<string, unknown>).guidance as string,
+      };
+    });
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+    return;
+  }
+  const preflight = await preflightLoop(workspace, opts);
+  if (!preflight) return;
+  const mcp = await prepareMcp(preflight.config, workspace);
+  const { deps, dispose } = createCliAgentDeps({
+    config: preflight.config,
+    workspace,
+    pluginContributions: mcp.pluginContributions,
+    model: preflight.model,
+    mcpToolSpecs: mcp.specs,
+    confirm: async () => false,
+    extractMemory: true,
+    subagents: loadAgentDefinitions(workspace, mcp.pluginContributions),
+  });
+  const controller = new AbortController();
+  const onSigint = () => controller.abort();
+  process.on("SIGINT", onSigint);
+  try {
+    const result = await runSpeculativeLoop(deps, {
+      workspace,
+      task: record.task as string,
+      verifyCommand: record.verifyCommand as string,
+      candidates,
+      costBudgetUsd: opts.budget,
+      tokenBudget: opts.tokenBudget,
+      maxDurationMs: opts.maxDurationSeconds === undefined ? undefined : Math.round(opts.maxDurationSeconds * 1_000),
+      maxIterations: opts.maxIterations,
+      managedWorktrees: true,
+      speculationId: opts.speculationId,
+      persist: true,
+      resume: opts.resume,
+      signal: controller.signal,
+    });
+    console.log(JSON.stringify(result.state ?? result, null, 2));
+    if (!result.winner) process.exitCode = 1;
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  } finally {
+    process.removeListener("SIGINT", onSigint);
+    dispose();
+    mcp.dispose();
   }
 }
 
@@ -740,6 +922,8 @@ export async function loopDagCommand(
     resume?: boolean;
     maxConcurrency?: number;
     managedWorktrees?: boolean;
+    managedWorktreeLimit?: number;
+    predictiveBudget?: boolean;
     approve?: string[];
     rerun?: string[];
   },
@@ -908,6 +1092,8 @@ export async function loopDagCommand(
       nodes,
       maxConcurrency: opts.maxConcurrency ?? 1,
       ...(opts.managedWorktrees ? { managedWorktrees: true } : {}),
+      ...(opts.managedWorktreeLimit !== undefined ? { managedWorktreeLimit: opts.managedWorktreeLimit } : {}),
+      ...(opts.predictiveBudget ? { predictiveBudget: true } : {}),
       ...(fanIn ? { fanIn } : {}),
       ...(opts.dagId ? { dagId: opts.dagId } : {}),
       ...(opts.resume ? { resume: true } : {}),
@@ -1297,7 +1483,7 @@ export async function closeLoopPrCi(options: LoopCiClosureOptions): Promise<Loop
   try {
     for (;;) {
       options.signal.throwIfAborted();
-      const checks = await ciProvider.waitForRequiredChecks(url, options.signal);
+      const checks = await ciProvider.waitForRequiredChecks(branch, options.signal);
       if (checks.status === "passed") {
         options.updateCi({ status: "passed", revision: delivered.evidence?.revision, url, error: undefined });
         return delivered;

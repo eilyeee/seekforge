@@ -103,6 +103,21 @@ export {
   type PersistedLoopDagState,
 } from "./loop-dag.js";
 export {
+  archiveLoopDagResources,
+  inspectLoopDagResources,
+  promoteLoopDagResult,
+  pruneLoopDagResources,
+  type LoopDagResourcePruneResult,
+  type LoopDagResourceReport,
+} from "./loop-dag-resources.js";
+export {
+  predictLoopBudgetWeight,
+  readLoopBudgetHistory,
+  recordLoopBudgetObservation,
+  type LoopBudgetObservation,
+  type LoopBudgetPrediction,
+} from "./loop-budget-history.js";
+export {
   resumeAutoLoop,
   autoResumeInterruptedLoops,
   runAutoLoop,
@@ -122,19 +137,34 @@ export {
   discoverLoopVerificationPlan,
   type DiscoveredLoopVerificationPlan,
 } from "./loop-verification-plan.js";
-export { buildLoopEvidenceReport, type LoopEvidenceReport } from "./loop-evidence.js";
 export {
+  buildLoopEvidenceReport,
+  compareLoopEvidence,
+  exportLoopEvidence,
+  verifyLoopEvidenceIntegrity,
+  type LoopEvidenceComparison,
+  type LoopEvidenceFormat,
+  type LoopEvidenceReport,
+} from "./loop-evidence.js";
+export {
+  listLoopSpeculationStates,
+  loadLoopSpeculationState,
+  promoteLoopSpeculation,
   runSpeculativeLoop,
   type LoopSpeculationCandidate,
   type LoopSpeculationOptions,
   type LoopSpeculationResult,
+  type LoopSpeculationState,
 } from "./loop-speculation.js";
 export {
   defaultLoopRecoveryStrategy,
+  explainLoopRecoveryStrategy,
   readLoopRecoveryObservations,
   recordLoopRecoveryObservation,
   selectLoopRecoveryStrategy,
   type LoopRecoveryObservation,
+  type LoopRecoveryContext,
+  type LoopRecoveryDecision,
 } from "./loop-recovery-policy.js";
 export {
   isLoopRequirementMode,

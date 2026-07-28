@@ -100,6 +100,8 @@ export type TaskExecution = {
   verifyRuns?: number;
   recoveryAttempts?: number;
   flaky?: boolean;
+  lifecycleEvents?: number;
+  interruptedAtOccurrence?: number;
   steps?: ExecutionStep[];
 };
 
@@ -560,6 +562,9 @@ async function runLoopTaskMode(
   const resume = opts.resumeLoop ?? resumeAutoLoop;
   const lifecycleController = config.interruptAfterEvent ? new AbortController() : undefined;
   let lifecycleInterrupted = false;
+  let lifecycleEvents = 0;
+  let matchedInterruptEvents = 0;
+  let didResume = false;
   const initial = await run(created.deps, {
     task: taskText(task.task, suffix),
     workspace: dir,
@@ -582,23 +587,26 @@ async function runLoopTaskMode(
     ...(config.rollbackOnRegression !== undefined ? { rollbackOnRegression: config.rollbackOnRegression } : {}),
     ...(config.adaptiveBudget !== undefined ? { adaptiveBudget: config.adaptiveBudget } : {}),
     ...(config.requirementMode ? { requirementMode: config.requirementMode } : {}),
-    ...(lifecycleController
-      ? {
-          signal: lifecycleController.signal,
-          abortStatus: "interrupted" as const,
-          onEvent: (event) => {
-            if (!lifecycleInterrupted && event.type === config.interruptAfterEvent) {
-              lifecycleInterrupted = true;
-              lifecycleController.abort();
-            }
-          },
-        }
-      : {}),
+    ...(lifecycleController ? { signal: lifecycleController.signal, abortStatus: "interrupted" as const } : {}),
+    onEvent: (event) => {
+      lifecycleEvents++;
+      if (event.type === config.interruptAfterEvent) matchedInterruptEvents++;
+      if (
+        lifecycleController &&
+        !lifecycleInterrupted &&
+        event.type === config.interruptAfterEvent &&
+        matchedInterruptEvents === (config.interruptAfterOccurrence ?? 1)
+      ) {
+        lifecycleInterrupted = true;
+        lifecycleController.abort();
+      }
+    },
   });
   let final: LoopResult = initial;
   let statePassed = config.resume === undefined || initial.status === config.resume.expectedInitialStatus;
   if (config.resume !== undefined && statePassed) {
     if (!initial.loopId) throw new Error(`task ${task.id}: loop did not persist a loopId required for resume`);
+    didResume = true;
     final = await resume(created.deps, initial.loopId, {
       workspace: dir,
       approvalMode: "auto",
@@ -632,10 +640,12 @@ async function runLoopTaskMode(
       sessionIds,
       iterations: final.iterations,
       maxIterations: config.maxIterations + (config.resume?.additionalIterations ?? 0),
-      resumed: config.resume !== undefined,
+      resumed: didResume,
       verifyRuns: final.verifyRuns,
       recoveryAttempts: final.recoveryAttempts,
       flaky: final.flaky,
+      lifecycleEvents,
+      ...(lifecycleInterrupted ? { interruptedAtOccurrence: matchedInterruptEvents } : {}),
     },
     ...(!statePassed
       ? {

@@ -111,10 +111,18 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/loops/verification-plan | discover a conservative root verification plan without executing it |
 | GET /api/loops/:id | one persisted Loop state; 404 when absent |
 | GET /api/loops/:id/history?after=N&limit=N | up to 1000 retained lifecycle log entries after the sequence cursor; 404 when the Loop is absent |
+| GET /api/loops/:id/evidence?compare=:otherId | integrity-digested evidence report, or a bounded comparison with another persisted Loop |
 | POST /api/loops/recover | body `{limit?:1..100}`; mark orphaned active records `interrupted` and return them |
 | POST /api/loops/prune | body `{maxAgeDays?,maxTerminalCount?,dryRun?}`; prune only retention-eligible terminal records |
 | POST /api/loops/:id/priority | body `{priority:-10..10}`; update recovery order under the Loop lifecycle guard |
 | DELETE /api/loops/:id | delete one inactive persisted Loop and its retained history |
+| GET /api/loop-dags | persisted Loop DAG states |
+| GET /api/loop-dags/:id | one persisted Loop DAG state |
+| GET /api/loop-dags/:id/resources | retained managed-worktree count and bounded disk use |
+| POST /api/loop-dags/:id/resources | body `{operation:"archive"|"prune"|"promote",dryRun?,force?,target?}`; explicit resource lifecycle operation |
+| GET /api/loop-speculations | persisted speculative runs and winners |
+| GET /api/loop-speculations/:id | one persisted speculative run |
+| POST /api/loop-speculations/:id/promote | explicitly merge the passing winner |
 | GET /api/workspaces | `[{id, name, path}]` (global; ordered, first is the default; includes registered worktrees `wt-<slug>`) |
 | POST /api/worktrees | body `{name?}` → `{id, path, branch}` — create a worktree session (see "Worktrees"); 400 `not_a_git_repo` |
 | GET /api/worktrees | `[{id, branch, path, dirty, ahead}]` — worktrees of the `?ws=` base workspace |

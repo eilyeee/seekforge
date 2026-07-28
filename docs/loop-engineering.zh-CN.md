@@ -241,7 +241,8 @@ seekforge loop-cleanup <worktree-name> [--force]
   已完成 merge 交付的 Loop worktree。整棵 worktree 的清理会在持有工作区 guard 时重新核验，
   并先删除 checkout 而不是先删除已跟踪状态，从而保持原子性。
 - `loop-evidence <id>` 与 `GET /api/loops/:id/evidence` 会生成一份有界的
-  「需求 → 验收证据 → 验证器 → 迭代 → 交付」报告；发生交付后还会包含不可变 revision、hash 或 URL。
+  「需求 → 验收证据 → 验证器 → 迭代 → 交付」报告；报告带 SHA-256 完整性摘要与 Core 校验函数，发生交付后还会包含不可变 revision、hash 或 URL。
+  CLI 可导出 JSON、SARIF、JUnit，`--compare` 可比较两次持久运行的变化。
 - `loop-dag <file>` 会持久化 JSON 依赖图检查点；`--resume` 与 `--dag-id` 可恢复已完成节点。
   就绪节点按权重分配剩余成本/Token 预算，并支持优先级、有界重试及
   `skip_dependents` / `continue` / `stop` 失败策略。节点可通过嵌套 `all` / `any` / `not`
@@ -255,8 +256,11 @@ seekforge loop-cleanup <worktree-name> [--force]
   集成时则为全部节点）合入保留的集成 worktree，再对组合后的代码树执行最终有界 Loop 门禁。
   托管路径会重新核验物理绑定，且解析后的全部工作区
   身份会进入持久 DAG 指纹，因此节点改换 checkout 后 `--resume` 会拒绝旧结果，而不会错误复用。
-- Core 的 `runSpeculativeLoop` 只允许运行两个或三个修复策略，共享一个必填成本上限并使用隔离工作区，
-  最终选择成本最低的通过候选。它不会自动发布或合并候选，交付仍是独立的显式操作。
+  `--predictive-budget` 会根据有界历史资源需求调整调度权重，`--worktree-limit` 限制保留的托管 worktree 数量；
+  `loop-dag-resources` 可查看磁盘占用，并显式归档、提升或清理已完成依赖图；清理始终保留有未提交修改的 worktree。
+- `loop-speculate` 与 Core 的 `runSpeculativeLoop` 只允许运行两个或三个修复策略，共享一个必填成本上限并使用隔离工作区，
+  最终选择成本最低的通过候选。运行与胜出结果可恢复，`loop-speculation-promote` 是独立的显式合并步骤；REST 与 Desktop
+  也暴露持久运行和资源操作。
 - `--deliver checkpoint|merge|patch|pr` 在通过后从保留 worktree 显式交付；`pr` 会推送
   Loop 分支，并通过 `gh` 创建草稿 PR。交付模式、状态、尝试次数、错误和最终产物都会写入
   Loop 状态。若验证通过后交付失败，可用 `loop-deliver <id>` 直接重试而无需重新运行 Agent；
@@ -273,7 +277,7 @@ seekforge loop-cleanup <worktree-name> [--force]
   重新运行冻结的本地流水线，checkpoint 并推送不可变 revision，然后再次等待 CI。
   CI 策略、修复次数、已检查 revision 与失败都会持久化；之后的 `loop-deliver --wait-ci` 会续接
   同一策略，不带 CI 闭环的重试会被拒绝。检查等待与修复推送都支持协作式取消。
-  checks 等待与失败日志获取已使用 provider 中立的 CI 适配器；CLI 当前提供 GitHub `gh` 实现。
+  checks 等待与失败日志获取已使用 provider 中立的 CI 适配器；CLI 提供 GitHub `gh` 与 GitLab `glab` 实现。
   只有 checks 真实失败且需要修复后，才会初始化 Agent 凭据、工作区授权与 MCP 修复工具；绿色 checks
   不需要这些依赖。
 - REST Loop 列表支持 `status`、`q`、`limit` 与 `after`；活跃 Loop 可接受
@@ -281,6 +285,9 @@ seekforge loop-cleanup <worktree-name> [--force]
   活跃数、成本、Token 与验证次数聚合。Desktop 增加筛选、轮询、历史分页、CI 状态、验证选择/耗时、
   验收证据、迭代时间线、fan-in 与 DAG 节点状态，以及安全边界控制；
   当查询或所选 Loop 已变化时，会丢弃迟到的筛选与历史响应。
+- 验证发现会保留权威根门禁，同时加入安全的路径级 pnpm workspace、嵌套 Cargo、Go 与 Python 阶段。
+  恢复排序综合衰减时间、框架/阶段上下文、诊断改善、成本与耗时。评测故障注入支持指定事件出现次数，
+  并报告 Loop 生命周期事件、验证、恢复、续跑及 p95 耗时指标。
 - WebSocket 客户端可发送 `loop.pause`、`loop.control.resume` 与 `loop.steer`；控制只在安全
   的迭代边界生效。
 - 顶层 CLI 的 `loop-pause`、`loop-continue` 与 `loop-steer` 可以控制另一个仍存活的

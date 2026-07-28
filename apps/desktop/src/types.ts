@@ -96,6 +96,7 @@ export type LoopEvidenceReport = {
   loopId: string;
   generatedAt: string;
   status: string;
+  usage: { costUsd: number; tokensUsed: number; iterations: number };
   criteria: Array<{
     id: string;
     text: string;
@@ -124,6 +125,7 @@ export type LoopEvidenceReport = {
     failureCategory?: string;
     rolledBack?: boolean;
   }>;
+  integrity: { algorithm: "sha256"; digest: string; revision?: string };
 };
 export type LoopPruneResult = { candidates: string[]; removed: string[]; skipped: string[] };
 export type LoopDagSummary = {
@@ -134,6 +136,23 @@ export type LoopDagSummary = {
   completedAt?: string;
   results: Array<{ id: string; status: string; reason?: string }>;
   fanIn?: { status: "passed" | "failed"; branch: string; workspace: string; error?: string };
+};
+export type LoopDagResourceReport = {
+  dagId: string;
+  completed: boolean;
+  archived: boolean;
+  active: boolean;
+  totalBytes: number;
+  truncated: boolean;
+  worktrees: Array<{ branch: string; path: string; bytes: number }>;
+};
+export type LoopSpeculationSummary = {
+  schemaVersion: 1;
+  speculationId: string;
+  status: "running" | "completed" | "failed" | "promoted";
+  updatedAt: string;
+  winnerId?: string;
+  candidates: Array<{ id: string; status: string; costUsd: number; iterations: number; branch?: string }>;
 };
 
 export type AgentImportResult = {

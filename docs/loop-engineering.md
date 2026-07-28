@@ -283,7 +283,9 @@ seekforge loop-cleanup <worktree-name> [--force]
   guard and removes the checkout before its tracked state, so cleanup is atomic.
 - `loop-evidence <id>` and `GET /api/loops/:id/evidence` produce one bounded
   requirement → acceptance evidence → verifier → iteration → delivery report.
-  It includes the immutable delivery revision/hash/URL when delivery has occurred.
+  It includes a SHA-256 integrity digest, a Core verification helper, and immutable delivery revision/hash/URL.
+  CLI export supports JSON, SARIF, and JUnit, while `--compare` reports changes
+  between two persisted runs.
 - `loop-dag <file>` durably checkpoints a JSON dependency graph. `--resume` and
   `--dag-id` restore completed nodes; ready nodes receive weighted shares of the
   remaining cost/token budgets and support priorities, bounded retries, and
@@ -306,10 +308,14 @@ seekforge loop-cleanup <worktree-name> [--force]
   combined tree. Managed paths are physically rebound and all resolved workspace identities are part of
   the durable graph fingerprint, so `--resume` rejects a remapped node instead
   of reusing work completed in another checkout.
-- The Core `runSpeculativeLoop` helper runs exactly two or three repair strategies
+  `--predictive-budget` learns bounded historical resource demand, while
+  `--worktree-limit` caps retained managed worktrees. `loop-dag-resources`
+  inspects disk use and explicitly archives, promotes, or prunes completed graphs;
+  pruning always retains worktrees with uncommitted changes.
+- `loop-speculate` and the Core `runSpeculativeLoop` helper run exactly two or three repair strategies
   under one mandatory cost cap in isolated workspaces and selects the lowest-cost
-  passing result. It never publishes or merges the winner; that remains an explicit
-  delivery operation.
+  passing result. Runs and winners are resumable; `loop-speculation-promote` is the
+  separate explicit merge step. REST and Desktop expose persisted runs and resource operations.
 - `--deliver checkpoint|merge|patch|pr` performs an explicit post-pass delivery
   from a retained Loop worktree. `pr` pushes the Loop branch and creates a draft
   pull request through `gh`. Delivery records its mode, status, attempt count,
@@ -337,7 +343,7 @@ seekforge loop-cleanup <worktree-name> [--force]
   `loop-deliver --wait-ci` resumes the same policy, while retrying without CI
   closure is rejected. Check waits and repair pushes are cooperatively cancellable.
   Check waiting and failed-log retrieval use a provider-neutral CI adapter; the
-  CLI currently ships the GitHub `gh` implementation. Agent credentials, workspace authorization, and MCP repair tools are initialized
+  CLI ships GitHub `gh` and GitLab `glab` adapters. Agent credentials, workspace authorization, and MCP repair tools are initialized
   only after a failed check actually requires a repair; green checks need none of them.
 - REST Loop listing supports `status`, `q`, `limit`, and `after`; active Loops
   accept `POST /api/loops/:id/control`, and `/api/loop-dags` exposes durable graph
@@ -346,6 +352,11 @@ seekforge loop-cleanup <worktree-name> [--force]
   verifier selection/duration, acceptance evidence, iteration timelines, fan-in
   and DAG node status, plus safe-boundary controls; late filter or history responses are
   discarded when their query or selected Loop is no longer current.
+- Verification discovery preserves authoritative root gates while adding safe
+  path-scoped pnpm workspace, nested Cargo, Go, and Python stages. Recovery ranking
+  applies recency, framework/stage context, diagnostic improvement, cost, and duration.
+  Eval fault injection supports event occurrence boundaries and reports Loop lifecycle,
+  verify, recovery, resume, and p95 duration metrics.
 - WebSocket clients can send `loop.pause`, `loop.control.resume`, and
   `loop.steer`; controls take effect only at safe iteration boundaries.
 - The top-level `loop-pause`, `loop-continue`, and `loop-steer` CLI commands can

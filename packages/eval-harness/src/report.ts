@@ -80,6 +80,10 @@ export function toMarkdown(results: TaskResult[]): string {
   lines.push(`Tool failure rate: ${(aggregate.toolFailureRate * 100).toFixed(2)}%`);
   lines.push(`Session error rate: ${(aggregate.sessionErrorRate * 100).toFixed(2)}%`);
   lines.push(`Duration: ${(aggregate.durationMs / 1000).toFixed(1)}s`);
+  lines.push(`Duration p95: ${(aggregate.durationP95Ms / 1000).toFixed(1)}s`);
+  lines.push(
+    `Loop operations: ${aggregate.loopResumes} resumes, ${aggregate.loopVerifyRuns} verifies, ${aggregate.loopRecoveryAttempts} recoveries, ${aggregate.loopLifecycleEvents} lifecycle events`,
+  );
   return lines.join("\n");
 }
 

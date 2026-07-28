@@ -20,6 +20,7 @@ import {
   loopDeliverCommand,
   loopEvidenceCommand,
   loopDagCommand,
+  loopDagResourcesCommand,
   loopListCommand,
   loopHistoryCommand,
   loopRecoverCommand,
@@ -27,6 +28,9 @@ import {
   loopPruneCommand,
   loopResumeCommand,
   loopShowCommand,
+  loopSpeculateCommand,
+  loopSpeculationListCommand,
+  loopSpeculationPromoteCommand,
 } from "./commands/loop.js";
 import { resolveCommand, resolveReviewCommand } from "./commands/resolve.js";
 import { runTaskCommand } from "./commands/run.js";
@@ -560,6 +564,8 @@ program
   .option("--approve <node-id>", "approve a requiresApproval node for this run", collect, [])
   .option("--max-concurrency <n>", "parallel nodes (2-8 require distinct node workspace fields)", parsePositiveInt, 1)
   .option("--managed-worktrees", "automatically create and retain one isolated Git worktree per node")
+  .option("--worktree-limit <n>", "maximum managed seekforge worktrees in the repository", parsePositiveInt)
+  .option("--predictive-budget", "weight scheduling from bounded historical cost and duration")
   .option("-y, --yes", "authorize the workspace without prompting")
   .option("-m, --model <model>", "override model")
   .option("--profile <name>", "use a named config profile")
@@ -578,6 +584,8 @@ program
         resume?: boolean;
         maxConcurrency?: number;
         managedWorktrees?: boolean;
+        worktreeLimit?: number;
+        predictiveBudget?: boolean;
         rerun?: string[];
         approve?: string[];
       },
@@ -593,6 +601,8 @@ program
         resume: opts.resume,
         maxConcurrency: opts.maxConcurrency,
         managedWorktrees: opts.managedWorktrees,
+        managedWorktreeLimit: opts.worktreeLimit,
+        predictiveBudget: opts.predictiveBudget,
         rerun: opts.rerun,
         approve: opts.approve,
       });
@@ -656,8 +666,78 @@ program
 program
   .command("loop-evidence")
   .argument("<loop-id>")
-  .description("print requirement, verification, iteration, and delivery evidence as JSON")
-  .action(loopEvidenceCommand);
+  .option("--format <format>", "json, sarif, or junit", "json")
+  .option("--compare <loop-id>", "compare with another persisted Loop")
+  .description("export or compare requirement, verification, iteration, and delivery evidence")
+  .action((loopId: string, opts: { format: string; compare?: string }) => {
+    if (opts.format !== "json" && opts.format !== "sarif" && opts.format !== "junit") {
+      throw new InvalidArgumentError("format must be json, sarif, or junit");
+    }
+    return loopEvidenceCommand(loopId, { format: opts.format, compare: opts.compare });
+  });
+program
+  .command("loop-dag-resources")
+  .argument("<dag-id>")
+  .argument("<operation>", "inspect, archive, prune, or promote")
+  .option("--dry-run", "preview pruning")
+  .option("--force", "prune without an archive marker")
+  .option("--target <node-id>", "node id or fan-in for promotion", "fan-in")
+  .description("inspect or manage retained Loop DAG worktrees")
+  .action((dagId: string, operation: string, opts: { dryRun?: boolean; force?: boolean; target?: string }) => {
+    if (!(["inspect", "archive", "prune", "promote"] as const).includes(operation as never)) {
+      throw new InvalidArgumentError("operation must be inspect, archive, prune, or promote");
+    }
+    return loopDagResourcesCommand(dagId, operation as "inspect" | "archive" | "prune" | "promote", opts);
+  });
+program
+  .command("loop-speculate")
+  .argument("<file>", "JSON with task, verifyCommand, and 2-3 candidate strategies")
+  .requiredOption("--budget <usd>", "shared positive cost cap", parsePositiveFloat)
+  .option("--token-budget <n>", "shared token cap", parsePositiveInt)
+  .option("--max-duration <seconds>", "shared wall-clock budget", parsePositiveFloat)
+  .option("--max-iters <n>", "iterations per candidate", parsePositiveInt)
+  .option("--speculation-id <id>", "stable persisted speculation id")
+  .option("--resume", "resume a persisted speculation")
+  .option("-y, --yes", "authorize the workspace without prompting")
+  .option("-m, --model <model>", "override model")
+  .option("--profile <name>", "use a named config profile")
+  .description("run 2-3 isolated candidate repair strategies and rank passing results")
+  .action(
+    (
+      file: string,
+      opts: {
+        budget: number;
+        tokenBudget?: number;
+        maxDuration?: number;
+        maxIters?: number;
+        speculationId?: string;
+        resume?: boolean;
+        yes?: boolean;
+        model?: string;
+        profile?: string;
+      },
+    ) =>
+      loopSpeculateCommand(file, {
+        budget: opts.budget,
+        tokenBudget: opts.tokenBudget,
+        maxDurationSeconds: opts.maxDuration,
+        maxIterations: opts.maxIters,
+        speculationId: opts.speculationId,
+        resume: opts.resume,
+        yes: opts.yes,
+        model: opts.model,
+        profile: opts.profile ?? rootProfile(),
+      }),
+  );
+program
+  .command("loop-speculation-list")
+  .description("list persisted Loop speculations")
+  .action(loopSpeculationListCommand);
+program
+  .command("loop-speculation-promote")
+  .argument("<speculation-id>")
+  .description("merge the winning speculative worktree into the current branch")
+  .action(loopSpeculationPromoteCommand);
 program
   .command("loop-recover")
   .description("mark orphaned running or paused loops as interrupted and resumable")

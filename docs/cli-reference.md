@@ -236,6 +236,11 @@ with completion-driven scheduling, weighted budgets, retries, failure policies, 
 audited approvals, exclusive resources, declared artifacts, structured dependency outputs, and
 `--resume`/`--dag-id` checkpoints. Use `--approve <node-id>`
 to cross a node gate and `--rerun <node-id>` to invalidate that node and its descendants.
+`--predictive-budget` uses bounded historical demand and `--worktree-limit` caps retained managed worktrees.
+`loop-dag-resources <id> inspect|archive|prune|promote` manages retained graph resources.
+`loop-speculate <file> --budget <usd>` persists two or three isolated strategies;
+`loop-speculation-list` and `loop-speculation-promote` inspect and explicitly merge the winner.
+`loop-evidence <id> --format json|sarif|junit [--compare <id>]` exports attestable evidence or compares runs.
 checkpoints. TUI and Desktop/WebSocket Loop surfaces also support safe-boundary
 pause, resume, priority, and steering.
 `seekforge loop-cleanup <name>` removes a retained `seekforge/loop-*` worktree;

@@ -95,7 +95,7 @@ test("external command cancellation remains a distinct control-flow error", asyn
   assert.equal((result.error as NodeJS.ErrnoException | undefined)?.code, "ABORT_ERR");
 });
 
-test("green PR checks do not initialize CI repair dependencies", async () => {
+test("green PR checks do not initialize CI repair dependencies", { timeout: 30_000 }, async () => {
   if (process.platform === "win32") return;
   const bin = mkdtempSync(resolve(tmpdir(), "seekforge-loop-gh-"));
   const gh = resolve(bin, "gh");
@@ -142,7 +142,7 @@ test("green PR checks do not initialize CI repair dependencies", async () => {
   }
 });
 
-test("cancelled PR check watches remain resumable instead of failed", async () => {
+test("cancelled PR check watches remain resumable instead of failed", { timeout: 30_000 }, async () => {
   if (process.platform === "win32") return;
   const bin = mkdtempSync(resolve(tmpdir(), "seekforge-loop-gh-"));
   const gh = resolve(bin, "gh");

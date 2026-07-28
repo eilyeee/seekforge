@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### round 70: operational Loop intelligence
+- Added context-weighted recovery learning, predictive DAG budget allocation,
+  multi-ecosystem verification discovery, and occurrence-based lifecycle eval metrics.
+- Added resumable speculative runs, explicit winner promotion, managed DAG resource
+  inspection/archive/prune/promotion, and CLI/REST/Desktop operational surfaces.
+- Added SHA-256 evidence integrity with JSON/SARIF/JUnit export and run comparison,
+  plus a GitLab CLI adapter alongside GitHub CI closure.
+
 ### round 69: dependency-aware and isolated Loop operations
 - Added dependency-closure verification selection with explainable stage outcomes,
   bounded workspace recovery learning, lifecycle interruption evals, and hosted-CI fixtures.

@@ -1,15 +1,23 @@
 import {
   buildLoopEvidenceReport,
+  archiveLoopDagResources,
+  compareLoopEvidence,
   discoverLoopVerificationPlan,
   enqueueLoopControl,
   isRecord,
   isLoopLeaseActive,
   isValidLoopId,
+  inspectLoopDagResources,
   listLoopDagStates,
+  listLoopSpeculationStates,
   listLoopStates,
   loadLoopDagState,
+  loadLoopSpeculationState,
   loadLoopState,
   pruneLoopStates,
+  promoteLoopDagResult,
+  promoteLoopSpeculation,
+  pruneLoopDagResources,
   readLoopHistory,
   recoverInterruptedLoops,
   removeLoopState,
@@ -37,6 +45,61 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
       const state = loadLoopDagState(workspace, dagId);
       if (state) sendJson(res, 200, state);
       else sendApiError(res, 404, "not_found", `unknown Loop DAG: ${dagId}`);
+      return true;
+    }
+    if (dagId && segs.length === 4 && segs[3] === "resources") {
+      try {
+        if (method === "GET") sendJson(res, 200, await inspectLoopDagResources(workspace, dagId));
+        else if (method === "POST") {
+          const body = await readJsonBody(ctx.req, res);
+          if (body === undefined) return true;
+          if (!isRecord(body)) sendApiError(res, 400, "bad_request", "body must be an object");
+          else if (body.operation === "archive") sendJson(res, 200, archiveLoopDagResources(workspace, dagId));
+          else if (body.operation === "prune") {
+            if (
+              (body.dryRun !== undefined && typeof body.dryRun !== "boolean") ||
+              (body.force !== undefined && typeof body.force !== "boolean")
+            ) {
+              sendApiError(res, 400, "bad_request", "dryRun and force must be boolean");
+            } else {
+              sendJson(
+                res,
+                200,
+                await pruneLoopDagResources(workspace, dagId, {
+                  dryRun: body.dryRun as boolean | undefined,
+                  force: body.force as boolean | undefined,
+                }),
+              );
+            }
+          } else if (body.operation === "promote" && typeof body.target === "string") {
+            sendJson(res, 200, await promoteLoopDagResult(workspace, dagId, body.target));
+          } else sendApiError(res, 400, "bad_request", "unknown Loop DAG resource operation");
+        } else return false;
+      } catch (error) {
+        sendApiError(res, 409, "conflict", error instanceof Error ? error.message : String(error));
+      }
+      return true;
+    }
+    return false;
+  }
+  if (segs[1] === "loop-speculations") {
+    if (method === "GET" && segs.length === 2) {
+      sendJson(res, 200, listLoopSpeculationStates(workspace));
+      return true;
+    }
+    const speculationId = segs[2];
+    if (method === "GET" && segs.length === 3 && speculationId) {
+      const state = loadLoopSpeculationState(workspace, speculationId);
+      if (state) sendJson(res, 200, state);
+      else sendApiError(res, 404, "not_found", `unknown Loop speculation: ${speculationId}`);
+      return true;
+    }
+    if (method === "POST" && segs.length === 4 && segs[3] === "promote" && speculationId) {
+      try {
+        sendJson(res, 200, await promoteLoopSpeculation(workspace, speculationId));
+      } catch (error) {
+        sendApiError(res, 409, "conflict", error instanceof Error ? error.message : String(error));
+      }
       return true;
     }
     return false;
@@ -148,7 +211,14 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
   if (method === "GET" && segs[3] === "evidence" && segs.length === 4) {
     const state = loadLoopState(workspace, loopId);
     if (!state) sendApiError(res, 404, "not_found", `unknown loop: ${loopId}`);
-    else sendJson(res, 200, buildLoopEvidenceReport(state));
+    else {
+      const compareId = url.searchParams.get("compare");
+      if (compareId !== null) {
+        const other = isValidLoopId(compareId) ? loadLoopState(workspace, compareId) : null;
+        if (!other) sendApiError(res, 404, "not_found", `unknown comparison Loop: ${compareId}`);
+        else sendJson(res, 200, compareLoopEvidence(buildLoopEvidenceReport(state), buildLoopEvidenceReport(other)));
+      } else sendJson(res, 200, buildLoopEvidenceReport(state));
+    }
     return true;
   }
   if (method === "POST" && segs[3] === "priority" && segs.length === 4) {

@@ -269,6 +269,60 @@ describe("loop management API", () => {
       schemaVersion: 1,
       loopId: "rest-loop",
       verification: [{ id: "verify", command: "npm run build", required: true }],
+      integrity: { algorithm: "sha256", digest: expect.stringMatching(/^[0-9a-f]{64}$/) },
+    });
+    createLoopState({
+      loopId: "rest-loop-other",
+      task: "compare me",
+      workspace,
+      verifyCommand: "npm run build",
+      maxIterations: 1,
+      costBudgetUsd: null,
+    });
+    const comparison = await authed("/api/loops/rest-loop/evidence?compare=rest-loop-other");
+    expect(await jsonOf(comparison)).toMatchObject({ leftLoopId: "rest-loop", rightLoopId: "rest-loop-other" });
+  });
+
+  it("lists persisted speculations and inspects DAGs without managed worktrees", async () => {
+    const now = "2026-01-01T00:00:00.000Z";
+    writeFileIn(
+      workspace,
+      ".seekforge/loop-speculations/rest-spec.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        speculationId: "rest-spec",
+        fingerprint: "a".repeat(64),
+        status: "completed",
+        createdAt: now,
+        updatedAt: now,
+        candidates: [
+          { id: "a", status: "failed", costUsd: 0, iterations: 1 },
+          { id: "b", status: "failed", costUsd: 0, iterations: 1 },
+        ],
+      }),
+    );
+    writeFileIn(
+      workspace,
+      ".seekforge/loop-dags/rest-dag.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        dagId: "rest-dag",
+        fingerprint: "b".repeat(64),
+        spentCost: 0,
+        spentTokens: 0,
+        results: [],
+        createdAt: now,
+        updatedAt: now,
+        completedAt: now,
+      }),
+    );
+    expect(await jsonOf(await authed("/api/loop-speculations"))).toEqual([
+      expect.objectContaining({ speculationId: "rest-spec", status: "completed" }),
+    ]);
+    expect(await jsonOf(await authed("/api/loop-dags/rest-dag/resources"))).toMatchObject({
+      completed: true,
+      totalBytes: 0,
+      worktrees: [],
     });
   });
 

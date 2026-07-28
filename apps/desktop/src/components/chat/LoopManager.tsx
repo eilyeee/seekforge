@@ -2,7 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api";
 import { LatestRequest } from "../../views/async-coordination";
 import { useT } from "../../lib/i18n";
-import type { LoopDagSummary, LoopEvidenceReport, LoopHistoryEntry, LoopStateSummary } from "../../types";
+import type {
+  LoopDagResourceReport,
+  LoopDagSummary,
+  LoopEvidenceReport,
+  LoopHistoryEntry,
+  LoopSpeculationSummary,
+  LoopStateSummary,
+} from "../../types";
 import { Badge, Button } from "../ui";
 
 type Props = { running: boolean; onResume: (opts: { loopId: string }) => void };
@@ -14,24 +21,30 @@ export function LoopManager({ running, onResume }: Props) {
   const [history, setHistory] = useState<LoopHistoryEntry[]>([]);
   const [evidence, setEvidence] = useState<LoopEvidenceReport>();
   const [dags, setDags] = useState<LoopDagSummary[]>([]);
+  const [dagResources, setDagResources] = useState<Record<string, LoopDagResourceReport>>({});
+  const [speculations, setSpeculations] = useState<LoopSpeculationSummary[]>([]);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const refreshRequests = useRef(new LatestRequest());
   const historyRequests = useRef(new LatestRequest());
+  const dagRequests = useRef(new LatestRequest());
+  const operationRequests = useRef(new LatestRequest());
   const selectedRef = useRef<string>();
   const refresh = useCallback(async () => {
     const request = refreshRequests.current.begin();
     setBusy(true);
     try {
-      const [nextLoops, nextDags] = await Promise.all([
+      const [nextLoops, nextDags, nextSpeculations] = await Promise.all([
         api.loops({ q: query || undefined, status: status || undefined, limit: 100 }),
         api.loopDags(),
+        api.loopSpeculations(),
       ]);
       if (refreshRequests.current.isCurrent(request)) {
         setLoops(nextLoops);
         setDags(nextDags);
+        setSpeculations(nextSpeculations);
         setError("");
       }
     } catch (caught) {
@@ -47,6 +60,8 @@ export function LoopManager({ running, onResume }: Props) {
     () => () => {
       refreshRequests.current.invalidate();
       historyRequests.current.invalidate();
+      dagRequests.current.invalidate();
+      operationRequests.current.invalidate();
     },
     [],
   );
@@ -154,6 +169,72 @@ export function LoopManager({ running, onResume }: Props) {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       setBusy(false);
+    }
+  };
+  const inspectDag = async (dagId: string) => {
+    const request = dagRequests.current.begin();
+    setBusy(true);
+    try {
+      const report = await api.loopDagResources(dagId);
+      if (dagRequests.current.isCurrent(request)) {
+        setDagResources((current) => ({ ...current, [dagId]: report }));
+        setError("");
+      }
+    } catch (caught) {
+      if (dagRequests.current.isCurrent(request)) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    } finally {
+      if (dagRequests.current.isCurrent(request)) setBusy(false);
+    }
+  };
+  const dagAction = async (dagId: string, operation: "archive" | "prune" | "promote") => {
+    if (
+      operation !== "archive" &&
+      !window.confirm(
+        t("chat.loop.manager.resourceConfirm", {
+          action: operation === "promote" ? t("chat.loop.manager.promote") : t("chat.loop.manager.pruneResources"),
+          id: dagId,
+        }),
+      )
+    )
+      return;
+    const request = operationRequests.current.begin();
+    setBusy(true);
+    try {
+      await api.loopDagResourceAction(dagId, { operation, ...(operation === "promote" ? { target: "fan-in" } : {}) });
+      if (!operationRequests.current.isCurrent(request)) return;
+      await refresh();
+      if (operationRequests.current.isCurrent(request) && operation !== "prune") await inspectDag(dagId);
+    } catch (caught) {
+      if (operationRequests.current.isCurrent(request)) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    } finally {
+      if (operationRequests.current.isCurrent(request)) setBusy(false);
+    }
+  };
+  const promoteSpeculation = async (speculationId: string) => {
+    if (
+      !window.confirm(
+        t("chat.loop.manager.resourceConfirm", {
+          action: t("chat.loop.manager.promote"),
+          id: speculationId,
+        }),
+      )
+    )
+      return;
+    const request = operationRequests.current.begin();
+    setBusy(true);
+    try {
+      await api.loopSpeculationPromote(speculationId);
+      if (operationRequests.current.isCurrent(request)) await refresh();
+    } catch (caught) {
+      if (operationRequests.current.isCurrent(request)) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    } finally {
+      if (operationRequests.current.isCurrent(request)) setBusy(false);
     }
   };
 
@@ -315,9 +396,47 @@ export function LoopManager({ running, onResume }: Props) {
           {dags.map((dag) => (
             <div key={dag.dagId} className="mt-1 rounded border border-subtle p-2">
               {dag.dagId} · {dag.completedAt ? t("chat.loop.manager.completed") : t("chat.loop.manager.active")} ·{" "}
-              {dag.results.length} nodes · ${dag.spentCost.toFixed(4)}
+              {dag.results.length} {t("chat.loop.manager.nodes")} · ${dag.spentCost.toFixed(4)}
               {dag.fanIn && (
                 <Badge tone={dag.fanIn.status === "passed" ? "ok" : "danger"}>fan-in: {dag.fanIn.status}</Badge>
+              )}
+              <div className="ml-2 inline-flex gap-1">
+                <Button size="sm" variant="ghost" disabled={busy} onClick={() => void inspectDag(dag.dagId)}>
+                  {t("chat.loop.manager.inspect")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy || !dag.completedAt}
+                  onClick={() => void dagAction(dag.dagId, "archive")}
+                >
+                  {t("chat.loop.manager.archive")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy || !dag.fanIn}
+                  onClick={() => void dagAction(dag.dagId, "promote")}
+                >
+                  {t("chat.loop.manager.promote")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy || !dagResources[dag.dagId]?.archived}
+                  onClick={() => void dagAction(dag.dagId, "prune")}
+                >
+                  {t("chat.loop.manager.pruneResources")}
+                </Button>
+              </div>
+              {dagResources[dag.dagId] && (
+                <p className="mt-1 text-tertiary">
+                  {((dagResources[dag.dagId]?.totalBytes ?? 0) / 1024 / 1024).toFixed(2)} MiB ·{" "}
+                  {dagResources[dag.dagId]?.worktrees.length ?? 0} {t("chat.loop.manager.worktrees")} ·{" "}
+                  {dagResources[dag.dagId]?.archived
+                    ? t("chat.loop.manager.archived")
+                    : t("chat.loop.manager.retained")}
+                </p>
               )}
               <div className="mt-1 flex flex-wrap gap-1">
                 {dag.results.map((node) => (
@@ -326,6 +445,33 @@ export function LoopManager({ running, onResume }: Props) {
                   </Badge>
                 ))}
               </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {speculations.length > 0 && (
+        <div className="mt-2 text-xs text-secondary">
+          {speculations.map((speculation) => (
+            <div
+              key={speculation.speculationId}
+              className="mt-1 flex flex-wrap items-center gap-2 rounded border border-subtle p-2"
+            >
+              <span className="font-mono">{speculation.speculationId}</span>
+              <Badge tone={speculation.status === "completed" || speculation.status === "promoted" ? "ok" : "neutral"}>
+                {speculation.status}
+              </Badge>
+              <span>
+                {speculation.candidates.length} {t("chat.loop.manager.candidates")} · {t("chat.loop.manager.winner")}{" "}
+                {speculation.winnerId ?? "—"}
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy || speculation.status !== "completed" || !speculation.winnerId}
+                onClick={() => void promoteSpeculation(speculation.speculationId)}
+              >
+                {t("chat.loop.manager.promote")}
+              </Button>
             </div>
           ))}
         </div>

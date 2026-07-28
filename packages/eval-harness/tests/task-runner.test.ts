@@ -402,6 +402,7 @@ describe("runTask", () => {
           maxIterations: 1,
           expectedStatus: "passed",
           interruptAfterEvent: "run.completed",
+          interruptAfterOccurrence: 2,
           resume: { expectedInitialStatus: "interrupted", additionalIterations: 1 },
         },
         checks: [{ type: "file_contains", path: "file.txt", pattern: "ok" }],
@@ -410,6 +411,8 @@ describe("runTask", () => {
         fixturesDir: fx.fixturesDir,
         createAgent: () => ({ agent: { async *runTask() {} }, deps: {} as AgentCoreDeps }),
         runLoop: async (_deps, options) => {
+          options.onEvent?.({ type: "run.completed", iteration: 1, costUsd: 0.01 });
+          expect(options.signal?.aborted).toBe(false);
           options.onEvent?.({ type: "run.completed", iteration: 1, costUsd: 0.01 });
           aborted = options.signal?.aborted === true;
           return {
@@ -436,7 +439,13 @@ describe("runTask", () => {
     );
     expect(aborted).toBe(true);
     expect(result.success).toBe(true);
-    expect(result.execution).toMatchObject({ verifyRuns: 3, recoveryAttempts: 1, flaky: false });
+    expect(result.execution).toMatchObject({
+      verifyRuns: 3,
+      recoveryAttempts: 1,
+      flaky: false,
+      lifecycleEvents: 2,
+      interruptedAtOccurrence: 2,
+    });
   });
 
   it("binds session_scenario resume steps to the prior session and applies memory lifecycle actions", async () => {

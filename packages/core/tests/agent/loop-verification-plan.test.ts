@@ -143,4 +143,45 @@ describe("discoverLoopVerificationPlan", () => {
     symlinkSync(join(outside, "Cargo.toml"), join(root, "Cargo.toml"));
     expect(() => discoverLoopVerificationPlan(root)).toThrow(/Could not discover/);
   });
+
+  it("discovers custom pnpm workspace parents and nested language modules", () => {
+    const root = mkdtempSync(join(tmpdir(), "seekforge-loop-plan-"));
+    roots.push(root);
+    mkdirSync(join(root, "tools", "lint"), { recursive: true });
+    mkdirSync(join(root, "services", "api"), { recursive: true });
+    mkdirSync(join(root, "modules", "python"), { recursive: true });
+    writeFileSync(join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    writeFileSync(join(root, "pnpm-workspace.yaml"), "packages:\n  - 'tools/*'\n");
+    writeFileSync(join(root, "package.json"), JSON.stringify({ private: true }));
+    writeFileSync(join(root, "tools", "lint", "package.json"), JSON.stringify({ scripts: { test: "vitest" } }));
+    writeFileSync(join(root, "services", "api", "go.mod"), "module example.test/api\n");
+    writeFileSync(join(root, "modules", "python", "pyproject.toml"), "[tool.pytest.ini_options]\n");
+    const plan = discoverLoopVerificationPlan(root);
+    expect(plan.stages.map((stage) => stage.id)).toEqual(
+      expect.arrayContaining(["test-tools-lint", "go-services-api", "pytest-modules-python"]),
+    );
+  });
+
+  it("bounds generated stage ids for long but safe workspace names", () => {
+    const root = mkdtempSync(join(tmpdir(), "seekforge-loop-plan-"));
+    roots.push(root);
+    const name = `package-${"x".repeat(100)}`;
+    mkdirSync(join(root, "packages", name), { recursive: true });
+    writeFileSync(join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    writeFileSync(join(root, "package.json"), JSON.stringify({ private: true }));
+    writeFileSync(join(root, "packages", name, "package.json"), JSON.stringify({ scripts: { test: "vitest" } }));
+    const [stage] = discoverLoopVerificationPlan(root).stages;
+    expect(stage?.id.length).toBeLessThanOrEqual(128);
+    expect(stage?.id).toMatch(/^[A-Za-z0-9][A-Za-z0-9_-]*$/);
+  });
+
+  it("normalizes dots out of generated stage ids", () => {
+    const root = mkdtempSync(join(tmpdir(), "seekforge-loop-plan-"));
+    roots.push(root);
+    mkdirSync(join(root, "packages", "web.app"), { recursive: true });
+    writeFileSync(join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    writeFileSync(join(root, "package.json"), JSON.stringify({ private: true }));
+    writeFileSync(join(root, "packages", "web.app", "package.json"), JSON.stringify({ scripts: { test: "vitest" } }));
+    expect(discoverLoopVerificationPlan(root).stages[0]?.id).toBe("test-packages-web-app");
+  });
 });

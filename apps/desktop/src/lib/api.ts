@@ -259,6 +259,23 @@ export const api = {
       command,
     ),
   loopDags: (ws?: string) => request<import("../types").LoopDagSummary[]>("GET", withWorkspace("/api/loop-dags", ws)),
+  loopDagResources: (id: string, ws?: string) =>
+    request<import("../types").LoopDagResourceReport>(
+      "GET",
+      withWorkspace(`/api/loop-dags/${encodeURIComponent(id)}/resources`, ws),
+    ),
+  loopDagResourceAction: (
+    id: string,
+    input: { operation: "archive" | "prune" | "promote"; dryRun?: boolean; force?: boolean; target?: string },
+    ws?: string,
+  ) => request<unknown>("POST", withWorkspace(`/api/loop-dags/${encodeURIComponent(id)}/resources`, ws), input),
+  loopSpeculations: (ws?: string) =>
+    request<import("../types").LoopSpeculationSummary[]>("GET", withWorkspace("/api/loop-speculations", ws)),
+  loopSpeculationPromote: (id: string, ws?: string) =>
+    request<import("../types").LoopSpeculationSummary>(
+      "POST",
+      withWorkspace(`/api/loop-speculations/${encodeURIComponent(id)}/promote`, ws),
+    ),
   loopDelete: (id: string, ws?: string) =>
     request<{ removed: true; loopId: string }>("DELETE", withWorkspace(`/api/loops/${encodeURIComponent(id)}`, ws)),
   diff: (staged?: boolean, ws?: string) =>

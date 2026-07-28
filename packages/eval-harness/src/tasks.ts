@@ -67,6 +67,8 @@ export type LoopTaskConfig = {
   requirementMode?: LoopRequirementMode;
   /** Deterministic lifecycle interruption used by resilience fixtures. */
   interruptAfterEvent?: LoopEvent["type"];
+  /** One-based matching occurrence; defaults to the first boundary. */
+  interruptAfterOccurrence?: number;
   resume?: LoopResumeConfig;
 };
 
@@ -354,6 +356,15 @@ function parseLoop(value: unknown, where: string): LoopTaskConfig {
       throw new Error(`${where}.interruptAfterEvent must be a supported lifecycle boundary`);
     }
     loop.interruptAfterEvent = value.interruptAfterEvent as LoopEvent["type"];
+    if (value.interruptAfterOccurrence !== undefined) {
+      loop.interruptAfterOccurrence = positiveInteger(
+        value.interruptAfterOccurrence,
+        `${where}.interruptAfterOccurrence`,
+        1_000,
+      );
+    }
+  } else if (value.interruptAfterOccurrence !== undefined) {
+    throw new Error(`${where}.interruptAfterOccurrence requires interruptAfterEvent`);
   }
   if (value.verificationPlan !== undefined) {
     if (

@@ -2519,6 +2519,67 @@ but its explanation and policy classification become wrong.
 - **Caught:** Loop verification could label a dependency edit as direct when a
   broader direct prefix appeared before the nested dependency prefix.
 
+## 208. Destructive resource identity must have typed provenance
+
+A generic artifact string can resemble a managed branch name. Inferring ownership
+from a prefix can make archive, merge, or prune act on an unrelated checkout.
+
+- **Do:** persist the managed branch in a dedicated validated field and rebind its
+  physical path under the exact managed root immediately before every mutation.
+- **Caught:** Loop DAG resource cleanup inferred branches from user-declared
+  artifact paths beginning with `seekforge/`.
+
+## 209. Repository-wide quotas require repository-wide coordination
+
+Checking a resource count under an operation-specific lease is still racy when
+another operation uses a different id and can provision before the first commits.
+
+- **Do:** hold one canonical resource-family lease across count, reservation,
+  provisioning, and delayed derived-resource creation; use it for cleanup too.
+- **Caught:** concurrent managed Loop DAGs could both pass the worktree limit and
+  later create more retained worktrees than the configured cap.
+
+## 210. Nested persisted identifiers keep their own grammar
+
+Parent record ids and nested candidate/node ids often have intentionally different
+length limits. Reusing the parent validator can make a freshly written valid state
+unreadable, while unchecked optional fields can taint trusted typed state.
+
+- **Do:** validate every nested field with its declared grammar and validate
+  references/status relationships before casting the parsed record.
+- **Caught:** a valid 57–64 character speculation candidate id was written but
+  rejected on reload, and winner/error/timestamp fields were accepted unchecked.
+
+## 211. Composed identifiers need a final grammar check
+
+Individually safe path segments can produce an overlong identifier or carry
+characters forbidden by the destination schema after prefixes and separators are added.
+
+- **Do:** normalize the composed value, bound it with a deterministic hash suffix,
+  and validate the final consumer grammar rather than only each source segment.
+- **Caught:** long or dotted workspace directory names produced auto-discovered
+  verification stage ids that the Loop stage validator rejected.
+
+## 212. Decayed evidence needs an effective-mass maturity threshold
+
+Counting raw historical samples as mature after their weights decay to nearly zero
+lets ancient data keep overriding a deterministic default through tie-break rules.
+
+- **Do:** require both a raw sample floor and a minimum effective weight, and use
+  effective mass—not raw count—for confidence and tie-breaking.
+- **Caught:** years-old Loop recovery observations could still select a non-default
+  strategy despite the advertised recency decay.
+
+## 213. Empty optional resources bypass their backend
+
+An operation that has no derived resources should not initialize the backend used
+only to enumerate or mutate them; the workspace may validly lack that backend.
+
+- **Do:** validate durable state and return the empty result before opening Git,
+  database, network, or managed-root resources that are unnecessary for the case.
+- **Caught:** inspecting or pruning a completed non-managed Loop DAG failed because
+  it still invoked `git worktree list` in a non-Git workspace.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the
