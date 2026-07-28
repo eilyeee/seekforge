@@ -187,6 +187,8 @@ checkout 后会拒绝旧检查点，而不会复用另一个工作区产生的�
 依赖前调用它。需要字段级解码的适配层可使用 `parseLoopDagCondition`、`isValidLoopDagId` 与
 `isSafeLoopDagRelativePath` 复用同一套有界条件/id/路径规则；不要在本地复制这些规则。
 
+异构编排应先调用 `parseEngineeringGraphDefinition`，确认无副作用校验通过后，再调用 `runEngineeringGraph(deps, definition, options)`。命名确定性处理器放在 `options.handlers`；持久状态通过 `loadEngineeringGraphState` 与 `listEngineeringGraphStates` 读取。恢复指纹同时绑定标准化定义和节点物理工作区。详见[图工程](graph-engineering.zh-CN.md)。
+
 循环状态以原子方式存储在 `.seekforge/loops/` 下；只有当嵌入方自己拥有等效的持久化编排时，才应设置 `persist: false`。迭代次数硬性上限为 100。持久化的 Loop 持有独占租约；写入失败会通过有界的 `loop.warning` 事件上报，不会掩盖验证结果。
 `LoopResult.status` 会区分 `passed`、由防护预算触发的 `budget`（含
 `budgetReason`）、验证器错误、取消、无进展/迭代耗尽，以及带结构化 provider/session

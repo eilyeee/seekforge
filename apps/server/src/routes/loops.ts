@@ -18,6 +18,7 @@ import { readJsonBody, sendApiError, sendJson } from "../http.js";
 import type { RouteCtx } from "./context.js";
 import { handleLoopDagRoutes } from "./loop-dags.js";
 import { handleLoopSpeculationRoutes } from "./loop-speculations.js";
+import { handleGraphRoutes } from "./graphs.js";
 
 function boundedInteger(value: string | null, fallback: number, min: number, max: number): number | null {
   if (value === null) return fallback;
@@ -30,6 +31,7 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
   const { method, segs, url, res, workspace } = ctx;
   if (await handleLoopDagRoutes(ctx)) return true;
   if (await handleLoopSpeculationRoutes(ctx)) return true;
+  if (await handleGraphRoutes(ctx)) return true;
   if (segs[1] !== "loops") return false;
 
   if (method === "GET" && segs.length === 2) {

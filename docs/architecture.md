@@ -6,6 +6,8 @@ SeekForge is a local-first monorepo with one agent engine and several adapters.
 The adapters own interaction and transport concerns; `packages/core` owns agent
 behavior, policy, persistence, and tool execution.
 
+Engineering Graphs are also Core-owned: `graph-contract.ts` owns pure bounded validation, `graph-engineering.ts` owns heterogeneous scheduling, and `graph-state.ts` owns atomic checkpoints. CLI, Server, and Desktop are adapters over those contracts; they must not recreate graph topology or resume rules. See [Graph Engineering](graph-engineering.md).
+
 ```mermaid
 flowchart TD
   CLI["apps/cli"] --> Core["packages/core"]

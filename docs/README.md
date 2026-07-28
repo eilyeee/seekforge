@@ -30,6 +30,7 @@ and quick start; this folder holds the reference docs.
   definitions/references/diagnostics vs. the lexical `repo_map`/`find_definition`.
 - [Loop engineering](loop-engineering.md) — the autonomous run→verify→continue
   loop and its guardrails.
+- [Graph Engineering](graph-engineering.md) — durable heterogeneous Agent/Loop/function/router/gate/subgraph orchestration.
 - [Loop tutorial](loop-tutorial.md) — practical CLI, TUI, Desktop, recovery,
   worktree, and Core API usage for autonomous Loop runs.
 - [Scheduled jobs](scheduling.md) — register local cron/interval jobs

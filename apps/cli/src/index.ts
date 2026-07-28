@@ -40,6 +40,7 @@ import { modelsCommand } from "./commands/models.js";
 import { sessionsCommand, sessionsPruneCommand, statusCommand } from "./commands/sessions.js";
 import { runInheritedCommand } from "./inherited-command.js";
 import { registerLoopCommands } from "./register-loop.js";
+import { registerGraphCommands } from "./register-graph.js";
 
 const program = new Command();
 
@@ -415,6 +416,7 @@ program
   );
 
 registerLoopCommands(program, { collect, parsePositiveInt, parseNonNegativeInt, parsePositiveFloat, rootProfile });
+registerGraphCommands(program, collect, rootProfile);
 
 // Local scheduled jobs (Track E automation). Register a task to run on an
 // interval or cron; `schedule run` is the tick the OS scheduler invokes. Every

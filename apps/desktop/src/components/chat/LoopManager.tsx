@@ -3,6 +3,7 @@ import { api } from "../../lib/api";
 import { LatestRequest } from "../../views/async-coordination";
 import { useT } from "../../lib/i18n";
 import type {
+  EngineeringGraphSummary,
   LoopDagResourceReport,
   LoopDagSummary,
   LoopEvidenceReport,
@@ -12,6 +13,7 @@ import type {
 } from "../../types";
 import { Button } from "../ui";
 import { LoopDagSection } from "./LoopDagSection";
+import { GraphEngineeringSection } from "./GraphEngineeringSection";
 import { LoopDetailsSection } from "./LoopDetailsSection";
 import { LoopListSection } from "./LoopListSection";
 import { LoopSpeculationSection } from "./LoopSpeculationSection";
@@ -25,6 +27,7 @@ export function LoopManager({ running, onResume }: Props) {
   const [history, setHistory] = useState<LoopHistoryEntry[]>([]);
   const [evidence, setEvidence] = useState<LoopEvidenceReport>();
   const [dags, setDags] = useState<LoopDagSummary[]>([]);
+  const [graphs, setGraphs] = useState<EngineeringGraphSummary[]>([]);
   const [dagResources, setDagResources] = useState<Record<string, LoopDagResourceReport>>({});
   const [speculations, setSpeculations] = useState<LoopSpeculationSummary[]>([]);
   const [query, setQuery] = useState("");
@@ -42,15 +45,17 @@ export function LoopManager({ running, onResume }: Props) {
     const request = refreshRequests.current.begin();
     setRefreshBusy(true);
     try {
-      const [nextLoops, nextDags, nextSpeculations] = await Promise.all([
+      const [nextLoops, nextDags, nextSpeculations, nextGraphs] = await Promise.all([
         api.loops({ q: query || undefined, status: status || undefined, limit: 100 }),
         api.loopDags(),
         api.loopSpeculations(),
+        api.graphs(),
       ]);
       if (refreshRequests.current.isCurrent(request)) {
         setLoops(nextLoops);
         setDags(nextDags);
         setSpeculations(nextSpeculations);
+        setGraphs(nextGraphs);
         setError("");
       }
     } catch (caught) {
@@ -248,6 +253,21 @@ export function LoopManager({ running, onResume }: Props) {
       if (operationRequests.current.isCurrent(request)) setResourceBusy(false);
     }
   };
+  const removeGraph = async (graphId: string) => {
+    if (!window.confirm(t("chat.loop.graph.deleteConfirm"))) return;
+    const request = operationRequests.current.begin();
+    setResourceBusy(true);
+    try {
+      await api.graphDelete(graphId);
+      if (operationRequests.current.isCurrent(request)) await refresh();
+    } catch (caught) {
+      if (operationRequests.current.isCurrent(request)) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    } finally {
+      if (operationRequests.current.isCurrent(request)) setResourceBusy(false);
+    }
+  };
 
   return (
     <details className="mt-2 rounded border border-subtle p-2">
@@ -305,6 +325,7 @@ export function LoopManager({ running, onResume }: Props) {
         onInspect={(dagId) => void inspectDag(dagId)}
         onAction={(dagId, operation) => void dagAction(dagId, operation)}
       />
+      <GraphEngineeringSection graphs={graphs} busy={resourceBusy} onRemove={(graphId) => void removeGraph(graphId)} />
       <LoopSpeculationSection
         speculations={speculations}
         busy={resourceBusy}

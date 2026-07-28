@@ -4,6 +4,8 @@
 
 SeekForge 是一个本地优先的 monorepo：一个智能体引擎，配多个适配层。适配层负责交互与传输相关的事务；`packages/core` 负责智能体行为、策略、持久化与工具执行。
 
+工程图同样由 Core 拥有：`graph-contract.ts` 负责纯且有界的校验，`graph-engineering.ts` 负责异构调度，`graph-state.ts` 负责原子检查点。CLI、Server 与 Desktop 只是这些契约的适配层，不得重新实现图拓扑或恢复规则。详见[图工程](graph-engineering.zh-CN.md)。
+
 ```mermaid
 flowchart TD
   CLI["apps/cli"] --> Core["packages/core"]

@@ -109,6 +109,42 @@ export {
   type PersistedLoopDagState,
 } from "./loop-dag.js";
 export {
+  graphConditionMatches,
+  graphConditionReferences,
+  graphDefinitionFingerprint,
+  parseEngineeringGraphDefinition,
+  MAX_GRAPH_CONCURRENCY,
+  MAX_GRAPH_DEFINITION_BYTES,
+  MAX_GRAPH_DEPTH,
+  MAX_GRAPH_NODES,
+  MAX_GRAPH_NODE_TIMEOUT_MS,
+  type EngineeringGraphDefinition,
+  type GraphCondition,
+  type GraphNode,
+  type GraphNodeKind,
+  type GraphNodeStatus,
+  type GraphRoute,
+  type GraphRunStatus,
+} from "./graph-contract.js";
+export {
+  runEngineeringGraph,
+  validateEngineeringGraphRunOptions,
+  validateEngineeringGraphWorkspaces,
+  type GraphFunctionContext,
+  type GraphFunctionHandler,
+  type GraphFunctionResult,
+  type RunEngineeringGraphOptions,
+} from "./graph-engineering.js";
+export {
+  listEngineeringGraphStates,
+  engineeringGraphStateExists,
+  loadEngineeringGraphState,
+  removeEngineeringGraphState,
+  type EngineeringGraphState,
+  type GraphEvent,
+  type GraphNodeResult,
+} from "./graph-state.js";
+export {
   archiveLoopDagResources,
   inspectLoopDagResources,
   promoteLoopDagResult,

@@ -210,6 +210,8 @@ any runtime dependencies. `parseLoopDagCondition`, `isValidLoopDagId`, and
 `isSafeLoopDagRelativePath` expose the same bounded condition/id/path rules for
 adapters that need field-level decoding; do not copy those rules locally.
 
+For heterogeneous orchestration, call `parseEngineeringGraphDefinition` before effects and then `runEngineeringGraph(deps, definition, options)`. Named deterministic handlers live in `options.handlers`; durable state is available through `loadEngineeringGraphState` and `listEngineeringGraphStates`. Resume fingerprints both the normalized definition and physical node workspaces. See [Graph Engineering](graph-engineering.md).
+
 Loop state is stored atomically under `.seekforge/loops/`; set `persist: false`
 only for embedders that own equivalent durable orchestration. Iterations are
 hard-capped at 100. Persisted Loops hold an exclusive lease; write failures are

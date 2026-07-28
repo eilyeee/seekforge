@@ -23,6 +23,7 @@
   `lsp_definition` / `lsp_references` / `lsp_diagnostics` 工具，提供精确的
   定义/引用/诊断信息，区别于词法层面的 `repo_map`/`find_definition`。
 - [Loop 工程](loop-engineering.zh-CN.md) — 自主的「运行→验证→继续」循环及其护栏机制。
+- [图工程](graph-engineering.zh-CN.md) — 持久化的异构 Agent/Loop/函数/路由/审批门/子图编排。
 - [Loop 教程](loop-tutorial.zh-CN.md) — 自主 Loop 运行在 CLI、TUI、桌面端、
   恢复、worktree 与 Core API 中的实用用法。
 - [定时任务](scheduling.zh-CN.md) — 注册本地 cron/间隔任务

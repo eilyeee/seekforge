@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### round 73: Graph Engineering
+- Added a validated, durable heterogeneous execution graph for Agent, Loop, function, router, approval-gate, and nested-graph nodes.
+- Added completion-driven scheduling, shared budgets, retries, timeouts, pause/resume, downstream reruns, bounded event/output persistence, and physical-workspace concurrency guards.
+- Added CLI lifecycle commands, REST/Desktop observability, shared DTOs, bilingual architecture guidance, and regression coverage.
+
 ### round 72: reusable Loop contracts and documentation rules
 - Centralized Loop DAG identifiers, conditions, relative paths, dependency, and
   topology validation in one pure Core module shared by runtime and CLI input.

@@ -70,6 +70,13 @@ export type {
   LoopDagSummary,
   LoopDagResourceReport,
   LoopSpeculationSummary,
+  EngineeringGraphSummary,
+  EngineeringGraphDetail,
+  GraphEventSummary,
+  GraphNodeKind,
+  GraphNodeStatus,
+  GraphNodeSummary,
+  GraphRunStatus,
   ModelInfo,
   ApiErrorCode,
 } from "@seekforge/shared";

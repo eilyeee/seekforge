@@ -79,6 +79,7 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge resolve <issue> --max-cost <usd>` | 在隔离 worktree 中修复一个 GitHub issue 并开草稿 PR；支持 `--wait-ci` 与 `--dry-run`——见 [GitHub 工作流](docs/github.zh-CN.md) |
 | `seekforge resolve-review <pr> --max-cost <usd>` | 处理 PR 评审中可执行的反馈，验证、提交并推送修复 |
 | `seekforge schedule add\|list\|run\|next\|history\|install\|uninstall\|status` | 管理定时任务、历史、重试与 crontab tick——见[定时任务](docs/scheduling.zh-CN.md) |
+| `seekforge graph validate\|run\|resume\|list\|show\|history\|delete` | 运行持久化的异构 Agent/Loop/函数/路由/审批门/子图工作流——见[图工程](docs/graph-engineering.zh-CN.md) |
 | `seekforge sandbox-run "<task>"` | 通过 Docker runner 契约执行任务——见[远程执行](docs/remote.zh-CN.md) |
 | `seekforge evolve analyze\|list\|show\|accept\|reject\|apply` | 会话打分与自我进化提案审阅（人工把关） |
 

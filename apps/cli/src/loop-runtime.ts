@@ -5,7 +5,7 @@ import type { loadConfig } from "./config.js";
 export type LoopRuntime = { deps: AgentCoreDeps; controller: AbortController };
 
 /** Owns MCP, agent dependencies, and SIGINT cleanup for one foreground Loop command. */
-export async function withLoopAgentRuntime<T>(
+export async function withAgentRuntime<T>(
   options: {
     config: ReturnType<typeof loadConfig>;
     workspace: string;
@@ -54,3 +54,6 @@ export async function withLoopAgentRuntime<T>(
     }
   }
 }
+
+/** Backward-compatible Loop-specific name. */
+export const withLoopAgentRuntime = withAgentRuntime;

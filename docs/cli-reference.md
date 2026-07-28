@@ -241,7 +241,8 @@ to cross a node gate and `--rerun <node-id>` to invalidate that node and its des
 `loop-speculate <file> --budget <usd>` persists two or three isolated strategies;
 `loop-speculation-list` and `loop-speculation-promote` inspect and explicitly merge the winner.
 `loop-evidence <id> --format json|sarif|junit [--compare <id>]` exports attestable evidence or compares runs.
-checkpoints. TUI and Desktop/WebSocket Loop surfaces also support safe-boundary
+`graph validate|run|resume|list|show|history|delete` manages heterogeneous Engineering Graphs. Definitions can combine Agent, Loop, function, router, gate, and nested-graph nodes; `--approve` crosses a gate, `--rerun` invalidates a node plus descendants, and `--restart` explicitly replaces an existing checkpoint. See [Graph Engineering](graph-engineering.md).
+TUI and Desktop/WebSocket Loop surfaces also support safe-boundary
 pause, resume, priority, and steering.
 `seekforge loop-cleanup <name>` removes a retained `seekforge/loop-*` worktree;
 dirty worktrees require explicit `--force` because their changes are discarded.

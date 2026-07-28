@@ -326,6 +326,59 @@ describe("loop management API", () => {
     });
   });
 
+  it("lists, inspects, reads history, and deletes Engineering Graph checkpoints", async () => {
+    const now = "2026-01-01T00:00:00.000Z";
+    writeFileIn(
+      workspace,
+      ".seekforge/graphs/rest-graph.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        graphId: "rest-graph",
+        fingerprint: "c".repeat(64),
+        status: "passed",
+        definition: {
+          graphId: "rest-graph",
+          nodes: [{ id: "done", kind: "function", handler: "noop" }],
+          maxConcurrency: 1,
+          failurePolicy: "stop",
+        },
+        results: [
+          {
+            id: "done",
+            kind: "function",
+            status: "passed",
+            attempts: 1,
+            costUsd: 0,
+            tokensUsed: 0,
+            startedAt: now,
+            completedAt: now,
+            output: { private: "detail" },
+          },
+        ],
+        events: [{ sequence: 1, type: "graph.completed", timestamp: now, status: "passed" }],
+        spentCost: 0,
+        spentTokens: 0,
+        createdAt: now,
+        updatedAt: now,
+        completedAt: now,
+      }),
+    );
+    const listed = (await jsonOf(await authed("/api/graphs"))) as Array<Record<string, unknown>>;
+    expect(listed).toEqual([expect.objectContaining({ graphId: "rest-graph", status: "passed" })]);
+    const first = listed[0]!;
+    expect(first).not.toHaveProperty("definition");
+    expect((first.results as Array<Record<string, unknown>>)[0]).not.toHaveProperty("output");
+    expect(await jsonOf(await authed("/api/graphs/rest-graph"))).toMatchObject({ graphId: "rest-graph" });
+    expect(await jsonOf(await authed("/api/graphs/rest-graph/history"))).toEqual([
+      expect.objectContaining({ sequence: 1, type: "graph.completed" }),
+    ]);
+    expect(await jsonOf(await authed("/api/graphs/rest-graph", { method: "DELETE" }))).toEqual({
+      removed: true,
+      graphId: "rest-graph",
+    });
+    expect((await authed("/api/graphs/rest-graph")).status).toBe(404);
+  });
+
   it("queues safe-boundary controls only for a live Loop owner", async () => {
     createLoopState({
       loopId: "rest-control",

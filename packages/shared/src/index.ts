@@ -1001,6 +1001,46 @@ export type LoopDagSummary = {
   fanIn?: { status: "passed" | "failed"; branch: string; workspace: string; error?: string };
 };
 
+/** Durable multi-Agent / multi-Loop engineering graph contracts. */
+export type GraphRunStatus = "running" | "paused" | "passed" | "failed" | "cancelled";
+export type GraphNodeStatus = "passed" | "failed" | "skipped" | "waiting_approval";
+export type GraphNodeKind = "agent" | "loop" | "function" | "router" | "gate" | "subgraph";
+export type GraphNodeSummary = {
+  id: string;
+  kind: GraphNodeKind;
+  status: GraphNodeStatus;
+  attempts: number;
+  costUsd: number;
+  tokensUsed: number;
+  startedAt?: string;
+  completedAt?: string;
+  sessionId?: string;
+  output?: unknown;
+  error?: string;
+};
+export type GraphEventSummary = {
+  sequence: number;
+  type: string;
+  timestamp: string;
+  nodeId?: string;
+  status?: GraphNodeStatus | GraphRunStatus;
+  message?: string;
+};
+export type EngineeringGraphSummary = {
+  schemaVersion: 1;
+  graphId: string;
+  fingerprint: string;
+  status: GraphRunStatus;
+  results: GraphNodeSummary[];
+  events: GraphEventSummary[];
+  spentCost: number;
+  spentTokens: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+};
+export type EngineeringGraphDetail = EngineeringGraphSummary & { definition: unknown };
+
 export type LoopDagResourceReport = {
   dagId: string;
   completed: boolean;

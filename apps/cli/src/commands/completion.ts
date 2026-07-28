@@ -16,6 +16,7 @@ const COMMANDS = [
   "init",
   "diff",
   "schedule",
+  "graph",
   "sessions",
   "status",
   "models",

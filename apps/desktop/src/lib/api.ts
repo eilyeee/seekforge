@@ -276,6 +276,20 @@ export const api = {
       "POST",
       withWorkspace(`/api/loop-speculations/${encodeURIComponent(id)}/promote`, ws),
     ),
+  graphs: (ws?: string) =>
+    request<import("../types").EngineeringGraphSummary[]>("GET", withWorkspace("/api/graphs", ws)),
+  graph: (id: string, ws?: string) =>
+    request<import("../types").EngineeringGraphDetail>(
+      "GET",
+      withWorkspace(`/api/graphs/${encodeURIComponent(id)}`, ws),
+    ),
+  graphHistory: (id: string, ws?: string) =>
+    request<import("../types").GraphEventSummary[]>(
+      "GET",
+      withWorkspace(`/api/graphs/${encodeURIComponent(id)}/history`, ws),
+    ),
+  graphDelete: (id: string, ws?: string) =>
+    request<{ removed: true; graphId: string }>("DELETE", withWorkspace(`/api/graphs/${encodeURIComponent(id)}`, ws)),
   loopDelete: (id: string, ws?: string) =>
     request<{ removed: true; loopId: string }>("DELETE", withWorkspace(`/api/loops/${encodeURIComponent(id)}`, ws)),
   diff: (staged?: boolean, ws?: string) =>

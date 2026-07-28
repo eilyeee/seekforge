@@ -120,6 +120,10 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/loop-dags/:id | one persisted Loop DAG state |
 | GET /api/loop-dags/:id/resources | retained managed-worktree count and bounded disk use |
 | POST /api/loop-dags/:id/resources | body `{operation:"archive"|"prune"|"promote",dryRun?,force?,target?}`; explicit resource lifecycle operation |
+| GET /api/graphs | bounded Engineering Graph summaries (definitions/node outputs omitted, latest events only) |
+| GET /api/graphs/:id | one normalized graph, node results, usage, and recent events |
+| GET /api/graphs/:id/history | the checkpoint's bounded lifecycle events |
+| DELETE /api/graphs/:id | delete one inactive graph checkpoint under its graph lease |
 | GET /api/loop-speculations | persisted speculative runs and winners |
 | GET /api/loop-speculations/:id | one persisted speculative run |
 | POST /api/loop-speculations/:id/promote | explicitly merge the passing winner |

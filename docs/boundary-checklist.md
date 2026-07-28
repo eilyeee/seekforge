@@ -2608,6 +2608,90 @@ while a field omitted by one decoder disappears without an error.
 - **Caught:** CLI and Core Loop DAG validators disagreed on duplicate dependencies
   and NUL-containing artifact paths, while CLI silently discarded `verifierId`.
 
+## 216. Nested authorization needs qualified durable state
+
+Reusing a leaf id across parent and nested scopes can make approval intended for one node authorize another node with the same name.
+
+- **Do:** qualify external approvals and persist the child scope independently; reject nested gates when a resumable child checkpoint does not yet exist.
+- **Caught:** a nested Engineering Graph gate could either inherit a same-named parent approval or force already-completed child effects to run again on resume.
+
+## 217. Timeout is not resource settlement
+
+Winning a timeout race does not mean the losing asynchronous operation has stopped. Retrying immediately can overlap attempts and mutate shared state after the scheduler has recorded failure.
+
+- **Do:** abort the timed operation, await its settlement, and only then retry or release the owner lease.
+- **Caught:** a timed-out Engineering Graph function could remain active while its retry started.
+
+## 218. Resume fingerprints include recursively derived locations
+
+Hashing a nested definition without its resolved child locations lets a resumed parent reuse a completed subgraph after the physical workspace mapping changed.
+
+- **Do:** recursively resolve and containment-check every nested physical workspace before lifecycle effects, and include qualified paths in the parent fingerprint.
+- **Caught:** an Engineering Graph parent fingerprint originally bound only top-level node workspaces.
+
+## 219. Pausing an owner does not orphan its in-flight children
+
+A scheduler cannot persist `paused` and release its lease while already-started child work is still mutating state.
+
+- **Do:** stop launching new work, settle every in-flight child, checkpoint those results, and only then expose the paused state or release ownership.
+- **Caught:** an Engineering Graph gate could return immediately while an independent node kept running without a graph owner.
+
+## 220. Per-item bounds do not imply a bounded aggregate
+
+A valid maximum for each output, event, task, or list item can still exceed the enclosing checkpoint or response limit when multiplied by maximum cardinality.
+
+- **Do:** bound the serialized definition and aggregate retained outputs/events, and make list endpoints omit heavy detail fields.
+- **Caught:** individually bounded Engineering Graph node outputs and events could exceed the 1 MiB checkpoint or produce a very large REST list.
+
+## 221. Resolve extension registries before workflow effects
+
+Discovering a missing named handler only when its node becomes ready lets earlier nodes mutate the workspace before an invalid graph fails.
+
+- **Do:** resolve every referenced extension through own data properties, reject getters/prototype fallbacks, and complete this pass before leases or node effects.
+- **Caught:** an unregistered Engineering Graph function handler originally failed only during node execution.
+
+## 222. Sparse arrays and timer overflow bypass ordinary range checks
+
+JavaScript array iteration can skip holes, and Node clamps an oversized timer delay to a near-immediate timeout even when the number is a safe integer.
+
+- **Do:** require own entries at every array index and cap delays to the runtime's supported operational range.
+- **Caught:** sparse Engineering Graph dependencies/routes could evade element validation, while an oversized node timeout behaved like an immediate timeout.
+
+## 223. Presentation bounds must not replay completed effects
+
+Serialization, output-size, or display-shaping failures can happen after an effectful operation has already completed successfully. Treating that failure as retryable repeats the effect only because its telemetry was inconvenient.
+
+- **Do:** convert completed outputs into a bounded serializable summary without changing the execution outcome; separately reject streams that never produced a terminal event.
+- **Caught:** a successful Engineering Graph Agent or function could be retried when its returned output exceeded the checkpoint limit.
+
+## 224. Concurrent reservations need overlap checks and serialized settlement
+
+Exact-key uniqueness does not prevent an ancestor path from overlapping a descendant, and independently completed promises cannot safely enforce one shared aggregate limit from the same stale snapshot.
+
+- **Do:** reject pairwise ancestor/descendant resource scopes and settle shared quotas at one owner-controlled completion point.
+- **Caught:** concurrent Engineering Graph nodes could mutate nested workspaces or collectively exceed the retained-output budget.
+
+## 225. Approval callbacks require exact affirmative values
+
+Truthiness is not an authorization contract. Untyped embedders can accidentally return strings, objects, or numeric status values that should not cross an explicit approval boundary.
+
+- **Do:** treat only the boolean value `true` as callback approval and validate all serialized approval selectors before effects.
+- **Caught:** a truthy non-boolean Engineering Graph approval callback result could cross a gate.
+
+## 226. Drained work still needs durable settlement
+
+Aborting and awaiting in-flight work prevents orphan mutation, but it does not make completed or cancelled outcomes resumable unless the owner records them before releasing its lease.
+
+- **Do:** route emergency-drain settlements through the same serialized result and checkpoint path, while preserving the original scheduler error if persistence itself is failing.
+- **Caught:** an exceptionally stopped Engineering Graph drained child promises but could resume by repeating their effects because their final results were never recorded.
+
+## 227. Cancellation needs a post-settlement check
+
+A final in-flight item can settle and make both pending and active collections empty before the scheduler reaches the next loop-header cancellation check.
+
+- **Do:** check owner cancellation again after the scheduling loop and before deriving a success/failure terminal status.
+- **Caught:** cancelling the last Engineering Graph node could report `failed` instead of `cancelled` because the loop exited immediately after settlement.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

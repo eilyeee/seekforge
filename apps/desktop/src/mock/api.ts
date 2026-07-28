@@ -226,6 +226,7 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
 
   if (method === "GET" && path === "/api/worktrees") return mockWorktrees.map((w) => ({ ...w }));
   if (method === "GET" && path === "/api/loops") return mockLoops.map((loop) => ({ ...loop }));
+  if (method === "GET" && path === "/api/graphs") return [];
   if (method === "GET" && path === "/api/loops/verification-plan") {
     return { stages: [{ id: "test", command: "pnpm test" }], sources: ["package.json"] };
   }
