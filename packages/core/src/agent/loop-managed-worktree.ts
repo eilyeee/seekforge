@@ -3,12 +3,14 @@ import { join, sep } from "node:path";
 import { listGitWorktrees, mergeWorktree } from "../worktree.js";
 import { acquireSessionLease, type SessionLease } from "./session-lease.js";
 
-export const MANAGED_LOOP_BRANCH_RE = /^seekforge\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+export const MANAGED_ORCHESTRATION_BRANCH_RE = /^seekforge\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+export const MANAGED_LOOP_BRANCH_RE = MANAGED_ORCHESTRATION_BRANCH_RE;
 const MANAGED_WORKTREE_LEASE_ID = "loop-dag-managed-worktrees";
 
 export function acquireManagedLoopWorktreeLease(workspace: string): SessionLease {
   return acquireSessionLease(workspace, MANAGED_WORKTREE_LEASE_ID);
 }
+export const acquireManagedOrchestrationWorktreeLease = acquireManagedLoopWorktreeLease;
 
 /** Rebinds a retained worktree to its physical path beneath the managed root. */
 export function resolveManagedLoopWorktree(
@@ -24,6 +26,7 @@ export function resolveManagedLoopWorktree(
   }
   return { root, physical };
 }
+export const resolveManagedOrchestrationWorktree = resolveManagedLoopWorktree;
 
 /** Promotes one typed managed branch under the repository-wide resource lease. */
 export async function promoteManagedLoopWorktree(
@@ -44,3 +47,4 @@ export async function promoteManagedLoopWorktree(
     lease.release();
   }
 }
+export const promoteManagedOrchestrationWorktree = promoteManagedLoopWorktree;

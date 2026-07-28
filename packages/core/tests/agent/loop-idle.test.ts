@@ -120,7 +120,7 @@ describe("idle Loop recovery scheduler", () => {
     expect(scheduled[0]?.delayMs).toBe(DEFAULT_LOOP_IDLE_INITIAL_DELAY_MS);
     scheduled[0]?.callback();
     await vi.waitFor(() => expect(onResults).toHaveBeenCalledWith([]));
-    expect(scheduled[1]?.delayMs).toBe(DEFAULT_LOOP_IDLE_CHECK_INTERVAL_MS);
+    await vi.waitFor(() => expect(scheduled[1]?.delayMs).toBe(DEFAULT_LOOP_IDLE_CHECK_INTERVAL_MS));
 
     scheduler.dispose();
     expect(cancel).toHaveBeenCalledWith(scheduled[1]?.handle);

@@ -318,6 +318,7 @@ function parseSnapshots(value: unknown): LoopIterationSnapshot[] | null {
         item.failureCategory !== "test" &&
         item.failureCategory !== "compile" &&
         item.failureCategory !== "lint" &&
+        item.failureCategory !== "review" &&
         item.failureCategory !== "environment" &&
         item.failureCategory !== "timeout" &&
         item.failureCategory !== "permission" &&

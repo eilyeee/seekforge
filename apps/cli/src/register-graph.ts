@@ -1,8 +1,10 @@
 import type { Command } from "commander";
+import { InvalidArgumentError } from "commander";
 import {
   graphDeleteCommand,
   graphListCommand,
   graphRunCommand,
+  graphResourcesCommand,
   graphShowCommand,
   graphValidateCommand,
 } from "./commands/graph.js";
@@ -13,7 +15,14 @@ export function registerGraphCommands(
   rootProfile: () => string | undefined,
 ): void {
   const graph = program.command("graph").description("validate, run, resume, and inspect Engineering Graphs");
-  graph.command("validate").argument("<file>").action(graphValidateCommand);
+  graph
+    .command("validate")
+    .argument("<file>")
+    .option("--param <name=value>", "supply a typed template parameter", collect, [])
+    .option("--json", "print the normalized dry-run plan")
+    .action((file: string, opts: { param?: string[]; json?: boolean }) =>
+      graphValidateCommand(file, { params: opts.param, json: opts.json }),
+    );
   graph
     .command("run")
     .argument("<file>")
@@ -21,6 +30,7 @@ export function registerGraphCommands(
     .option("--restart", "explicitly replace an existing checkpoint")
     .option("--rerun <node-id>", "invalidate this node and its descendants", collect, [])
     .option("--approve <node-id>", "approve a gate for this run", collect, [])
+    .option("--param <name=value>", "supply a typed template parameter", collect, [])
     .option("-y, --yes", "authorize the workspace without prompting")
     .option("-m, --model <model>", "override model")
     .option("--profile <name>", "use a named config profile")
@@ -35,20 +45,37 @@ export function registerGraphCommands(
           yes?: boolean;
           model?: string;
           profile?: string;
+          param?: string[];
         },
-      ) => graphRunCommand(file, { ...opts, profile: opts.profile ?? rootProfile() }),
+      ) => graphRunCommand(file, { ...opts, params: opts.param, profile: opts.profile ?? rootProfile() }),
     );
   graph
     .command("resume")
     .argument("<file>")
     .option("--rerun <node-id>", "invalidate this node and its descendants", collect, [])
     .option("--approve <node-id>", "approve a gate for this run", collect, [])
+    .option("--param <name=value>", "supply the same typed template parameter", collect, [])
     .option("-y, --yes", "authorize the workspace without prompting")
     .option("-m, --model <model>", "override model")
     .option("--profile <name>", "use a named config profile")
     .action(
-      (file: string, opts: { rerun?: string[]; approve?: string[]; yes?: boolean; model?: string; profile?: string }) =>
-        graphRunCommand(file, { ...opts, resume: true, profile: opts.profile ?? rootProfile() }),
+      (
+        file: string,
+        opts: {
+          rerun?: string[];
+          approve?: string[];
+          param?: string[];
+          yes?: boolean;
+          model?: string;
+          profile?: string;
+        },
+      ) =>
+        graphRunCommand(file, {
+          ...opts,
+          params: opts.param,
+          resume: true,
+          profile: opts.profile ?? rootProfile(),
+        }),
     );
   graph.command("list").action(graphListCommand);
   graph
@@ -60,4 +87,17 @@ export function registerGraphCommands(
     .argument("<graph-id>")
     .action((id: string) => graphShowCommand(id, true));
   graph.command("delete").argument("<graph-id>").action(graphDeleteCommand);
+  graph
+    .command("resources")
+    .argument("<graph-id>")
+    .argument("<operation>", "inspect, archive, prune, or promote")
+    .option("--dry-run", "preview pruning")
+    .option("--force", "prune without an archive marker")
+    .option("--target <node-id>", "node id or fan-in for promotion", "fan-in")
+    .action((graphId: string, operation: string, opts: { dryRun?: boolean; force?: boolean; target?: string }) => {
+      if (!(["inspect", "archive", "prune", "promote"] as const).includes(operation as never)) {
+        throw new InvalidArgumentError("operation must be inspect, archive, prune, or promote");
+      }
+      return graphResourcesCommand(graphId, operation as "inspect" | "archive" | "prune" | "promote", opts);
+    });
 }

@@ -1,10 +1,24 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { engineeringSubgraphStateId } from "../../src/agent/graph-contract.js";
 import { runEngineeringGraph } from "../../src/agent/graph-engineering.js";
-import { listEngineeringGraphStates, loadEngineeringGraphState } from "../../src/agent/graph-state.js";
+import { readEngineeringGraphHistory } from "../../src/agent/graph-history.js";
+import {
+  archiveEngineeringGraphResources,
+  inspectEngineeringGraphResources,
+  pruneEngineeringGraphResources,
+} from "../../src/agent/graph-resources.js";
+import {
+  listEngineeringGraphStates,
+  loadEngineeringGraphState,
+  removeEngineeringGraphState,
+  saveEngineeringGraphState,
+} from "../../src/agent/graph-state.js";
 import type { AgentCoreDeps } from "../../src/agent/loop.js";
+import { listGitWorktrees } from "../../src/worktree.js";
 
 const deps = {} as AgentCoreDeps;
 
@@ -14,6 +28,16 @@ describe("runEngineeringGraph", () => {
     const result = mkdtempSync(join(tmpdir(), "seekforge-graph-"));
     workspaces.push(result);
     return result;
+  };
+  const gitWorkspace = (): string => {
+    const root = workspace();
+    writeFileSync(join(root, "base.txt"), "base\n");
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "graph-test@seekforge.local"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Graph Test"], { cwd: root });
+    execFileSync("git", ["add", "-A"], { cwd: root });
+    execFileSync("git", ["commit", "-q", "-m", "base"], { cwd: root });
+    return root;
   };
   afterEach(() => {
     for (const path of workspaces.splice(0)) rmSync(path, { recursive: true, force: true });
@@ -70,6 +94,143 @@ describe("runEngineeringGraph", () => {
     expect(state.spentCost).toBe(0.2);
     expect(loadEngineeringGraphState(root, "routed")?.status).toBe("passed");
     expect(listEngineeringGraphStates(root).map((item) => item.graphId)).toEqual(["routed"]);
+  });
+
+  it("allows dependency-ordered effectful nodes to reuse a workspace", async () => {
+    const root = workspace();
+    const state = await runEngineeringGraph(
+      deps,
+      {
+        graphId: "ordered-workspace",
+        maxConcurrency: 2,
+        nodes: [
+          { id: "first", kind: "function", handler: "noop" },
+          { id: "second", kind: "function", handler: "noop", dependsOn: ["first"] },
+        ],
+      },
+      { workspace: root, handlers: { noop: () => ({ output: null }) } },
+    );
+    expect(state.status).toBe("passed");
+  });
+
+  it("isolates managed nodes, integrates dependencies, verifies fan-in, and prunes archived resources", async () => {
+    const root = gitWorkspace();
+    const definition = {
+      graphId: "managed-graph",
+      managedWorktrees: true,
+      fanIn: { verifyCommand: "test -f produced.txt", maxIterations: 1 },
+      nodes: [
+        { id: "producer", kind: "function", handler: "producer" },
+        { id: "review", kind: "gate", dependsOn: ["producer"] },
+        { id: "consumer", kind: "function", handler: "consumer", dependsOn: ["review"] },
+      ],
+    };
+    const handlers = {
+      producer: ({ workspace: nodeWorkspace }: { workspace: string }) => {
+        writeFileSync(join(nodeWorkspace, "produced.txt"), "ready\n");
+        return { output: "produced" };
+      },
+      consumer: ({ workspace: nodeWorkspace }: { workspace: string }) => ({
+        output: existsSync(join(nodeWorkspace, "produced.txt")) ? "integrated" : "missing",
+      }),
+    };
+    const fanInCheckpoint: { current: ReturnType<typeof loadEngineeringGraphState> } = { current: null };
+    const state = await runEngineeringGraph(deps, definition, {
+      workspace: root,
+      handlers,
+      approvedNodeIds: ["review"],
+      onEvent: (event) => {
+        if (event.type === "graph.completed") {
+          fanInCheckpoint.current = loadEngineeringGraphState(root, "managed-graph");
+        }
+      },
+    });
+
+    expect(state.status).toBe("passed");
+    expect(fanInCheckpoint.current?.status).toBe("running");
+    expect(fanInCheckpoint.current?.completedAt).toBeUndefined();
+    expect(state.results[2]?.output).toBe("integrated");
+    expect(
+      state.results
+        .filter((result) => result.kind !== "gate" && result.kind !== "router")
+        .every((result) => result.managedBranch?.startsWith("seekforge/")),
+    ).toBe(true);
+    expect(state.fanIn?.status).toBe("passed");
+    expect(await listGitWorktrees(root)).toHaveLength(4);
+
+    const report = await inspectEngineeringGraphResources(root, "managed-graph");
+    expect(report.worktrees).toHaveLength(3);
+    expect(report.archived).toBe(false);
+    archiveEngineeringGraphResources(root, "managed-graph");
+    const pruned = await pruneEngineeringGraphResources(root, "managed-graph");
+    expect(pruned.removed).toHaveLength(3);
+    expect(await listGitWorktrees(root)).toHaveLength(1);
+
+    const restarted = await runEngineeringGraph(deps, definition, {
+      workspace: root,
+      restart: true,
+      handlers,
+      approvedNodeIds: ["review"],
+    });
+    expect(restarted.status).toBe("passed");
+    expect((await inspectEngineeringGraphResources(root, "managed-graph")).archived).toBe(false);
+  }, 30_000);
+
+  it("retains dirty managed Graph resources during pruning", async () => {
+    const root = gitWorkspace();
+    await runEngineeringGraph(
+      deps,
+      { graphId: "dirty-graph", managedWorktrees: true, nodes: [{ id: "node", kind: "function", handler: "node" }] },
+      { workspace: root, handlers: { node: () => ({ output: "done" }) } },
+    );
+    const managed = (await listGitWorktrees(root)).find((entry) => entry.branch.includes("dirty-graph"));
+    expect(managed).toBeDefined();
+    writeFileSync(join(managed!.path, "uncommitted.txt"), "keep\n");
+    archiveEngineeringGraphResources(root, "dirty-graph");
+    const pruned = await pruneEngineeringGraphResources(root, "dirty-graph");
+    expect(pruned.removed).toEqual([]);
+    expect(pruned.retained).toEqual([managed!.branch]);
+  }, 30_000);
+
+  it("persists a recoverable cancellation while managed fan-in is starting", async () => {
+    const root = gitWorkspace();
+    const controller = new AbortController();
+    const state = await runEngineeringGraph(
+      deps,
+      {
+        graphId: "cancel-fanin",
+        managedWorktrees: true,
+        fanIn: { verifyCommand: "true", maxIterations: 1 },
+        nodes: [{ id: "node", kind: "function", handler: "node" }],
+      },
+      {
+        workspace: root,
+        signal: controller.signal,
+        handlers: { node: () => ({ output: "done" }) },
+        onEvent: (event) => {
+          if (event.type === "fan_in.started") controller.abort();
+        },
+      },
+    );
+    expect(state.status).toBe("cancelled");
+    expect(state.fanIn?.status).toBe("failed");
+    expect(loadEngineeringGraphState(root, "cancel-fanin")?.status).toBe("cancelled");
+  }, 30_000);
+
+  it("does not let an invalid observational history target block checkpoints", async () => {
+    const root = workspace();
+    const graphDirectory = join(root, ".seekforge", "graphs");
+    mkdirSync(graphDirectory, { recursive: true });
+    const unrelated = join(root, "unrelated.log");
+    writeFileSync(unrelated, "keep");
+    symlinkSync(unrelated, join(graphDirectory, "history-symlink.jsonl"));
+    const state = await runEngineeringGraph(
+      deps,
+      { graphId: "history-symlink", nodes: [{ id: "done", kind: "function", handler: "noop" }] },
+      { workspace: root, handlers: { noop: () => ({ output: null }) } },
+    );
+    expect(state.status).toBe("passed");
+    expect(loadEngineeringGraphState(root, "history-symlink")?.status).toBe("passed");
   });
 
   it("pauses at a gate and resumes without rerunning ancestors", async () => {
@@ -142,6 +303,75 @@ describe("runEngineeringGraph", () => {
     expect(resumedHandler).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps cancellation checkpoints recoverable while pending nodes are materialized", async () => {
+    const root = workspace();
+    const controller = new AbortController();
+    const intermediate: { current: ReturnType<typeof loadEngineeringGraphState> } = { current: null };
+    let skipped = 0;
+    const state = await runEngineeringGraph(
+      deps,
+      {
+        graphId: "cancel-checkpoint",
+        nodes: [
+          { id: "first", kind: "function", handler: "noop" },
+          { id: "second", kind: "function", handler: "noop" },
+        ],
+      },
+      {
+        workspace: root,
+        handlers: { noop: () => ({ output: null }) },
+        signal: controller.signal,
+        onEvent: (event) => {
+          if (event.type === "graph.started") controller.abort();
+          if (event.type === "node.skipped" && ++skipped === 2) {
+            intermediate.current = loadEngineeringGraphState(root, "cancel-checkpoint");
+          }
+        },
+      },
+    );
+    expect(intermediate.current).toMatchObject({ status: "running", results: [{ id: "first" }] });
+    expect(state.status).toBe("cancelled");
+  });
+
+  it("normalizes a subgraph that pauses while cancellation is draining", async () => {
+    const root = workspace();
+    mkdirSync(join(root, "child"));
+    mkdirSync(join(root, "sibling"));
+    const controller = new AbortController();
+    const state = await runEngineeringGraph(
+      deps,
+      {
+        graphId: "cancel-pausing-child",
+        maxConcurrency: 2,
+        nodes: [
+          {
+            id: "child",
+            kind: "subgraph",
+            workspace: "child",
+            graph: { graphId: "approval-child", nodes: [{ id: "review", kind: "gate" }] },
+          },
+          { id: "sibling", kind: "function", handler: "cancel", workspace: "sibling" },
+        ],
+      },
+      {
+        workspace: root,
+        signal: controller.signal,
+        handlers: {
+          cancel: () =>
+            new Promise((resolve) => {
+              setTimeout(() => {
+                controller.abort();
+                resolve({ output: "cancelled" });
+              }, 10);
+            }),
+        },
+      },
+    );
+    expect(state.status).toBe("cancelled");
+    expect(state.results.some((result) => result.status === "waiting_approval")).toBe(false);
+    expect(loadEngineeringGraphState(root, "cancel-pausing-child")?.status).toBe("cancelled");
+  });
+
   it("reruns the selected node and all descendants", async () => {
     const root = workspace();
     const calls = { a: 0, b: 0, c: 0 };
@@ -183,19 +413,229 @@ describe("runEngineeringGraph", () => {
     expect(state.results[1]).toMatchObject({ id: "second", status: "skipped", error: "Graph budget exhausted" });
   });
 
-  it("rejects nested gates and settles timed-out attempts before retry", async () => {
+  it("persists nested gates and resumes them with a scoped approval", async () => {
     const root = workspace();
+    const before = vi.fn(() => ({ output: "ready", costUsd: 1 }));
+    const after = vi.fn(() => ({ output: "done", costUsd: 1 }));
     const nested = {
       graphId: "nested-graph",
-      nodes: [{ id: "approval", kind: "gate" }],
+      nodes: [
+        { id: "before", kind: "function", handler: "before" },
+        { id: "approval", kind: "gate", dependsOn: ["before"] },
+        { id: "after", kind: "function", handler: "after", dependsOn: ["approval"] },
+      ],
     };
+    const parent = {
+      graphId: "parent",
+      costBudgetUsd: 3,
+      nodes: [{ id: "child", kind: "subgraph", graph: nested }],
+    };
+    const waitingCheckpoint: { current: ReturnType<typeof loadEngineeringGraphState> } = { current: null };
+    const paused = await runEngineeringGraph(deps, parent, {
+      workspace: root,
+      handlers: { before, after },
+      onEvent: (event) => {
+        if (event.type === "graph.paused") waitingCheckpoint.current = loadEngineeringGraphState(root, "parent");
+      },
+    });
+    expect(paused.status).toBe("paused");
+    expect(waitingCheckpoint.current).toMatchObject({ status: "paused", results: [{ status: "waiting_approval" }] });
+    expect(paused.spentCost).toBe(1);
+    expect(paused.results[0]).toMatchObject({
+      id: "child",
+      status: "waiting_approval",
+      output: { waitingFor: ["child/approval"] },
+    });
+    const childGraphId = engineeringSubgraphStateId("parent", "child", "nested-graph");
+    expect(loadEngineeringGraphState(root, childGraphId)).toMatchObject({
+      status: "paused",
+      parentGraph: { graphId: "parent", nodeId: "child" },
+    });
+    const resumed = await runEngineeringGraph(deps, parent, {
+      workspace: root,
+      handlers: { before, after },
+      resume: true,
+      approvedNodeIds: ["child/approval"],
+    });
+    expect(resumed.status).toBe("passed");
+    expect(resumed.spentCost).toBe(2);
+    expect(before).toHaveBeenCalledTimes(1);
+    expect(after).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries and selectively reruns a durable subgraph without replaying passed siblings", async () => {
+    const root = workspace();
+    const first = vi.fn(() => ({ output: "first" }));
+    let failures = 0;
+    const second = vi.fn(() => {
+      if (failures++ === 0) throw new Error("retry child");
+      return { output: "second" };
+    });
+    const parent = {
+      graphId: "retry-parent",
+      nodes: [
+        {
+          id: "child",
+          kind: "subgraph",
+          maxRetries: 1,
+          graph: {
+            graphId: "retry-child",
+            nodes: [
+              { id: "first", kind: "function", handler: "first" },
+              { id: "second", kind: "function", handler: "second", dependsOn: ["first"] },
+            ],
+          },
+        },
+      ],
+    };
+    const passed = await runEngineeringGraph(deps, parent, { workspace: root, handlers: { first, second } });
+    expect(passed.status).toBe("passed");
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(2);
+    const rerun = await runEngineeringGraph(deps, parent, {
+      workspace: root,
+      handlers: { first, second },
+      resume: true,
+      rerunFrom: ["child/second"],
+    });
+    expect(rerun.status).toBe("passed");
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(3);
+  });
+
+  it("recovers a settled child checkpoint when the parent missed settlement", async () => {
+    const root = workspace();
+    const handler = vi.fn(() => ({ output: "durable", costUsd: 0.5 }));
+    const parent = {
+      graphId: "crash-parent",
+      costBudgetUsd: 2,
+      nodes: [
+        {
+          id: "child",
+          kind: "subgraph",
+          graph: {
+            graphId: "crash-child",
+            nodes: [{ id: "effect", kind: "function", handler: "effect" }],
+          },
+        },
+      ],
+    };
+    const completed = await runEngineeringGraph(deps, parent, { workspace: root, handlers: { effect: handler } });
+    const interrupted = {
+      ...completed,
+      status: "running",
+      results: [],
+      spentCost: 0,
+      spentTokens: 0,
+    } as typeof completed;
+    delete interrupted.completedAt;
+    saveEngineeringGraphState(root, interrupted);
+    const recovered = await runEngineeringGraph(deps, parent, {
+      workspace: root,
+      handlers: { effect: handler },
+      resume: true,
+    });
+    expect(recovered.status).toBe("passed");
+    expect(recovered.spentCost).toBe(0.5);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a mismatched child checkpoint before resumed sibling effects", async () => {
+    const root = workspace();
+    const childEffect = vi.fn(() => ({ output: "child" }));
+    const siblingEffect = vi.fn(() => ({ output: "sibling" }));
+    const parent = {
+      graphId: "preflight-parent",
+      maxConcurrency: 2,
+      nodes: [
+        {
+          id: "child",
+          kind: "subgraph",
+          workspace: "child",
+          graph: {
+            graphId: "preflight-child",
+            nodes: [{ id: "effect", kind: "function", handler: "child-effect" }],
+          },
+        },
+        { id: "sibling", kind: "function", handler: "sibling-effect", workspace: "sibling" },
+      ],
+    };
+    mkdirSync(join(root, "child"));
+    mkdirSync(join(root, "sibling"));
+    const completed = await runEngineeringGraph(deps, parent, {
+      workspace: root,
+      handlers: { "child-effect": childEffect, "sibling-effect": siblingEffect },
+    });
+    const childGraphId = engineeringSubgraphStateId("preflight-parent", "child", "preflight-child");
+    const child = loadEngineeringGraphState(join(root, "child"), childGraphId)!;
+    saveEngineeringGraphState(join(root, "child"), { ...child, fingerprint: "b".repeat(64) });
+    const interrupted = {
+      ...completed,
+      status: "running",
+      results: [],
+      spentCost: 0,
+      spentTokens: 0,
+    } as typeof completed;
+    delete interrupted.completedAt;
+    saveEngineeringGraphState(root, interrupted);
+    childEffect.mockClear();
+    siblingEffect.mockClear();
+
     await expect(
-      runEngineeringGraph(
-        deps,
-        { graphId: "parent", nodes: [{ id: "child", kind: "subgraph", graph: nested }] },
-        { workspace: root },
-      ),
-    ).rejects.toThrow(/Nested Graph approval gates/);
+      runEngineeringGraph(deps, parent, {
+        workspace: root,
+        resume: true,
+        handlers: { "child-effect": childEffect, "sibling-effect": siblingEffect },
+      }),
+    ).rejects.toThrow(/does not match/);
+    expect(childEffect).not.toHaveBeenCalled();
+    expect(siblingEffect).not.toHaveBeenCalled();
+
+    rmSync(join(root, "child", ".seekforge", "graphs", `${childGraphId}.json`));
+    await expect(
+      runEngineeringGraph(deps, parent, {
+        workspace: root,
+        resume: true,
+        handlers: { "child-effect": childEffect, "sibling-effect": siblingEffect },
+      }),
+    ).rejects.toThrow(/subgraph not found or invalid/);
+    expect(childEffect).not.toHaveBeenCalled();
+    expect(siblingEffect).not.toHaveBeenCalled();
+  });
+
+  it("does not adopt an orphaned child checkpoint on a fresh parent retry", async () => {
+    const root = workspace();
+    const handler = vi.fn(() => ({ output: "effect" }));
+    const parent = {
+      graphId: "orphan-parent",
+      nodes: [
+        {
+          id: "child",
+          kind: "subgraph",
+          maxRetries: 2,
+          graph: { graphId: "orphan-child", nodes: [{ id: "effect", kind: "function", handler: "effect" }] },
+        },
+      ],
+    };
+    expect((await runEngineeringGraph(deps, parent, { workspace: root, handlers: { effect: handler } })).status).toBe(
+      "passed",
+    );
+    expect(removeEngineeringGraphState(root, "orphan-parent")).toBe(true);
+    const collision = await runEngineeringGraph(deps, parent, { workspace: root, handlers: { effect: handler } });
+    expect(collision.status).toBe("failed");
+    expect(collision.results[0]?.attempts).toBe(1);
+    expect(handler).toHaveBeenCalledTimes(1);
+    const restarted = await runEngineeringGraph(deps, parent, {
+      workspace: root,
+      handlers: { effect: handler },
+      restart: true,
+    });
+    expect(restarted.status).toBe("passed");
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it("settles timed-out attempts before retry", async () => {
+    const root = workspace();
 
     let active = 0;
     let maxActive = 0;
@@ -409,6 +849,11 @@ describe("runEngineeringGraph", () => {
     );
     expect(retainedBytes).toBeLessThanOrEqual(128 * 1024);
     expect(state.results.some((result) => (result.output as { truncated?: boolean })?.truncated)).toBe(true);
+    saveEngineeringGraphState(root, {
+      ...state,
+      results: state.results.map((result) => ({ ...result, output: "x".repeat(15_000) })),
+    });
+    expect(loadEngineeringGraphState(root, "aggregate-output")).toBeNull();
   });
 
   it("isolates observer failures and enforces output bounds", async () => {
@@ -426,6 +871,9 @@ describe("runEngineeringGraph", () => {
     );
     expect(state.status).toBe("passed");
     expect(state.events.some((event) => event.type === "graph.warning")).toBe(true);
+    expect(readEngineeringGraphHistory(root, "observer").some((entry) => entry.event.type === "graph.warning")).toBe(
+      true,
+    );
 
     const oversizedHandler = vi.fn(() => ({ output: "x".repeat(70_000) }));
     const oversized = await runEngineeringGraph(
@@ -436,5 +884,10 @@ describe("runEngineeringGraph", () => {
     expect(oversized.status).toBe("passed");
     expect(oversized.results[0]?.output).toMatchObject({ truncated: true });
     expect(oversizedHandler).toHaveBeenCalledTimes(1);
+    saveEngineeringGraphState(root, {
+      ...oversized,
+      results: oversized.results.map((result) => ({ ...result, output: "x".repeat(17_000) })),
+    });
+    expect(loadEngineeringGraphState(root, "oversized")).toBeNull();
   });
 });

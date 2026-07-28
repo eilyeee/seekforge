@@ -112,12 +112,16 @@ export {
   graphConditionMatches,
   graphConditionReferences,
   graphDefinitionFingerprint,
+  engineeringGraphNeedsAgentRuntime,
+  engineeringSubgraphStateId,
+  isValidEngineeringGraphNodePath,
   parseEngineeringGraphDefinition,
   MAX_GRAPH_CONCURRENCY,
   MAX_GRAPH_DEFINITION_BYTES,
   MAX_GRAPH_DEPTH,
   MAX_GRAPH_NODES,
   MAX_GRAPH_NODE_TIMEOUT_MS,
+  MAX_GRAPH_HISTORY_SEGMENTS,
   type EngineeringGraphDefinition,
   type GraphCondition,
   type GraphNode,
@@ -144,6 +148,33 @@ export {
   type GraphEvent,
   type GraphNodeResult,
 } from "./graph-state.js";
+export {
+  createEngineeringGraphLogWriter,
+  engineeringGraphHistoryExists,
+  readEngineeringGraphHistory,
+  type GraphHistoryEntry,
+  type GraphLogWriter,
+} from "./graph-history.js";
+export {
+  buildEngineeringGraphEvidenceReport,
+  verifyEngineeringGraphEvidenceIntegrity,
+} from "./graph-evidence.js";
+export { BUILTIN_GRAPH_HANDLERS } from "./graph-handlers.js";
+export { planEngineeringGraph, type EngineeringGraphPlan, type EngineeringGraphPlanNode } from "./graph-plan.js";
+export {
+  materializeEngineeringGraph,
+  parseEngineeringGraphTemplate,
+  type EngineeringGraphTemplate,
+  type EngineeringGraphTemplateParameter,
+} from "./graph-template.js";
+export {
+  archiveEngineeringGraphResources,
+  inspectEngineeringGraphResources,
+  promoteEngineeringGraphResult,
+  pruneEngineeringGraphResources,
+  type EngineeringGraphResourcePruneResult,
+  type EngineeringGraphResourceReport,
+} from "./graph-resources.js";
 export {
   archiveLoopDagResources,
   inspectLoopDagResources,

@@ -1,9 +1,8 @@
 import type { LoopResult } from "./auto-loop.js";
+import { createRecurringIdleTimer, idleTimerDelay } from "./idle-scheduler.js";
 
 export const DEFAULT_LOOP_IDLE_INITIAL_DELAY_MS = 30_000;
 export const DEFAULT_LOOP_IDLE_CHECK_INTERVAL_MS = 5 * 60_000;
-
-const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 export type IdleLoopRecoveryTarget = {
   workspace: string;
@@ -38,20 +37,6 @@ export type LoopRecoverySchedulerOptions = {
   onResults?: (results: IdleLoopRecoveryResult[]) => void;
 };
 
-function timerDelay(value: number | undefined, fallback: number, name: string, allowZero: boolean): number {
-  const resolved = value ?? fallback;
-  if (!Number.isSafeInteger(resolved) || resolved > MAX_TIMER_DELAY_MS || (allowZero ? resolved < 0 : resolved <= 0)) {
-    throw new RangeError(`${name} must be ${allowZero ? "a non-negative" : "a positive"} safe integer`);
-  }
-  return resolved;
-}
-
-function defaultSchedule(callback: () => void, delayMs: number): ReturnType<typeof setTimeout> {
-  const timer = setTimeout(callback, delayMs);
-  timer.unref();
-  return timer;
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -62,14 +47,16 @@ function errorMessage(error: unknown): string {
  * unbounded burst of concurrent model calls.
  */
 export function createLoopRecoveryScheduler(options: LoopRecoverySchedulerOptions): LoopRecoveryScheduler {
-  const initialDelayMs = timerDelay(options.initialDelayMs, DEFAULT_LOOP_IDLE_INITIAL_DELAY_MS, "initialDelayMs", true);
-  const intervalMs = timerDelay(options.intervalMs, DEFAULT_LOOP_IDLE_CHECK_INTERVAL_MS, "intervalMs", false);
-  const schedule = options.schedule ?? defaultSchedule;
-  const cancel = options.cancel ?? ((handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>));
+  const initialDelayMs = idleTimerDelay(
+    options.initialDelayMs,
+    DEFAULT_LOOP_IDLE_INITIAL_DELAY_MS,
+    "initialDelayMs",
+    true,
+  );
+  const intervalMs = idleTimerDelay(options.intervalMs, DEFAULT_LOOP_IDLE_CHECK_INTERVAL_MS, "intervalMs", false);
   const controller = new AbortController();
   let disposed = false;
   let checking = false;
-  let timer: unknown;
 
   const checkNow = async (): Promise<IdleLoopRecoveryResult[]> => {
     if (disposed || checking) return [];
@@ -110,14 +97,13 @@ export function createLoopRecoveryScheduler(options: LoopRecoverySchedulerOption
     }
   };
 
-  const scheduleNext = (delayMs: number): void => {
-    if (disposed) return;
-    timer = schedule(() => {
-      timer = undefined;
-      void checkNow().finally(() => scheduleNext(intervalMs));
-    }, delayMs);
-  };
-  scheduleNext(initialDelayMs);
+  const recurring = createRecurringIdleTimer({
+    initialDelayMs,
+    intervalMs,
+    run: checkNow,
+    ...(options.schedule ? { schedule: options.schedule } : {}),
+    ...(options.cancel ? { cancel: options.cancel } : {}),
+  });
 
   return {
     checkNow,
@@ -125,10 +111,7 @@ export function createLoopRecoveryScheduler(options: LoopRecoverySchedulerOption
       if (disposed) return;
       disposed = true;
       controller.abort();
-      if (timer !== undefined) {
-        cancel(timer);
-        timer = undefined;
-      }
+      recurring.dispose();
     },
   };
 }

@@ -121,9 +121,19 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/loop-dags/:id/resources | retained managed-worktree count and bounded disk use |
 | POST /api/loop-dags/:id/resources | body `{operation:"archive"|"prune"|"promote",dryRun?,force?,target?}`; explicit resource lifecycle operation |
 | GET /api/graphs | bounded Engineering Graph summaries (definitions/node outputs omitted, latest events only) |
+| POST /api/graphs/validate | validate a definition/template with optional `parameters` and return its normalized recursive dry-run plan |
+| POST /api/graphs | materialize a definition/template with optional `parameters` and start a durable Graph (`{definition,parameters?,restart?}`) |
 | GET /api/graphs/:id | one normalized graph, node results, usage, and recent events |
-| GET /api/graphs/:id/history | the checkpoint's bounded lifecycle events |
-| DELETE /api/graphs/:id | delete one inactive graph checkpoint under its graph lease |
+| GET /api/graphs/:id/history | bounded rotating lifecycle history; `format=entries` adds log sequence/cursor metadata |
+| GET /api/graphs/:id/evidence | node/usage evidence summary with SHA-256 integrity digest and no node outputs |
+| GET /api/graphs/:id/resources | retained managed-worktree paths, disk usage, archival, and active status |
+| POST /api/graphs/:id/resources | `archive`, `prune` (`dryRun`/`force`), or `promote` a passed node/`fan-in` branch |
+| POST /api/graphs/:id/resume | resume with optional `approve` and `rerun` node-id arrays |
+| POST /api/graphs/:id/approve | resume and approve exactly the supplied `approve` or `nodeIds` array |
+| POST /api/graphs/:id/rerun | resume and invalidate exactly the supplied `rerun` or `nodeIds` array plus descendants |
+| POST /api/graphs/:id/restart | explicitly restart from the persisted normalized definition |
+| POST /api/graphs/:id/cancel | cancel only the active run for this workspace and Graph id |
+| DELETE /api/graphs/:id | delete one inactive graph checkpoint/history after retained managed resources are pruned |
 | GET /api/loop-speculations | persisted speculative runs and winners |
 | GET /api/loop-speculations/:id | one persisted speculative run |
 | POST /api/loop-speculations/:id/promote | explicitly merge the passing winner |

@@ -1,7 +1,3 @@
-import { lstatSync, readdirSync, realpathSync } from "node:fs";
-import { join, sep } from "node:path";
-import { isRecord } from "../util/guards.js";
-import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 import { isWorktreeDirty, listGitWorktrees, removeWorktree } from "../worktree.js";
 import { loadLoopDagState } from "./loop-dag.js";
 import {
@@ -10,6 +6,11 @@ import {
   resolveManagedLoopWorktree,
 } from "./loop-managed-worktree.js";
 import { acquireSessionLease, isSessionRunActive } from "./session-lease.js";
+import {
+  archiveOrchestrationResources,
+  measureManagedWorktreeDirectory,
+  orchestrationResourcesArchived,
+} from "./orchestration-resources.js";
 
 export type LoopDagResourceReport = {
   dagId: string;
@@ -23,8 +24,6 @@ export type LoopDagResourceReport = {
 
 export type LoopDagResourcePruneResult = { dagId: string; dryRun: boolean; removed: string[]; retained: string[] };
 
-const markerPath = (dagId: string): string => `.seekforge/loop-dag-archives/${dagId}.json`;
-
 function branchesFor(workspace: string, dagId: string): { completed: boolean; branches: string[] } {
   const state = loadLoopDagState(workspace, dagId);
   if (!state) throw new Error(`Persisted Loop DAG not found: ${dagId}`);
@@ -36,49 +35,13 @@ function branchesFor(workspace: string, dagId: string): { completed: boolean; br
   return { completed: state.completedAt !== undefined, branches: [...branches] };
 }
 
-function isArchived(workspace: string, dagId: string): boolean {
-  const raw = readWorkspaceStateFile(workspace, markerPath(dagId), 8_192);
-  if (raw === undefined) return false;
-  try {
-    const value = JSON.parse(raw) as unknown;
-    return (
-      isRecord(value) &&
-      value.schemaVersion === 1 &&
-      value.dagId === dagId &&
-      typeof value.archivedAt === "string" &&
-      Number.isFinite(Date.parse(value.archivedAt))
-    );
-  } catch {
-    return false;
-  }
-}
-
-function directoryBytes(path: string, root: string, budget = 100_000): { bytes: number; truncated: boolean } {
-  const pending = [path];
-  let bytes = 0;
-  let visited = 0;
-  while (pending.length > 0) {
-    const current = pending.pop()!;
-    if (++visited > budget) return { bytes, truncated: true };
-    const stat = lstatSync(current);
-    if (stat.isSymbolicLink()) continue;
-    if (stat.isFile()) {
-      bytes += stat.size;
-      continue;
-    }
-    if (!stat.isDirectory() || !realpathSync.native(current).startsWith(`${root}${sep}`)) continue;
-    for (const entry of readdirSync(current)) pending.push(join(current, entry));
-  }
-  return { bytes, truncated: false };
-}
-
 export async function inspectLoopDagResources(workspace: string, dagId: string): Promise<LoopDagResourceReport> {
   const { completed, branches } = branchesFor(workspace, dagId);
   if (branches.length === 0) {
     return {
       dagId,
       completed,
-      archived: isArchived(workspace, dagId),
+      archived: orchestrationResourcesArchived(workspace, "loop-dag", dagId),
       active: isSessionRunActive(workspace, `loop-dag-${dagId}`),
       totalBytes: 0,
       truncated: false,
@@ -92,14 +55,14 @@ export async function inspectLoopDagResources(workspace: string, dagId: string):
     const entry = entries.find((item) => item.branch === branch);
     if (!entry) continue;
     const { root, physical } = resolveManagedLoopWorktree(workspace, entry.path, branch);
-    const measured = directoryBytes(physical, root);
+    const measured = measureManagedWorktreeDirectory(physical, root);
     truncated ||= measured.truncated;
     worktrees.push({ branch, path: physical, bytes: measured.bytes });
   }
   return {
     dagId,
     completed,
-    archived: isArchived(workspace, dagId),
+    archived: orchestrationResourcesArchived(workspace, "loop-dag", dagId),
     active: isSessionRunActive(workspace, `loop-dag-${dagId}`),
     totalBytes: worktrees.reduce((sum, item) => sum + item.bytes, 0),
     truncated,
@@ -112,12 +75,7 @@ export function archiveLoopDagResources(workspace: string, dagId: string): { dag
   try {
     const { completed } = branchesFor(workspace, dagId);
     if (!completed) throw new Error(`Loop DAG must complete before archival: ${dagId}`);
-    const archivedAt = new Date().toISOString();
-    writeWorkspaceStateFileAtomic(
-      workspace,
-      markerPath(dagId),
-      `${JSON.stringify({ schemaVersion: 1, dagId, archivedAt }, null, 2)}\n`,
-    );
+    const archivedAt = archiveOrchestrationResources(workspace, "loop-dag", dagId);
     return { dagId, archivedAt };
   } finally {
     lease.release();
@@ -134,7 +92,7 @@ export async function pruneLoopDagResources(
   try {
     resourceLease = acquireManagedLoopWorktreeLease(workspace);
     const { branches } = branchesFor(workspace, dagId);
-    if (!options.force && !isArchived(workspace, dagId))
+    if (!options.force && !orchestrationResourcesArchived(workspace, "loop-dag", dagId))
       throw new Error(`Loop DAG must be archived before pruning: ${dagId}`);
     if (branches.length === 0) {
       return { dagId, dryRun: options.dryRun === true, removed: [], retained: [] };

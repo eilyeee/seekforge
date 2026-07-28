@@ -21,4 +21,26 @@ describe("Engineering Graph CLI input", () => {
     writeFileSync(join(workspace, "bad.json"), "{");
     expect(() => readEngineeringGraphFile("bad.json", workspace)).toThrow(/not valid JSON/);
   });
+
+  it("materializes typed Graph template parameters", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-cli-graph-template-"));
+    workspaces.push(workspace);
+    writeFileSync(
+      join(workspace, "template.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: "engineering-graph-template",
+        templateId: "cli-template",
+        parameters: { retries: { type: "number" } },
+        definition: {
+          graphId: "cli-template-run",
+          nodes: [{ id: "review", kind: "gate", maxRetries: "${{retries}}" }],
+        },
+      }),
+    );
+    expect(readEngineeringGraphFile("template.json", workspace, ["retries=2"]).nodes[0]?.maxRetries).toBe(2);
+    expect(() => readEngineeringGraphFile("template.json", workspace, ["retries=2", "retries=3"])).toThrow(
+      /duplicated/,
+    );
+  });
 });

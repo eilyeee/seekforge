@@ -288,6 +288,16 @@ export const api = {
       "GET",
       withWorkspace(`/api/graphs/${encodeURIComponent(id)}/history`, ws),
     ),
+  graphResources: (id: string, ws?: string) =>
+    request<import("../types").EngineeringGraphResourceReport>(
+      "GET",
+      withWorkspace(`/api/graphs/${encodeURIComponent(id)}/resources`, ws),
+    ),
+  graphResourceAction: (
+    id: string,
+    input: { operation: "archive" | "prune" | "promote"; dryRun?: boolean; force?: boolean; target?: string },
+    ws?: string,
+  ) => request<unknown>("POST", withWorkspace(`/api/graphs/${encodeURIComponent(id)}/resources`, ws), input),
   graphDelete: (id: string, ws?: string) =>
     request<{ removed: true; graphId: string }>("DELETE", withWorkspace(`/api/graphs/${encodeURIComponent(id)}`, ws)),
   loopDelete: (id: string, ws?: string) =>

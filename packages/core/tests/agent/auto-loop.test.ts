@@ -372,6 +372,27 @@ describe("runAutoLoop", () => {
         result: expect.objectContaining({ id: "cli", selection: "dependency" }),
       }),
     );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "verify.impact",
+        iteration: 1,
+        fullFallback: false,
+        decisions: expect.arrayContaining([
+          expect.objectContaining({ stageId: "cli", action: "run", reason: "dependency" }),
+          expect.objectContaining({ stageId: "server", action: "skip", reason: "unaffected" }),
+        ]),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "verify.impact",
+        iteration: 0,
+        fullFallback: true,
+        decisions: expect.arrayContaining([
+          expect.objectContaining({ stageId: "server", action: "blocked", reason: "prior_failure" }),
+        ]),
+      }),
+    );
   });
 
   it("invalidates an incremental verification cache entry when a later stage changes the workspace", async () => {
@@ -1033,6 +1054,46 @@ describe("runAutoLoop", () => {
         strategy: "replan",
       }),
     );
+  });
+
+  it("uses a dedicated repair strategy and bounded context for repeated SARIF review findings", async () => {
+    const events: LoopEvent[] = [];
+    const sarif = JSON.stringify({
+      version: "2.1.0",
+      runs: [
+        {
+          results: [
+            {
+              ruleId: "security/path-traversal",
+              message: { text: "Untrusted path reaches a filesystem sink" },
+              locations: [
+                { physicalLocation: { artifactLocation: { uri: "src/path.ts" }, region: { startLine: 12 } } },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const { deps, provider } = mkDeps();
+    const result = await runAutoLoop(deps, {
+      ...baseOpts(workspace, async () => ({ code: 1, output: sarif })),
+      maxNoProgressRecoveries: 1,
+      onEvent: (event) => events.push(event),
+    });
+    expect(result.status).toBe("no_progress");
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "loop.recovery", category: "review", strategy: "repair_review" }),
+    );
+    expect(
+      provider.seen
+        .flat()
+        .some(
+          (message) =>
+            typeof message.content === "string" &&
+            message.content.includes("bounded recovery context") &&
+            message.content.includes("src/path.ts"),
+        ),
+    ).toBe(true);
   });
 
   it("parses early diagnostics while exposing only the 4KB output tail", async () => {

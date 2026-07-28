@@ -19,6 +19,7 @@ flowchart LR
   Scheduler --> Gate
   Scheduler --> Subgraph
   Scheduler --> State["Atomic .seekforge/graphs checkpoint"]
+  Scheduler --> Trace["Bounded rotating JSONL trace"]
   State --> CLI
   State --> REST
   REST --> Desktop
@@ -34,12 +35,34 @@ Validation completes before provider, lease, or node effects. Definitions are ca
   "failurePolicy": "continue",
   "costBudgetUsd": 5,
   "tokenBudget": 200000,
+  "managedWorktrees": { "integrateDependencies": true, "limit": 64 },
+  "fanIn": { "verifyCommand": "pnpm test", "maxIterations": 2 },
   "nodes": [
     { "id": "implement", "kind": "agent", "task": "Implement the accepted change" },
     { "id": "verify", "kind": "loop", "task": "Repair until tests pass", "verifyCommand": "pnpm test", "dependsOn": ["implement"] },
     { "id": "review", "kind": "gate", "dependsOn": ["verify"] },
     { "id": "summary", "kind": "function", "handler": "collect", "dependsOn": ["review"] }
   ]
+}
+```
+
+Reusable files may use the versioned template envelope below. Placeholders use `${{name}}`; an exact placeholder preserves the declared string/number/boolean type, while interpolation inside a larger string is textual. All declared parameters require a supplied value or a typed default; unknown, duplicated, mistyped, unresolved, sparse, oversized, or future-version inputs fail before workspace or Git effects. CLI commands accept repeatable `--param name=value`; REST accepts `{definition:<template>,parameters:{...}}`.
+
+```json
+{
+  "schemaVersion": 1,
+  "kind": "engineering-graph-template",
+  "templateId": "package-release",
+  "parameters": {
+    "package": { "type": "string", "description": "pnpm workspace package" },
+    "retries": { "type": "number", "default": 2 }
+  },
+  "definition": {
+    "graphId": "release-${{package}}",
+    "nodes": [
+      { "id": "verify", "kind": "loop", "task": "Repair ${{package}}", "verifyCommand": "pnpm --filter ${{package}} test", "maxRetries": "${{retries}}" }
+    ]
+  }
 }
 ```
 
@@ -50,24 +73,31 @@ Node kinds:
 - `function`: an embedding-supplied named handler. Every handler is resolved before effects. The CLI exposes only safe `noop` and `collect` handlers; it does not turn handler names into shell commands. Retried handlers must be idempotent. Handler ids are part of the resume fingerprint, so change the id when its behavior changes.
 - `router`: selects the first matching conditional route, then the optional default route. Downstream nodes bind through `route.routerId` and `route.branch`.
 - `gate`: pauses the graph until the embedding surface explicitly approves the node.
-- `subgraph`: runs another validated graph with bounded nesting. Its usage rolls into the parent and is constrained by the parent share. Nested approval gates and subgraph retries are rejected until durable child checkpoints can make them safely resumable.
+- `subgraph`: runs another validated graph with bounded nesting. Every child receives a deterministic, collision-resistant checkpoint id and records its parent Graph/node provenance. Its usage rolls into the parent and is constrained by the parent share. Subgraph retries resume the child checkpoint and invalidate only failed nodes plus descendants.
 
 `failurePolicy: "stop"` skips outstanding work after the first failed node. `"continue"` allows independent branches to finish; ordinary dependents of a failed node are skipped unless an explicit condition accepts that status. `maxRetries` is per node. `timeoutMs` is per attempt.
 
-For `maxConcurrency > 1`, effectful nodes must resolve to non-overlapping physical directories under the graph workspace; an ancestor and its descendant cannot run as separate branches. Use explicit retained worktrees when parallel branches edit code. Router and gate nodes do not require separate workspaces.
+For `maxConcurrency > 1`, effectful nodes that can actually overlap must resolve to non-overlapping physical directories under the graph workspace; dependency-ordered nodes may safely reuse one workspace. An ancestor and its descendant cannot run as separate parallel branches. Router and gate nodes do not require separate workspaces.
+
+Top-level `managedWorktrees` provisions a deterministic retained Git worktree for every effectful node under one repository-wide resource lock. Explicit node workspaces are then forbidden. With `integrateDependencies: true`, passed dependency branches are merged into a node before its first attempt. `limit` accounts for all existing `seekforge/` worktrees before provisioning. An optional `fanIn` merges all passed node branches in definition order into a dedicated integration branch, runs a bounded autonomous Loop against `verifyCommand`, checkpoints repairs, and charges every attempt to the graph budget. Conflicts and failed verification fail the graph without weakening the gate.
 
 ## Persistence and recovery
 
 Every persistent run owns `engineering-graph-<graphId>` and atomically checkpoints to `.seekforge/graphs/<graphId>.json`. A new run refuses to replace an existing id unless `restart`/`--restart` is explicit. The checkpoint contains the normalized definition, a definition-plus-physical-workspace fingerprint, node results, cumulative usage, and the last 128 lifecycle events. One node output is capped at 16 KiB and retained output across the graph is bounded; the full checkpoint is capped at 1 MiB.
 
+The complete lifecycle trace is also appended to `.seekforge/graphs/<graphId>.jsonl`, with an independent monotonic sequence, 1 MiB segments, three bounded segments, torn-tail repair, and physical-path checks. Checkpoint writes remain authoritative if observational history I/O fails. Evidence exports summarize status, usage, and node outcomes without node outputs, and carry a SHA-256 integrity digest.
+
 Ready work receives shares of the unspent, unreserved graph budgets. Failed retry usage is charged before another attempt. Loop and subgraph nodes enforce their shares directly; Agent calls and embedding functions are atomic, so one in-flight call can report an overrun, which makes the graph fail instead of allowing further nodes to start.
 
-Resume refuses a changed definition or changed physical workspace mapping. `--rerun <node>` invalidates that node and all descendants. Waiting gates are re-evaluated on resume; `--approve <node>` crosses a gate for that run. Observer failures become bounded warning events and never change node outcomes.
+Resume refuses a changed definition, physical workspace mapping, managed branch placement, or parent provenance. `--rerun <node>` invalidates that node and all descendants plus stale fan-in evidence. Scoped paths such as `child/verify` rerun only that nested node and its nested descendants while preserving already-passed siblings. Waiting gates are re-evaluated on resume; `--approve child/review` crosses exactly that nested gate for that run. A paused subgraph is represented as a waiting parent node, so its already-completed effects and usage remain recoverable after a process crash. Observer failures become bounded warning events and never change node outcomes.
+
+Managed branches remain after completion for inspection or promotion. The resource API reports physically rebound paths and bounded disk measurements. Archive a terminal graph before pruning; pruning skips dirty worktrees, supports dry-run, and runs under the graph lease plus the shared managed-worktree lease. A passed node branch or the passed `fan-in` branch can be promoted to the repository worktree. A managed Graph must be pruned before `restart`, preventing an old retained branch from being silently rebound to a new definition.
 
 ## CLI and API
 
 ```sh
-seekforge graph validate release.graph.json
+seekforge graph validate release.graph.json --json
+seekforge graph validate release.template.json --param package=core --param retries=2 --json
 seekforge graph run release.graph.json -y
 seekforge graph run release.graph.json --restart -y
 seekforge graph resume release.graph.json --approve review -y
@@ -75,9 +105,15 @@ seekforge graph resume release.graph.json --rerun verify -y
 seekforge graph list
 seekforge graph show release
 seekforge graph history release
+seekforge graph resources release inspect
+seekforge graph resources release archive
+seekforge graph resources release prune --dry-run
+seekforge graph resources release promote --target fan-in
 seekforge graph delete release
 ```
 
-The server exposes `GET /api/graphs`, `GET /api/graphs/:id`, `GET /api/graphs/:id/history`, and `DELETE /api/graphs/:id`. The list endpoint omits definitions and node outputs and keeps only recent events; the detail endpoint returns the full bounded checkpoint. The Desktop Loop manager renders graph/node status, cost, tokens, and recent lifecycle events. It polls the same REST contract, so graphs executed by another local process become visible without a second source of truth.
+The server exposes validation/dry-run planning (`POST /api/graphs/validate`), background start (`POST /api/graphs`), explicit resume/approve/rerun/restart/cancel controls, bounded history, evidence export, list/detail, and deletion. The shared dry-run planner returns execution waves, recursive node paths, runtime requirements, and deterministic managed/fan-in branches without creating resources. Graph runs are represented in the normal Run Ledger and are drained on server shutdown. Server-started graphs containing Agent or Loop nodes must declare `costBudgetUsd`. The Server and CLI share the deterministic `noop` and `collect` handler registry; handler names never become shell commands.
+
+`GET /api/graphs/:id/history` preserves the original event-array response by default. Add `?format=entries&afterSeq=<n>&limit=<n>` for cursor-bearing JSONL records. `GET /api/graphs/:id/evidence` returns the tamper-evident summary, including managed-branch and fan-in provenance but not absolute fan-in workspace paths. `GET`/`POST /api/graphs/:id/resources` inspect or perform `archive`, `prune`, and `promote` operations. Deletion refuses retained managed resources. The list endpoint omits definitions and node outputs and keeps only recent events; the detail endpoint returns the full bounded checkpoint. Desktop inspection renders dependency arrows from the normalized detail and exposes the same archive/promote/prune lifecycle.
 
 Embedders use `parseEngineeringGraphDefinition`, `runEngineeringGraph`, `loadEngineeringGraphState`, and `listEngineeringGraphStates` from `@seekforge/core`; function handlers are passed through `RunEngineeringGraphOptions.handlers`.

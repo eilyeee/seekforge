@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### round 74: durable Graph operations and explainable Loop recovery
+- Added nested Graph pause/resume and scoped reruns, rotating JSONL history, tamper-evident evidence, shared handler/run-ledger integration, and full REST lifecycle controls.
+- Added deterministic managed Graph worktrees, dependency propagation through control nodes, verified fan-in, generation-bound archive/prune/promotion, templates with typed parameters, recursive dry-run plans, and Desktop resource/dependency inspection.
+- Added auditable Loop verification-impact events, dedicated SARIF/review repair, bounded contextual recovery prompts, and a shared non-overlapping idle timer lifecycle for Loop and memory maintenance.
+
 ### round 73: Graph Engineering
 - Added a validated, durable heterogeneous execution graph for Agent, Loop, function, router, approval-gate, and nested-graph nodes.
 - Added completion-driven scheduling, shared budgets, retries, timeouts, pause/resume, downstream reruns, bounded event/output persistence, and physical-workspace concurrency guards.

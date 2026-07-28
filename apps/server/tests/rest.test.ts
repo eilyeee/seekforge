@@ -2,7 +2,7 @@ import { existsSync, readFileSync, symlinkSync, truncateSync, unlinkSync, writeF
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startServer, type RunningServer } from "../src/index.js";
+import { startServer, type RunGraphFn, type RunningServer } from "../src/index.js";
 import { makeWorkspace, unusedAgentFactory, writeFileIn } from "./helpers.js";
 import { writeFixtureServer } from "./mcp-fixture.js";
 import { MAX_STATIC_FILE_BYTES } from "../src/static.js";
@@ -377,6 +377,139 @@ describe("loop management API", () => {
       graphId: "rest-graph",
     });
     expect((await authed("/api/graphs/rest-graph")).status).toBe(404);
+    expect((await authed("/api/graphs/rest-graph/resources")).status).toBe(404);
+  });
+
+  it("validates, runs, approves, reruns, and exports durable Engineering Graph evidence", async () => {
+    const definition = {
+      graphId: "rest-live-graph",
+      nodes: [
+        { id: "prepare", kind: "function", handler: "noop" },
+        { id: "approval", kind: "gate", dependsOn: ["prepare"] },
+        { id: "summary", kind: "function", handler: "collect", dependsOn: ["approval"] },
+      ],
+      maxConcurrency: 2,
+    };
+    const validated = await authed("/api/graphs/validate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ definition }),
+    });
+    expect(await jsonOf(validated)).toMatchObject({
+      valid: true,
+      plan: { graphId: "rest-live-graph", waves: [["prepare"], ["approval"], ["summary"]] },
+    });
+
+    const started = await authed("/api/graphs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ definition }),
+    });
+    expect(started.status).toBe(202);
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const detail = await authed("/api/graphs/rest-live-graph");
+      if (detail.ok && ((await jsonOf(detail)) as { status: string }).status === "paused") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(await jsonOf(await authed("/api/graphs/rest-live-graph"))).toMatchObject({ status: "paused" });
+
+    const malformed = await authed("/api/graphs/rest-live-graph/approve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ approve: "approval" }),
+    });
+    expect(malformed.status).toBe(400);
+    const approved = await authed("/api/graphs/rest-live-graph/approve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ nodeIds: ["approval"] }),
+    });
+    const approvedRun = (await jsonOf(approved)) as { runId: string };
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const run = (await jsonOf(await authed(`/api/runs/${approvedRun.runId}`))) as { status: string };
+      if (run.status === "succeeded") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(await jsonOf(await authed("/api/graphs/rest-live-graph"))).toMatchObject({ status: "passed" });
+
+    const rerun = await authed("/api/graphs/rest-live-graph/rerun", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ nodeIds: ["summary"] }),
+    });
+    expect(rerun.status).toBe(202);
+    const rerunRecord = (await jsonOf(rerun)) as { runId: string };
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const run = (await jsonOf(await authed(`/api/runs/${rerunRecord.runId}`))) as { status: string };
+      if (run.status === "succeeded") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const history = await jsonOf(await authed("/api/graphs/rest-live-graph/history?format=entries&limit=100"));
+    expect(history).toMatchObject({
+      entries: expect.arrayContaining([
+        expect.objectContaining({ event: expect.objectContaining({ type: "graph.paused" }) }),
+      ]),
+      hasMore: false,
+    });
+    expect(await jsonOf(await authed("/api/graphs/rest-live-graph/evidence"))).toMatchObject({
+      schemaVersion: 1,
+      graphId: "rest-live-graph",
+      integrity: { algorithm: "sha256", digest: expect.stringMatching(/^[0-9a-f]{64}$/) },
+    });
+  });
+
+  it("cancels only the active Engineering Graph run", async () => {
+    const cancelWorkspace = makeWorkspace();
+    const runGraph: RunGraphFn = async (_opts, definition, graphOptions) =>
+      new Promise((resolve) => {
+        const finish = () => {
+          const now = new Date().toISOString();
+          resolve({
+            schemaVersion: 1,
+            graphId: definition.graphId,
+            fingerprint: "d".repeat(64),
+            status: "cancelled",
+            definition,
+            results: [],
+            events: [],
+            spentCost: 0,
+            spentTokens: 0,
+            createdAt: now,
+            updatedAt: now,
+            completedAt: now,
+          });
+        };
+        if (graphOptions.signal?.aborted) finish();
+        else graphOptions.signal?.addEventListener("abort", finish, { once: true });
+      });
+    const cancelServer = await startServer({
+      workspace: cancelWorkspace,
+      port: 0,
+      token: TOKEN,
+      createAgent: unusedAgentFactory,
+      runGraph,
+    });
+    const cancelBase = `http://127.0.0.1:${cancelServer.port}`;
+    const cancelAuthed = (path: string, init: RequestInit = {}) =>
+      fetch(`${cancelBase}${path}`, {
+        ...init,
+        headers: { authorization: `Bearer ${TOKEN}`, ...(init.headers as Record<string, string>) },
+      });
+    try {
+      const started = await cancelAuthed("/api/graphs", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          definition: { graphId: "rest-cancel-graph", nodes: [{ id: "wait", kind: "function", handler: "noop" }] },
+        }),
+      });
+      expect(started.status).toBe(202);
+      const cancelled = await cancelAuthed("/api/graphs/rest-cancel-graph/cancel", { method: "POST" });
+      expect(await jsonOf(cancelled)).toMatchObject({ status: "cancelled" });
+      expect((await cancelAuthed("/api/graphs/another-graph/cancel", { method: "POST" })).status).toBe(409);
+    } finally {
+      await cancelServer.close();
+    }
   });
 
   it("queues safe-boundary controls only for a live Loop owner", async () => {

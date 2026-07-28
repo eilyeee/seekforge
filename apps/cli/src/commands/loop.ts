@@ -178,6 +178,8 @@ export function formatLoopEvent(event: LoopEvent): string {
       return `  ${event.result.code === 0 ? "✓" : "✗"} verifier ${event.result.id} · ${event.result.durationMs}ms${event.result.flaky ? " · flaky" : ""}`;
     case "verify.flaky":
       return `Warning: verifier ${event.stageId} passed after ${event.attempts} attempts (flaky)`;
+    case "verify.impact":
+      return `  verification impact · ${event.decisions.filter((decision) => decision.action === "run").length} run, ${event.decisions.filter((decision) => decision.action === "reuse").length} reused, ${event.decisions.filter((decision) => decision.action === "skip").length} skipped, ${event.decisions.filter((decision) => decision.action === "blocked").length} blocked${event.fullFallback ? " · full" : ""}`;
     case "loop.paused":
       return `Loop paused at boundary ${event.iteration}`;
     case "loop.resumed":

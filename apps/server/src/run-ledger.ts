@@ -12,7 +12,7 @@ import {
   writeProjectFileAtomic,
 } from "./config.js";
 
-export type RunSource = "ws" | "loop" | "schedule" | "trigger" | "background";
+export type RunSource = "ws" | "loop" | "graph" | "schedule" | "trigger" | "background";
 export type RunStatus = "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled";
 
 export type RunRecord = {
@@ -99,7 +99,7 @@ function parseRecord(value: unknown): RunRecord | undefined {
   if (
     typeof value["runId"] !== "string" ||
     !/^run-[A-Za-z0-9-]+$/.test(value["runId"]) ||
-    !["ws", "loop", "schedule", "trigger", "background"].includes(String(value["source"])) ||
+    !["ws", "loop", "graph", "schedule", "trigger", "background"].includes(String(value["source"])) ||
     !validStatus(value["status"]) ||
     !Number.isSafeInteger(value["attempt"]) ||
     (value["attempt"] as number) <= 0 ||

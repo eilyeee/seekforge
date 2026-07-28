@@ -3,6 +3,8 @@ import { api } from "../../lib/api";
 import { LatestRequest } from "../../views/async-coordination";
 import { useT } from "../../lib/i18n";
 import type {
+  EngineeringGraphDetail,
+  EngineeringGraphResourceReport,
   EngineeringGraphSummary,
   LoopDagResourceReport,
   LoopDagSummary,
@@ -28,6 +30,8 @@ export function LoopManager({ running, onResume }: Props) {
   const [evidence, setEvidence] = useState<LoopEvidenceReport>();
   const [dags, setDags] = useState<LoopDagSummary[]>([]);
   const [graphs, setGraphs] = useState<EngineeringGraphSummary[]>([]);
+  const [graphDetails, setGraphDetails] = useState<Record<string, EngineeringGraphDetail>>({});
+  const [graphResources, setGraphResources] = useState<Record<string, EngineeringGraphResourceReport>>({});
   const [dagResources, setDagResources] = useState<Record<string, LoopDagResourceReport>>({});
   const [speculations, setSpeculations] = useState<LoopSpeculationSummary[]>([]);
   const [query, setQuery] = useState("");
@@ -39,6 +43,7 @@ export function LoopManager({ running, onResume }: Props) {
   const refreshRequests = useRef(new LatestRequest());
   const historyRequests = useRef(new LatestRequest());
   const dagRequests = useRef(new LatestRequest());
+  const graphRequests = useRef(new LatestRequest());
   const operationRequests = useRef(new LatestRequest());
   const selectedRef = useRef<string>();
   const refresh = useCallback(async () => {
@@ -72,6 +77,7 @@ export function LoopManager({ running, onResume }: Props) {
       refreshRequests.current.invalidate();
       historyRequests.current.invalidate();
       dagRequests.current.invalidate();
+      graphRequests.current.invalidate();
       operationRequests.current.invalidate();
     },
     [],
@@ -268,6 +274,50 @@ export function LoopManager({ running, onResume }: Props) {
       if (operationRequests.current.isCurrent(request)) setResourceBusy(false);
     }
   };
+  const inspectGraph = async (graphId: string) => {
+    const request = graphRequests.current.begin();
+    setResourceBusy(true);
+    try {
+      const [detail, resources] = await Promise.all([api.graph(graphId), api.graphResources(graphId)]);
+      if (graphRequests.current.isCurrent(request)) {
+        setGraphDetails((current) => ({ ...current, [graphId]: detail }));
+        setGraphResources((current) => ({ ...current, [graphId]: resources }));
+        setError("");
+      }
+    } catch (caught) {
+      if (graphRequests.current.isCurrent(request)) setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      if (graphRequests.current.isCurrent(request)) setResourceBusy(false);
+    }
+  };
+  const graphAction = async (graphId: string, operation: "archive" | "prune" | "promote", target?: string) => {
+    if (
+      operation !== "archive" &&
+      !window.confirm(
+        t("chat.loop.manager.resourceConfirm", {
+          action: operation === "promote" ? t("chat.loop.manager.promote") : t("chat.loop.manager.pruneResources"),
+          id: target ? `${graphId}/${target}` : graphId,
+        }),
+      )
+    )
+      return;
+    const request = operationRequests.current.begin();
+    setResourceBusy(true);
+    try {
+      await api.graphResourceAction(graphId, {
+        operation,
+        ...(operation === "promote" ? { target: target ?? "fan-in" } : {}),
+      });
+      if (!operationRequests.current.isCurrent(request)) return;
+      await refresh();
+      if (operationRequests.current.isCurrent(request)) await inspectGraph(graphId);
+    } catch (caught) {
+      if (operationRequests.current.isCurrent(request))
+        setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      if (operationRequests.current.isCurrent(request)) setResourceBusy(false);
+    }
+  };
 
   return (
     <details className="mt-2 rounded border border-subtle p-2">
@@ -325,7 +375,15 @@ export function LoopManager({ running, onResume }: Props) {
         onInspect={(dagId) => void inspectDag(dagId)}
         onAction={(dagId, operation) => void dagAction(dagId, operation)}
       />
-      <GraphEngineeringSection graphs={graphs} busy={resourceBusy} onRemove={(graphId) => void removeGraph(graphId)} />
+      <GraphEngineeringSection
+        graphs={graphs}
+        details={graphDetails}
+        resources={graphResources}
+        busy={resourceBusy}
+        onInspect={(graphId) => void inspectGraph(graphId)}
+        onAction={(graphId, operation) => void graphAction(graphId, operation)}
+        onRemove={(graphId) => void removeGraph(graphId)}
+      />
       <LoopSpeculationSection
         speculations={speculations}
         busy={resourceBusy}

@@ -119,13 +119,15 @@ State is written atomically after observable progress. Live output is bounded
 per verification; the final verification event still carries the normal output
 tail used for diagnostics and continuation prompts.
 
+Each verification emits a bounded `verify.impact` decision set showing whether every stage ran because of a direct path, a transitive workspace dependency, a full gate, or was skipped as unaffected. Incremental success still triggers the authoritative full pipeline before completion, and cache reuse remains bound to an unchanged whole-workspace fingerprint.
+
 Each completed iteration also records bounded observability fields: elapsed
 milliseconds, cost and token deltas, changed relative paths, rollback state, and
 a normalized failure category. Stuck/cycle recovery selects only from the
-category-safe strategy set (test isolation, compiler/lint repair, environment
+category-safe strategy set (test isolation, compiler/lint repair, SARIF/code-review repair, environment
 validation, scope reduction, or replanning). A bounded workspace history records
 whether each strategy produced diagnostic progress; two or more observations may
-change the preference, but never permissions, approval, verification, or budgets.
+change the preference, but never permissions, approval, verification, or budgets. Recovery turns receive a bounded, explicitly untrusted capsule of failed tests, anchored diagnostics, the failed stage, and changed paths; SARIF repair instructions forbid suppressing or downgrading the rule.
 
 The session id and cumulative provider usage are checkpointed as their events
 arrive. The iteration counter advances only after the agent run completes, so a
@@ -295,7 +297,7 @@ seekforge loop-cleanup <worktree-name> [--force]
   idle guard, skips rather than waits when work is active, and keeps that guard
   for the complete recovery while explicitly authorizing only the recovery's
   own Agent sessions. Workspaces are processed sequentially, ticks cannot
-  overlap, and shutdown aborts the current recovery. A lifecycle abort is
+  overlap, and shutdown aborts the current recovery. Idle memory maintenance and Loop recovery share one recurring-timer kernel for delay validation, non-overlap, rescheduling, cancellation, and observer isolation, while retaining their separate cross-process leases. A lifecycle abort is
   persisted as `interrupted`, not user `cancelled`, so the next server can
   resume it. `--loop-auto-prune` uses the same idle guard to remove only old
   terminal records; resumable states and unfinished delivery transactions are

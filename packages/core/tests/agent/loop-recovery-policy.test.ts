@@ -44,6 +44,7 @@ describe("loop recovery policy", () => {
     }
     expect(["repair_compile", "replan"]).toContain(selectLoopRecoveryStrategy(root, "compile"));
     expect(selectLoopRecoveryStrategy(root, "permission")).toBe("validate_environment");
+    expect(selectLoopRecoveryStrategy(root, "review")).toBe("repair_review");
   });
 
   it("lets stale observations decay back to the deterministic default", () => {

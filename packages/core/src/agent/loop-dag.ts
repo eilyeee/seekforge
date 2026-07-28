@@ -15,6 +15,11 @@ import {
   isSafeLoopDagRelativePath,
   loopDagConditionReferences,
 } from "./loop-dag-validation.js";
+import {
+  assertNonOverlappingOrchestrationPaths,
+  orchestrationDescendantClosure,
+  validateOrchestrationSelection,
+} from "./orchestration.js";
 
 export {
   assertLoopDagAcyclic,
@@ -27,14 +32,13 @@ export {
 import { type acquireSessionLease, acquireSessionLeaseWithPreemption } from "./session-lease.js";
 import { isRecord } from "../util/guards.js";
 import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
+import { checkpointWorktree, createWorktree, listGitWorktrees, mergeWorktree } from "../worktree.js";
 import {
-  checkpointWorktree,
-  createWorktree,
-  listGitWorktrees,
-  mergeWorktree,
-  removeWorktree,
-  worktreeSlug,
-} from "../worktree.js";
+  managedOrchestrationWorktreePath,
+  managedOrchestrationWorktreeSlug,
+  prepareManagedOrchestrationWorktrees,
+  type ManagedOrchestrationWorktree,
+} from "./orchestration-worktrees.js";
 
 export type LoopDagFailurePolicy = "skip_dependents" | "continue" | "stop";
 export type LoopDagCondition =
@@ -139,7 +143,7 @@ export type LoopDagFanInResult = {
   error?: string;
 };
 
-type ManagedNodeWorktree = { path: string; branch: string; created: boolean };
+type ManagedNodeWorktree = ManagedOrchestrationWorktree;
 
 export type PersistedLoopDagState = {
   schemaVersion: 1;
@@ -226,13 +230,11 @@ function dagStatePath(dagId: string): string {
 }
 
 function managedWorktreeSlug(seed: string, nodeId: string): string {
-  const suffix = createHash("sha256").update(`${seed}:${nodeId}`).digest("hex").slice(0, 10);
-  const prefix = worktreeSlug(`dag-${seed}-${nodeId}`).slice(0, 52).replace(/-+$/, "");
-  return `${prefix}-${suffix}`;
+  return managedOrchestrationWorktreeSlug("dag", seed, nodeId);
 }
 
 function managedWorktreePath(workspace: string, seed: string, nodeId: string): string {
-  return join(realpathSync.native(workspace), ".seekforge", "worktrees", managedWorktreeSlug(seed, nodeId));
+  return managedOrchestrationWorktreePath(workspace, "dag", seed, nodeId);
 }
 
 async function prepareManagedWorktrees(
@@ -241,34 +243,13 @@ async function prepareManagedWorktrees(
   seed: string,
   resume: boolean,
 ): Promise<Map<string, ManagedNodeWorktree>> {
-  const existing = resume ? await listGitWorktrees(workspace) : [];
-  const byBranch = new Map(existing.map((entry) => [entry.branch, entry.path]));
-  const result = new Map<string, ManagedNodeWorktree>();
-  try {
-    for (const node of nodes) {
-      const slug = managedWorktreeSlug(seed, node.id);
-      const branch = `seekforge/${slug}`;
-      const retained = byBranch.get(branch);
-      if (retained) {
-        const physical = realpathSync.native(retained);
-        const expected = managedWorktreePath(workspace, seed, node.id);
-        if (physical !== expected) {
-          throw new Error(`Managed Loop DAG worktree is outside its expected path for node ${node.id}: ${physical}`);
-        }
-        result.set(node.id, { path: physical, branch, created: false });
-        continue;
-      }
-      if (resume) throw new Error(`Managed Loop DAG worktree is missing for node ${node.id}: ${branch}`);
-      const created = await createWorktree(workspace, slug);
-      result.set(node.id, { ...created, path: realpathSync.native(created.path), created: true });
-    }
-    return result;
-  } catch (error) {
-    for (const entry of [...result.values()].reverse()) {
-      if (entry.created) await removeWorktree(workspace, entry.path, entry.branch).catch(() => undefined);
-    }
-    throw error;
-  }
+  return prepareManagedOrchestrationWorktrees(
+    workspace,
+    nodes.map((node) => node.id),
+    "dag",
+    seed,
+    resume,
+  );
 }
 
 function parseLoopResult(value: unknown): LoopResult | null {
@@ -544,14 +525,12 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
   }
   if (options.rerunFrom !== undefined) {
     if (!options.resume) throw new Error("Loop DAG rerunFrom requires resume");
-    if (
-      !Array.isArray(options.rerunFrom) ||
-      options.rerunFrom.length === 0 ||
-      new Set(options.rerunFrom).size !== options.rerunFrom.length ||
-      options.rerunFrom.some((id) => !byId.has(id))
-    ) {
-      throw new Error("Loop DAG rerunFrom must contain unique existing node ids");
-    }
+    validateOrchestrationSelection(options.rerunFrom, {
+      label: "Loop DAG rerunFrom",
+      max: options.nodes.length,
+      knownIds: new Set(byId.keys()),
+      isValidId: isValidLoopDagId,
+    });
   }
   const persistenceEnabled = options.persist !== false;
   for (const node of options.nodes) {
@@ -573,9 +552,11 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
         : realpathSync.native(options.workspaceForNode?.(node) ?? options.workspace),
     ]),
   );
-  if (concurrency > 1 && new Set(nodeWorkspaces.values()).size !== nodeWorkspaces.size) {
-    throw new Error("Concurrent Loop DAG nodes must resolve to distinct workspaces");
-  }
+  if (concurrency > 1)
+    assertNonOverlappingOrchestrationPaths(
+      [...nodeWorkspaces.values()],
+      "Concurrent Loop DAG nodes must resolve to distinct workspaces; physical paths must be non-overlapping",
+    );
   const fingerprint = createHash("sha256")
     .update(dagFingerprint(options.nodes, nodeWorkspaces))
     .update(
@@ -660,17 +641,7 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
       if (result.status === "waiting_approval" || result.status === "approved") results.delete(id);
     }
     if (options.rerunFrom?.length) {
-      const invalidated = new Set(options.rerunFrom);
-      let changed = true;
-      while (changed) {
-        changed = false;
-        for (const node of options.nodes) {
-          if (!invalidated.has(node.id) && (node.dependsOn ?? []).some((dependency) => invalidated.has(dependency))) {
-            invalidated.add(node.id);
-            changed = true;
-          }
-        }
-      }
+      const invalidated = orchestrationDescendantClosure(options.nodes, options.rerunFrom);
       for (const id of invalidated) {
         results.delete(id);
         approvals.delete(id);

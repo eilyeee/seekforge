@@ -2612,7 +2612,7 @@ while a field omitted by one decoder disappears without an error.
 
 Reusing a leaf id across parent and nested scopes can make approval intended for one node authorize another node with the same name.
 
-- **Do:** qualify external approvals and persist the child scope independently; reject nested gates when a resumable child checkpoint does not yet exist.
+- **Do:** qualify external approvals, persist each child scope independently before its effects, and require an existing matching child checkpoint whenever the parent is resuming it.
 - **Caught:** a nested Engineering Graph gate could either inherit a same-named parent approval or force already-completed child effects to run again on resume.
 
 ## 217. Timeout is not resource settlement
@@ -2655,7 +2655,7 @@ Discovering a missing named handler only when its node becomes ready lets earlie
 JavaScript array iteration can skip holes, and Node clamps an oversized timer delay to a near-immediate timeout even when the number is a safe integer.
 
 - **Do:** require own entries at every array index and cap delays to the runtime's supported operational range.
-- **Caught:** sparse Engineering Graph dependencies/routes could evade element validation, while an oversized node timeout behaved like an immediate timeout.
+- **Caught:** sparse Engineering Graph dependencies/routes and Loop DAG rerun selectors could evade element validation, while an oversized node timeout behaved like an immediate timeout.
 
 ## 223. Presentation bounds must not replay completed effects
 
@@ -2669,7 +2669,7 @@ Serialization, output-size, or display-shaping failures can happen after an effe
 Exact-key uniqueness does not prevent an ancestor path from overlapping a descendant, and independently completed promises cannot safely enforce one shared aggregate limit from the same stale snapshot.
 
 - **Do:** reject pairwise ancestor/descendant resource scopes and settle shared quotas at one owner-controlled completion point.
-- **Caught:** concurrent Engineering Graph nodes could mutate nested workspaces or collectively exceed the retained-output budget.
+- **Caught:** concurrent Engineering Graph or Loop DAG nodes could mutate nested workspaces, and Graph nodes could collectively exceed the retained-output budget.
 
 ## 225. Approval callbacks require exact affirmative values
 
@@ -2691,6 +2691,125 @@ A final in-flight item can settle and make both pending and active collections e
 
 - **Do:** check owner cancellation again after the scheduling loop and before deriving a success/failure terminal status.
 - **Caught:** cancelling the last Engineering Graph node could report `failed` instead of `cancelled` because the loop exited immediately after settlement.
+
+## 228. Optional selector decoding must reject malformed presence
+
+Treating a present value of the wrong type like an omitted optional selector can silently turn an approve, rerun, or resume request into a different operation.
+
+- **Do:** distinguish absence from malformed presence, reject ambiguous aliases, then pass the selected array through the shared semantic validator.
+- **Caught:** the Graph REST adapter initially treated a string-valued approval or rerun selector as if no selector had been supplied.
+
+## 229. Concurrency guards need dependency reachability
+
+A scheduler concurrency setting describes a maximum, not proof that every pair of nodes can overlap. Rejecting shared resources without considering transitive ordering blocks safe serial workflows.
+
+- **Do:** apply overlap exclusion only to effectful node pairs for which neither node transitively depends on the other.
+- **Caught:** a Graph with `maxConcurrency > 1` rejected two nodes sharing a workspace even when one had to complete before the other could start.
+
+## 230. Fresh owners must not adopt stale derived checkpoints
+
+A deterministic child id makes crash recovery possible, but it can also find an orphan from an older deleted or interrupted owner. Retrying a fresh parent after that collision must not turn the stale child into trusted progress.
+
+- **Do:** allow child-checkpoint reuse only for an explicit parent resume or for a child created by the current node attempt sequence; make a pre-existing collision non-retryable until explicit restart.
+- **Caught:** a fresh Graph subgraph attempt could fail on an existing child and then adopt it on its automatic retry.
+
+## 231. Resumed child usage is an in-flight reservation
+
+Deleting a parent's waiting result before resume temporarily removes its cost and tokens from the parent checkpoint even though the durable child still owns that usage.
+
+- **Do:** reserve persisted child usage before scheduling, include it in concurrency budget calculations, and replace the reservation atomically with the settled parent result.
+- **Caught:** a resumed subgraph could receive a full fresh budget share and let concurrent parent nodes oversubscribe the Graph budget.
+
+## 232. Operational caps are not durable identity
+
+An invocation-specific remaining budget can differ on every parent retry even though the child workflow definition is unchanged.
+
+- **Do:** keep runtime caps outside the durable definition fingerprint and validate them independently.
+- **Caught:** a resumed Graph subgraph rejected its own checkpoint because the parent's newly calculated budget share changed its fingerprint.
+
+## 233. Intermediate checkpoints must satisfy the loader's invariants
+
+Publishing a terminal status before its terminal metadata or final verification is durable creates a crash window whose checkpoint the loader must reject.
+
+- **Do:** persist an explicit running phase during fan-in and transition status, evidence, usage, and completion metadata together.
+- **Caught:** Graph fan-in emitted `passed` before `completedAt`, making a crash at fan-in start unrecoverable.
+
+## 234. Resource archival belongs to one run generation
+
+An archive marker keyed only by a reusable workflow id can authorize pruning resources created by a later restart.
+
+- **Do:** bind archival markers to an immutable run generation and require an exact match before pruning.
+- **Caught:** a pruned and restarted managed Graph inherited the previous run's archived status.
+
+## 235. Internal resource ids need a disjoint namespace
+
+Using an ordinary user node id such as `integration` for an internal worktree lets a valid definition alias its fan-in resource.
+
+- **Do:** use an internal identifier outside the accepted user-id grammar and derive every expected branch through the same helper.
+- **Caught:** a Graph node named `integration` could share its managed worktree with fan-in.
+
+## 236. Transparent orchestration nodes must preserve artifact ancestry
+
+Approval gates and routers carry control state but no branch. Looking only at direct dependencies can therefore disconnect downstream work from the last effectful ancestor.
+
+- **Do:** walk through passed non-effectful dependencies until reaching typed managed sources, then merge each source once.
+- **Caught:** a managed Graph consumer after a gate did not receive its producer's committed changes.
+
+## 237. Template substitution must fail closed
+
+Replacing an undeclared placeholder with JavaScript `undefined`, accepting an extra value, or iterating a sparse template array can silently materialize a different workflow.
+
+- **Do:** validate own parameter declarations and supplied keys, preserve exact-placeholder types, reject unresolved names, and retain dense-array checks after substitution.
+- **Caught:** Graph template interpolation initially had no explicit unknown-placeholder boundary.
+
+## 238. Aggregate prompt context needs an outer bound
+
+Bounding each log, error, or prior attempt independently still permits the combined recovery capsule to grow without limit.
+
+- **Do:** cap the final serialized context before sending it to the model.
+- **Caught:** Loop recovery initially bounded each field but not the combined contextual capsule.
+
+## 239. Impact telemetry must distinguish selection from execution
+
+A stage selected by the planner may later be blocked by a prerequisite failure or satisfied by cache reuse.
+
+- **Do:** report run, skip, reuse, and blocked decisions explicitly instead of claiming every selected stage ran.
+- **Caught:** Loop impact reporting initially reflected the plan but not the eventual execution outcome.
+
+## 240. Every event checkpoint must satisfy durable state invariants
+
+A terminal or paused status can become invalid while the scheduler is still materializing skipped or waiting results, even when the final checkpoint is valid.
+
+- **Do:** persist preparatory node events under a non-terminal status, switch to `paused` before persisting a waiting result, and publish terminal status only after all required results and timestamps exist.
+- **Caught:** Graph cancellation and nested approval events briefly wrote checkpoints that restart validation rejected.
+
+## 241. Validate derived resume state before sibling effects
+
+A parent fingerprint can match while a separately persisted child checkpoint has stale provenance, identity, or resolved locations. Discovering that mismatch only when the child starts allows independent siblings to mutate first.
+
+- **Do:** preflight every retained child checkpoint against expected parent provenance and its independently derived fingerprint before publishing resume or scheduling any node.
+- **Caught:** a resumed Graph reserved child usage before proving that the child checkpoint belonged to the current parent definition and workspace mapping.
+
+## 242. Loaders must re-enforce presentation budgets
+
+Writer-side truncation does not protect resume, list, or detail paths from a syntactically valid checkpoint written by an older version, embedder, or local tampering.
+
+- **Do:** enforce both per-item and aggregate serialized-output limits while decoding durable state.
+- **Caught:** the Graph loader accepted node outputs that the live scheduler would have truncated, bypassing its retained-output contract.
+
+## 243. Synthesized events must reach every event sink
+
+An observer failure can create a warning after the original event has already been sent to history. Adding it only to the in-memory checkpoint makes the durable trace disagree with the authoritative recent-event window.
+
+- **Do:** route synthesized warnings through every durable event sink while isolating secondary observability failures.
+- **Caught:** Graph observer warnings were checkpointed but omitted from rotating JSONL history.
+
+## 244. Cancellation must normalize newly settled waiting work
+
+Awaiting in-flight work after cancellation can produce a fresh `waiting_approval` result. Publishing `cancelled` while any waiting result remains violates the durable status/result invariant.
+
+- **Do:** settle in-flight work, convert every waiting result to a usage-preserving cancelled skip under valid intermediate statuses, then materialize pending skips and publish the terminal checkpoint.
+- **Caught:** a subgraph could pause while its parent was draining cancellation, leaving an unloadable cancelled checkpoint.
 
 ---
 

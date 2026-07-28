@@ -9,9 +9,11 @@
 import { existsSync } from "node:fs";
 import {
   buildAgentCoreDeps,
+  BUILTIN_GRAPH_HANDLERS,
   createAgentCore,
   createDefaultDispatcher,
   createRuntimeClient,
+  engineeringGraphNeedsAgentRuntime,
   loadAgentDefinitions,
   loadMcpToolSpecs,
   loadPluginContributions,
@@ -21,6 +23,7 @@ import {
   readMcpResource,
   runAutoLoop,
   resumeAutoLoop,
+  runEngineeringGraph,
   type AgentCore,
   type AgentCoreDeps,
   type LoopOptions,
@@ -30,6 +33,9 @@ import {
   type ToolSpec,
   type McpClientEntry,
   type PluginContributions,
+  type EngineeringGraphDefinition,
+  type EngineeringGraphState,
+  type RunEngineeringGraphOptions,
 } from "@seekforge/core";
 import type { ConfirmResult, PermissionRequest, RunOverrides } from "@seekforge/shared";
 import { loadConfig } from "./config.js";
@@ -78,6 +84,11 @@ export type ResumeLoopFn = (
   loopId: string,
   loopOpts: Parameters<typeof resumeAutoLoop>[2],
 ) => Promise<LoopResult>;
+export type RunGraphFn = (
+  opts: CreateAgentOptions,
+  definition: EngineeringGraphDefinition,
+  graphOpts: Omit<RunEngineeringGraphOptions, "workspace" | "handlers">,
+) => Promise<EngineeringGraphState>;
 
 /**
  * Assembles the connection-scoped AgentCoreDeps from a config + the WS-tied
@@ -224,6 +235,26 @@ export const runDefaultLoop: RunLoopFn = async (opts, loopOpts) => {
 export const resumeDefaultLoop: ResumeLoopFn = async (opts, loopId, loopOpts) => {
   const { deps, disposeMcp } = await prepareAgentDeps(opts, loopOpts.signal);
   return resumeAutoLoop(deps, loopId, loopOpts).finally(() => {
+    deps.runtime?.dispose();
+    disposeMcp();
+  });
+};
+
+/** Runs a REST/embedding Graph with the same provider, MCP, plugin, and skill assembly as other Server runs. */
+export const runDefaultGraph: RunGraphFn = async (opts, definition, graphOpts) => {
+  if (!engineeringGraphNeedsAgentRuntime(definition)) {
+    return runEngineeringGraph({} as AgentCoreDeps, definition, {
+      ...graphOpts,
+      workspace: opts.workspace,
+      handlers: BUILTIN_GRAPH_HANDLERS,
+    });
+  }
+  const { deps, disposeMcp } = await prepareAgentDeps(opts, graphOpts.signal);
+  return runEngineeringGraph(deps, definition, {
+    ...graphOpts,
+    workspace: opts.workspace,
+    handlers: BUILTIN_GRAPH_HANDLERS,
+  }).finally(() => {
     deps.runtime?.dispose();
     disposeMcp();
   });

@@ -1,8 +1,15 @@
 import {
+  BUILTIN_GRAPH_HANDLERS,
+  archiveEngineeringGraphResources,
   engineeringGraphStateExists,
+  engineeringGraphNeedsAgentRuntime,
+  inspectEngineeringGraphResources,
   listEngineeringGraphStates,
   loadEngineeringGraphState,
-  parseEngineeringGraphDefinition,
+  materializeEngineeringGraph,
+  planEngineeringGraph,
+  promoteEngineeringGraphResult,
+  pruneEngineeringGraphResources,
   readFileIfExists,
   removeEngineeringGraphState,
   runEngineeringGraph,
@@ -10,7 +17,6 @@ import {
   validateEngineeringGraphWorkspaces,
   type EngineeringGraphDefinition,
   type AgentCoreDeps,
-  type GraphFunctionHandler,
 } from "@seekforge/core";
 import { resolve } from "node:path";
 import { fail } from "../colors.js";
@@ -26,9 +32,36 @@ export type GraphRunCliOptions = {
   yes?: boolean;
   model?: string;
   profile?: string;
+  params?: string[];
 };
 
-export function readEngineeringGraphFile(file: string, workspace = process.cwd()): EngineeringGraphDefinition {
+function graphParameters(values: readonly string[] = []): Record<string, unknown> {
+  const result = Object.create(null) as Record<string, unknown>;
+  for (const item of values) {
+    const separator = item.indexOf("=");
+    if (separator < 1) throw new Error(`Graph parameter must use name=value: ${item}`);
+    const name = item.slice(0, separator);
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(name) || Object.hasOwn(result, name)) {
+      throw new Error(`Graph parameter name is invalid or duplicated: ${name}`);
+    }
+    const raw = item.slice(separator + 1);
+    result[name] =
+      raw === "true"
+        ? true
+        : raw === "false"
+          ? false
+          : /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(raw) && Number.isFinite(Number(raw))
+            ? Number(raw)
+            : raw;
+  }
+  return result;
+}
+
+export function readEngineeringGraphFile(
+  file: string,
+  workspace = process.cwd(),
+  params: readonly string[] = [],
+): EngineeringGraphDefinition {
   const raw = readFileIfExists(resolve(workspace, file), 512 * 1024);
   if (raw === undefined) throw new Error(`Engineering Graph file not found: ${file}`);
   let parsed: unknown;
@@ -37,20 +70,20 @@ export function readEngineeringGraphFile(file: string, workspace = process.cwd()
   } catch {
     throw new Error(`Engineering Graph file is not valid JSON: ${file}`);
   }
-  return parseEngineeringGraphDefinition(parsed);
+  return materializeEngineeringGraph(parsed, graphParameters(params));
 }
 
-const handlers: Readonly<Record<string, GraphFunctionHandler>> = {
-  noop: () => ({ output: null }),
-  collect: ({ dependencies }) => ({
-    output: Object.fromEntries([...dependencies].map(([id, result]) => [id, result.output])),
-  }),
-};
-
-export async function graphValidateCommand(file: string): Promise<void> {
+export async function graphValidateCommand(
+  file: string,
+  opts: { params?: string[]; json?: boolean } = {},
+): Promise<void> {
   try {
-    const graph = readEngineeringGraphFile(file);
-    console.log(`${graph.graphId}\tvalid\t${graph.nodes.length} node(s)`);
+    const graph = readEngineeringGraphFile(file, process.cwd(), opts.params);
+    console.log(
+      opts.json
+        ? JSON.stringify(planEngineeringGraph(graph), null, 2)
+        : `${graph.graphId}\tvalid\t${graph.nodes.length} node(s)`,
+    );
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
@@ -61,22 +94,17 @@ export async function graphRunCommand(file: string, opts: GraphRunCliOptions): P
   const workspace = process.cwd();
   let graph: EngineeringGraphDefinition;
   try {
-    graph = readEngineeringGraphFile(file, workspace);
+    graph = readEngineeringGraphFile(file, workspace, opts.params);
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
     return;
   }
-  const requiresAgentRuntime = (definition: EngineeringGraphDefinition): boolean =>
-    definition.nodes.some(
-      (node) =>
-        node.kind === "agent" || node.kind === "loop" || (node.graph ? requiresAgentRuntime(node.graph) : false),
-    );
-  const needsRuntime = requiresAgentRuntime(graph);
+  const needsRuntime = engineeringGraphNeedsAgentRuntime(graph);
   try {
     validateEngineeringGraphRunOptions(graph, {
       workspace,
-      handlers,
+      handlers: BUILTIN_GRAPH_HANDLERS,
       ...(opts.resume ? { resume: true } : {}),
       ...(opts.restart ? { restart: true } : {}),
       ...(opts.rerun?.length ? { rerunFrom: opts.rerun } : {}),
@@ -117,7 +145,7 @@ export async function graphRunCommand(file: string, opts: GraphRunCliOptions): P
   const execute = async (deps: AgentCoreDeps, signal?: AbortSignal): Promise<void> => {
     const state = await runEngineeringGraph(deps, graph, {
       workspace,
-      handlers,
+      handlers: BUILTIN_GRAPH_HANDLERS,
       ...(signal ? { signal } : {}),
       ...(opts.resume ? { resume: true } : {}),
       ...(opts.restart ? { restart: true } : {}),
@@ -165,8 +193,37 @@ export function graphShowCommand(graphId: string, historyOnly = false): void {
   console.log(JSON.stringify(historyOnly ? state.events : state, null, 2));
 }
 
-export function graphDeleteCommand(graphId: string): void {
+export async function graphResourcesCommand(
+  graphId: string,
+  operation: "inspect" | "archive" | "prune" | "promote",
+  opts: { dryRun?: boolean; force?: boolean; target?: string } = {},
+): Promise<void> {
   try {
+    const workspace = process.cwd();
+    const result =
+      operation === "inspect"
+        ? await inspectEngineeringGraphResources(workspace, graphId)
+        : operation === "archive"
+          ? archiveEngineeringGraphResources(workspace, graphId)
+          : operation === "prune"
+            ? await pruneEngineeringGraphResources(workspace, graphId, {
+                dryRun: opts.dryRun,
+                force: opts.force,
+              })
+            : await promoteEngineeringGraphResult(workspace, graphId, opts.target ?? "fan-in");
+    console.log(JSON.stringify(result, null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+export async function graphDeleteCommand(graphId: string): Promise<void> {
+  try {
+    const resources = await inspectEngineeringGraphResources(process.cwd(), graphId);
+    if (resources.worktrees.length > 0) {
+      throw new Error(`Graph managed resources must be pruned before deletion: ${graphId}`);
+    }
     if (!removeEngineeringGraphState(process.cwd(), graphId))
       throw new Error(`Engineering Graph not found: ${graphId}`);
     console.log(`Removed Engineering Graph: ${graphId}`);

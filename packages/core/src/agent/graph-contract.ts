@@ -1,12 +1,15 @@
 import { createHash } from "node:crypto";
 import { isRecord } from "../util/guards.js";
 import { isValidLoopDagId } from "./loop-dag-validation.js";
+import { isDenseArray } from "./orchestration.js";
 
 export const MAX_GRAPH_NODES = 128;
 export const MAX_GRAPH_DEPTH = 4;
 export const MAX_GRAPH_CONCURRENCY = 8;
 export const MAX_GRAPH_DEFINITION_BYTES = 256 * 1024;
 export const MAX_GRAPH_NODE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+export const MAX_GRAPH_HISTORY_SEGMENTS = 3;
+export const ENGINEERING_GRAPH_FAN_IN_WORKTREE_ID = "@fan-in";
 
 export type GraphNodeKind = "agent" | "loop" | "function" | "router" | "gate" | "subgraph";
 export type GraphNodeStatus = "passed" | "failed" | "skipped" | "waiting_approval";
@@ -43,18 +46,37 @@ export type EngineeringGraphDefinition = {
   failurePolicy?: "stop" | "continue";
   costBudgetUsd?: number;
   tokenBudget?: number;
+  managedWorktrees?: { integrateDependencies: boolean; limit: number };
+  fanIn?: { verifyCommand: string; maxIterations: number };
 };
+
+export function isValidEngineeringGraphNodePath(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 512) return false;
+  const parts = value.split("/");
+  return parts.length > 0 && parts.length <= MAX_GRAPH_DEPTH + 1 && parts.every(isValidLoopDagId);
+}
+
+export function engineeringSubgraphStateId(parentGraphId: string, nodeId: string, childGraphId: string): string {
+  if (![parentGraphId, nodeId, childGraphId].every(isValidLoopDagId)) {
+    throw new Error("Subgraph state identity requires safe graph and node ids");
+  }
+  const suffix = createHash("sha256").update(`${parentGraphId}\0${nodeId}\0${childGraphId}`).digest("hex").slice(0, 16);
+  const result = `${childGraphId.slice(0, 40)}-${suffix}`;
+  if (!isValidLoopDagId(result)) throw new Error("Subgraph state identity is invalid");
+  return result;
+}
+
+export function engineeringGraphNeedsAgentRuntime(definition: EngineeringGraphDefinition): boolean {
+  return definition.nodes.some(
+    (node) =>
+      node.kind === "agent" ||
+      node.kind === "loop" ||
+      (node.graph !== undefined && engineeringGraphNeedsAgentRuntime(node.graph)),
+  );
+}
 
 function graphNodeCount(definition: EngineeringGraphDefinition): number {
   return definition.nodes.reduce((total, node) => total + 1 + (node.graph ? graphNodeCount(node.graph) : 0), 0);
-}
-
-function isDenseArray(value: unknown): value is unknown[] {
-  if (!Array.isArray(value)) return false;
-  for (let index = 0; index < value.length; index++) {
-    if (!Object.hasOwn(value, index)) return false;
-  }
-  return true;
 }
 
 function parseCondition(value: unknown, depth = 0): GraphCondition {
@@ -141,9 +163,6 @@ function parseNode(value: unknown, depth: number): GraphNode {
     throw new Error(`Graph node ${value.id} timeoutMs must be 1 to ${MAX_GRAPH_NODE_TIMEOUT_MS}`);
   }
   const kind = value.kind as GraphNodeKind;
-  if (kind === "subgraph" && value.maxRetries !== undefined && value.maxRetries !== 0) {
-    throw new Error(`Graph subgraph node ${value.id} cannot retry without a durable child checkpoint`);
-  }
   if (
     (kind === "agent" || kind === "loop") &&
     (typeof value.task !== "string" || !value.task.trim() || value.task.length > 64 * 1024)
@@ -222,9 +241,6 @@ export function parseEngineeringGraphDefinition(value: unknown, depth = 0): Engi
     throw new Error(`Graph must contain 1 to ${MAX_GRAPH_NODES} nodes`);
   }
   const nodes = value.nodes.map((node) => parseNode(node, depth));
-  if (depth > 0 && nodes.some((node) => node.kind === "gate")) {
-    throw new Error("Nested Graph approval gates require a durable child checkpoint and are not supported");
-  }
   const ids = new Set<string>();
   for (const node of nodes) {
     if (ids.has(node.id)) throw new Error(`Duplicate Graph node id: ${node.id}`);
@@ -291,6 +307,52 @@ export function parseEngineeringGraphDefinition(value: unknown, depth = 0): Engi
   ) {
     throw new Error("Graph tokenBudget must be a positive safe integer");
   }
+  let managedWorktrees: EngineeringGraphDefinition["managedWorktrees"];
+  if (value.managedWorktrees !== undefined) {
+    if (depth > 0) throw new Error("Nested Graph managedWorktrees are not supported");
+    if (value.managedWorktrees === true) {
+      managedWorktrees = { integrateDependencies: true, limit: 64 };
+    } else if (
+      isRecord(value.managedWorktrees) &&
+      (value.managedWorktrees.integrateDependencies === undefined ||
+        typeof value.managedWorktrees.integrateDependencies === "boolean") &&
+      (value.managedWorktrees.limit === undefined ||
+        (Number.isSafeInteger(value.managedWorktrees.limit) &&
+          (value.managedWorktrees.limit as number) >= 1 &&
+          (value.managedWorktrees.limit as number) <= 256))
+    ) {
+      managedWorktrees = {
+        integrateDependencies: value.managedWorktrees.integrateDependencies !== false,
+        limit: (value.managedWorktrees.limit as number | undefined) ?? 64,
+      };
+    } else {
+      throw new Error("Graph managedWorktrees configuration is invalid");
+    }
+    const hasExplicitWorkspace = (graphNodes: readonly GraphNode[]): boolean =>
+      graphNodes.some((node) => node.workspace !== undefined || (node.graph && hasExplicitWorkspace(node.graph.nodes)));
+    if (hasExplicitWorkspace(nodes)) throw new Error("Graph managedWorktrees cannot be combined with node workspaces");
+  }
+  let fanIn: EngineeringGraphDefinition["fanIn"];
+  if (value.fanIn !== undefined) {
+    if (depth > 0 || !managedWorktrees || !isRecord(value.fanIn)) {
+      throw new Error("Graph fanIn requires top-level managedWorktrees");
+    }
+    if (
+      typeof value.fanIn.verifyCommand !== "string" ||
+      !value.fanIn.verifyCommand.trim() ||
+      value.fanIn.verifyCommand.length > 8_192 ||
+      (value.fanIn.maxIterations !== undefined &&
+        (!Number.isSafeInteger(value.fanIn.maxIterations) ||
+          (value.fanIn.maxIterations as number) < 1 ||
+          (value.fanIn.maxIterations as number) > 5))
+    ) {
+      throw new Error("Graph fanIn configuration is invalid");
+    }
+    fanIn = {
+      verifyCommand: value.fanIn.verifyCommand,
+      maxIterations: (value.fanIn.maxIterations as number | undefined) ?? 1,
+    };
+  }
   const definition: EngineeringGraphDefinition = {
     graphId: value.graphId,
     nodes,
@@ -298,6 +360,8 @@ export function parseEngineeringGraphDefinition(value: unknown, depth = 0): Engi
     failurePolicy,
     ...(typeof value.costBudgetUsd === "number" ? { costBudgetUsd: value.costBudgetUsd } : {}),
     ...(typeof value.tokenBudget === "number" ? { tokenBudget: value.tokenBudget } : {}),
+    ...(managedWorktrees ? { managedWorktrees } : {}),
+    ...(fanIn ? { fanIn } : {}),
   };
   if (depth === 0 && graphNodeCount(definition) > MAX_GRAPH_NODES) {
     throw new Error(`Graph and its subgraphs may contain at most ${MAX_GRAPH_NODES} nodes in total`);

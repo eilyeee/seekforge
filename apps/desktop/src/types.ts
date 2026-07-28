@@ -72,6 +72,7 @@ export type {
   LoopSpeculationSummary,
   EngineeringGraphSummary,
   EngineeringGraphDetail,
+  EngineeringGraphResourceReport,
   GraphEventSummary,
   GraphNodeKind,
   GraphNodeStatus,

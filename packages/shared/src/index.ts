@@ -859,6 +859,12 @@ export type LoopAcceptanceReview = {
   criteria: Array<{ id: string; status: "met" | "unmet" | "unknown"; evidence: string[] }>;
   gaps: string[];
 };
+export type LoopVerificationDecision = {
+  stageId: string;
+  action: "run" | "skip" | "reuse" | "blocked";
+  reason: "full" | "direct" | "dependency" | "unaffected" | "cache_hit" | "prior_failure";
+  matchedPaths: string[];
+};
 
 /** Final summary of a loop run (server LoopResult). */
 export type LoopResult = {
@@ -895,6 +901,13 @@ export type LoopEvent =
   | { type: "verify.stage.started"; iteration: number; stageId: string; attempt: number }
   | { type: "verify.stage.completed"; iteration: number; result: LoopStageResult }
   | { type: "verify.flaky"; iteration: number; stageId: string; attempts: number }
+  | {
+      type: "verify.impact";
+      iteration: number;
+      changedPaths: string[];
+      decisions: LoopVerificationDecision[];
+      fullFallback: boolean;
+    }
   | { type: "loop.paused"; iteration: number }
   | { type: "loop.resumed"; iteration: number }
   | { type: "loop.steered"; iteration: number; count: number }
@@ -1017,6 +1030,7 @@ export type GraphNodeSummary = {
   sessionId?: string;
   output?: unknown;
   error?: string;
+  managedBranch?: string;
 };
 export type GraphEventSummary = {
   sequence: number;
@@ -1038,8 +1052,53 @@ export type EngineeringGraphSummary = {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  parentGraph?: { graphId: string; nodeId: string };
+  resourceGeneration?: string;
+  fanIn?: {
+    status: "passed" | "failed";
+    branch: string;
+    workspace: string;
+    costUsd: number;
+    tokensUsed: number;
+    updatedAt: string;
+    error?: string;
+  };
 };
 export type EngineeringGraphDetail = EngineeringGraphSummary & { definition: unknown };
+export type EngineeringGraphEvidenceReport = {
+  schemaVersion: 1;
+  graphId: string;
+  fingerprint: string;
+  generatedAt: string;
+  status: GraphRunStatus;
+  usage: { costUsd: number; tokensUsed: number };
+  nodes: GraphNodeSummary[];
+  retainedEventCount: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  parentGraph?: { graphId: string; nodeId: string };
+  resourceGeneration?: string;
+  fanIn?: {
+    status: "passed" | "failed";
+    branch: string;
+    costUsd: number;
+    tokensUsed: number;
+    updatedAt: string;
+    error?: string;
+  };
+  integrity: { algorithm: "sha256"; digest: string };
+};
+
+export type EngineeringGraphResourceReport = {
+  graphId: string;
+  completed: boolean;
+  archived: boolean;
+  active: boolean;
+  totalBytes: number;
+  truncated: boolean;
+  worktrees: Array<{ branch: string; path: string; bytes: number }>;
+};
 
 export type LoopDagResourceReport = {
   dagId: string;

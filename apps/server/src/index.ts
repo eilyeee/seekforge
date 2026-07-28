@@ -23,10 +23,12 @@ import { MAX_WS_PAYLOAD_BYTES } from "@seekforge/shared/protocol-limits";
 import {
   createDefaultAgent,
   resumeDefaultLoop,
+  runDefaultGraph,
   runDefaultLoop,
   type CreateAgentFn,
   type ResumeLoopFn,
   type RunLoopFn,
+  type RunGraphFn,
 } from "./agent.js";
 import { discardRequestBody } from "./http.js";
 import { handleApi, sendApiError } from "./rest.js";
@@ -40,7 +42,15 @@ import { RunManager } from "./run-ledger.js";
 import { createStructuredLogger, type StructuredLogger } from "./logger.js";
 import { loadConfig } from "./config.js";
 
-export type { AgentHandle, CreateAgentFn, CreateAgentOptions, ResumeLoopFn, RunLoopFn, RunOverrides } from "./agent.js";
+export type {
+  AgentHandle,
+  CreateAgentFn,
+  CreateAgentOptions,
+  ResumeLoopFn,
+  RunGraphFn,
+  RunLoopFn,
+  RunOverrides,
+} from "./agent.js";
 export type { ServerConfig } from "./config.js";
 export type { Workspace } from "./workspaces.js";
 export type { MergeResult, WorktreeStatus } from "./worktrees.js";
@@ -77,6 +87,8 @@ export type StartServerOptions = {
   createAgent?: CreateAgentFn;
   /** Test/embedding override for the auto-loop runner. Default: real DeepSeek loop. */
   runLoop?: RunLoopFn;
+  /** Test/embedding override for Engineering Graph execution. */
+  runGraph?: RunGraphFn;
   /** Test/embedding override for persisted auto-loop resume. */
   resumeLoop?: ResumeLoopFn;
   /** Test/embedding override for the static UI root. Default: apps/desktop/dist. */
@@ -139,9 +151,11 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   const token = opts.token ?? randomBytes(24).toString("base64url");
   const createAgent = opts.createAgent ?? createDefaultAgent;
   const runLoop = opts.runLoop ?? runDefaultLoop;
+  const runGraph = opts.runGraph ?? runDefaultGraph;
   const resumeLoop = opts.resumeLoop ?? resumeDefaultLoop;
   const staticRoot = resolveStaticRoot(opts.staticDir);
   const triggerRuns = new Set<TriggerRunHandle>();
+  const graphRuns = new Map<string, string>();
   const runManager = new RunManager((workspace) => {
     const config = loadConfig(workspace);
     return {
@@ -183,7 +197,9 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
         version,
         createAgent,
         runLoop,
+        runGraph,
         triggerRuns,
+        graphRuns,
         runManager,
         logger,
         requestId,

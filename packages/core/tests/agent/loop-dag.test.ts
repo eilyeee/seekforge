@@ -112,6 +112,27 @@ describe("runLoopDag", () => {
         ],
       }),
     ).rejects.toThrow(/distinct workspaces/);
+    mkdirSync(join(workspace, "parent", "child"), { recursive: true });
+    await expect(
+      runLoopDag(deps, {
+        workspace,
+        maxConcurrency: 2,
+        workspaceForNode: (node) => join(workspace, node.id === "a" ? "parent" : "parent/child"),
+        nodes: [
+          { id: "a", task: "a", verifyCommand: "test" },
+          { id: "b", task: "b", verifyCommand: "test" },
+        ],
+      }),
+    ).rejects.toThrow(/non-overlapping/);
+    await expect(
+      runLoopDag(deps, {
+        workspace,
+        dagId: "sparse-rerun",
+        resume: true,
+        rerunFrom: new Array(1),
+        nodes: [{ id: "a", task: "a", verifyCommand: "test" }],
+      }),
+    ).rejects.toThrow(/unique existing node ids/);
     await expect(
       runLoopDag(deps, {
         workspace,

@@ -10,7 +10,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { CreateAgentFn, RunLoopFn } from "../agent.js";
+import type { CreateAgentFn, RunGraphFn, RunLoopFn } from "../agent.js";
 import type { ServerCoordinator } from "../coordinator.js";
 import type { Workspace, WorkspaceRegistry } from "../workspaces.js";
 import type { WorktreeManager } from "../worktrees.js";
@@ -29,8 +29,11 @@ export type RestContext = {
    */
   createAgent: CreateAgentFn;
   runLoop: RunLoopFn;
+  runGraph: RunGraphFn;
   /** Active headless runs, owned by startServer and drained during shutdown. */
   triggerRuns?: Set<TriggerRunHandle>;
+  /** Active Graph id to Run Ledger id, used for exact cancellation and duplicate-run exclusion. */
+  graphRuns?: Map<string, string>;
   runManager: RunManager;
   /** Structured logger + per-request id, so an internal 500 can be correlated
    * back to its http.request log line. */

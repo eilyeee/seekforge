@@ -32,6 +32,7 @@ const CATEGORIES = new Set<LoopFailureCategory>([
   "test",
   "compile",
   "lint",
+  "review",
   "environment",
   "timeout",
   "permission",
@@ -42,6 +43,7 @@ const STRATEGIES = new Set<LoopRecoveryStrategy>([
   "isolate_test",
   "repair_compile",
   "repair_lint",
+  "repair_review",
   "validate_environment",
   "reduce_scope",
   "replan",
@@ -51,6 +53,7 @@ function candidates(category: LoopFailureCategory): LoopRecoveryStrategy[] {
   if (category === "test") return ["isolate_test", "replan"];
   if (category === "compile") return ["repair_compile", "replan"];
   if (category === "lint") return ["repair_lint", "replan"];
+  if (category === "review") return ["repair_review", "replan"];
   if (category === "environment" || category === "permission" || category === "network") {
     return ["validate_environment", "replan"];
   }
