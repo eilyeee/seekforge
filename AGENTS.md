@@ -97,6 +97,20 @@ backend in `crates/runtime`.
   a commit, merge them into `main` when working on another branch, and push when
   a remote is configured.
 
+### Independent code review
+
+- Every task that changes the repository must enter a separate code-review phase
+  after implementation and verification, but before commit or push.
+- Start the review fresh from the final diff against its base and re-read the
+  original request and public contracts. Do not reuse the implementation plan,
+  implementation-time assumptions, or implementation self-checks as the review.
+- Review correctness, regressions, security boundaries, async/state/resource
+  lifecycles, tests, and documentation as applicable. Consult the boundary
+  checklist whenever its trigger rules apply.
+- Report review findings explicitly. Fix every actionable finding, rerun the
+  relevant verification, and then perform another independent review of the new
+  final diff. Commit and push only after that review has no actionable findings.
+
 ### Commit discipline
 
 - Verify against a **clean checkout, not just the dirty working tree** — local
