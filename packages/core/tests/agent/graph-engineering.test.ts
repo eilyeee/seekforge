@@ -1,12 +1,14 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { engineeringSubgraphStateId } from "../../src/agent/graph-contract.js";
 import { enqueueGraphControl } from "../../src/agent/graph-control-store.js";
-import { runEngineeringGraph } from "../../src/agent/graph-engineering.js";
+import { runEngineeringGraph, type GraphFunctionHandler } from "../../src/agent/graph-engineering.js";
 import { readEngineeringGraphHistory } from "../../src/agent/graph-history.js";
+import { readEngineeringGraphRunSnapshots } from "../../src/agent/graph-run-history.js";
+import { enqueueEngineeringGraphSignal } from "../../src/agent/graph-signal-store.js";
 import {
   archiveEngineeringGraphResources,
   inspectEngineeringGraphResources,
@@ -320,6 +322,9 @@ describe("runEngineeringGraph", () => {
       approvedNodeIds: ["review"],
     });
     expect(restarted.status).toBe("passed");
+    expect(readEngineeringGraphRunSnapshots(root, "managed-graph")).toEqual([
+      expect.objectContaining({ runNumber: 1, status: "passed" }),
+    ]);
     expect((await inspectEngineeringGraphResources(root, "managed-graph")).archived).toBe(false);
   }, 30_000);
 
@@ -1222,5 +1227,364 @@ describe("runEngineeringGraph", () => {
       results: oversized.results.map((result) => ({ ...result, output: "x".repeat(17_000) })),
     });
     expect(loadEngineeringGraphState(root, "oversized")).toBeNull();
+  });
+
+  it("checkpoints successful map items and retries only unfinished items", async () => {
+    const root = workspace();
+    const calls = [0, 0];
+    let fail = true;
+    const definition = {
+      graphId: "map-checkpoints",
+      nodes: [
+        { id: "source", kind: "function", handler: "source" },
+        {
+          id: "map",
+          kind: "map",
+          handler: "map",
+          dependsOn: ["source"],
+          source: { nodeId: "source" },
+          maxRetries: 0,
+        },
+      ],
+    };
+    const handlers = {
+      source: () => ({ output: [1, 2] }),
+      map: ({ itemIndex }) => {
+        calls[itemIndex!] = calls[itemIndex!]! + 1;
+        if (itemIndex === 1 && fail) throw new Error("retry me");
+        return { output: itemIndex };
+      },
+    } satisfies Record<string, GraphFunctionHandler>;
+    const failed = await runEngineeringGraph(deps, definition, { workspace: root, handlers });
+    expect(failed.status).toBe("failed");
+    expect(failed.mapProgress?.map).toHaveLength(1);
+    fail = false;
+    const resumed = await runEngineeringGraph(deps, definition, {
+      workspace: root,
+      handlers,
+      resume: true,
+      rerunFrom: ["map"],
+    });
+    expect(resumed.status).toBe("passed");
+    expect(resumed.results.find((result) => result.id === "map")?.output).toEqual([0, 1]);
+    expect(calls).toEqual([1, 2]);
+    expect(resumed.mapProgress?.map).toBeUndefined();
+  });
+
+  it("settles map result validation before publishing a sibling failure", async () => {
+    const root = workspace();
+    const calls = [0, 0];
+    let invalidArtifact = true;
+    const definition = {
+      graphId: "map-postprocess-checkpoints",
+      nodes: [
+        { id: "source", kind: "function", handler: "source" },
+        { id: "map", kind: "map", handler: "map", dependsOn: ["source"], source: { nodeId: "source" } },
+      ],
+    };
+    const handlers = {
+      source: () => ({ output: [1, 2] }),
+      map: ({ itemIndex }) => {
+        calls[itemIndex!] = calls[itemIndex!]! + 1;
+        return itemIndex === 0 && invalidArtifact
+          ? { costUsd: 1, artifacts: [{ name: "1-invalid", path: "artifact.txt" }] }
+          : { costUsd: 1, output: itemIndex };
+      },
+    } satisfies Record<string, GraphFunctionHandler>;
+    const failed = await runEngineeringGraph(deps, definition, { workspace: root, handlers });
+    expect(failed.status).toBe("failed");
+    expect(failed.spentCost).toBe(2);
+    expect(failed.mapProgress?.map?.map((item) => item.index)).toEqual([1]);
+
+    invalidArtifact = false;
+    const resumed = await runEngineeringGraph(deps, definition, {
+      workspace: root,
+      handlers,
+      resume: true,
+      rerunFrom: ["map"],
+    });
+    expect(resumed.status).toBe("passed");
+    expect(resumed.results.find((result) => result.id === "map")?.output).toEqual([0, 1]);
+    expect(calls).toEqual([2, 1]);
+  });
+
+  it("durably waits for an external signal and resumes with its payload", async () => {
+    const root = workspace();
+    const definition = {
+      graphId: "signal-wait",
+      nodes: [{ id: "approval-event", kind: "wait", waitFor: { signal: "approved" } }],
+    };
+    const paused = await runEngineeringGraph(deps, definition, { workspace: root });
+    expect(paused).toMatchObject({ status: "paused", pauseReason: "wait" });
+    await enqueueEngineeringGraphSignal(root, "signal-wait", "approved", { actor: "reviewer" });
+    const resumed = await runEngineeringGraph(deps, definition, { workspace: root, resume: true });
+    expect(resumed.status).toBe("passed");
+    expect(resumed.results[0]?.output).toMatchObject({ signal: "approved", payload: { actor: "reviewer" } });
+    expect(JSON.parse(readFileSync(join(root, ".seekforge/graphs/signal-wait.signals.json"), "utf8"))).toEqual({
+      version: 1,
+      signals: [],
+    });
+  });
+
+  it("rejects signals created after a wait deadline", async () => {
+    const root = workspace();
+    await enqueueEngineeringGraphSignal(root, "expired-wait", "approved", { late: true });
+    const state = await runEngineeringGraph(
+      deps,
+      {
+        graphId: "expired-wait",
+        nodes: [
+          {
+            id: "deadline",
+            kind: "wait",
+            waitFor: { signal: "approved", expiresAt: "2000-01-01T00:00:00.000Z" },
+          },
+        ],
+      },
+      { workspace: root },
+    );
+    expect(state.status).toBe("failed");
+    expect(state.results[0]?.error).toBe("Graph wait expired");
+  });
+
+  it("settles concurrent work before publishing a wait pause", async () => {
+    const root = workspace();
+    mkdirSync(join(root, "source"));
+    mkdirSync(join(root, "failure"));
+    const state = await runEngineeringGraph(
+      deps,
+      {
+        graphId: "wait-settlement",
+        maxConcurrency: 2,
+        nodes: [
+          { id: "source", kind: "function", handler: "source", workspace: "source" },
+          { id: "failure", kind: "function", handler: "failure", workspace: "failure" },
+          { id: "external", kind: "wait", dependsOn: ["source"], waitFor: { signal: "continue" } },
+        ],
+      },
+      {
+        workspace: root,
+        handlers: {
+          source: () => ({}),
+          failure: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            throw new Error("boom");
+          },
+        },
+      },
+    );
+    expect(state.status).toBe("failed");
+    expect(state.results.find((result) => result.id === "external")).toMatchObject({
+      status: "skipped",
+      error: "Graph stopped after a node failure",
+    });
+    expect(loadEngineeringGraphState(root, "wait-settlement")?.status).toBe("failed");
+  });
+
+  it("runs compensation in reverse completion order after main work fails", async () => {
+    const root = workspace();
+    const order: string[] = [];
+    const state = await runEngineeringGraph(
+      deps,
+      {
+        graphId: "compensate",
+        failurePolicy: "continue",
+        nodes: [
+          { id: "first", kind: "function", handler: "first" },
+          { id: "second", kind: "function", handler: "second", dependsOn: ["first"] },
+          { id: "fail", kind: "function", handler: "fail", dependsOn: ["second"] },
+          {
+            id: "undo-first",
+            kind: "compensation",
+            handler: "undo-first",
+            dependsOn: ["first"],
+            compensates: ["first"],
+          },
+          {
+            id: "undo-second",
+            kind: "compensation",
+            handler: "undo-second",
+            dependsOn: ["second"],
+            compensates: ["second"],
+          },
+        ],
+      },
+      {
+        workspace: root,
+        handlers: {
+          first: () => {
+            order.push("first");
+            return {};
+          },
+          second: () => {
+            order.push("second");
+            return {};
+          },
+          fail: () => {
+            throw new Error("boom");
+          },
+          "undo-first": () => {
+            order.push("undo-first");
+            return {};
+          },
+          "undo-second": () => {
+            order.push("undo-second");
+            return {};
+          },
+        },
+      },
+    );
+    expect(state.status).toBe("failed");
+    expect(order.slice(-2)).toEqual(["undo-second", "undo-first"]);
+  });
+
+  it("does not let compensation exceed the shared graph budget", async () => {
+    const root = workspace();
+    const compensate = vi.fn(() => ({ costUsd: 1 }));
+    const state = await runEngineeringGraph(
+      deps,
+      {
+        graphId: "compensation-budget",
+        costBudgetUsd: 1,
+        nodes: [
+          { id: "forward", kind: "function", handler: "forward" },
+          { id: "blocked", kind: "function", handler: "blocked", dependsOn: ["forward"] },
+          {
+            id: "undo",
+            kind: "compensation",
+            handler: "undo",
+            dependsOn: ["forward"],
+            compensates: ["forward"],
+          },
+        ],
+      },
+      {
+        workspace: root,
+        handlers: {
+          forward: () => ({ costUsd: 1 }),
+          blocked: () => {
+            throw new Error("must not run after the budget is exhausted");
+          },
+          undo: compensate,
+        },
+      },
+    );
+    expect(state.status).toBe("failed");
+    expect(state.spentCost).toBe(1);
+    expect(state.results.find((result) => result.id === "undo")).toMatchObject({
+      status: "failed",
+      attempts: 0,
+      error: "Graph node retry budget exhausted",
+    });
+    expect(compensate).not.toHaveBeenCalled();
+  });
+
+  it("validates map source item schemas before invoking handlers", async () => {
+    const root = workspace();
+    const map = vi.fn(() => ({ output: true }));
+    const state = await runEngineeringGraph(
+      deps,
+      {
+        graphId: "map-source-schema",
+        nodes: [
+          { id: "source", kind: "function", handler: "source" },
+          {
+            id: "map",
+            kind: "map",
+            handler: "map",
+            dependsOn: ["source"],
+            source: { nodeId: "source", schema: { type: "array", items: { type: "number" } } },
+          },
+        ],
+      },
+      { workspace: root, handlers: { source: () => ({ output: ["wrong"] }), map } },
+    );
+    expect(state.status).toBe("failed");
+    expect(state.results.find((result) => result.id === "map")?.error).toMatch(/must be number/);
+    expect(map).not.toHaveBeenCalled();
+  });
+
+  it("shares a map node budget across each concurrent batch", async () => {
+    const root = workspace();
+    const shares: Array<{ cost?: number; tokens?: number }> = [];
+    const state = await runEngineeringGraph(
+      deps,
+      {
+        graphId: "map-budget-shares",
+        costBudgetUsd: 2,
+        tokenBudget: 4,
+        nodes: [
+          { id: "source", kind: "function", handler: "source" },
+          {
+            id: "map",
+            kind: "map",
+            handler: "map",
+            dependsOn: ["source"],
+            source: { nodeId: "source" },
+            mapConcurrency: 2,
+          },
+        ],
+      },
+      {
+        workspace: root,
+        handlers: {
+          source: () => ({ output: [1, 2] }),
+          map: ({ costBudgetUsd, tokenBudget }) => {
+            shares.push({ cost: costBudgetUsd, tokens: tokenBudget });
+            return { output: true };
+          },
+        },
+      },
+    );
+    expect(state.status).toBe("passed");
+    expect(shares).toEqual([
+      { cost: 1, tokens: 2 },
+      { cost: 1, tokens: 2 },
+    ]);
+  });
+
+  it("enforces deep schemas, verified artifact lineage, and trusted remote executors", async () => {
+    const root = workspace();
+    writeFileSync(join(root, "report.json"), "{}\n");
+    const state = await runEngineeringGraph(
+      deps,
+      {
+        graphId: "typed-remote",
+        nodes: [
+          {
+            id: "remote",
+            kind: "remote",
+            executor: "worker",
+            verifyArtifacts: true,
+            outputSchema: {
+              type: "object",
+              required: ["items"],
+              additionalProperties: false,
+              properties: { items: { type: "array", minItems: 1, items: { type: "number" } } },
+            },
+          },
+        ],
+      },
+      {
+        workspace: root,
+        executors: {
+          worker: {
+            trusted: true,
+            locality: "remote",
+            execute: () => ({
+              output: { items: [1] },
+              artifacts: [{ name: "report", path: "report.json" }],
+            }),
+          },
+        },
+      },
+    );
+    expect(state.status).toBe("passed");
+    expect(state.results[0]?.artifacts?.[0]).toMatchObject({
+      producerNodeId: "remote",
+      verified: true,
+      sizeBytes: 3,
+    });
+    expect(state.results[0]?.artifacts?.[0]?.sha256).toMatch(/^[0-9a-f]{64}$/);
   });
 });

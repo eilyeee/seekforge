@@ -2867,6 +2867,62 @@ Checking only a leading slash accepts malformed escape sequences that different 
 - **Do:** validate the complete bounded pointer grammar, then decode only `~0` and `~1` while blocking prototype keys and accessors.
 - **Caught:** Graph input bindings accepted `~2` escapes even though the resolver did not define them.
 
+## 253. `allSettled` cannot catch work that throws while its input array is built
+
+Calling an effect directly inside `items.map(...)` evaluates it before `Promise.allSettled` receives the array. A synchronous throw aborts that mapping step, so already-returned promises are neither awaited nor checkpointed.
+
+- **Do:** enter each possibly synchronous effect through `Promise.resolve().then(() => effect())`, then pass those promises to `allSettled`.
+- **Caught:** a synchronous Engineering Graph map handler failure bypassed successful sibling settlement and item-level checkpoints.
+
+## 254. Durable mailbox claims need checkpoint-ordered acknowledgement
+
+Removing a claimed event before its workflow result is durable loses the event on a crash; never removing it eventually exhausts a bounded mailbox.
+
+- **Do:** retain a claim through the authoritative workflow checkpoint, then acknowledge and remove it under the mailbox lease.
+- **Caught:** completed Graph wait signals accumulated permanently, while eager cleanup would have opened a loss window.
+
+## 255. Dynamic fan-out must partition the parent's remaining budget
+
+Giving every child in a concurrent batch the full parent budget multiplies the advertised allowance by the fan-out width.
+
+- **Do:** subtract committed child usage before each batch and divide the remainder across only the children that will start.
+- **Caught:** every Engineering Graph map item received the entire node cost/token budget.
+
+## 256. File verification must rebind the path after reading the descriptor
+
+An opened descriptor remains stable across rename, but the published path may be rebound to another inode while hashing is in progress.
+
+- **Do:** compare device/inode and physical path before and after streaming the descriptor; publish evidence only if both bindings match.
+- **Caught:** verified Graph artifact evidence could describe a path that changed after the initial identity check.
+
+## 257. Cancellation sentinels must be handled before numeric coercion
+
+UI prompt cancellation commonly returns `null`, and `Number(null)` silently becomes zero.
+
+- **Do:** branch on cancellation and blank input before parsing or clamping numeric values.
+- **Caught:** cancelling a Desktop Graph priority prompt submitted priority `0`.
+
+## 258. Internal scheduler keys must not reuse user-visible hierarchy syntax
+
+Embedding a raw filesystem path in a logical resource id lets ordinary path punctuation acquire scheduler meaning.
+
+- **Do:** encode exact internal identities with a domain-prefixed hash; reserve hierarchical separators for declared logical resources.
+- **Caught:** Loop DAG workspaces named `pkg` and `pkg.child` were falsely treated as a parent/child resource conflict.
+
+## 259. Numeric contracts must survive JSON normalization
+
+In-memory numbers such as `NaN`, infinity, and negative zero do not round-trip through JSON with their original meaning. Accepting them in a persisted schema can change fingerprints or validation behavior after resume.
+
+- **Do:** reject non-finite contract numbers and normalize signed zero before fingerprinting or persistence.
+- **Caught:** Graph schema enums accepted numbers whose resumed meaning differed from the original definition.
+
+## 260. Terminal live subscriptions need an explicit release point
+
+Reconnect registries outlive individual requests. Keeping a completed background run in such a registry causes every future reconnect to resubscribe to immutable history and leaks entries over long-lived UI sessions.
+
+- **Do:** advance cursors for non-terminal frames and remove the subscription as soon as its terminal frame arrives.
+- **Caught:** Desktop retained completed Graph Run Ledger subscriptions until the owning tab closed.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

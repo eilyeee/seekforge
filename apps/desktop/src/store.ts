@@ -89,6 +89,8 @@ type AppStore = {
    * read from. Empty = the server's default (first) workspace.
    */
   activeWorkspaceId: string;
+  /** Monotonic invalidation counter for live Engineering Graph events. */
+  graphEventVersion: number;
 
   /** Loads the workspace list at boot and selects the first one. */
   loadWorkspaces: () => void;
@@ -154,6 +156,8 @@ type AppStore = {
   clearChatDraft: () => void;
   /** Ensures the active tab has a (re)connecting WS client. */
   connect: () => void;
+  /** Subscribe the active tab socket to a background Graph run ledger. */
+  subscribeGraphRun: (runId: string) => void;
   openTab: () => void;
   /**
    * "New worktree session": creates an isolated git worktree in the active
@@ -244,6 +248,7 @@ type AppStore = {
  * connection). Lives outside the store: sockets are not state.
  */
 const wsByTab = new Map<string, WsClient>();
+const graphSubscriptionsByTab = new Map<string, Map<string, number>>();
 
 /**
  * Surfaced on a tab's `wsError` when a frame could not be sent because the
@@ -287,6 +292,17 @@ export const useStore = create<AppStore>()((set, get) => {
   const worktreeRefreshGeneration = new Map<string, number>();
 
   const handleFrame = (tabId: string, frame: ServerFrame): void => {
+    if (frame.type === "graph.event") {
+      if (frame.runId && typeof frame.seq === "number") {
+        const subscriptions = graphSubscriptionsByTab.get(tabId);
+        if (subscriptions?.has(frame.runId)) {
+          if (frame.event.type === "graph.completed") subscriptions.delete(frame.runId);
+          else subscriptions.set(frame.runId, frame.seq);
+        }
+      }
+      set((state) => ({ graphEventVersion: state.graphEventVersion + 1 }));
+      return;
+    }
     // Title is read before routing; it does not change mid-run.
     const tab = get().tabs.tabs.find((t) => t.tabId === tabId);
     set((s) => ({ tabs: routeFrame(s.tabs, tabId, frame) }));
@@ -319,6 +335,9 @@ export const useStore = create<AppStore>()((set, get) => {
                 ...(tab.ws ? { ws: tab.ws } : {}),
               });
             }
+            for (const [runId, afterSeq] of graphSubscriptionsByTab.get(tabId) ?? []) {
+              client?.send({ type: "subscribe", runId, afterSeq, ...(tab?.ws ? { ws: tab.ws } : {}) });
+            }
           }
         },
       });
@@ -334,6 +353,7 @@ export const useStore = create<AppStore>()((set, get) => {
     workspaces: [],
     recents: [],
     activeWorkspaceId: "",
+    graphEventVersion: 0,
 
     loadWorkspaces: () => {
       const generation = ++workspaceListGeneration;
@@ -459,6 +479,17 @@ export const useStore = create<AppStore>()((set, get) => {
     connect: () => {
       ensureWs(get().tabs.activeTabId);
     },
+    subscribeGraphRun: (runId) => {
+      const tab = activeTab(get().tabs);
+      let subscriptions = graphSubscriptionsByTab.get(tab.tabId);
+      if (!subscriptions) {
+        subscriptions = new Map();
+        graphSubscriptionsByTab.set(tab.tabId, subscriptions);
+      }
+      if (subscriptions.has(runId)) return;
+      subscriptions.set(runId, 0);
+      ensureWs(tab.tabId).send({ type: "subscribe", runId, afterSeq: 0, ...(tab.ws ? { ws: tab.ws } : {}) });
+    },
 
     openTab: () => {
       set((s) => ({ tabs: openTabPure(s.tabs, s.activeWorkspaceId) }));
@@ -522,6 +553,7 @@ export const useStore = create<AppStore>()((set, get) => {
     closeTab: (tabId) => {
       wsByTab.get(tabId)?.close();
       wsByTab.delete(tabId);
+      graphSubscriptionsByTab.delete(tabId);
       set((s) => ({ tabs: closeTabPure(s.tabs, tabId) }));
     },
 

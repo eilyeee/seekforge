@@ -139,6 +139,63 @@ describe("parseEngineeringGraphDefinition", () => {
     ).toThrow(/binding is invalid/);
   });
 
+  it("separates compensation phases and ranks the remaining critical path", () => {
+    const graph = parseEngineeringGraphDefinition({
+      graphId: "planned-compensation",
+      maxConcurrency: 2,
+      nodes: [
+        { id: "short", kind: "function", handler: "noop" },
+        { id: "long-a", kind: "function", handler: "noop" },
+        { id: "long-b", kind: "function", handler: "noop", dependsOn: ["long-a"] },
+        { id: "long-c", kind: "function", handler: "noop", dependsOn: ["long-b"] },
+        {
+          id: "undo-long",
+          kind: "compensation",
+          handler: "noop",
+          dependsOn: ["long-c"],
+          compensates: ["long-c"],
+        },
+      ],
+    });
+    expect(planEngineeringGraph(graph)).toMatchObject({
+      waves: [["short", "long-a"], ["long-b"], ["long-c"]],
+      criticalPath: ["long-a", "long-b", "long-c"],
+      compensationOrder: ["undo-long"],
+    });
+  });
+
+  it("requires map source schemas to describe arrays", () => {
+    expect(() =>
+      parseEngineeringGraphDefinition({
+        graphId: "bad-source-schema",
+        nodes: [
+          { id: "source", kind: "function", handler: "noop" },
+          {
+            id: "map",
+            kind: "map",
+            handler: "noop",
+            dependsOn: ["source"],
+            source: { nodeId: "source", schema: { type: "string" } },
+          },
+        ],
+      }),
+    ).toThrow(/source schema must be array/);
+  });
+
+  it("keeps numeric schema enums stable across JSON persistence", () => {
+    const graph = parseEngineeringGraphDefinition({
+      graphId: "numeric-schema",
+      nodes: [{ id: "run", kind: "function", handler: "noop", outputSchema: { type: "number", enum: [-0, 1] } }],
+    });
+    expect(graph.nodes[0]?.outputSchema?.enum).toEqual([0, 1]);
+    expect(() =>
+      parseEngineeringGraphDefinition({
+        graphId: "non-finite-schema",
+        nodes: [{ id: "run", kind: "function", handler: "noop", outputSchema: { type: "number", enum: [Infinity] } }],
+      }),
+    ).toThrow(/enum is invalid/);
+  });
+
   it("rejects sparse arrays and timer-overflow timeouts", () => {
     const sparseNodes = new Array(1);
     expect(() => parseEngineeringGraphDefinition({ graphId: "sparse", nodes: sparseNodes })).toThrow(/nodes/);

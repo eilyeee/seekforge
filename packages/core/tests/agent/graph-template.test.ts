@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { planEngineeringGraph } from "../../src/agent/graph-plan.js";
 import { materializeEngineeringGraph, parseEngineeringGraphTemplate } from "../../src/agent/graph-template.js";
+import {
+  listEngineeringGraphTemplates,
+  registerEngineeringGraphTemplate,
+  resolveEngineeringGraphTemplate,
+} from "../../src/agent/graph-template-registry.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const template = {
   schemaVersion: 1,
@@ -55,6 +63,27 @@ describe("Engineering Graph templates and plans", () => {
     expect(() =>
       materializeEngineeringGraph({ ...template, definition: { graphId: "x", nodes: sparse } }, { package: "core" }),
     ).toThrow(/nodes/);
-    expect(() => parseEngineeringGraphTemplate({ ...template, schemaVersion: 2 })).toThrow(/schemaVersion 1/);
+    expect(() => parseEngineeringGraphTemplate({ ...template, schemaVersion: 3 })).toThrow(/schemaVersion 1 or 2/);
+  });
+
+  it("registers and resolves exact semantic versions", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-graph-template-"));
+    try {
+      const versioned = {
+        ...template,
+        schemaVersion: 2,
+        version: "2.1.0",
+        interface: { outputSchema: { type: "object", additionalProperties: false } },
+      };
+      registerEngineeringGraphTemplate(workspace, versioned);
+      expect(listEngineeringGraphTemplates(workspace)).toHaveLength(1);
+      expect(resolveEngineeringGraphTemplate(workspace, "release-template", "2.1.0")?.version).toBe("2.1.0");
+      expect(() =>
+        parseEngineeringGraphTemplate({ ...versioned, interface: { outputSchema: { type: "unknown" } } }),
+      ).toThrow(/outputSchema/);
+      expect(() => resolveEngineeringGraphTemplate(workspace, "release-template", "latest")).toThrow(/invalid/);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
   });
 });

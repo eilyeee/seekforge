@@ -1,4 +1,4 @@
-import type { GraphFunctionHandler } from "./graph-engineering.js";
+import type { GraphExecutionAdapter, GraphFunctionHandler } from "./graph-engineering.js";
 import type { PluginContributions } from "../plugins/index.js";
 
 /** Deterministic handlers shared by the CLI and Server Graph adapters. */
@@ -20,4 +20,22 @@ export function graphHandlersWithPlugins(
     }
   }
   return Object.freeze(handlers);
+}
+
+export function graphExecutorsWithPlugins(
+  contributions: Pick<PluginContributions, "graphExecutors">,
+  registered: Readonly<Record<string, GraphExecutionAdapter>>,
+): Readonly<Record<string, GraphExecutionAdapter>> {
+  const executors: Record<string, GraphExecutionAdapter> = {};
+  for (const [alias, target] of Object.entries(contributions.graphExecutors ?? {})) {
+    const descriptor = Object.getOwnPropertyDescriptor(registered, target);
+    if (!descriptor || !("value" in descriptor)) continue;
+    const executor = descriptor.value as GraphExecutionAdapter;
+    // Plugin manifests select capabilities but never widen trust. The host
+    // must have registered the exact remote adapter as trusted beforehand.
+    if (executor.trusted === true && executor.locality === "remote" && typeof executor.execute === "function") {
+      executors[alias] = executor;
+    }
+  }
+  return Object.freeze(executors);
 }

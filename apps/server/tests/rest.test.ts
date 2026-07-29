@@ -238,7 +238,19 @@ beforeAll(async () => {
   mcpFixture = writeFixtureServer();
   seedWorkspace(workspace, mcpFixture.serverPath);
   writeFileIn(home, ".seekforge/config.json", JSON.stringify({ apiKey: "sk-test123456" }));
-  server = await startServer({ workspace, port: 0, token: TOKEN, createAgent: unusedAgentFactory });
+  server = await startServer({
+    workspace,
+    port: 0,
+    token: TOKEN,
+    createAgent: unusedAgentFactory,
+    graphExecutors: {
+      "rest-worker": {
+        trusted: true,
+        locality: "remote",
+        execute: ({ inputs }) => ({ output: { accepted: true, inputs } }),
+      },
+    },
+  });
   base = `http://127.0.0.1:${server.port}`;
 });
 
@@ -462,6 +474,109 @@ describe("loop management API", () => {
       schemaVersion: 1,
       graphId: "rest-live-graph",
       integrity: { algorithm: "sha256", digest: expect.stringMatching(/^[0-9a-f]{64}$/) },
+    });
+    expect(await jsonOf(await authed("/api/graphs/rest-live-graph/compare"))).toMatchObject({
+      baselineRunNumber: 1,
+      comparison: { graphId: "rest-live-graph" },
+    });
+  });
+
+  it("registers versioned Graph templates and materializes exact versions", async () => {
+    const template = {
+      schemaVersion: 2,
+      kind: "engineering-graph-template",
+      templateId: "rest-template",
+      version: "1.0.0",
+      parameters: { suffix: { type: "string" } },
+      definition: {
+        graphId: "rest-${{suffix}}",
+        nodes: [{ id: "run", kind: "function", handler: "noop" }],
+      },
+    };
+    expect(
+      (
+        await authed("/api/graphs/templates", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(template),
+        })
+      ).status,
+    ).toBe(201);
+    expect(await jsonOf(await authed("/api/graphs/templates"))).toEqual([
+      expect.objectContaining({ template: expect.objectContaining({ templateId: "rest-template", version: "1.0.0" }) }),
+    ]);
+    const materialized = await authed("/api/graphs/templates/rest-template/1.0.0/materialize", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ parameters: { suffix: "release" } }),
+    });
+    expect(await jsonOf(materialized)).toMatchObject({
+      definition: { graphId: "rest-release" },
+      plan: { waves: [["run"]], compensationOrder: [] },
+    });
+  });
+
+  it("signals and automatically resumes a waiting Engineering Graph", async () => {
+    const definition = {
+      graphId: "rest-signal-graph",
+      nodes: [{ id: "external", kind: "wait", waitFor: { signal: "continue" } }],
+    };
+    expect(
+      (
+        await authed("/api/graphs", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ definition }),
+        })
+      ).status,
+    ).toBe(202);
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const state = (await jsonOf(await authed("/api/graphs/rest-signal-graph"))) as { status: string };
+      if (state.status === "paused") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const signaled = await authed("/api/graphs/rest-signal-graph/signals", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "continue", payload: { actor: "test" } }),
+    });
+    expect(signaled.status).toBe(202);
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const state = (await jsonOf(await authed("/api/graphs/rest-signal-graph"))) as { status: string };
+      if (state.status === "passed") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(await jsonOf(await authed("/api/graphs/rest-signal-graph"))).toMatchObject({
+      status: "passed",
+      results: [
+        expect.objectContaining({
+          status: "passed",
+          output: expect.objectContaining({ payload: { actor: "test" } }),
+        }),
+      ],
+    });
+  });
+
+  it("runs a host-registered trusted remote Graph executor", async () => {
+    const started = await authed("/api/graphs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        definition: {
+          graphId: "rest-remote-graph",
+          nodes: [{ id: "remote", kind: "remote", executor: "rest-worker" }],
+        },
+      }),
+    });
+    expect(started.status).toBe(202);
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const response = await authed("/api/graphs/rest-remote-graph");
+      if (response.ok && ((await jsonOf(response)) as { status: string }).status === "passed") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(await jsonOf(await authed("/api/graphs/rest-remote-graph"))).toMatchObject({
+      status: "passed",
+      results: [expect.objectContaining({ id: "remote", status: "passed" })],
     });
   });
 

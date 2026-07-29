@@ -80,6 +80,7 @@ const manifestSchema = z
         mcpServers: z.record(z.string().regex(PLUGIN_ID_RE), mcpServer).optional(),
         hooks: hookConfig.optional(),
         graphHandlers: z.record(z.string().regex(PLUGIN_ID_RE), z.enum(["noop", "collect"])).optional(),
+        graphExecutors: z.record(z.string().regex(PLUGIN_ID_RE), z.string().regex(PLUGIN_ID_RE)).optional(),
       })
       .strict()
       .optional(),
@@ -288,6 +289,7 @@ export function loadPluginContributions(workspace: string): PluginContributions 
     mcpServers: {},
     hooks: {},
     graphHandlers: {},
+    graphExecutors: {},
     plugins,
   };
   for (const plugin of plugins) {
@@ -307,6 +309,9 @@ export function loadPluginContributions(workspace: string): PluginContributions 
     mergeHooks(result.hooks, plugin.manifest.contributes?.hooks);
     for (const [name, handler] of Object.entries(plugin.manifest.contributes?.graphHandlers ?? {})) {
       result.graphHandlers![`${plugin.id}__${name}`] = handler;
+    }
+    for (const [name, executor] of Object.entries(plugin.manifest.contributes?.graphExecutors ?? {})) {
+      result.graphExecutors![`${plugin.id}__${name}`] = executor;
     }
   }
   return result;

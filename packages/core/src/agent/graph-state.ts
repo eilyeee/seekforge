@@ -21,6 +21,25 @@ export const MAX_GRAPH_EVENT_MESSAGE_CHARS = 1024;
 export const MAX_GRAPH_OUTPUT_BYTES = 16 * 1024;
 export const MAX_GRAPH_OUTPUT_TOTAL_BYTES = 128 * 1024;
 
+export type GraphArtifact = {
+  name: string;
+  path: string;
+  sha256?: string;
+  sizeBytes?: number;
+  producerNodeId?: string;
+  verified?: boolean;
+};
+
+export type GraphMapItemResult = {
+  index: number;
+  idempotencyKey: string;
+  output?: unknown;
+  costUsd: number;
+  tokensUsed: number;
+  artifacts?: GraphArtifact[];
+  completedAt: string;
+};
+
 export type GraphNodeResult = {
   id: string;
   kind: GraphNodeKind;
@@ -34,7 +53,7 @@ export type GraphNodeResult = {
   output?: unknown;
   error?: string;
   managedBranch?: string;
-  artifacts?: Array<{ name: string; path: string; sha256?: string }>;
+  artifacts?: GraphArtifact[];
 };
 
 export type EngineeringGraphFanInResult = {
@@ -68,6 +87,9 @@ export type GraphEvent = {
     | "node.completed"
     | "node.skipped"
     | "node.waiting_approval"
+    | "node.waiting_signal"
+    | "map.item.completed"
+    | "graph.compensating"
     | "fan_in.started"
     | "fan_in.completed"
     | "graph.warning";
@@ -88,9 +110,11 @@ export type EngineeringGraphState = {
   spentCost: number;
   spentTokens: number;
   activeAttempts: GraphActiveAttempt[];
+  /** Successful map items are committed before their sibling batch settles. */
+  mapProgress?: Record<string, GraphMapItemResult[]>;
   controlSeq: number;
   controlRunId: string;
-  pauseReason?: "approval" | "control";
+  pauseReason?: "approval" | "control" | "wait";
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -111,6 +135,32 @@ function validTimestamp(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
 
+function parseArtifacts(value: unknown, producerNodeId?: string): GraphArtifact[] | undefined | null {
+  if (value === undefined) return undefined;
+  if (
+    !isDenseArray(value) ||
+    value.length > 32 ||
+    value.some(
+      (artifact) =>
+        !isRecord(artifact) ||
+        typeof artifact.name !== "string" ||
+        !/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(artifact.name) ||
+        !isSafeLoopDagRelativePath(artifact.path) ||
+        (artifact.sha256 !== undefined &&
+          (typeof artifact.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(artifact.sha256))) ||
+        (artifact.sizeBytes !== undefined &&
+          (!Number.isSafeInteger(artifact.sizeBytes) || (artifact.sizeBytes as number) < 0)) ||
+        (artifact.producerNodeId !== undefined &&
+          (!isValidLoopDagId(artifact.producerNodeId) || artifact.producerNodeId !== producerNodeId)) ||
+        (artifact.verified !== undefined && typeof artifact.verified !== "boolean") ||
+        (artifact.verified === true && (artifact.sha256 === undefined || artifact.sizeBytes === undefined)),
+    )
+  ) {
+    return null;
+  }
+  return value as GraphArtifact[];
+}
+
 function parseNodeResult(value: unknown, definition: EngineeringGraphDefinition): GraphNodeResult | null {
   if (!isRecord(value)) return null;
   const node = definition.nodes.find((candidate) => candidate.id === value.id);
@@ -118,7 +168,7 @@ function parseNodeResult(value: unknown, definition: EngineeringGraphDefinition)
   if (
     !node ||
     value.kind !== node.kind ||
-    !["passed", "failed", "skipped", "waiting_approval"].includes(status) ||
+    !["passed", "failed", "skipped", "waiting_approval", "waiting_signal"].includes(status) ||
     !Number.isSafeInteger(value.attempts) ||
     (value.attempts as number) < 0 ||
     !finiteNonNegative(value.costUsd) ||
@@ -131,30 +181,21 @@ function parseNodeResult(value: unknown, definition: EngineeringGraphDefinition)
     (value.output !== undefined && Buffer.byteLength(JSON.stringify(value.output)) > MAX_GRAPH_OUTPUT_BYTES) ||
     (value.managedBranch !== undefined &&
       (typeof value.managedBranch !== "string" || !MANAGED_ORCHESTRATION_BRANCH_RE.test(value.managedBranch))) ||
-    (value.artifacts !== undefined &&
-      (!isDenseArray(value.artifacts) ||
-        value.artifacts.length > 32 ||
-        value.artifacts.some(
-          (artifact) =>
-            !isRecord(artifact) ||
-            typeof artifact.name !== "string" ||
-            !/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(artifact.name) ||
-            !isSafeLoopDagRelativePath(artifact.path) ||
-            (artifact.sha256 !== undefined &&
-              (typeof artifact.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(artifact.sha256))),
-        )))
+    parseArtifacts(value.artifacts, node.id) === null
   ) {
     return null;
   }
   if (
     ((status === "failed" || status === "skipped") && typeof value.error !== "string") ||
-    ((status === "passed" || status === "waiting_approval") && value.error !== undefined) ||
+    ((status === "passed" || status === "waiting_approval" || status === "waiting_signal") &&
+      value.error !== undefined) ||
     ((status === "passed" || status === "failed") && !validTimestamp(value.startedAt)) ||
     (status === "skipped" && value.attempts !== 0) ||
     (status === "waiting_approval" &&
       ((node.kind === "gate" && value.attempts !== 0) ||
         (node.kind === "subgraph" && (value.attempts as number) < 1) ||
         (node.kind !== "gate" && node.kind !== "subgraph"))) ||
+    (status === "waiting_signal" && (node.kind !== "wait" || value.attempts !== 0)) ||
     (validTimestamp(value.startedAt) && Date.parse(value.completedAt) < Date.parse(value.startedAt))
   ) {
     return null;
@@ -195,6 +236,9 @@ export function parseGraphEvent(value: unknown, previousSequence = 0): GraphEven
     "node.completed",
     "node.skipped",
     "node.waiting_approval",
+    "node.waiting_signal",
+    "map.item.completed",
+    "graph.compensating",
     "fan_in.started",
     "fan_in.completed",
     "graph.warning",
@@ -206,7 +250,7 @@ export function parseGraphEvent(value: unknown, previousSequence = 0): GraphEven
     !validTimestamp(value.timestamp) ||
     (value.nodeId !== undefined && !isValidLoopDagId(value.nodeId)) ||
     (value.status !== undefined &&
-      !["running", "paused", "passed", "failed", "cancelled", "skipped", "waiting_approval"].includes(
+      !["running", "paused", "passed", "failed", "cancelled", "skipped", "waiting_approval", "waiting_signal"].includes(
         String(value.status),
       )) ||
     (value.message !== undefined &&
@@ -236,6 +280,7 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
   const controlSeq = value.schemaVersion === 1 ? 0 : value.controlSeq;
   const controlRunId = value.schemaVersion === 1 ? "" : value.controlRunId;
   const pauseReason = value.schemaVersion === 1 && value.status === "paused" ? "approval" : value.pauseReason;
+  const mapProgressValue = value.schemaVersion === 1 ? undefined : value.mapProgress;
   if (
     typeof value.fingerprint !== "string" ||
     !/^[a-f0-9]{64}$/.test(value.fingerprint) ||
@@ -262,7 +307,7 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
     (value.resourceGeneration !== undefined &&
       (typeof value.resourceGeneration !== "string" ||
         !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value.resourceGeneration))) ||
-    (pauseReason !== undefined && pauseReason !== "approval" && pauseReason !== "control")
+    (pauseReason !== undefined && pauseReason !== "approval" && pauseReason !== "control" && pauseReason !== "wait")
   ) {
     return null;
   }
@@ -302,6 +347,49 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
     0,
   );
   if (retainedOutputBytes > MAX_GRAPH_OUTPUT_TOTAL_BYTES) return null;
+  let mapProgress: Record<string, GraphMapItemResult[]> | undefined;
+  if (mapProgressValue !== undefined) {
+    if (!isRecord(mapProgressValue) || Object.keys(mapProgressValue).length > definition.nodes.length) return null;
+    mapProgress = Object.create(null) as Record<string, GraphMapItemResult[]>;
+    let progressOutputBytes = 0;
+    for (const [nodeId, rawItems] of Object.entries(mapProgressValue)) {
+      const node = definition.nodes.find((candidate) => candidate.id === nodeId);
+      if (node?.kind !== "map" || !isDenseArray(rawItems) || rawItems.length > (node.maxItems ?? 32)) return null;
+      const indexes = new Set<number>();
+      const items: GraphMapItemResult[] = [];
+      let artifactCount = 0;
+      for (const rawItem of rawItems) {
+        if (
+          !isRecord(rawItem) ||
+          !Number.isSafeInteger(rawItem.index) ||
+          (rawItem.index as number) < 0 ||
+          (rawItem.index as number) >= (node.maxItems ?? 32) ||
+          indexes.has(rawItem.index as number) ||
+          typeof rawItem.idempotencyKey !== "string" ||
+          rawItem.idempotencyKey.length === 0 ||
+          rawItem.idempotencyKey.length > 512 ||
+          !finiteNonNegative(rawItem.costUsd) ||
+          !Number.isSafeInteger(rawItem.tokensUsed) ||
+          (rawItem.tokensUsed as number) < 0 ||
+          !validTimestamp(rawItem.completedAt) ||
+          parseArtifacts(rawItem.artifacts, nodeId) === null
+        ) {
+          return null;
+        }
+        if (rawItem.output !== undefined) {
+          const bytes = Buffer.byteLength(JSON.stringify(rawItem.output));
+          if (bytes > MAX_GRAPH_OUTPUT_BYTES) return null;
+          progressOutputBytes += bytes;
+        }
+        indexes.add(rawItem.index as number);
+        artifactCount += Array.isArray(rawItem.artifacts) ? rawItem.artifacts.length : 0;
+        if (artifactCount > 32) return null;
+        items.push(rawItem as GraphMapItemResult);
+      }
+      mapProgress[nodeId] = items.sort((left, right) => left.index - right.index);
+    }
+    if (retainedOutputBytes + progressOutputBytes > MAX_GRAPH_OUTPUT_TOTAL_BYTES) return null;
+  }
   for (const result of results) {
     const node = definition.nodes.find((candidate) => candidate.id === result!.id)!;
     if ((node.dependsOn ?? []).some((dependency) => !resultIds.has(dependency))) return null;
@@ -311,18 +399,32 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
   if ((fanIn?.status === "failed" && !fanIn.error) || (fanIn?.status === "passed" && fanIn.error !== undefined)) {
     return null;
   }
-  const spentCost = results.reduce((sum, result) => sum + result!.costUsd, 0) + (fanIn?.costUsd ?? 0);
-  const spentTokens = results.reduce((sum, result) => sum + result!.tokensUsed, 0) + (fanIn?.tokensUsed ?? 0);
+  // Progress for a terminal map result is retained only as retry material and
+  // is therefore excluded from totals until that result is invalidated.
+  const uncommittedMapItems = Object.entries(mapProgress ?? {}).flatMap(([nodeId, items]) =>
+    resultIds.has(nodeId) ? [] : items,
+  );
+  const spentCost =
+    results.reduce((sum, result) => sum + result!.costUsd, 0) +
+    uncommittedMapItems.reduce((sum, item) => sum + item.costUsd, 0) +
+    (fanIn?.costUsd ?? 0);
+  const spentTokens =
+    results.reduce((sum, result) => sum + result!.tokensUsed, 0) +
+    uncommittedMapItems.reduce((sum, item) => sum + item.tokensUsed, 0) +
+    (fanIn?.tokensUsed ?? 0);
   if (Math.abs(spentCost - value.spentCost) > 1e-9 || spentTokens !== value.spentTokens) return null;
   const status = value.status as GraphRunStatus;
   const hasWaiting = results.some((result) => result!.status === "waiting_approval");
+  const hasWaitingSignal = results.some((result) => result!.status === "waiting_signal");
   const hasFailed = results.some((result) => result!.status === "failed");
   const terminal = status === "passed" || status === "failed" || status === "cancelled";
   if (
     (status === "paused" && pauseReason === undefined) ||
-    (status === "paused" && pauseReason === "approval" && !hasWaiting) ||
+    (status === "paused" && pauseReason === "approval" && (!hasWaiting || hasWaitingSignal)) ||
+    (status === "paused" && pauseReason === "wait" && (!hasWaitingSignal || hasWaiting)) ||
     (status === "paused" && pauseReason === "control" && hasWaiting) ||
-    (status !== "paused" && hasWaiting) ||
+    (status === "paused" && pauseReason === "control" && hasWaitingSignal) ||
+    (status !== "paused" && (hasWaiting || hasWaitingSignal)) ||
     (status !== "paused" && pauseReason !== undefined) ||
     (status === "passed" && hasFailed) ||
     (terminal && results.length !== definition.nodes.length) ||
@@ -349,6 +451,7 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
     results: results as GraphNodeResult[],
     events,
     activeAttempts: parsedAttempts,
+    ...(mapProgress ? { mapProgress } : {}),
     controlSeq: controlSeq as number,
     controlRunId,
     ...(pauseReason ? { pauseReason } : {}),
@@ -411,12 +514,23 @@ export function recoverableEngineeringGraphStates(
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
     throw new RangeError("Graph recovery limit must be 1 to 100");
   return listEngineeringGraphStates(workspace)
-    .filter(
-      (state) =>
+    .filter((state) => {
+      const waitDue =
+        state.status === "paused" &&
+        state.pauseReason === "wait" &&
+        state.results.some((result) => {
+          if (result.status !== "waiting_signal") return false;
+          const node = state.definition.nodes.find((candidate) => candidate.id === result.id);
+          return [node?.waitFor?.notBefore, node?.waitFor?.expiresAt].some(
+            (timestamp) => timestamp !== undefined && Date.parse(timestamp) <= Date.now(),
+          );
+        });
+      return (
         state.parentGraph === undefined &&
-        (state.status === "running" || (state.status === "paused" && state.pauseReason === "control")) &&
-        !isSessionRunActive(workspace, `engineering-graph-${state.graphId}`),
-    )
+        (state.status === "running" || (state.status === "paused" && state.pauseReason === "control") || waitDue) &&
+        !isSessionRunActive(workspace, `engineering-graph-${state.graphId}`)
+      );
+    })
     .sort((left, right) => Date.parse(left.updatedAt) - Date.parse(right.updatedAt))
     .slice(0, limit);
 }
@@ -432,6 +546,8 @@ export function removeEngineeringGraphState(workspace: string, graphId: string):
     const targets = [
       join(directory, `${graphId}.json`),
       join(directory, `${graphId}.control.json`),
+      join(directory, `${graphId}.signals.json`),
+      join(directory, `${graphId}.runs.json`),
       ...Array.from({ length: MAX_GRAPH_HISTORY_SEGMENTS }, (_, index) =>
         join(directory, `${graphId}.jsonl${index === 0 ? "" : `.${index}`}`),
       ),

@@ -15,7 +15,19 @@ export function buildEngineeringGraphEvidenceReport(
     status: state.status,
     usage: { costUsd: state.spentCost, tokensUsed: state.spentTokens },
     nodes: state.results.map(
-      ({ id, kind, status, attempts, costUsd, tokensUsed, startedAt, completedAt, error, managedBranch }) => ({
+      ({
+        id,
+        kind,
+        status,
+        attempts,
+        costUsd,
+        tokensUsed,
+        startedAt,
+        completedAt,
+        error,
+        managedBranch,
+        artifacts,
+      }) => ({
         id,
         kind,
         status,
@@ -26,6 +38,7 @@ export function buildEngineeringGraphEvidenceReport(
         ...(completedAt ? { completedAt } : {}),
         ...(error ? { error } : {}),
         ...(managedBranch ? { managedBranch } : {}),
+        ...(artifacts ? { artifacts } : {}),
       }),
     ),
     retainedEventCount: state.events.length,

@@ -17,6 +17,7 @@ import type { WorktreeManager } from "../worktrees.js";
 import type { TriggerRunHandle } from "../trigger-run.js";
 import type { RunManager } from "../run-ledger.js";
 import type { StructuredLogger } from "../logger.js";
+import type { GraphExecutionAdapter } from "@seekforge/core";
 
 export type RestContext = {
   registry: WorkspaceRegistry;
@@ -30,6 +31,8 @@ export type RestContext = {
   createAgent: CreateAgentFn;
   runLoop: RunLoopFn;
   runGraph: RunGraphFn;
+  /** Host-owned remote Graph capabilities; plugin manifests may only alias these. */
+  graphExecutors?: Readonly<Record<string, GraphExecutionAdapter>>;
   /** Active headless runs, owned by startServer and drained during shutdown. */
   triggerRuns?: Set<TriggerRunHandle>;
   /** Active Graph id to Run Ledger id, used for exact cancellation and duplicate-run exclusion. */

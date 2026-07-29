@@ -1,4 +1,10 @@
+import type { EngineeringGraphRunSnapshot } from "./graph-run-history.js";
 import type { EngineeringGraphState } from "./graph-state.js";
+
+type ComparableEngineeringGraphRun = Pick<
+  EngineeringGraphState | EngineeringGraphRunSnapshot,
+  "graphId" | "status" | "spentCost" | "spentTokens" | "createdAt" | "completedAt" | "results"
+>;
 
 export type EngineeringGraphRunComparison = {
   graphId: string;
@@ -17,8 +23,8 @@ export type EngineeringGraphRunComparison = {
 
 /** Pure run-to-run comparison used by CLI/Desktop observability surfaces. */
 export function compareEngineeringGraphRuns(
-  before: EngineeringGraphState,
-  after: EngineeringGraphState,
+  before: ComparableEngineeringGraphRun,
+  after: ComparableEngineeringGraphRun,
 ): EngineeringGraphRunComparison {
   if (before.graphId !== after.graphId) throw new Error("Graph comparison requires matching graph ids");
   const beforeNodes = new Map(before.results.map((result) => [result.id, result]));

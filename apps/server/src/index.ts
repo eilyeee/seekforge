@@ -14,12 +14,15 @@ import {
   createLoopRecoveryScheduler,
   createGraphMaintenanceScheduler,
   createMemoryMaintenanceScheduler,
+  graphExecutorsWithPlugins,
+  loadPluginContributions,
   recordLoopRecoveryFailure,
   recoverInterruptedLoops,
   pruneLoopStates,
   pruneEngineeringGraphStates,
   recoverableEngineeringGraphStates,
   type GraphMaintenanceScheduler,
+  type GraphExecutionAdapter,
   type LoopRecoveryScheduler,
   type LoopResult,
 } from "@seekforge/core";
@@ -93,6 +96,8 @@ export type StartServerOptions = {
   runLoop?: RunLoopFn;
   /** Test/embedding override for Engineering Graph execution. */
   runGraph?: RunGraphFn;
+  /** Host-owned trusted remote Graph executors available directly and through plugin aliases. */
+  graphExecutors?: Readonly<Record<string, GraphExecutionAdapter>>;
   /** Test/embedding override for persisted auto-loop resume. */
   resumeLoop?: ResumeLoopFn;
   /** Test/embedding override for the static UI root. Default: apps/desktop/dist. */
@@ -189,6 +194,11 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   const createAgent = opts.createAgent ?? createDefaultAgent;
   const runLoop = opts.runLoop ?? runDefaultLoop;
   const runGraph = opts.runGraph ?? runDefaultGraph;
+  const graphExecutorsFor = (workspace: string): Readonly<Record<string, GraphExecutionAdapter>> =>
+    Object.freeze({
+      ...graphExecutorsWithPlugins(loadPluginContributions(workspace), opts.graphExecutors ?? {}),
+      ...(opts.graphExecutors ?? {}),
+    });
   const resumeLoop = opts.resumeLoop ?? resumeDefaultLoop;
   const staticRoot = resolveStaticRoot(opts.staticDir);
   const triggerRuns = new Set<TriggerRunHandle>();
@@ -235,6 +245,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
         createAgent,
         runLoop,
         runGraph,
+        graphExecutors: opts.graphExecutors,
         triggerRuns,
         graphRuns,
         runManager,
@@ -450,6 +461,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
                                   resume: true,
                                   signal: maintenanceSignal,
                                   workspaceGuard: idleGuard,
+                                  executors: graphExecutorsFor(workspace.path),
                                 },
                               ),
                             );

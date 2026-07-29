@@ -22,6 +22,8 @@ export type PluginManifest = {
     hooks?: HookConfig;
     /** Safe aliases to deterministic built-in Graph handlers. */
     graphHandlers?: Record<string, "noop" | "collect">;
+    /** Aliases to host-registered trusted remote executors; no code is loaded from the plugin. */
+    graphExecutors?: Record<string, string>;
   };
 };
 
@@ -44,5 +46,6 @@ export type PluginContributions = {
   mcpServers: Record<string, McpServerConfig>;
   hooks: HookConfig;
   graphHandlers?: Record<string, "noop" | "collect">;
+  graphExecutors?: Record<string, string>;
   plugins: PluginRecord[];
 };

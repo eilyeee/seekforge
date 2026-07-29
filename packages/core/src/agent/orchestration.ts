@@ -90,3 +90,11 @@ export function assertNonOverlappingOrchestrationPaths(paths: readonly string[],
     }
   }
 }
+
+export {
+  isValidOrchestrationResourceId,
+  orchestrationResourcesOverlap,
+  selectOrchestrationReadyNodes,
+  type OrchestrationRunningReservation,
+  type OrchestrationScheduleCandidate,
+} from "./orchestration-scheduler.js";

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createPluginScaffold,
   installPlugin,
@@ -12,7 +12,7 @@ import {
 } from "../../src/plugins/index.js";
 import { loadSkills } from "../../src/skills/index.js";
 import { loadAgentDefinitions } from "../../src/subagents/index.js";
-import { graphHandlersWithPlugins } from "../../src/agent/graph-handlers.js";
+import { graphExecutorsWithPlugins, graphHandlersWithPlugins } from "../../src/agent/graph-handlers.js";
 
 const previousHome = process.env.SEEKFORGE_HOME;
 const roots: string[] = [];
@@ -64,6 +64,7 @@ describe("first-class plugins", () => {
           mcpServers: { docs: { url: "https://example.test/mcp", permission: "readonly" } },
           hooks: { sessionStart: [{ command: "node check.mjs" }] },
           graphHandlers: { summarize: "collect" },
+          graphExecutors: { deploy: "remote-worker" },
         },
       })}\n`,
     );
@@ -83,6 +84,15 @@ describe("first-class plugins", () => {
     const contributions = loadPluginContributions(workspace);
     expect(contributions.graphHandlers).toEqual({ "demo-plugin__summarize": "collect" });
     expect(graphHandlersWithPlugins(contributions)["demo-plugin__summarize"]).toBeTypeOf("function");
+    const trustedRemote = { trusted: true as const, locality: "remote" as const, execute: vi.fn() };
+    expect(graphExecutorsWithPlugins(contributions, { "remote-worker": trustedRemote })).toEqual({
+      "demo-plugin__deploy": trustedRemote,
+    });
+    expect(
+      graphExecutorsWithPlugins(contributions, {
+        "remote-worker": { ...trustedRemote, trusted: false },
+      }),
+    ).toEqual({});
     expect(loadSkills(workspace).find((skill) => skill.id === "plugin-skill")).toMatchObject({
       description: "from plugin",
       scope: "global",

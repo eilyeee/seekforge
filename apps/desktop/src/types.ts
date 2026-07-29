@@ -73,6 +73,8 @@ export type {
   EngineeringGraphSummary,
   EngineeringGraphDetail,
   EngineeringGraphResourceReport,
+  EngineeringGraphComparisonResponse,
+  EngineeringGraphRunComparison,
   GraphEventSummary,
   GraphNodeKind,
   GraphNodeStatus,
@@ -114,6 +116,7 @@ export type PluginRecord = {
       mcpServers?: Record<string, unknown>;
       hooks?: Record<string, unknown>;
       graphHandlers?: Record<string, "noop" | "collect">;
+      graphExecutors?: Record<string, string>;
     };
   };
   error?: string;

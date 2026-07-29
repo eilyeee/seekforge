@@ -8,9 +8,11 @@ import { loadEngineeringGraphState } from "./graph-state.js";
 import { acquireSessionLease, SessionBusyError } from "./session-lease.js";
 
 export type DurableGraphControlCommand =
-  | { operation: "pause" }
-  | { operation: "resume" }
-  | { operation: "steer"; message: string };
+  | { operation: "pause"; nodeId?: string }
+  | { operation: "resume"; nodeId?: string }
+  | { operation: "steer"; message: string; nodeId?: string }
+  | { operation: "reprioritize"; nodeId: string; priority: number }
+  | { operation: "cancel"; nodeId: string };
 
 export type DurableGraphControlEntry = DurableGraphControlCommand & { seq: number; runId: string; ts: string };
 
@@ -37,16 +39,31 @@ function loadEntries(workspace: string, graphId: string): DurableGraphControlEnt
     }
     let previous = 0;
     return value.entries.map((item) => {
+      const operation = isRecord(item) ? String(item.operation) : "";
+      const allowed =
+        operation === "steer"
+          ? new Set(["operation", "message", "nodeId", "seq", "runId", "ts"])
+          : operation === "reprioritize"
+            ? new Set(["operation", "nodeId", "priority", "seq", "runId", "ts"])
+            : new Set(["operation", "nodeId", "seq", "runId", "ts"]);
       if (
         !isRecord(item) ||
+        Object.keys(item).some((key) => !allowed.has(key)) ||
         !Number.isSafeInteger(item.seq) ||
         (item.seq as number) <= previous ||
         !isValidLoopDagId(item.runId) ||
         typeof item.ts !== "string" ||
         !Number.isFinite(Date.parse(item.ts)) ||
-        (item.operation !== "pause" && item.operation !== "resume" && item.operation !== "steer") ||
+        !["pause", "resume", "steer", "reprioritize", "cancel"].includes(String(item.operation)) ||
+        (item.nodeId !== undefined && !isValidLoopDagId(item.nodeId)) ||
         (item.operation === "steer" &&
-          (typeof item.message !== "string" || item.message.trim() === "" || item.message.length > MAX_STEER_LENGTH))
+          (typeof item.message !== "string" || item.message.trim() === "" || item.message.length > MAX_STEER_LENGTH)) ||
+        (item.operation === "reprioritize" &&
+          (!isValidLoopDagId(item.nodeId) ||
+            !Number.isSafeInteger(item.priority) ||
+            (item.priority as number) < -10 ||
+            (item.priority as number) > 10)) ||
+        (item.operation === "cancel" && !isValidLoopDagId(item.nodeId))
       ) {
         throw new Error("entry");
       }
@@ -76,17 +93,36 @@ export async function enqueueGraphControl(
   command: DurableGraphControlCommand,
 ): Promise<DurableGraphControlEntry> {
   if (!isValidLoopDagId(runId)) throw new Error(`Invalid Graph control run id: ${runId}`);
+  const commandOperation = isRecord(command) ? command.operation : undefined;
+  const allowedKeys =
+    commandOperation === "steer"
+      ? new Set(["operation", "message", "nodeId"])
+      : commandOperation === "reprioritize"
+        ? new Set(["operation", "nodeId", "priority"])
+        : new Set(["operation", "nodeId"]);
   if (
     !isRecord(command) ||
-    (command.operation !== "pause" && command.operation !== "resume" && command.operation !== "steer") ||
-    (command.operation === "steer" && typeof command.message !== "string")
+    Object.keys(command).some((key) => !allowedKeys.has(key)) ||
+    !["pause", "resume", "steer", "reprioritize", "cancel"].includes(String(command.operation)) ||
+    ("nodeId" in command && command.nodeId !== undefined && !isValidLoopDagId(command.nodeId)) ||
+    (command.operation === "steer" && typeof command.message !== "string") ||
+    (command.operation === "reprioritize" &&
+      (!Number.isSafeInteger(command.priority) || command.priority < -10 || command.priority > 10))
   ) {
     throw new Error("Invalid Graph control command");
   }
   const normalized: DurableGraphControlCommand =
     command.operation === "steer"
-      ? { operation: "steer", message: command.message.trim().slice(0, MAX_STEER_LENGTH) }
-      : { operation: command.operation };
+      ? {
+          operation: "steer",
+          message: command.message.trim().slice(0, MAX_STEER_LENGTH),
+          ...(command.nodeId ? { nodeId: command.nodeId } : {}),
+        }
+      : command.operation === "reprioritize"
+        ? { operation: "reprioritize", nodeId: command.nodeId, priority: command.priority }
+        : command.operation === "cancel"
+          ? { operation: "cancel", nodeId: command.nodeId }
+          : { operation: command.operation, ...(command.nodeId ? { nodeId: command.nodeId } : {}) };
   if (normalized.operation === "steer" && normalized.message === "")
     throw new Error("Graph guidance must be non-empty");
   let lease: ReturnType<typeof acquireSessionLease>;

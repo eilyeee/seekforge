@@ -760,6 +760,35 @@ describe("runLoopDag", () => {
     expect(maximumActive).toBe(1);
   });
 
+  it("does not treat dots in distinct workspace paths as logical resource hierarchy", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-"));
+    const first = join(workspace, "pkg");
+    const second = join(workspace, "pkg.child");
+    mkdirSync(first);
+    mkdirSync(second);
+    workspaces.push(workspace);
+    let active = 0;
+    let maximumActive = 0;
+    const verify = async () => {
+      active++;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      active--;
+      return { code: 0, output: "ok" };
+    };
+    await runLoopDag(deps, {
+      workspace,
+      persist: false,
+      maxConcurrency: 2,
+      workspaceForNode: (node) => (node.id === "a" ? first : second),
+      nodes: [
+        { id: "a", task: "a", verifyCommand: "pass", options: { verify } },
+        { id: "b", task: "b", verifyCommand: "pass", options: { verify } },
+      ],
+    });
+    expect(maximumActive).toBe(2);
+  });
+
   it("clears stale completion when a resumed graph pauses for approval", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-"));
     workspaces.push(workspace);

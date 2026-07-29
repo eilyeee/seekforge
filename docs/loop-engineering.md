@@ -121,7 +121,7 @@ tail used for diagnostics and continuation prompts.
 
 Each verification emits a bounded `verify.impact` decision set showing whether every stage ran because of a direct path, a transitive workspace dependency, a full gate, or was skipped as unaffected. Incremental success still triggers the authoritative full pipeline before completion, and cache reuse remains bound to an unchanged whole-workspace fingerprint.
 
-Verification stages may form an acyclic DAG with `dependsOn`. Execution remains ordered by default. A stage must explicitly set `parallel: true` and declare one or more logical `resources`; only simultaneously ready stages with disjoint resources run together. Required failure stops new waves while already-started peers settle. Resume history ranks explicitly parallel peers by prior failure and duration, but it never skips a required gate or changes the authoritative final full pass.
+Verification stages may form an acyclic DAG with `dependsOn`. Execution remains ordered by default. A stage must explicitly set `parallel: true` and declare one or more logical `resources`; only simultaneously ready stages with disjoint resources run together. Dot-separated resources are hierarchical, so a parent reservation conflicts with its children. Auto Loop, Loop DAG, and Graph share the same deterministic ready-queue implementation. Required failure stops new waves while already-started peers settle. Resume history ranks explicitly parallel peers by prior failure and duration, but it never skips a required gate or changes the authoritative final full pass.
 
 Each completed iteration also records bounded observability fields: elapsed
 milliseconds, cost and token deltas, changed relative paths, rollback state, and

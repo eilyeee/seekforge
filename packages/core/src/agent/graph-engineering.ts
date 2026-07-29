@@ -1,5 +1,6 @@
-import { lstatSync, realpathSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { constants, lstatSync, realpathSync } from "node:fs";
+import { open } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { onAbortOnce } from "../util/abort.js";
 import { isRecord } from "../util/guards.js";
@@ -25,6 +26,8 @@ import {
   type EngineeringGraphState,
   type GraphEvent,
   type GraphNodeResult,
+  type GraphArtifact,
+  type GraphMapItemResult,
   engineeringGraphStateExists,
   MAX_GRAPH_EVENTS,
   MAX_GRAPH_EVENT_MESSAGE_CHARS,
@@ -39,6 +42,10 @@ import { isSafeLoopDagRelativePath } from "./loop-dag-validation.js";
 import { acquireManagedOrchestrationWorktreeLease } from "./loop-managed-worktree.js";
 import { createEngineeringGraphLogWriter, type GraphLogWriter } from "./graph-history.js";
 import { readGraphControlEntries } from "./graph-control-store.js";
+import { acknowledgeEngineeringGraphSignal, claimEngineeringGraphSignal } from "./graph-signal-store.js";
+import { archiveEngineeringGraphRun } from "./graph-run-history.js";
+import { graphSchedulingScore, recordGraphSchedulingObservation } from "./graph-scheduling-history.js";
+import { engineeringGraphCriticality } from "./graph-plan.js";
 import {
   assertNonOverlappingOrchestrationPaths,
   isDenseArray,
@@ -46,6 +53,7 @@ import {
   orchestrationDependsOn,
   validateOrchestrationSelection,
 } from "./orchestration.js";
+import { selectOrchestrationReadyNodes } from "./orchestration-scheduler.js";
 import {
   managedOrchestrationWorktreeSlug,
   prepareManagedOrchestrationWorktrees,
@@ -76,6 +84,13 @@ export type GraphFunctionHandler = (
   context: GraphFunctionContext,
 ) => GraphFunctionResult | Promise<GraphFunctionResult>;
 
+export type GraphExecutionAdapter = {
+  /** Untrusted adapters are rejected during preflight, before any node starts. */
+  trusted: boolean;
+  locality: "remote";
+  execute: GraphFunctionHandler;
+};
+
 export type RunEngineeringGraphOptions = {
   workspace: string;
   resume?: boolean;
@@ -95,6 +110,7 @@ export type RunEngineeringGraphOptions = {
     graphId: string,
   ) => boolean | Promise<boolean>;
   handlers?: Readonly<Record<string, GraphFunctionHandler>>;
+  executors?: Readonly<Record<string, GraphExecutionAdapter>>;
   signal?: AbortSignal;
   onEvent?: (event: GraphEvent) => void;
   /** Internal owner guard used by idle maintenance. */
@@ -168,6 +184,13 @@ function graphHandler(options: RunEngineeringGraphOptions, id: string): GraphFun
     : undefined;
 }
 
+function graphExecutor(options: RunEngineeringGraphOptions, id: string): GraphExecutionAdapter | undefined {
+  const descriptor = options.executors ? Object.getOwnPropertyDescriptor(options.executors, id) : undefined;
+  return descriptor && "value" in descriptor && isRecord(descriptor.value)
+    ? (descriptor.value as unknown as GraphExecutionAdapter)
+    : undefined;
+}
+
 function bindingValue(binding: GraphInputBinding, completed: ReadonlyMap<string, GraphNodeResult>): unknown {
   let value = completed.get(binding.nodeId)?.output;
   if (!binding.pointer) return value;
@@ -188,28 +211,57 @@ function bindingValue(binding: GraphInputBinding, completed: ReadonlyMap<string,
 
 function graphInputs(node: GraphNode, completed: ReadonlyMap<string, GraphNodeResult>): Record<string, unknown> {
   const inputs = Object.create(null) as Record<string, unknown>;
-  for (const [name, binding] of Object.entries(node.inputs ?? {})) inputs[name] = bindingValue(binding, completed);
+  for (const [name, binding] of Object.entries(node.inputs ?? {})) {
+    const value = bindingValue(binding, completed);
+    assertGraphValue(value, binding.schema, `Graph node ${node.id} input ${name}`);
+    inputs[name] = value;
+  }
   return inputs;
 }
 
-function assertGraphOutput(value: unknown, schema: GraphValueSchema | undefined, nodeId: string): void {
+function assertGraphValue(value: unknown, schema: GraphValueSchema | undefined, label: string, depth = 0): void {
   if (!schema) return;
   const actual = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
-  if (actual !== schema.type)
-    throw new GraphNodeNonRetryableError(`Graph node ${nodeId} output must be ${schema.type}`);
+  if (actual !== schema.type) throw new GraphNodeNonRetryableError(`${label} must be ${schema.type}`);
+  if (schema.enum && !schema.enum.some((candidate) => Object.is(candidate, value))) {
+    throw new GraphNodeNonRetryableError(`${label} is outside its enum`);
+  }
   if (schema.type === "object") {
-    if (!isRecord(value)) throw new GraphNodeNonRetryableError(`Graph node ${nodeId} output must be an object`);
+    if (!isRecord(value)) throw new GraphNodeNonRetryableError(`${label} must be an object`);
     for (const name of schema.required ?? []) {
-      if (!Object.hasOwn(value, name))
-        throw new GraphNodeNonRetryableError(`Graph node ${nodeId} output is missing ${name}`);
+      if (!Object.hasOwn(value, name)) throw new GraphNodeNonRetryableError(`${label} is missing ${name}`);
+    }
+    if (schema.additionalProperties === false) {
+      for (const name of Object.keys(value)) {
+        if (!Object.hasOwn(schema.properties ?? {}, name)) {
+          throw new GraphNodeNonRetryableError(`${label} contains unsupported property ${name}`);
+        }
+      }
+    }
+    for (const [name, child] of Object.entries(schema.properties ?? {})) {
+      if (Object.hasOwn(value, name)) assertGraphValue(value[name], child, `${label}.${name}`, depth + 1);
     }
   }
+  if (schema.type === "array") {
+    const items = value as unknown[];
+    if (schema.minItems !== undefined && items.length < schema.minItems)
+      throw new GraphNodeNonRetryableError(`${label} has fewer than ${schema.minItems} items`);
+    if (schema.maxItems !== undefined && items.length > schema.maxItems)
+      throw new GraphNodeNonRetryableError(`${label} has more than ${schema.maxItems} items`);
+    if (schema.items) {
+      for (const [index, item] of items.entries())
+        assertGraphValue(item, schema.items, `${label}[${index}]`, depth + 1);
+    }
+  }
+  if (depth > 8) throw new GraphNodeNonRetryableError(`${label} schema is too deeply nested`);
 }
 
-function graphArtifacts(
+async function graphArtifacts(
   value: GraphFunctionResult["artifacts"],
   nodeId: string,
-): Array<{ name: string; path: string; sha256?: string }> | undefined {
+  workspace: string,
+  verify: boolean,
+): Promise<GraphArtifact[] | undefined> {
   if (value === undefined) return undefined;
   if (
     !isDenseArray(value) ||
@@ -226,7 +278,66 @@ function graphArtifacts(
   ) {
     throw new GraphNodeNonRetryableError(`Graph function ${nodeId} returned invalid artifacts`);
   }
-  return value.map((artifact) => ({ ...artifact }));
+  const root = realpathSync.native(workspace);
+  return Promise.all(
+    value.map(async (artifact): Promise<GraphArtifact> => {
+      const base: GraphArtifact = { ...artifact, producerNodeId: nodeId, verified: false };
+      if (!verify) return base;
+      const target = resolve(root, artifact.path);
+      const stat = lstatSync(target);
+      if (!stat.isFile() || stat.isSymbolicLink()) {
+        throw new GraphNodeNonRetryableError(`Graph artifact is not a physical file: ${artifact.path}`);
+      }
+      const physical = realpathSync.native(target);
+      if (physical !== root && !physical.startsWith(`${root}${sep}`)) {
+        throw new GraphNodeNonRetryableError(`Graph artifact escapes its workspace: ${artifact.path}`);
+      }
+      const hash = createHash("sha256");
+      let verifiedSize = 0;
+      const handle = await open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      try {
+        const opened = await handle.stat();
+        const current = lstatSync(target);
+        if (
+          !opened.isFile() ||
+          opened.dev !== stat.dev ||
+          opened.ino !== stat.ino ||
+          current.dev !== opened.dev ||
+          current.ino !== opened.ino ||
+          realpathSync.native(target) !== physical
+        ) {
+          throw new GraphNodeNonRetryableError(`Graph artifact changed during verification: ${artifact.path}`);
+        }
+        const buffer = Buffer.allocUnsafe(64 * 1024);
+        let position = 0;
+        for (;;) {
+          const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+          if (bytesRead === 0) break;
+          hash.update(buffer.subarray(0, bytesRead));
+          position += bytesRead;
+        }
+        const after = await handle.stat();
+        const finalPath = lstatSync(target);
+        if (
+          after.size !== opened.size ||
+          position !== opened.size ||
+          finalPath.dev !== opened.dev ||
+          finalPath.ino !== opened.ino ||
+          realpathSync.native(target) !== physical
+        ) {
+          throw new GraphNodeNonRetryableError(`Graph artifact changed during hashing: ${artifact.path}`);
+        }
+        verifiedSize = opened.size;
+      } finally {
+        await handle.close();
+      }
+      const sha256 = hash.digest("hex");
+      if (artifact.sha256 && artifact.sha256 !== sha256) {
+        throw new GraphNodeNonRetryableError(`Graph artifact hash mismatch: ${artifact.path}`);
+      }
+      return { ...base, sha256, sizeBytes: verifiedSize, verified: true };
+    }),
+  );
 }
 
 export function validateEngineeringGraphRunOptions(
@@ -289,10 +400,22 @@ export function validateEngineeringGraphRunOptions(
     allowEmpty: true,
   });
   if (rerunFrom.length && !options.resume) throw new Error("Graph rerunFrom requires resume");
+  if (options.persist === false && definition.nodes.some((node) => node.kind === "wait")) {
+    throw new Error("Graph wait nodes require persistence");
+  }
   const validateHandlers = (graph: EngineeringGraphDefinition): void => {
     for (const node of graph.nodes) {
-      if ((node.kind === "function" || node.kind === "map") && !graphHandler(options, node.handler!)) {
+      if (
+        (node.kind === "function" || node.kind === "map" || node.kind === "compensation") &&
+        !graphHandler(options, node.handler!)
+      ) {
         throw new Error(`Graph function handler is not registered: ${node.handler}`);
+      }
+      if (node.kind === "remote") {
+        const adapter = graphExecutor(options, node.executor!);
+        if (adapter?.trusted !== true || adapter.locality !== "remote" || typeof adapter.execute !== "function") {
+          throw new Error(`Graph remote executor is not registered as trusted: ${node.executor}`);
+        }
       }
       if (node.graph) validateHandlers(node.graph);
     }
@@ -468,6 +591,8 @@ async function executeNode(
   signal: AbortSignal,
   attempt: number,
   idempotencyKey: string,
+  committedMapItems: readonly GraphMapItemResult[] = [],
+  onMapItem?: (item: GraphMapItemResult) => void,
 ): Promise<ExecutionResult> {
   if (node.kind === "agent") return executeAgent(deps, node, workspace, signal, options.workspaceGuard);
   if (node.kind === "loop") {
@@ -501,7 +626,7 @@ async function executeNode(
       }),
     };
   }
-  if (node.kind === "function") {
+  if (node.kind === "function" || node.kind === "compensation") {
     const handler = graphHandler(options, node.handler!);
     if (!handler) throw new Error(`Graph function handler is not registered: ${node.handler}`);
     const result = await handler({
@@ -520,7 +645,7 @@ async function executeNode(
     if (result.tokensUsed !== undefined && (!Number.isSafeInteger(result.tokensUsed) || result.tokensUsed < 0)) {
       throw new GraphNodeNonRetryableError(`Graph function ${node.id} returned invalid tokensUsed`);
     }
-    const artifacts = graphArtifacts(result.artifacts, node.id);
+    const artifacts = await graphArtifacts(result.artifacts, node.id, workspace, node.verifyArtifacts === true);
     return {
       output: boundedOutput(result.output),
       costUsd: result.costUsd ?? 0,
@@ -532,60 +657,167 @@ async function executeNode(
     const handler = graphHandler(options, node.handler!);
     if (!handler) throw new Error(`Graph map handler is not registered: ${node.handler}`);
     const source = bindingValue(node.source!, completed);
+    assertGraphValue(source, node.source!.schema, `Graph map ${node.id} source`);
     if (!Array.isArray(source))
       throw new GraphNodeNonRetryableError(`Graph map ${node.id} source must resolve to an array`);
     const maxItems = node.maxItems ?? 32;
     if (source.length > maxItems) {
       throw new GraphNodeNonRetryableError(`Graph map ${node.id} source exceeds maxItems ${maxItems}`);
     }
-    const outputs: unknown[] = [];
-    const artifacts: NonNullable<GraphFunctionResult["artifacts"]> = [];
-    let costUsd = 0;
-    let tokensUsed = 0;
+    const committedByIndex = new Map(committedMapItems.map((item) => [item.index, item]));
+    if ([...committedByIndex.keys()].some((index) => index >= source.length)) {
+      throw new GraphNodeNonRetryableError(`Graph map ${node.id} checkpoint does not match its source`);
+    }
+    const outputs: unknown[] = Array.from({ length: source.length });
+    const artifacts: GraphArtifact[] = [];
+    let costUsd = committedMapItems.reduce((sum, item) => sum + item.costUsd, 0);
+    let tokensUsed = committedMapItems.reduce((sum, item) => sum + item.tokensUsed, 0);
+    let checkpointedCost = costUsd;
+    let checkpointedTokens = tokensUsed;
+    for (const item of committedMapItems) {
+      outputs[item.index] = item.output;
+      artifacts.push(...(item.artifacts ?? []));
+    }
+    if (artifacts.length > 32) {
+      throw new GraphNodeNonRetryableError(`Graph map ${node.id} checkpoint contains more than 32 artifacts`);
+    }
     const inputs = graphInputs(node, completed);
-    for (let offset = 0; offset < source.length; offset += 4) {
-      const batch = source.slice(offset, offset + 4);
+    const pendingIndexes = source.map((_, index) => index).filter((index) => !committedByIndex.has(index));
+    const concurrency = node.mapConcurrency ?? 4;
+    for (let offset = 0; offset < pendingIndexes.length; ) {
+      const remainingCost = costBudgetUsd === undefined ? undefined : costBudgetUsd - costUsd;
+      const remainingTokens = tokenBudget === undefined ? undefined : tokenBudget - tokensUsed;
+      if (
+        (remainingCost !== undefined && remainingCost <= 0) ||
+        (remainingTokens !== undefined && remainingTokens <= 0)
+      ) {
+        throw new GraphNodeNonRetryableError(`Graph map ${node.id} budget exhausted`);
+      }
+      const batchLimit =
+        remainingTokens === undefined ? concurrency : Math.min(concurrency, Math.floor(remainingTokens));
+      const batchIndexes = pendingIndexes.slice(offset, offset + batchLimit);
+      const itemCostBudget = remainingCost === undefined ? undefined : remainingCost / batchIndexes.length;
+      const itemTokenBudget =
+        remainingTokens === undefined ? undefined : Math.max(1, Math.floor(remainingTokens / batchIndexes.length));
       const settled = await Promise.allSettled(
-        batch.map((item, index) =>
-          handler({
-            node,
-            workspace,
-            dependencies: completed,
-            inputs,
-            item,
-            itemIndex: offset + index,
-            idempotencyKey: `${idempotencyKey}:${offset + index}`,
-            costBudgetUsd,
-            tokenBudget,
-            signal,
-          }),
+        batchIndexes.map((index) =>
+          Promise.resolve().then(() =>
+            handler({
+              node,
+              workspace,
+              dependencies: completed,
+              inputs,
+              item: source[index],
+              itemIndex: index,
+              idempotencyKey: `${idempotencyKey}:${index}`,
+              costBudgetUsd: itemCostBudget,
+              tokenBudget: itemTokenBudget,
+              signal,
+            }),
+          ),
         ),
       );
-      const rejected = settled.find((result) => result.status === "rejected");
-      if (rejected?.status === "rejected") throw rejected.reason;
-      for (const item of settled) {
-        if (item.status !== "fulfilled") continue;
-        const result = item.value;
-        if (result.costUsd !== undefined && (!Number.isFinite(result.costUsd) || result.costUsd < 0)) {
-          throw new GraphNodeNonRetryableError(`Graph map ${node.id} returned invalid costUsd`);
-        }
-        if (result.tokensUsed !== undefined && (!Number.isSafeInteger(result.tokensUsed) || result.tokensUsed < 0)) {
-          throw new GraphNodeNonRetryableError(`Graph map ${node.id} returned invalid tokensUsed`);
-        }
+      const processed = await Promise.allSettled(
+        settled.map(async (item, batchIndex) => {
+          if (item.status === "rejected") return undefined;
+          const result = item.value;
+          if (result.costUsd !== undefined && (!Number.isFinite(result.costUsd) || result.costUsd < 0)) {
+            throw new GraphNodeNonRetryableError(`Graph map ${node.id} returned invalid costUsd`);
+          }
+          if (result.tokensUsed !== undefined && (!Number.isSafeInteger(result.tokensUsed) || result.tokensUsed < 0)) {
+            throw new GraphNodeNonRetryableError(`Graph map ${node.id} returned invalid tokensUsed`);
+          }
+          try {
+            const itemArtifacts =
+              (await graphArtifacts(result.artifacts, node.id, workspace, node.verifyArtifacts === true)) ?? [];
+            return { batchIndex, result, itemArtifacts };
+          } catch (error) {
+            throw new GraphNodeNonRetryableError(retryableError(error), {
+              costUsd: result.costUsd ?? 0,
+              tokensUsed: result.tokensUsed ?? 0,
+            });
+          }
+        }),
+      );
+      let checkpointError: unknown;
+      let artifactOverflow = false;
+      for (const item of processed) {
+        if (item.status !== "fulfilled" || item.value === undefined) continue;
+        const { batchIndex, result, itemArtifacts } = item.value;
+        const index = batchIndexes[batchIndex]!;
         costUsd += result.costUsd ?? 0;
         tokensUsed += result.tokensUsed ?? 0;
-        outputs.push(result.output);
-        artifacts.push(...(graphArtifacts(result.artifacts, node.id) ?? []));
+        outputs[index] = boundedOutput(result.output);
+        artifacts.push(...itemArtifacts);
         if (artifacts.length > 32) {
-          throw new GraphNodeNonRetryableError(`Graph map ${node.id} returned more than 32 artifacts`);
+          artifactOverflow = true;
+          continue;
+        }
+        try {
+          onMapItem?.({
+            index,
+            idempotencyKey: `${idempotencyKey}:${index}`,
+            ...(result.output !== undefined ? { output: boundedOutput(result.output) } : {}),
+            costUsd: result.costUsd ?? 0,
+            tokensUsed: result.tokensUsed ?? 0,
+            ...(itemArtifacts.length > 0 ? { artifacts: itemArtifacts } : {}),
+            completedAt: new Date().toISOString(),
+          });
+          checkpointedCost += result.costUsd ?? 0;
+          checkpointedTokens += result.tokensUsed ?? 0;
+        } catch (error) {
+          checkpointError ??= error;
         }
       }
+      if (artifactOverflow) {
+        checkpointError = new GraphNodeNonRetryableError(`Graph map ${node.id} returned more than 32 artifacts`, {
+          costUsd: Math.max(0, costUsd - checkpointedCost),
+          tokensUsed: Math.max(0, tokensUsed - checkpointedTokens),
+        });
+      }
+      const rejected = settled.find((result) => result.status === "rejected");
+      if (rejected?.status === "rejected") {
+        // Fulfilled peers were checkpointed individually, so their usage is
+        // recovered from mapProgress instead of being charged again here.
+        throw new GraphNodeExecutionError(retryableError(rejected.reason), { costUsd: 0, tokensUsed: 0 });
+      }
+      const processingFailure = processed.find((result) => result.status === "rejected");
+      if (processingFailure?.status === "rejected") throw processingFailure.reason;
+      if (checkpointError) throw checkpointError;
+      offset += batchIndexes.length;
     }
     return {
       output: boundedOutput(outputs),
       costUsd,
       tokensUsed,
       ...(artifacts.length > 0 ? { artifacts } : {}),
+    };
+  }
+  if (node.kind === "remote") {
+    const adapter = graphExecutor(options, node.executor!);
+    if (!adapter) throw new Error(`Graph remote executor is not registered: ${node.executor}`);
+    const result = await adapter.execute({
+      node,
+      workspace,
+      dependencies: completed,
+      inputs: graphInputs(node, completed),
+      idempotencyKey,
+      costBudgetUsd,
+      tokenBudget,
+      signal,
+    });
+    if (result.costUsd !== undefined && (!Number.isFinite(result.costUsd) || result.costUsd < 0)) {
+      throw new GraphNodeNonRetryableError(`Graph remote ${node.id} returned invalid costUsd`);
+    }
+    if (result.tokensUsed !== undefined && (!Number.isSafeInteger(result.tokensUsed) || result.tokensUsed < 0)) {
+      throw new GraphNodeNonRetryableError(`Graph remote ${node.id} returned invalid tokensUsed`);
+    }
+    const artifacts = await graphArtifacts(result.artifacts, node.id, workspace, node.verifyArtifacts === true);
+    return {
+      output: boundedOutput(result.output),
+      costUsd: result.costUsd ?? 0,
+      tokensUsed: result.tokensUsed ?? 0,
+      ...(artifacts ? { artifacts } : {}),
     };
   }
   if (node.kind === "join") {
@@ -757,6 +989,10 @@ export async function runEngineeringGraph(
         throw new Error(`Persisted Graph already exists; use resume or restart: ${definition.graphId}`);
       }
     }
+    if (persistenceEnabled && options.restart) {
+      const previous = loadEngineeringGraphState(options.workspace, definition.graphId);
+      if (previous) archiveEngineeringGraphRun(options.workspace, previous);
+    }
     if (definition.managedWorktrees) {
       managedResourceLease = acquireManagedOrchestrationWorktreeLease(options.workspace);
       const effectfulNodeIds = definition.nodes.filter(graphNodeIsEffectful).map((node) => node.id);
@@ -802,6 +1038,7 @@ export async function runEngineeringGraph(
       spentCost: 0,
       spentTokens: 0,
       activeAttempts: [],
+      mapProgress: {},
       controlSeq: 0,
       controlRunId,
       createdAt: now,
@@ -820,6 +1057,7 @@ export async function runEngineeringGraph(
       ) {
         throw new Error(`Persisted Graph parent provenance does not match: ${definition.graphId}`);
       }
+      if (restored.completedAt) archiveEngineeringGraphRun(options.workspace, restored);
       state = { ...restored, status: "running", completedAt: undefined, controlRunId };
       delete state.pauseReason;
     }
@@ -829,22 +1067,50 @@ export async function runEngineeringGraph(
       const rootSelections = [...new Set(options.rerunFrom.map((id) => id.split("/", 1)[0]!))];
       const invalidated = orchestrationDescendantClosure(definition.nodes, rootSelections);
       for (const id of invalidated) {
+        const previous = results.get(id);
         results.delete(id);
         recoveredAttempts.delete(id);
+        // A directly retried failed map keeps successful items. Descendants
+        // invalidated by changed input and explicit successful reruns do not.
+        if (!rootSelections.includes(id) || previous?.status !== "failed") delete state.mapProgress?.[id];
       }
       delete state.fanIn;
     }
     for (const [id, result] of results) {
-      if (result.status === "waiting_approval" || (options.resume && result.error === "Graph cancelled")) {
+      if (
+        result.status === "waiting_approval" ||
+        result.status === "waiting_signal" ||
+        (options.resume && result.error === "Graph cancelled")
+      ) {
         results.delete(id);
       }
     }
+    const pendingMapItems = (): GraphMapItemResult[] =>
+      Object.entries(state.mapProgress ?? {}).flatMap(([nodeId, items]) => (results.has(nodeId) ? [] : items));
     state.spentCost =
-      [...results.values()].reduce((sum, result) => sum + result.costUsd, 0) + (state.fanIn?.costUsd ?? 0);
+      [...results.values()].reduce((sum, result) => sum + result.costUsd, 0) +
+      pendingMapItems().reduce((sum, item) => sum + item.costUsd, 0) +
+      (state.fanIn?.costUsd ?? 0);
     state.spentTokens =
-      [...results.values()].reduce((sum, result) => sum + result.tokensUsed, 0) + (state.fanIn?.tokensUsed ?? 0);
+      [...results.values()].reduce((sum, result) => sum + result.tokensUsed, 0) +
+      pendingMapItems().reduce((sum, item) => sum + item.tokensUsed, 0) +
+      (state.fanIn?.tokensUsed ?? 0);
     const byId = new Map(definition.nodes.map((node) => [node.id, node]));
     const pending = new Set(definition.nodes.map((node) => node.id).filter((id) => !results.has(id)));
+    const compensationPending = new Set(
+      definition.nodes.filter((node) => node.kind === "compensation" && !results.has(node.id)).map((node) => node.id),
+    );
+    for (const id of compensationPending) pending.delete(id);
+    const criticality = engineeringGraphCriticality(definition);
+    const schedulingScores = new Map(
+      definition.nodes.map((node) => [
+        node.id,
+        // The static remaining-path rank is correctness-neutral and dominates
+        // advisory history, which only orders peers on the same critical tier.
+        (criticality.get(node.id) ?? 0) * 1_000_000_000_000 +
+          (definition.adaptiveScheduling ? graphSchedulingScore(options.workspace, definition.graphId, node.id) : 0),
+      ]),
+    );
     const inFlight = new Map<string, Promise<{ id: string; result: GraphNodeResult }>>();
     const costReservations = new Map<string, number>();
     const tokenReservations = new Map<string, number>();
@@ -903,9 +1169,12 @@ export async function runEngineeringGraph(
         }),
         spentCost: [...results.values()].reduce((sum, result) => sum + result.costUsd, 0) + (state.fanIn?.costUsd ?? 0),
         spentTokens:
-          [...results.values()].reduce((sum, result) => sum + result.tokensUsed, 0) + (state.fanIn?.tokensUsed ?? 0),
+          [...results.values()].reduce((sum, result) => sum + result.tokensUsed, 0) +
+          pendingMapItems().reduce((sum, item) => sum + item.tokensUsed, 0) +
+          (state.fanIn?.tokensUsed ?? 0),
         updatedAt: new Date().toISOString(),
       };
+      state.spentCost += pendingMapItems().reduce((sum, item) => sum + item.costUsd, 0);
       if (persistenceEnabled) saveEngineeringGraphState(options.workspace, state);
     };
     const emit = (event: Omit<GraphEvent, "sequence" | "timestamp">): void => {
@@ -950,8 +1219,12 @@ export async function runEngineeringGraph(
     }
     durableCheckpointStarted = true;
     let controlPaused = false;
+    const pausedNodes = new Set<string>();
+    const cancelledNodes = new Set<string>();
+    const priorityOverrides = new Map<string, number>();
     let controlMailboxWarning: string | undefined;
     const steeringGuidance: string[] = [];
+    const nodeSteeringGuidance = new Map<string, string[]>();
     const processControl = (): void => {
       if (!persistenceEnabled) return;
       let entries: ReturnType<typeof readGraphControlEntries>;
@@ -968,9 +1241,21 @@ export async function runEngineeringGraph(
       }
       for (const entry of entries) {
         state.controlSeq = entry.seq;
-        if (entry.operation === "pause") controlPaused = true;
-        else if (entry.operation === "resume") controlPaused = false;
-        else {
+        if (entry.operation === "pause") {
+          if (entry.nodeId) pausedNodes.add(entry.nodeId);
+          else controlPaused = true;
+        } else if (entry.operation === "resume") {
+          if (entry.nodeId) pausedNodes.delete(entry.nodeId);
+          else controlPaused = false;
+        } else if (entry.operation === "cancel") {
+          cancelledNodes.add(entry.nodeId);
+        } else if (entry.operation === "reprioritize") {
+          priorityOverrides.set(entry.nodeId, entry.priority);
+        } else if (entry.nodeId) {
+          const guidance = nodeSteeringGuidance.get(entry.nodeId) ?? [];
+          guidance.push(entry.message);
+          nodeSteeringGuidance.set(entry.nodeId, guidance.slice(-16));
+        } else {
           steeringGuidance.push(entry.message);
           if (steeringGuidance.length > 16) steeringGuidance.shift();
         }
@@ -1040,11 +1325,13 @@ export async function runEngineeringGraph(
       const dependencySnapshot = new Map(
         (node.dependsOn ?? []).map((dependency) => [dependency, results.get(dependency)!]),
       );
+      const applicableGuidance = [...steeringGuidance, ...(nodeSteeringGuidance.get(node.id) ?? [])];
       const executionNode =
-        steeringGuidance.length > 0 && (node.kind === "agent" || node.kind === "loop")
+        applicableGuidance.length > 0 && (node.kind === "agent" || node.kind === "loop")
           ? {
               ...node,
               task: `${node.task!}\n\nCurrent Graph steering guidance (the frozen verification and permission boundaries remain authoritative):\n${steeringGuidance
+                .concat(nodeSteeringGuidance.get(node.id) ?? [])
                 .map((message) => `- ${message}`)
                 .join("\n")}`,
             }
@@ -1112,11 +1399,61 @@ export async function runEngineeringGraph(
                   signal,
                   attempts,
                   idempotencyKey,
+                  state.mapProgress?.[node.id] ?? [],
+                  node.kind === "map"
+                    ? (item) => {
+                        state.mapProgress ??= {};
+                        const retained = (state.mapProgress[node.id] ?? []).filter(
+                          (candidate) => candidate.index !== item.index,
+                        );
+                        const progressBytes = Object.entries(state.mapProgress).reduce(
+                          (total, [progressNodeId, items]) =>
+                            total +
+                            items.reduce(
+                              (sum, candidate) =>
+                                sum +
+                                (progressNodeId === node.id && candidate.index === item.index
+                                  ? 0
+                                  : candidate.output === undefined
+                                    ? 0
+                                    : Buffer.byteLength(JSON.stringify(candidate.output))),
+                              0,
+                            ),
+                          0,
+                        );
+                        const resultBytes = [...results.values()].reduce(
+                          (total, result) =>
+                            total +
+                            (result.output === undefined ? 0 : Buffer.byteLength(JSON.stringify(result.output))),
+                          0,
+                        );
+                        const itemOutput =
+                          item.output === undefined
+                            ? undefined
+                            : resultBytes + progressBytes + Buffer.byteLength(JSON.stringify(item.output)) <=
+                                MAX_GRAPH_OUTPUT_TOTAL_BYTES
+                              ? item.output
+                              : { truncated: true };
+                        const checkpoint = {
+                          ...item,
+                          ...(itemOutput !== undefined ? { output: itemOutput } : {}),
+                        };
+                        state.mapProgress[node.id] = [...retained, checkpoint].sort(
+                          (left, right) => left.index - right.index,
+                        );
+                        emit({
+                          type: "map.item.completed",
+                          nodeId: node.id,
+                          status: "passed",
+                          message: `item ${item.index}`,
+                        });
+                      }
+                    : undefined,
                 ),
               node.timeoutMs,
               runController.signal,
             );
-            assertGraphOutput(execution.output, node.outputSchema, node.id);
+            assertGraphValue(execution.output, node.outputSchema, `Graph node ${node.id} output`);
             if (managed) {
               try {
                 await checkpointWorktree(managed.path, `chore: checkpoint Graph node ${node.id}`);
@@ -1188,8 +1525,14 @@ export async function runEngineeringGraph(
             attempts,
             startedAt,
             completedAt: new Date().toISOString(),
-            costUsd: baseCost + consumedCost,
-            tokensUsed: baseTokens + consumedTokens,
+            costUsd:
+              node.kind === "map"
+                ? consumedCost + (state.mapProgress?.[node.id] ?? []).reduce((sum, item) => sum + item.costUsd, 0)
+                : baseCost + consumedCost,
+            tokensUsed:
+              node.kind === "map"
+                ? consumedTokens + (state.mapProgress?.[node.id] ?? []).reduce((sum, item) => sum + item.tokensUsed, 0)
+                : baseTokens + consumedTokens,
             ...(failedSessionId ? { sessionId: failedSessionId } : {}),
             error: lastError,
           },
@@ -1208,6 +1551,22 @@ export async function runEngineeringGraph(
           : { ...completed.result, output: fitOutputBudget(completed.result.output, results) };
       state.activeAttempts = state.activeAttempts.filter((active) => active.nodeId !== completed.id);
       results.set(completed.id, result);
+      if (result.kind === "map" && result.status === "passed") delete state.mapProgress?.[completed.id];
+      try {
+        const started = result.startedAt ? Date.parse(result.startedAt) : Number.NaN;
+        const completedAt = result.completedAt ? Date.parse(result.completedAt) : Number.NaN;
+        if (Number.isFinite(started) && Number.isFinite(completedAt)) {
+          recordGraphSchedulingObservation(options.workspace, {
+            graphId: definition.graphId,
+            nodeId: result.id,
+            durationMs: Math.max(0, completedAt - started),
+            passed: result.status === "passed",
+            recordedAt: result.completedAt!,
+          });
+        }
+      } catch {
+        // Scheduling history is advisory and never owns Graph correctness.
+      }
       if (result.status === "waiting_approval") {
         state.status = "paused";
         state.pauseReason = "approval";
@@ -1250,6 +1609,11 @@ export async function runEngineeringGraph(
       [...results.values()].some((result) => result.status === "waiting_approval")
     ) {
       processControl();
+      for (const nodeId of [...cancelledNodes]) {
+        if (!pending.has(nodeId)) continue;
+        cancelledNodes.delete(nodeId);
+        completeWithoutRun(byId.get(nodeId)!, "skipped", "Graph node cancelled by durable control");
+      }
       if (controlPaused) {
         await settleInFlight();
         processControl();
@@ -1368,6 +1732,107 @@ export async function runEngineeringGraph(
             emit({ type: "node.completed", nodeId: node.id, status: "passed", message: "Gate approved" });
             changed = true;
           }
+          if (node.kind === "wait") {
+            const now = Date.now();
+            const claimed = node.waitFor?.signal
+              ? await claimEngineeringGraphSignal(
+                  options.workspace,
+                  definition.graphId,
+                  node.id,
+                  node.waitFor.signal,
+                  node.waitFor.expiresAt,
+                )
+              : undefined;
+            const timerReady = node.waitFor?.notBefore !== undefined && now >= Date.parse(node.waitFor.notBefore);
+            const expired = node.waitFor?.expiresAt !== undefined && now >= Date.parse(node.waitFor.expiresAt);
+            const timestamp = new Date().toISOString();
+            if (claimed || timerReady) {
+              results.set(node.id, {
+                id: node.id,
+                kind: node.kind,
+                status: "passed",
+                attempts: 0,
+                costUsd: 0,
+                tokensUsed: 0,
+                startedAt: timestamp,
+                completedAt: timestamp,
+                output: boundedOutput(
+                  claimed
+                    ? { signalId: claimed.id, signal: claimed.name, payload: claimed.payload }
+                    : { timer: node.waitFor?.notBefore },
+                ),
+              });
+              pending.delete(node.id);
+              emit({ type: "node.completed", nodeId: node.id, status: "passed", message: "Graph wait resolved" });
+              if (claimed) {
+                try {
+                  // The Graph checkpoint is authoritative; mailbox cleanup only
+                  // happens after the passed wait result has been persisted.
+                  await acknowledgeEngineeringGraphSignal(options.workspace, definition.graphId, node.id, claimed.id);
+                } catch (error) {
+                  emit({ type: "graph.warning", nodeId: node.id, message: retryableError(error) });
+                }
+              }
+              changed = true;
+              continue;
+            }
+            if (expired) {
+              results.set(node.id, {
+                id: node.id,
+                kind: node.kind,
+                status: "failed",
+                attempts: 0,
+                costUsd: 0,
+                tokensUsed: 0,
+                startedAt: timestamp,
+                completedAt: timestamp,
+                error: "Graph wait expired",
+              });
+              pending.delete(node.id);
+              emit({ type: "node.completed", nodeId: node.id, status: "failed", message: "Graph wait expired" });
+              changed = true;
+              continue;
+            }
+            await settleInFlight();
+            if (runController.signal.aborted) {
+              cancelWaitingResults();
+              for (const id of [...pending]) completeWithoutRun(byId.get(id)!, "skipped", "Graph cancelled");
+              state.status = "cancelled";
+              delete state.pauseReason;
+              state.completedAt = new Date().toISOString();
+              emit({ type: "graph.completed", status: "cancelled", message: "Graph cancelled" });
+              return state;
+            }
+            if (
+              definition.failurePolicy === "stop" &&
+              [...results.values()].some((result) => result.status === "failed")
+            ) {
+              completeWithoutRun(node, "skipped", "Graph stopped after a node failure");
+              changed = true;
+              continue;
+            }
+            const waitingAt = new Date().toISOString();
+            results.set(node.id, {
+              id: node.id,
+              kind: node.kind,
+              status: "waiting_signal",
+              attempts: 0,
+              costUsd: 0,
+              tokensUsed: 0,
+              completedAt: waitingAt,
+              output: {
+                ...(node.waitFor?.signal ? { signal: node.waitFor.signal } : {}),
+                ...(node.waitFor?.notBefore ? { notBefore: node.waitFor.notBefore } : {}),
+                ...(node.waitFor?.expiresAt ? { expiresAt: node.waitFor.expiresAt } : {}),
+              },
+            });
+            pending.delete(node.id);
+            state.status = "paused";
+            state.pauseReason = "wait";
+            emit({ type: "node.waiting_signal", nodeId: node.id, status: "waiting_signal" });
+            emit({ type: "graph.paused", nodeId: node.id, status: "paused", message: "Graph wait is pending" });
+            return state;
+          }
         }
       }
       const budgetExhausted =
@@ -1385,8 +1850,9 @@ export async function runEngineeringGraph(
       const availableSlots = (definition.maxConcurrency ?? 1) - inFlight.size;
       const readyNodes = [...pending]
         .map((id) => byId.get(id)!)
-        .filter((node) => (node.dependsOn ?? []).every((dependency) => results.has(dependency)))
-        .sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0));
+        .filter(
+          (node) => !pausedNodes.has(node.id) && (node.dependsOn ?? []).every((dependency) => results.has(dependency)),
+        );
       const reservedCost =
         [...costReservations.values()].reduce((sum, value) => sum + value, 0) +
         [...resumedChildUsage.values()].reduce((sum, usage) => sum + usage.costUsd, 0);
@@ -1401,18 +1867,40 @@ export async function runEngineeringGraph(
         effectiveTokenBudget === undefined
           ? undefined
           : Math.max(0, effectiveTokenBudget - state.spentTokens - reservedTokens);
-      let launchCount = Math.min(availableSlots, readyNodes.length);
-      if (remainingCost === 0 || remainingTokens === 0) launchCount = 0;
-      if (remainingTokens !== undefined) launchCount = Math.min(launchCount, Math.floor(remainingTokens));
+      let launchLimit = Math.min(availableSlots, readyNodes.length);
+      if (remainingCost === 0 || remainingTokens === 0) launchLimit = 0;
+      if (remainingTokens !== undefined) launchLimit = Math.min(launchLimit, Math.floor(remainingTokens));
+      const selectedIds = selectOrchestrationReadyNodes(
+        readyNodes.map((node) => ({
+          id: node.id,
+          priority: priorityOverrides.get(node.id) ?? node.priority,
+          resources: node.resources,
+          score: schedulingScores.get(node.id),
+        })),
+        [...inFlight.keys()].map((id) => ({ resources: byId.get(id)?.resources })),
+        launchLimit,
+        definition.resourceCapacities,
+      );
+      const launchCount = selectedIds.length;
       const costShare = remainingCost === undefined || launchCount === 0 ? undefined : remainingCost / launchCount;
       const tokenShare =
         remainingTokens === undefined || launchCount === 0
           ? undefined
           : Math.max(1, Math.floor(remainingTokens / launchCount));
-      for (const node of readyNodes.slice(0, launchCount)) {
-        startNode(node, costShare, tokenShare);
+      for (const id of selectedIds) {
+        startNode(byId.get(id)!, costShare, tokenShare);
       }
       if (!inFlight.size) {
+        if (pending.size && [...pending].some((id) => pausedNodes.has(id))) {
+          state.status = "paused";
+          state.pauseReason = "control";
+          emit({
+            type: "graph.paused",
+            status: "paused",
+            message: `Graph paused before node${pausedNodes.size === 1 ? "" : "s"}: ${[...pausedNodes].join(", ")}`,
+          });
+          return state;
+        }
         if (pending.size) throw new Error("Graph scheduler made no progress");
         break;
       }
@@ -1431,13 +1919,51 @@ export async function runEngineeringGraph(
     const hasBudgetSkip = [...results.values()].some(
       (result) => result.status === "skipped" && result.error === "Graph budget exhausted",
     );
-    state.status =
+    const mainStatus: EngineeringGraphState["status"] =
       budgetStopped ||
       hasBudgetSkip ||
       exceededBudget ||
       [...results.values()].some((result) => result.status === "failed")
         ? "failed"
         : "passed";
+    state.status = "running";
+    if (mainStatus === "failed") {
+      if (compensationPending.size > 0) emit({ type: "graph.compensating", status: "running" });
+      const ordered = [...compensationPending]
+        .map((id) => byId.get(id)!)
+        .sort((left, right) => {
+          const latest = (node: GraphNode): number =>
+            Math.max(0, ...(node.compensates ?? []).map((id) => Date.parse(results.get(id)?.completedAt ?? "")));
+          const targetOrder = (node: GraphNode): number =>
+            Math.max(0, ...(node.compensates ?? []).map((id) => definition.nodes.findIndex((item) => item.id === id)));
+          return (
+            latest(right) - latest(left) || targetOrder(right) - targetOrder(left) || left.id.localeCompare(right.id)
+          );
+        });
+      for (const node of ordered) {
+        compensationPending.delete(node.id);
+        if (!(node.compensates ?? []).some((id) => results.get(id)?.status === "passed")) {
+          completeWithoutRun(node, "skipped", "Compensation target did not complete");
+          continue;
+        }
+        // Compensation is intentionally serialized in reverse completion
+        // order so rollback effects do not overtake their forward effects.
+        const compensationCost =
+          effectiveCostBudget === undefined ? undefined : Math.max(0, effectiveCostBudget - state.spentCost);
+        const compensationTokens =
+          effectiveTokenBudget === undefined ? undefined : Math.max(0, effectiveTokenBudget - state.spentTokens);
+        // Rollback work shares the same hard budget as forward work. Passing a
+        // zero remainder records a failed compensation instead of overspending.
+        startNode(node, compensationCost, compensationTokens);
+        recordCompleted(await Promise.race(inFlight.values()));
+      }
+    } else {
+      for (const id of compensationPending) {
+        completeWithoutRun(byId.get(id)!, "skipped", "Compensation was not required");
+      }
+      compensationPending.clear();
+    }
+    state.status = mainStatus;
     delete state.pauseReason;
     if (state.status === "passed" && definition.fanIn && state.fanIn?.status !== "passed") {
       const integration = managedWorktrees?.get(ENGINEERING_GRAPH_FAN_IN_WORKTREE_ID);

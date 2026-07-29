@@ -116,6 +116,7 @@ export {
   engineeringGraphNeedsAgentRuntime,
   engineeringSubgraphStateId,
   isValidEngineeringGraphNodePath,
+  parseGraphValueSchema,
   parseEngineeringGraphDefinition,
   MAX_GRAPH_CONCURRENCY,
   MAX_GRAPH_DEFINITION_BYTES,
@@ -141,6 +142,7 @@ export {
   type GraphFunctionContext,
   type GraphFunctionHandler,
   type GraphFunctionResult,
+  type GraphExecutionAdapter,
   type RunEngineeringGraphOptions,
 } from "./graph-engineering.js";
 export {
@@ -161,6 +163,12 @@ export {
   type DurableGraphControlEntry,
 } from "./graph-control-store.js";
 export {
+  acknowledgeEngineeringGraphSignal,
+  claimEngineeringGraphSignal,
+  enqueueEngineeringGraphSignal,
+  type EngineeringGraphSignal,
+} from "./graph-signal-store.js";
+export {
   createEngineeringGraphLogWriter,
   engineeringGraphHistoryExists,
   readEngineeringGraphHistory,
@@ -171,18 +179,39 @@ export {
   buildEngineeringGraphEvidenceReport,
   verifyEngineeringGraphEvidenceIntegrity,
 } from "./graph-evidence.js";
-export { BUILTIN_GRAPH_HANDLERS, graphHandlersWithPlugins } from "./graph-handlers.js";
-export { planEngineeringGraph, type EngineeringGraphPlan, type EngineeringGraphPlanNode } from "./graph-plan.js";
+export { BUILTIN_GRAPH_HANDLERS, graphExecutorsWithPlugins, graphHandlersWithPlugins } from "./graph-handlers.js";
+export {
+  engineeringGraphCriticality,
+  planEngineeringGraph,
+  type EngineeringGraphPlan,
+  type EngineeringGraphPlanNode,
+} from "./graph-plan.js";
 export {
   compareEngineeringGraphRuns,
   type EngineeringGraphRunComparison,
 } from "./graph-observability.js";
+export {
+  archiveEngineeringGraphRun,
+  readEngineeringGraphRunSnapshots,
+  type EngineeringGraphRunSnapshot,
+} from "./graph-run-history.js";
+export {
+  graphSchedulingScore,
+  recordGraphSchedulingObservation,
+  type GraphSchedulingObservation,
+} from "./graph-scheduling-history.js";
 export {
   materializeEngineeringGraph,
   parseEngineeringGraphTemplate,
   type EngineeringGraphTemplate,
   type EngineeringGraphTemplateParameter,
 } from "./graph-template.js";
+export {
+  listEngineeringGraphTemplates,
+  registerEngineeringGraphTemplate,
+  resolveEngineeringGraphTemplate,
+  type RegisteredEngineeringGraphTemplate,
+} from "./graph-template-registry.js";
 export {
   createGraphMaintenanceScheduler,
   DEFAULT_GRAPH_IDLE_CHECK_INTERVAL_MS,
@@ -216,6 +245,13 @@ export {
   type LoopBudgetObservation,
   type LoopBudgetPrediction,
 } from "./loop-budget-history.js";
+export {
+  isValidOrchestrationResourceId,
+  orchestrationResourcesOverlap,
+  selectOrchestrationReadyNodes,
+  type OrchestrationRunningReservation,
+  type OrchestrationScheduleCandidate,
+} from "./orchestration-scheduler.js";
 export {
   resumeAutoLoop,
   autoResumeInterruptedLoops,

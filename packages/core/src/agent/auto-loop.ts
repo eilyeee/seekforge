@@ -70,6 +70,7 @@ import {
 import { currentLoopBudgetReason, forecastLoopBudgetReason } from "./loop-budget-policy.js";
 import { isVerificationPathPrefix, selectLoopVerificationStage } from "./loop-verification-selection.js";
 import { isDenseArray } from "./orchestration.js";
+import { selectOrchestrationReadyNodes } from "./orchestration-scheduler.js";
 
 export type LoopStatus =
   | "passed" // verification command exited 0
@@ -1095,15 +1096,21 @@ async function runAutoLoopWithLease(
         (stage) => pending.has(stage.id) && (stage.dependsOn ?? []).every((dependency) => outcomes.has(dependency)),
       );
       const ready: LoopVerificationStage[] = [];
-      const usedResources = new Set<string>();
       if (candidates[0]?.parallel === true) {
-        for (const stage of [...candidates].sort(
-          (left, right) => historicalFailureScore(right.id) - historicalFailureScore(left.id),
-        )) {
-          if (stage.parallel !== true || stage.resources?.some((resource) => usedResources.has(resource))) continue;
-          ready.push(stage);
-          for (const resource of stage.resources ?? []) usedResources.add(resource);
-        }
+        const selected = new Set(
+          selectOrchestrationReadyNodes(
+            candidates
+              .filter((stage) => stage.parallel === true)
+              .map((stage) => ({
+                id: stage.id,
+                resources: stage.resources,
+                score: historicalFailureScore(stage.id),
+              })),
+            [],
+            candidates.length,
+          ),
+        );
+        ready.push(...candidates.filter((stage) => selected.has(stage.id)));
       } else if (candidates[0]) ready.push(candidates[0]);
       if (ready.length === 0) throw new Error("Loop verification scheduler made no progress");
       const runnable: Array<{ stage: LoopVerificationStage; decision: LoopVerificationDecision }> = [];

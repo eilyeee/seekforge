@@ -1,5 +1,10 @@
 import { useT } from "../../lib/i18n";
-import type { EngineeringGraphDetail, EngineeringGraphResourceReport, EngineeringGraphSummary } from "../../types";
+import type {
+  EngineeringGraphDetail,
+  EngineeringGraphResourceReport,
+  EngineeringGraphRunComparison,
+  EngineeringGraphSummary,
+} from "../../types";
 import { Badge, Button } from "../ui";
 import type { BadgeTone } from "../ui/Badge";
 
@@ -14,6 +19,7 @@ export function GraphEngineeringSection(props: {
   graphs: EngineeringGraphSummary[];
   details: Record<string, EngineeringGraphDetail>;
   resources: Record<string, EngineeringGraphResourceReport>;
+  comparisons: Record<string, EngineeringGraphRunComparison>;
   busy: boolean;
   onInspect: (graphId: string) => void;
   onAction: (graphId: string, operation: "archive" | "prune" | "promote", target?: string) => void;
@@ -22,7 +28,13 @@ export function GraphEngineeringSection(props: {
     operation: "resume" | "approve" | "rerun" | "restart" | "cancel",
     nodeIds?: string[],
   ) => void;
-  onControl: (graphId: string, operation: "pause" | "steer") => void;
+  onControl: (
+    graphId: string,
+    operation: "pause" | "steer" | "reprioritize" | "cancel",
+    nodeId?: string,
+    priority?: number,
+  ) => void;
+  onSignal: (graphId: string, name: string) => void;
   onRemove: (graphId: string) => void;
 }) {
   const t = useT();
@@ -32,10 +44,21 @@ export function GraphEngineeringSection(props: {
       <p className="font-medium">{t("chat.loop.graph.title")}</p>
       {props.graphs.map((graph) => {
         const resources = props.resources[graph.graphId];
+        const comparison = props.comparisons[graph.graphId];
         const definition = props.details[graph.graphId]?.definition;
         const nodes =
           definition && typeof definition === "object" && Array.isArray((definition as { nodes?: unknown }).nodes)
-            ? ((definition as { nodes: Array<{ id?: unknown; kind?: unknown; dependsOn?: unknown }> }).nodes ?? [])
+            ? ((
+                definition as {
+                  nodes: Array<{
+                    id?: unknown;
+                    kind?: unknown;
+                    dependsOn?: unknown;
+                    priority?: unknown;
+                    waitFor?: { signal?: unknown };
+                  }>;
+                }
+              ).nodes ?? [])
             : [];
         return (
           <details key={graph.graphId} className="mt-1 rounded border border-subtle p-2">
@@ -59,14 +82,78 @@ export function GraphEngineeringSection(props: {
             )}
             {nodes.length > 0 && (
               <div className="mt-2 space-y-1 rounded border border-subtle p-2 text-tertiary">
-                {nodes.map((node, index) => (
-                  <p key={typeof node.id === "string" ? node.id : index}>
-                    {typeof node.id === "string" ? node.id : "?"} ({typeof node.kind === "string" ? node.kind : "?"})
-                    {Array.isArray(node.dependsOn) && node.dependsOn.length > 0
-                      ? ` ← ${node.dependsOn.filter((id): id is string => typeof id === "string").join(", ")}`
-                      : ""}
-                  </p>
-                ))}
+                {nodes.map((node, index) => {
+                  const nodeId = typeof node.id === "string" ? node.id : undefined;
+                  const result = nodeId ? graph.results.find((candidate) => candidate.id === nodeId) : undefined;
+                  const active = nodeId ? graph.activeAttempts?.some((attempt) => attempt.nodeId === nodeId) : false;
+                  const waiting = result?.status === "waiting_signal";
+                  const controllable = graph.status === "running" && nodeId && !result && !active;
+                  return (
+                    <div key={nodeId ?? index} className="flex flex-wrap items-center gap-1">
+                      <span>
+                        {nodeId ?? "?"} ({typeof node.kind === "string" ? node.kind : "?"})
+                        {Array.isArray(node.dependsOn) && node.dependsOn.length > 0
+                          ? ` ← ${node.dependsOn.filter((id): id is string => typeof id === "string").join(", ")}`
+                          : ""}
+                      </span>
+                      {controllable && (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={props.busy}
+                            onClick={() => props.onControl(graph.graphId, "pause", nodeId)}
+                          >
+                            {t("chat.loop.graph.pauseNode")}
+                          </Button>
+                          {(node.kind === "agent" || node.kind === "loop") && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              disabled={props.busy}
+                              onClick={() => props.onControl(graph.graphId, "steer", nodeId)}
+                            >
+                              {t("chat.loop.graph.steer")}
+                            </Button>
+                          )}
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={props.busy}
+                            onClick={() =>
+                              props.onControl(
+                                graph.graphId,
+                                "reprioritize",
+                                nodeId,
+                                typeof node.priority === "number" ? node.priority : 0,
+                              )
+                            }
+                          >
+                            {t("chat.loop.graph.priority")}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={props.busy}
+                            onClick={() => props.onControl(graph.graphId, "cancel", nodeId)}
+                          >
+                            {t("chat.loop.graph.cancelNode")}
+                          </Button>
+                        </>
+                      )}
+                      {waiting && typeof node.waitFor?.signal === "string" && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={props.busy}
+                          onClick={() => props.onSignal(graph.graphId, node.waitFor!.signal as string)}
+                        >
+                          {t("chat.loop.graph.signal")}
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
             <div className="mt-2 space-y-1 text-tertiary">
@@ -83,6 +170,15 @@ export function GraphEngineeringSection(props: {
                 {(resources.totalBytes / 1024 / 1024).toFixed(2)} MiB · {resources.worktrees.length}{" "}
                 {t("chat.loop.manager.worktrees")} ·{" "}
                 {resources.archived ? t("chat.loop.manager.archived") : t("chat.loop.manager.retained")}
+              </p>
+            )}
+            {comparison && (
+              <p className="mt-1 text-tertiary">
+                Δ ${comparison.costDeltaUsd.toFixed(4)} · Δ {comparison.tokenDelta.toLocaleString()}{" "}
+                {t("chat.loop.graph.tokens")}
+                {comparison.durationDeltaMs !== undefined
+                  ? ` · Δ ${(comparison.durationDeltaMs / 1000).toFixed(1)}s`
+                  : ""}
               </p>
             )}
             <div className="mt-1 flex flex-wrap gap-1">

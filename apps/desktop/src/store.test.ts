@@ -70,6 +70,7 @@ function resetStore(): void {
   worktreesMock.mockReset().mockResolvedValue([]);
   // Fresh single-tab state for each test.
   useStore.setState((s) => ({
+    graphEventVersion: 0,
     tabs: {
       ...s.tabs,
       tabs: s.tabs.tabs.map((t, i) =>
@@ -723,6 +724,37 @@ describe("store: loop mode", () => {
     const tab = activeTab(useStore.getState().tabs);
     expect(tab.loop.events).toHaveLength(4);
     expect(tab.loop.result?.status).toBe("passed");
+  });
+
+  it("tracks background Graph cursors and resubscribes after reconnect", () => {
+    const tabId = activeTab(useStore.getState().tabs).tabId;
+    useStore.getState().subscribeGraphRun("graph-run-live");
+    expect(sent.at(-1)).toMatchObject({ type: "subscribe", runId: "graph-run-live", afterSeq: 0 });
+
+    lastHandlers!.onFrame({
+      type: "graph.event",
+      runId: "graph-run-live",
+      seq: 4,
+      event: { sequence: 3, type: "node.completed", timestamp: "2026-01-01T00:00:00.000Z", status: "passed" },
+    });
+    expect(useStore.getState().graphEventVersion).toBe(1);
+
+    lastHandlers!.onState("disconnected");
+    lastHandlers!.onState("connected");
+    expect(sent.at(-1)).toMatchObject({ type: "subscribe", runId: "graph-run-live", afterSeq: 4 });
+
+    lastHandlers!.onFrame({
+      type: "graph.event",
+      runId: "graph-run-live",
+      seq: 5,
+      event: { sequence: 4, type: "graph.completed", timestamp: "2026-01-01T00:00:01.000Z", status: "passed" },
+    });
+    const sentBeforeReconnect = sent.length;
+    lastHandlers!.onState("disconnected");
+    lastHandlers!.onState("connected");
+    expect(sent).toHaveLength(sentBeforeReconnect);
+
+    useStore.getState().closeTab(tabId);
   });
 });
 

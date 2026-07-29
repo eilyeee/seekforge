@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "../../lib/api";
+import { api, ApiError } from "../../lib/api";
 import { LatestRequest } from "../../views/async-coordination";
 import { useT } from "../../lib/i18n";
+import { useStore } from "../../store";
 import type {
   EngineeringGraphDetail,
+  EngineeringGraphRunComparison,
   EngineeringGraphResourceReport,
   EngineeringGraphSummary,
   LoopDagResourceReport,
@@ -24,6 +26,8 @@ type Props = { running: boolean; onResume: (opts: { loopId: string }) => void };
 
 export function LoopManager({ running, onResume }: Props) {
   const t = useT();
+  const graphEventVersion = useStore((state) => state.graphEventVersion);
+  const subscribeGraphRun = useStore((state) => state.subscribeGraphRun);
   const [loops, setLoops] = useState<LoopStateSummary[]>([]);
   const [selected, setSelected] = useState<string>();
   const [history, setHistory] = useState<LoopHistoryEntry[]>([]);
@@ -32,6 +36,7 @@ export function LoopManager({ running, onResume }: Props) {
   const [graphs, setGraphs] = useState<EngineeringGraphSummary[]>([]);
   const [graphDetails, setGraphDetails] = useState<Record<string, EngineeringGraphDetail>>({});
   const [graphResources, setGraphResources] = useState<Record<string, EngineeringGraphResourceReport>>({});
+  const [graphComparisons, setGraphComparisons] = useState<Record<string, EngineeringGraphRunComparison>>({});
   const [dagResources, setDagResources] = useState<Record<string, LoopDagResourceReport>>({});
   const [speculations, setSpeculations] = useState<LoopSpeculationSummary[]>([]);
   const [query, setQuery] = useState("");
@@ -72,6 +77,16 @@ export function LoopManager({ running, onResume }: Props) {
     }
   }, [query, status]);
   useEffect(() => void refresh(), [refresh]);
+  useEffect(() => {
+    for (const graph of graphs) if (graph.status === "running" && graph.runId) subscribeGraphRun(graph.runId);
+  }, [graphs, subscribeGraphRun]);
+  useEffect(() => {
+    if (graphEventVersion === 0) return;
+    // Graph nodes can emit several frames back-to-back. Coalescing them keeps
+    // the REST snapshot authoritative without creating an overlapping request burst.
+    const timer = window.setTimeout(() => void refresh(), 100);
+    return () => window.clearTimeout(timer);
+  }, [graphEventVersion, refresh]);
   useEffect(
     () => () => {
       refreshRequests.current.invalidate();
@@ -85,7 +100,7 @@ export function LoopManager({ running, onResume }: Props) {
   useEffect(() => {
     const graphRunning = graphs.some((graph) => graph.status === "running");
     if (!running && !selected && !graphRunning) return;
-    const timer = window.setInterval(() => void refresh(), 5_000);
+    const timer = window.setInterval(() => void refresh(), running || selected ? 5_000 : 30_000);
     return () => window.clearInterval(timer);
   }, [graphs, refresh, running, selected]);
 
@@ -279,10 +294,22 @@ export function LoopManager({ running, onResume }: Props) {
     const request = graphRequests.current.begin();
     setResourceBusy(true);
     try {
-      const [detail, resources] = await Promise.all([api.graph(graphId), api.graphResources(graphId)]);
+      const [detail, resources, comparison] = await Promise.all([
+        api.graph(graphId),
+        api.graphResources(graphId),
+        api.graphComparison(graphId).catch((error) => {
+          if (error instanceof ApiError && error.status === 404) return undefined;
+          throw error;
+        }),
+      ]);
       if (graphRequests.current.isCurrent(request)) {
         setGraphDetails((current) => ({ ...current, [graphId]: detail }));
         setGraphResources((current) => ({ ...current, [graphId]: resources }));
+        setGraphComparisons((current) => {
+          if (comparison) return { ...current, [graphId]: comparison.comparison };
+          const { [graphId]: _stale, ...retained } = current;
+          return retained;
+        });
         setError("");
       }
     } catch (caught) {
@@ -355,17 +382,57 @@ export function LoopManager({ running, onResume }: Props) {
       if (operationRequests.current.isCurrent(request)) setResourceBusy(false);
     }
   };
-  const graphControl = async (graphId: string, operation: "pause" | "steer") => {
-    const message = operation === "steer" ? window.prompt("Graph guidance")?.trim() : undefined;
+  const graphControl = async (
+    graphId: string,
+    operation: "pause" | "steer" | "reprioritize" | "cancel",
+    nodeId?: string,
+    currentPriority = 0,
+  ) => {
+    const message = operation === "steer" ? window.prompt(t("chat.loop.graph.guidancePrompt"))?.trim() : undefined;
     if (operation === "steer" && !message) return;
+    const priorityText =
+      operation === "reprioritize"
+        ? window.prompt(t("chat.loop.graph.priorityPrompt"), String(currentPriority))
+        : undefined;
+    if (operation === "reprioritize" && (priorityText === null || priorityText?.trim() === "")) return;
+    const priority = priorityText === undefined ? undefined : Number(priorityText);
+    if (operation === "reprioritize" && (!Number.isSafeInteger(priority) || priority! < -10 || priority! > 10)) return;
     const request = operationRequests.current.begin();
     setResourceBusy(true);
     try {
-      await api.graphControl(graphId, { operation, ...(message ? { message } : {}) });
+      await api.graphControl(graphId, {
+        operation,
+        ...(message ? { message } : {}),
+        ...(nodeId ? { nodeId } : {}),
+        ...(priority !== undefined ? { priority } : {}),
+      });
       if (operationRequests.current.isCurrent(request)) await refresh();
     } catch (caught) {
       if (operationRequests.current.isCurrent(request))
         setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      if (operationRequests.current.isCurrent(request)) setResourceBusy(false);
+    }
+  };
+  const graphSignal = async (graphId: string, name: string) => {
+    const raw = window.prompt(t("chat.loop.graph.signalPrompt", { name }), "");
+    if (raw === null) return;
+    let payload: unknown;
+    try {
+      payload = raw.trim() ? JSON.parse(raw) : undefined;
+    } catch {
+      setError(t("chat.loop.graph.signalInvalid"));
+      return;
+    }
+    const request = operationRequests.current.begin();
+    setResourceBusy(true);
+    try {
+      await api.graphSignal(graphId, name, payload);
+      if (operationRequests.current.isCurrent(request)) await refresh();
+    } catch (caught) {
+      if (operationRequests.current.isCurrent(request)) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
     } finally {
       if (operationRequests.current.isCurrent(request)) setResourceBusy(false);
     }
@@ -431,11 +498,13 @@ export function LoopManager({ running, onResume }: Props) {
         graphs={graphs}
         details={graphDetails}
         resources={graphResources}
+        comparisons={graphComparisons}
         busy={resourceBusy}
         onInspect={(graphId) => void inspectGraph(graphId)}
         onAction={(graphId, operation, target) => void graphAction(graphId, operation, target)}
         onLifecycle={(graphId, operation, nodeIds) => void graphLifecycle(graphId, operation, nodeIds)}
-        onControl={(graphId, operation) => void graphControl(graphId, operation)}
+        onControl={(graphId, operation, nodeId, priority) => void graphControl(graphId, operation, nodeId, priority)}
+        onSignal={(graphId, name) => void graphSignal(graphId, name)}
         onRemove={(graphId) => void removeGraph(graphId)}
       />
       <LoopSpeculationSection

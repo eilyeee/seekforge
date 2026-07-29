@@ -1016,8 +1016,19 @@ export type LoopDagSummary = {
 
 /** Durable multi-Agent / multi-Loop engineering graph contracts. */
 export type GraphRunStatus = "running" | "paused" | "passed" | "failed" | "cancelled";
-export type GraphNodeStatus = "passed" | "failed" | "skipped" | "waiting_approval";
-export type GraphNodeKind = "agent" | "loop" | "function" | "map" | "join" | "router" | "gate" | "subgraph";
+export type GraphNodeStatus = "passed" | "failed" | "skipped" | "waiting_approval" | "waiting_signal";
+export type GraphNodeKind =
+  | "agent"
+  | "loop"
+  | "function"
+  | "map"
+  | "join"
+  | "router"
+  | "gate"
+  | "subgraph"
+  | "wait"
+  | "compensation"
+  | "remote";
 export type GraphNodeSummary = {
   id: string;
   kind: GraphNodeKind;
@@ -1031,7 +1042,14 @@ export type GraphNodeSummary = {
   output?: unknown;
   error?: string;
   managedBranch?: string;
-  artifacts?: Array<{ name: string; path: string; sha256?: string }>;
+  artifacts?: Array<{
+    name: string;
+    path: string;
+    sha256?: string;
+    sizeBytes?: number;
+    producerNodeId?: string;
+    verified?: boolean;
+  }>;
 };
 export type GraphEventSummary = {
   sequence: number;
@@ -1046,6 +1064,7 @@ export type EngineeringGraphSummary = {
   graphId: string;
   fingerprint: string;
   status: GraphRunStatus;
+  runId?: string;
   results: GraphNodeSummary[];
   events: GraphEventSummary[];
   spentCost: number;
@@ -1053,7 +1072,7 @@ export type EngineeringGraphSummary = {
   activeAttempts?: Array<{ nodeId: string; attempt: number; idempotencyKey: string; startedAt: string }>;
   controlSeq?: number;
   controlRunId?: string;
-  pauseReason?: "approval" | "control";
+  pauseReason?: "approval" | "control" | "wait";
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -1070,6 +1089,24 @@ export type EngineeringGraphSummary = {
   };
 };
 export type EngineeringGraphDetail = EngineeringGraphSummary & { definition: unknown };
+export type EngineeringGraphRunComparison = {
+  graphId: string;
+  statusChanged: boolean;
+  costDeltaUsd: number;
+  tokenDelta: number;
+  durationDeltaMs?: number;
+  nodes: Array<{
+    id: string;
+    before?: string;
+    after?: string;
+    costDeltaUsd: number;
+    tokenDelta: number;
+  }>;
+};
+export type EngineeringGraphComparisonResponse = {
+  baselineRunNumber: number;
+  comparison: EngineeringGraphRunComparison;
+};
 export type EngineeringGraphEvidenceReport = {
   schemaVersion: 1;
   graphId: string;
@@ -1316,6 +1353,7 @@ export type ServerFrame =
       seq?: number;
     })
   | ({ type: "loop.event"; event: LoopEvent } & { runId?: string; seq?: number })
+  | ({ type: "graph.event"; event: GraphEventSummary } & { runId?: string; seq?: number })
   | ({
       type: "subagent.control";
       dispatchId: string;

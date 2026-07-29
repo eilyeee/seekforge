@@ -2,7 +2,9 @@ import { isRecord } from "../util/guards.js";
 import { isValidLoopDagId } from "./loop-dag-validation.js";
 import {
   type EngineeringGraphDefinition,
+  type GraphValueSchema,
   MAX_GRAPH_DEFINITION_BYTES,
+  parseGraphValueSchema,
   parseEngineeringGraphDefinition,
 } from "./graph-contract.js";
 import { isDenseArray } from "./orchestration.js";
@@ -14,14 +16,18 @@ export type EngineeringGraphTemplateParameter = {
 };
 
 export type EngineeringGraphTemplate = {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   kind: "engineering-graph-template";
   templateId: string;
+  version?: string;
+  interface?: { outputSchema?: GraphValueSchema };
   parameters: Record<string, EngineeringGraphTemplateParameter>;
   definition: unknown;
 };
 
 const PLACEHOLDER_RE = /\$\{\{([A-Za-z0-9][A-Za-z0-9_-]{0,63})\}\}/g;
+export const GRAPH_TEMPLATE_VERSION_RE =
+  /^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})(?:-[A-Za-z0-9.-]{1,64})?$/;
 
 function validParameterValue(value: unknown, type: EngineeringGraphTemplateParameter["type"]): boolean {
   return (
@@ -34,14 +40,33 @@ function validParameterValue(value: unknown, type: EngineeringGraphTemplateParam
 export function parseEngineeringGraphTemplate(value: unknown): EngineeringGraphTemplate {
   if (
     !isRecord(value) ||
-    value.schemaVersion !== 1 ||
+    (value.schemaVersion !== 1 && value.schemaVersion !== 2) ||
     value.kind !== "engineering-graph-template" ||
     !isValidLoopDagId(value.templateId) ||
     !isRecord(value.parameters) ||
     value.definition === undefined
   ) {
-    throw new Error("Graph template requires schemaVersion 1, kind, templateId, parameters, and definition");
+    throw new Error("Graph template requires schemaVersion 1 or 2, kind, templateId, parameters, and definition");
   }
+  if (
+    (value.schemaVersion === 2 &&
+      (typeof value.version !== "string" || !GRAPH_TEMPLATE_VERSION_RE.test(value.version))) ||
+    (value.schemaVersion === 1 && value.version !== undefined)
+  ) {
+    throw new Error("Graph template version is invalid");
+  }
+  if (
+    value.interface !== undefined &&
+    (value.schemaVersion !== 2 ||
+      !isRecord(value.interface) ||
+      Object.keys(value.interface).some((key) => key !== "outputSchema"))
+  ) {
+    throw new Error("Graph template interface requires schemaVersion 2");
+  }
+  const outputSchema =
+    isRecord(value.interface) && value.interface.outputSchema !== undefined
+      ? parseGraphValueSchema(value.interface.outputSchema, "Graph template outputSchema")
+      : undefined;
   const entries = Object.entries(value.parameters);
   if (entries.length > 64) throw new Error("Graph template may declare at most 64 parameters");
   const parameters = Object.create(null) as Record<string, EngineeringGraphTemplateParameter>;
@@ -66,9 +91,11 @@ export function parseEngineeringGraphTemplate(value: unknown): EngineeringGraphT
     throw new Error(`Graph template exceeds ${MAX_GRAPH_DEFINITION_BYTES} bytes`);
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: value.schemaVersion,
     kind: "engineering-graph-template",
     templateId: value.templateId,
+    ...(typeof value.version === "string" ? { version: value.version } : {}),
+    ...(isRecord(value.interface) ? { interface: { ...(outputSchema ? { outputSchema } : {}) } } : {}),
     parameters,
     definition: value.definition,
   };

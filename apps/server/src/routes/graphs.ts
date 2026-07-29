@@ -5,12 +5,15 @@ import {
   engineeringGraphHistoryExists,
   engineeringGraphNeedsAgentRuntime,
   enqueueGraphControl,
+  enqueueEngineeringGraphSignal,
+  graphExecutorsWithPlugins,
   graphHandlersWithPlugins,
   inspectEngineeringGraphResources,
   isRecord,
   isSessionRunActive,
   isValidLoopDagId,
   listEngineeringGraphStates,
+  listEngineeringGraphTemplates,
   loadPluginContributions,
   loadEngineeringGraphState,
   materializeEngineeringGraph,
@@ -18,11 +21,16 @@ import {
   promoteEngineeringGraphResult,
   pruneEngineeringGraphResources,
   readEngineeringGraphHistory,
+  readEngineeringGraphRunSnapshots,
+  registerEngineeringGraphTemplate,
+  resolveEngineeringGraphTemplate,
+  compareEngineeringGraphRuns,
   removeEngineeringGraphState,
   validateEngineeringGraphRunOptions,
   validateEngineeringGraphWorkspaces,
   type EngineeringGraphDefinition,
   type EngineeringGraphState,
+  type GraphExecutionAdapter,
   type RunEngineeringGraphOptions,
 } from "@seekforge/core";
 import { readJsonBody, sendApiError, sendJson } from "../http.js";
@@ -42,16 +50,28 @@ function validateRun(
   workspace: string,
   definition: EngineeringGraphDefinition,
   options: Omit<RunEngineeringGraphOptions, "workspace" | "handlers">,
+  executors: Readonly<Record<string, GraphExecutionAdapter>> = {},
 ): void {
   validateEngineeringGraphRunOptions(definition, {
     ...options,
     workspace,
     handlers: graphHandlersWithPlugins(loadPluginContributions(workspace)),
+    executors,
   });
   validateEngineeringGraphWorkspaces(definition, workspace);
   if (engineeringGraphNeedsAgentRuntime(definition) && definition.costBudgetUsd === undefined) {
     throw new Error("Server Graphs containing agent or loop nodes require costBudgetUsd");
   }
+}
+
+function graphExecutionRegistry(
+  ctx: Pick<RouteCtx, "workspace" | "rest">,
+): Readonly<Record<string, GraphExecutionAdapter>> {
+  const registered = ctx.rest.graphExecutors ?? {};
+  return Object.freeze({
+    ...graphExecutorsWithPlugins(loadPluginContributions(ctx.workspace), registered),
+    ...registered,
+  });
 }
 
 function trackGraphRun(ctx: RouteCtx, graphId: string, runId: string, handle: TriggerRunHandle): void {
@@ -78,13 +98,14 @@ function startGraphRun(
   options: Omit<RunEngineeringGraphOptions, "workspace" | "handlers" | "signal" | "onEvent">,
 ): void {
   const { rest, workspace, res } = ctx;
+  const executors = graphExecutionRegistry(ctx);
   const key = graphRunKey(workspace, definition.graphId);
   if (rest.graphRuns?.has(key)) {
     sendApiError(res, 409, "busy", `Graph is already running: ${definition.graphId}`);
     return;
   }
   try {
-    validateRun(workspace, definition, options);
+    validateRun(workspace, definition, options, executors);
   } catch (error) {
     sendApiError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
     return;
@@ -126,6 +147,7 @@ function startGraphRun(
         definition,
         {
           ...options,
+          executors,
           signal: controller.signal,
           onEvent: (event) => rest.runManager.appendFrame(workspace, ledger.runId, { type: "graph.event", event }),
         },
@@ -195,7 +217,7 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
       const parameters = wrapped ? (body.parameters ?? {}) : {};
       if (!isRecord(parameters)) throw new Error("Graph parameters must be an object");
       const definition = materializeEngineeringGraph(wrapped ? body.definition : body, parameters);
-      validateRun(workspace, definition, {});
+      validateRun(workspace, definition, {}, graphExecutionRegistry(ctx));
       sendJson(res, 200, { valid: true, definition, plan: planEngineeringGraph(definition) });
     } catch (error) {
       sendApiError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
@@ -234,6 +256,9 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
         graphId: state.graphId,
         fingerprint: state.fingerprint,
         status: state.status,
+        ...(rest.graphRuns?.get(graphRunKey(workspace, state.graphId))
+          ? { runId: rest.graphRuns.get(graphRunKey(workspace, state.graphId)) }
+          : {}),
         results: state.results.map(
           ({
             id,
@@ -274,6 +299,51 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
         ...(state.fanIn ? { fanIn: state.fanIn } : {}),
       })),
     );
+    return true;
+  }
+
+  if (segs[2] === "templates") {
+    if (method === "GET" && segs.length === 3) {
+      sendJson(res, 200, listEngineeringGraphTemplates(workspace));
+      return true;
+    }
+    if (method === "POST" && segs.length === 3) {
+      const body = await readJsonBody(ctx.req, res);
+      if (body === undefined) return true;
+      try {
+        sendJson(res, 201, registerEngineeringGraphTemplate(workspace, body));
+      } catch (error) {
+        sendApiError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
+      }
+      return true;
+    }
+    const templateId = segs[3];
+    const version = segs[4];
+    if (!templateId || !version) {
+      sendApiError(res, 400, "bad_request", "Graph template id and version are required");
+      return true;
+    }
+    try {
+      const template = resolveEngineeringGraphTemplate(workspace, templateId, version);
+      if (!template) {
+        sendApiError(res, 404, "not_found", `unknown Graph template: ${templateId}@${version}`);
+        return true;
+      }
+      if (method === "GET" && segs.length === 5) sendJson(res, 200, template);
+      else if (method === "POST" && segs.length === 6 && segs[5] === "materialize") {
+        const body = await readJsonBody(ctx.req, res, { emptyOk: true });
+        if (body === undefined) return true;
+        if (!isRecord(body) || (body.parameters !== undefined && !isRecord(body.parameters))) {
+          sendApiError(res, 400, "bad_request", "Graph template parameters must be an object");
+          return true;
+        }
+        const definition = materializeEngineeringGraph(template, (body.parameters as Record<string, unknown>) ?? {});
+        validateRun(workspace, definition, {}, graphExecutionRegistry(ctx));
+        sendJson(res, 200, { definition, plan: planEngineeringGraph(definition) });
+      } else return false;
+    } catch (error) {
+      sendApiError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
+    }
     return true;
   }
 
@@ -325,6 +395,68 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
     const state = loadEngineeringGraphState(workspace, graphId);
     if (state) sendJson(res, 200, buildEngineeringGraphEvidenceReport(state));
     else sendApiError(res, 404, "not_found", `unknown Graph: ${graphId}`);
+    return true;
+  }
+  if (method === "GET" && segs.length === 4 && segs[3] === "compare") {
+    const state = loadEngineeringGraphState(workspace, graphId);
+    if (!state) {
+      sendApiError(res, 404, "not_found", `unknown Graph: ${graphId}`);
+      return true;
+    }
+    const snapshots = readEngineeringGraphRunSnapshots(workspace, graphId);
+    const requested = url.searchParams.get("runNumber");
+    const runNumber = requested === null ? undefined : boundedInteger(requested, 0, 1, Number.MAX_SAFE_INTEGER);
+    if (runNumber === null) {
+      sendApiError(res, 400, "bad_request", "runNumber is invalid");
+      return true;
+    }
+    const baseline = runNumber === undefined ? snapshots.at(-1) : snapshots.find((run) => run.runNumber === runNumber);
+    if (!baseline) {
+      sendApiError(res, 404, "not_found", `Graph comparison baseline not found: ${graphId}`);
+      return true;
+    }
+    sendJson(res, 200, {
+      baselineRunNumber: baseline.runNumber,
+      comparison: compareEngineeringGraphRuns(baseline, state),
+    });
+    return true;
+  }
+  if (method === "POST" && segs.length === 4 && segs[3] === "signals") {
+    const state = loadEngineeringGraphState(workspace, graphId);
+    if (!state) {
+      sendApiError(res, 404, "not_found", `unknown Graph: ${graphId}`);
+      return true;
+    }
+    const body = await readJsonBody(ctx.req, res);
+    if (body === undefined) return true;
+    if (
+      !isRecord(body) ||
+      Object.keys(body).some((key) => key !== "name" && key !== "payload") ||
+      !isValidLoopDagId(body.name) ||
+      !state.definition.nodes.some((node) => node.waitFor?.signal === body.name)
+    ) {
+      sendApiError(res, 400, "bad_request", "Graph signal must match a declared wait node");
+      return true;
+    }
+    if (state.status !== "running" && !(state.status === "paused" && state.pauseReason === "wait")) {
+      sendApiError(res, 409, "conflict", `Graph is not waiting for a signal: ${graphId}`);
+      return true;
+    }
+    if (
+      state.status === "paused" &&
+      (rest.graphRuns?.has(graphRunKey(workspace, graphId)) ||
+        isSessionRunActive(workspace, `engineering-graph-${graphId}`))
+    ) {
+      sendApiError(res, 409, "busy", `Graph wait transition is still settling: ${graphId}`);
+      return true;
+    }
+    try {
+      const signal = await enqueueEngineeringGraphSignal(workspace, graphId, body.name, body.payload);
+      if (state.status === "paused") startGraphRun(ctx, state.definition, { resume: true });
+      else sendJson(res, 202, signal);
+    } catch (error) {
+      sendApiError(res, 409, "conflict", error instanceof Error ? error.message : String(error));
+    }
     return true;
   }
   if (segs.length === 4 && segs[3] === "resources") {
@@ -389,22 +521,44 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
     if (body === undefined) return true;
     if (
       !isRecord(body) ||
-      (body.operation !== "pause" && body.operation !== "resume" && body.operation !== "steer") ||
+      !["pause", "resume", "steer", "reprioritize", "cancel"].includes(String(body.operation)) ||
+      (body.nodeId !== undefined &&
+        (!isValidLoopDagId(body.nodeId) || !state.definition.nodes.some((node) => node.id === body.nodeId))) ||
       (body.operation === "steer" && typeof body.message !== "string") ||
-      (body.operation !== "steer" && body.message !== undefined)
+      (body.operation !== "steer" && body.message !== undefined) ||
+      ((body.operation === "reprioritize" || body.operation === "cancel") && !isValidLoopDagId(body.nodeId)) ||
+      (body.operation === "reprioritize" &&
+        (!Number.isSafeInteger(body.priority) || (body.priority as number) < -10 || (body.priority as number) > 10)) ||
+      (body.operation !== "reprioritize" && body.priority !== undefined)
     ) {
-      sendApiError(res, 400, "bad_request", "Graph control requires pause, resume, or steer");
+      sendApiError(res, 400, "bad_request", "Graph control command is invalid");
+      return true;
+    }
+    if (
+      typeof body.nodeId === "string" &&
+      (state.results.some((result) => result.id === body.nodeId) ||
+        state.activeAttempts.some((attempt) => attempt.nodeId === body.nodeId))
+    ) {
+      sendApiError(res, 409, "conflict", `Graph node control only applies before start: ${body.nodeId}`);
       return true;
     }
     try {
-      const entry = await enqueueGraphControl(
-        workspace,
-        graphId,
-        state.controlRunId,
+      const command =
         body.operation === "steer"
-          ? { operation: "steer", message: body.message as string }
-          : { operation: body.operation },
-      );
+          ? {
+              operation: "steer" as const,
+              message: body.message as string,
+              ...(typeof body.nodeId === "string" ? { nodeId: body.nodeId } : {}),
+            }
+          : body.operation === "reprioritize"
+            ? { operation: "reprioritize" as const, nodeId: body.nodeId as string, priority: body.priority as number }
+            : body.operation === "cancel"
+              ? { operation: "cancel" as const, nodeId: body.nodeId as string }
+              : {
+                  operation: body.operation as "pause" | "resume",
+                  ...(typeof body.nodeId === "string" ? { nodeId: body.nodeId } : {}),
+                };
+      const entry = await enqueueGraphControl(workspace, graphId, state.controlRunId, command);
       sendJson(res, 202, entry);
     } catch (error) {
       sendApiError(res, 409, "conflict", error instanceof Error ? error.message : String(error));

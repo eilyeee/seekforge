@@ -20,6 +20,13 @@ import {
   orchestrationDescendantClosure,
   validateOrchestrationSelection,
 } from "./orchestration.js";
+import { selectOrchestrationReadyNodes } from "./orchestration-scheduler.js";
+
+function workspaceReservationResource(workspace: string): string {
+  // Workspace reservations are exact identities. Hashing avoids interpreting
+  // dots in a physical path as the hierarchy syntax used by logical resources.
+  return `workspace-${createHash("sha256").update(workspace).digest("hex")}`;
+}
 
 export {
   assertLoopDagAcyclic,
@@ -853,23 +860,17 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
               }),
             )
             .sort((left, right) => (byId.get(right)?.priority ?? 0) - (byId.get(left)?.priority ?? 0));
-      const ready: string[] = [];
-      const reservedResources = new Set([...running.values()].flatMap((entry) => entry.resources));
-      const reservedWorkspaces = new Set([...running.values()].map((entry) => entry.workspace));
-      for (const id of candidates) {
-        const node = byId.get(id)!;
-        const workspace = nodeWorkspaces.get(id)!;
-        if (
-          reservedWorkspaces.has(workspace) ||
-          (node.resources ?? []).some((resource) => reservedResources.has(resource))
-        ) {
-          continue;
-        }
-        ready.push(id);
-        reservedWorkspaces.add(workspace);
-        for (const resource of node.resources ?? []) reservedResources.add(resource);
-        if (ready.length + running.size === concurrency) break;
-      }
+      const ready = selectOrchestrationReadyNodes(
+        candidates.map((id) => ({
+          id,
+          priority: byId.get(id)?.priority,
+          resources: [...(byId.get(id)?.resources ?? []), workspaceReservationResource(nodeWorkspaces.get(id)!)],
+        })),
+        [...running.values()].map((entry) => ({
+          resources: [...entry.resources, workspaceReservationResource(entry.workspace)],
+        })),
+        Math.max(0, concurrency - running.size),
+      );
       if (ready.length === 0 && running.size === 0) {
         if ([...results.values()].some((result) => result.status === "waiting_approval")) {
           approvalPending = true;

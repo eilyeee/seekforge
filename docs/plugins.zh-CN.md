@@ -43,7 +43,8 @@ hook 只有在显式批准后才会启用。
     "hooks": {
       "sessionStart": [{ "command": "node scripts/check-environment.mjs" }]
     },
-    "graphHandlers": { "summarize": "collect" }
+    "graphHandlers": { "summarize": "collect" },
+    "graphExecutors": { "build-farm": "trusted-build-farm" }
   }
 }
 ```
@@ -52,7 +53,7 @@ ID 只能使用小写字母、数字与连字符；版本使用 SemVer 语法。
 插件内的相对目录。MCP server 会以 `<plugin-id>__<server-name>` 对外暴露，避免歧义冲突。
 当用户配置与插件 MCP 同名时，用户配置优先；插件 hook 先于用户配置 hook 运行。
 
-`graphHandlers` 会为确定性内建处理器 `noop`、`collect` 提供命名空间化别名，例如 `team-workflows__summarize`。清单不能包含 Graph 处理器代码或 shell 命令；所有别名都会在 Graph 产生任何副作用前解析完成。
+`graphHandlers` 会为确定性内建处理器 `noop`、`collect` 提供命名空间化别名，例如 `team-workflows__summarize`。`graphExecutors` 只能为嵌入宿主已经注册为可信且远程的适配器建立别名，清单本身不能创建或提升执行器。清单不能包含 Graph 处理器代码或 shell 命令；所有别名都会在 Graph 产生任何副作用前解析完成。
 
 插件的 skill/agent 根目录按插件 ID 顺序加载；较后的插件可覆盖较早插件的同 ID 贡献，
 用户级全局/项目定义总是最后加载并优先。建议 skill 与 agent ID 带插件前缀。
