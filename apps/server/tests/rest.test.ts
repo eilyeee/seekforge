@@ -513,6 +513,35 @@ describe("loop management API", () => {
     });
   });
 
+  it("requires a server cost budget for dynamic Agent and Loop maps", async () => {
+    for (const mapKind of ["agent", "loop"] as const) {
+      const response = await authed("/api/graphs/validate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          graphId: `budgeted-map-${mapKind}`,
+          nodes: [
+            { id: "source", kind: "function", handler: "noop" },
+            {
+              id: "map",
+              kind: "map",
+              mapKind,
+              task: "Process the item",
+              ...(mapKind === "loop" ? { verifyCommand: "true" } : {}),
+              dependsOn: ["source"],
+              source: { nodeId: "source" },
+              mapConcurrency: 1,
+            },
+          ],
+        }),
+      });
+      expect(response.status).toBe(400);
+      expect(await jsonOf(response)).toMatchObject({
+        error: { message: expect.stringMatching(/costBudgetUsd/) },
+      });
+    }
+  });
+
   it("registers versioned Graph templates and materializes exact versions", async () => {
     const template = {
       schemaVersion: 2,

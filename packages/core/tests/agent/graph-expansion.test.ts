@@ -23,11 +23,36 @@ describe("Engineering Graph expansion policies", () => {
     });
     expect(planEngineeringGraphMigration(before, after)).toEqual({
       graphId: "migrate",
+      graphPolicyChanged: false,
       added: ["report"],
       removed: [],
       changed: ["source"],
       preserved: [],
       invalidated: ["consume", "report", "source"],
+    });
+  });
+
+  it("invalidates every retained node when graph-level execution policy changes", () => {
+    const before = parseEngineeringGraphDefinition({
+      graphId: "policy-migration",
+      failurePolicy: "stop",
+      nodes: [
+        { id: "build", kind: "function", handler: "build" },
+        { id: "publish", kind: "function", handler: "publish", dependsOn: ["build"] },
+      ],
+    });
+    const after = parseEngineeringGraphDefinition({
+      ...before,
+      failurePolicy: "continue",
+    });
+    expect(planEngineeringGraphMigration(before, after)).toEqual({
+      graphId: "policy-migration",
+      graphPolicyChanged: true,
+      added: [],
+      removed: [],
+      changed: [],
+      preserved: [],
+      invalidated: ["build", "publish"],
     });
   });
 

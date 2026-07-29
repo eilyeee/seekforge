@@ -350,13 +350,14 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
   const parsedAttempts: GraphActiveAttempt[] = [];
   const attemptNodes = new Set<string>();
   for (const attempt of activeAttempts) {
+    const attemptNode = isRecord(attempt) ? definition.nodes.find((node) => node.id === attempt.nodeId) : undefined;
     if (
       !isRecord(attempt) ||
-      !definition.nodes.some((node) => node.id === attempt.nodeId) ||
+      !attemptNode ||
       attemptNodes.has(attempt.nodeId as string) ||
       !Number.isSafeInteger(attempt.attempt) ||
       (attempt.attempt as number) < 1 ||
-      (attempt.attempt as number) > 6 ||
+      (attempt.attempt as number) > (attemptNode.maxRetries ?? 0) + 1 ||
       typeof attempt.idempotencyKey !== "string" ||
       attempt.idempotencyKey.length === 0 ||
       attempt.idempotencyKey.length > 512 ||
@@ -366,7 +367,9 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
       (attempt.lastError !== undefined &&
         (typeof attempt.lastError !== "string" || attempt.lastError.length < 1 || attempt.lastError.length > 8_192)) ||
       (attempt.phase === "waiting_retry" &&
-        (!validTimestamp(attempt.nextAttemptAt) || typeof attempt.lastError !== "string")) ||
+        (!validTimestamp(attempt.nextAttemptAt) ||
+          typeof attempt.lastError !== "string" ||
+          (attempt.attempt as number) > (attemptNode.maxRetries ?? 0))) ||
       (attempt.phase !== "waiting_retry" && (attempt.nextAttemptAt !== undefined || attempt.lastError !== undefined))
     ) {
       return null;

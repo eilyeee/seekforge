@@ -510,6 +510,7 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
   ) {
     throw new Error("Loop recoveryAttemptId requires a resumed Loop and a safe id");
   }
+  const routedModels = new Set<string>();
   if (opts.modelByFailureCategory !== undefined) {
     if (!isRecord(opts.modelByFailureCategory)) throw new Error("Loop modelByFailureCategory must be an object");
     const categories = new Set<LoopFailureCategory>([
@@ -524,7 +525,6 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
       "network",
       "unknown",
     ]);
-    const routedModels = new Set<string>();
     for (const [category, model] of Object.entries(opts.modelByFailureCategory)) {
       if (
         !categories.has(category as LoopFailureCategory) ||
@@ -535,19 +535,6 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
         throw new Error("Loop modelByFailureCategory contains an invalid category or model");
       }
       routedModels.add(model);
-    }
-    if (!deps.providerForModel) throw new Error("Loop modelByFailureCategory requires providerForModel");
-    for (const model of routedModels) {
-      if (model === deps.provider.model) continue;
-      const provider = deps.providerForModel(model);
-      if (
-        !provider ||
-        typeof provider.model !== "string" ||
-        typeof provider.chat !== "function" ||
-        typeof provider.chatStream !== "function"
-      ) {
-        throw new Error(`Loop modelByFailureCategory provider is invalid: ${model}`);
-      }
     }
   }
   const configuredIterations = opts.maxIterations ?? opts.resumeState?.maxIterations;
@@ -686,6 +673,52 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
     }
     if (visited !== configuredPlan.length) throw new Error("Loop verificationPlan contains a dependency cycle");
   }
+  const requirementMode = opts.resumeState?.requirementMode ?? opts.requirementMode ?? "quick";
+  if (!isLoopRequirementMode(requirementMode)) {
+    throw new Error(`Invalid loop requirement mode: ${String(requirementMode)}`);
+  }
+  if (
+    opts.resumeState !== undefined &&
+    opts.requirementMode !== undefined &&
+    opts.resumeState.requirementMode !== undefined &&
+    opts.requirementMode !== opts.resumeState.requirementMode
+  ) {
+    throw new Error("A resumed loop cannot change its requirement mode");
+  }
+  if (opts.rollbackOnRegression ?? opts.resumeState?.rollbackOnRegression ?? false) {
+    const parts = resolve(opts.workspace).split(sep);
+    const isolated = parts.some((part, index) => part === ".seekforge" && parts[index + 1] === "worktrees");
+    if (!isolated) throw new Error("rollbackOnRegression requires a retained .seekforge/worktrees workspace");
+  }
+  if (opts.model !== undefined && (!opts.model.trim() || opts.model.length > 256)) {
+    throw new Error("Loop model must be a non-empty bounded string");
+  }
+  if (opts.modelByFailureCategory !== undefined && !deps.providerForModel) {
+    throw new Error("Loop modelByFailureCategory requires providerForModel");
+  }
+  const requestedModels = new Set(routedModels);
+  if (opts.model) requestedModels.add(opts.model);
+  const defaultModel = deps.provider?.model;
+  if ([...requestedModels].some((model) => model !== defaultModel) && !deps.providerForModel) {
+    throw new Error("Loop model selection requires providerForModel");
+  }
+  const resolvedProviders = new Map<string, AgentCoreDeps["provider"]>();
+  if (defaultModel) resolvedProviders.set(defaultModel, deps.provider);
+  for (const model of requestedModels) {
+    if (resolvedProviders.has(model)) continue;
+    const provider = deps.providerForModel?.(model);
+    if (
+      !provider ||
+      typeof provider.model !== "string" ||
+      !provider.model.trim() ||
+      provider.model.length > 256 ||
+      typeof provider.chat !== "function" ||
+      typeof provider.chatStream !== "function"
+    ) {
+      throw new Error(`Loop provider is invalid: ${model}`);
+    }
+    resolvedProviders.set(model, provider);
+  }
   const persistenceEnabled = opts.persist !== false;
   const loopId = opts.resumeState?.loopId ?? opts.loopId ?? `loop-${randomUUID()}`;
   // Mirror the event stream into an append-only `.seekforge/loops/<id>.log`
@@ -729,7 +762,7 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
   let lease: ReturnType<typeof acquireLoopLease> | undefined;
   try {
     lease = acquireLoopLease(opts.workspace, loopId, persistenceEnabled);
-    return await runAutoLoopWithLease(deps, opts, emit, persistenceEnabled, loopId);
+    return await runAutoLoopWithLease(deps, opts, emit, persistenceEnabled, loopId, resolvedProviders);
   } finally {
     try {
       logWriter?.close();
@@ -747,6 +780,7 @@ async function runAutoLoopWithLease(
   emit: (event: LoopEvent) => void,
   persistenceEnabled: boolean,
   loopId: string,
+  resolvedProviders: ReadonlyMap<string, AgentCoreDeps["provider"]>,
 ): Promise<LoopResult> {
   const requestedIterations = opts.maxIterations ?? opts.resumeState?.maxIterations ?? 8;
   const maxIterations = Math.min(requestedIterations, MAX_LOOP_ITERATIONS);
@@ -769,32 +803,14 @@ async function runAutoLoopWithLease(
   );
   const rollbackOnRegression = opts.rollbackOnRegression ?? opts.resumeState?.rollbackOnRegression ?? false;
   const adaptiveBudget = opts.adaptiveBudget ?? opts.resumeState?.adaptiveBudget ?? false;
-  if (rollbackOnRegression) {
-    const parts = resolve(opts.workspace).split(sep);
-    const isolated = parts.some((part, index) => part === ".seekforge" && parts[index + 1] === "worktrees");
-    if (!isolated) throw new Error("rollbackOnRegression requires a retained .seekforge/worktrees workspace");
-  }
   const verify =
     opts.verify ??
     ((workspace, command, signal, onOutput) =>
       defaultVerify(deps, workspace, command, verifyTimeoutMs, signal, onOutput));
   const approvalMode: ApprovalMode = opts.approvalMode ?? "acceptEdits";
   const requirementMode = opts.resumeState?.requirementMode ?? opts.requirementMode ?? "quick";
-  if (!isLoopRequirementMode(requirementMode))
-    throw new Error(`Invalid loop requirement mode: ${String(requirementMode)}`);
-  if (
-    opts.resumeState !== undefined &&
-    opts.requirementMode !== undefined &&
-    opts.resumeState.requirementMode !== undefined &&
-    opts.requirementMode !== opts.resumeState.requirementMode
-  )
-    throw new Error("A resumed loop cannot change its requirement mode");
-
-  if (opts.model && opts.model !== deps.provider.model && !deps.providerForModel) {
-    throw new Error(`Cannot select loop model without providerForModel: ${opts.model}`);
-  }
-
-  const loopProvider = opts.model && deps.providerForModel ? deps.providerForModel(opts.model) : deps.provider;
+  const loopModel = opts.model;
+  const loopProvider = loopModel ? resolvedProviders.get(loopModel)! : deps.provider;
   const agent = createAgentCore({
     ...deps,
     extractMemory: false,
@@ -803,11 +819,14 @@ async function runAutoLoopWithLease(
     ...(opts.escalateOnFailure !== undefined ? { escalateOnFailure: opts.escalateOnFailure } : {}),
     ...(opts.planModel ? { planModel: opts.planModel } : {}),
   });
+  const editAgents = new Map<string | undefined, ReturnType<typeof createAgentCore>>([[loopModel, agent]]);
   const editAgentForModel = (model: string | undefined): ReturnType<typeof createAgentCore> => {
-    if (!model || model === loopProvider.model) return agent;
-    const provider = deps.providerForModel?.(model);
-    if (!provider) throw new Error(`Cannot route Loop failure category without providerForModel: ${model}`);
-    return createAgentCore({
+    const requestedModel = model ?? loopModel;
+    const existing = editAgents.get(requestedModel);
+    if (existing) return existing;
+    const provider = requestedModel ? resolvedProviders.get(requestedModel) : deps.provider;
+    if (!provider) throw new Error(`Cannot route Loop failure category without providerForModel: ${requestedModel}`);
+    const created = createAgentCore({
       ...deps,
       extractMemory: false,
       deferSkillOutcome: true,
@@ -815,6 +834,8 @@ async function runAutoLoopWithLease(
       ...(opts.escalateOnFailure !== undefined ? { escalateOnFailure: opts.escalateOnFailure } : {}),
       ...(opts.planModel ? { planModel: opts.planModel } : {}),
     });
+    editAgents.set(requestedModel, created);
+    return created;
   };
   // Analysis/review may inspect through read-only tools, but must not execute
   // lifecycle hooks or dispatch subagents that could mutate outside mode checks.
@@ -827,7 +848,7 @@ async function runAutoLoopWithLease(
           subagents: [],
           extractMemory: false,
           deferSkillOutcome: true,
-          ...(opts.model && deps.providerForModel ? { provider: deps.providerForModel(opts.model) } : {}),
+          provider: loopProvider,
           ...(opts.planModel ? { planModel: opts.planModel } : {}),
         });
 

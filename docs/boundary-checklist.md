@@ -3056,6 +3056,41 @@ A loader that returns `null` for both absence and corruption is convenient for l
 - **Do:** pair validated loading with a physical existence probe at recovery boundaries; create only when absent and fail closed when a file exists but cannot be validated.
 - **Caught:** a corrupt deterministic Graph child-Loop checkpoint could otherwise fall through to a new unpersisted child execution.
 
+## 279. New implicit defaults must preserve legacy durable identity
+
+Adding a normalized default property can change a serialized definition even when runtime behavior is unchanged. Older checkpoints then fail their fingerprint check after an upgrade.
+
+- **Do:** keep newly introduced defaults implicit when legacy canonical state omitted them, or provide an explicit fingerprint migration.
+- **Caught:** parsing a legacy handler `map` inserted `mapKind: "handler"`, making otherwise compatible Graph checkpoints impossible to resume.
+
+## 280. Aggregate capability predicates must include nested variants
+
+A runtime capability may be requested by a subtype rather than only by the top-level kind. Checking direct kinds alone lets derived execution bypass preflight requirements.
+
+- **Do:** enumerate every variant that can invoke the capability and recurse through nested definitions in the shared predicate.
+- **Caught:** dynamic Agent/Loop map nodes bypassed the Server's mandatory Graph cost-budget check.
+
+## 281. Migration invalidation includes graph-level policy
+
+Comparing nodes alone is insufficient when scheduling, failure, budget, workspace, or fan-in policy lives on the definition envelope. Reporting every node as preserved after such a change gives unsafe migration guidance.
+
+- **Do:** compare the graph-level envelope structurally and invalidate every retained node when behavior-affecting policy changes.
+- **Caught:** Graph migration planning ignored changes to `failurePolicy`, concurrency, budgets, managed worktrees, and fan-in.
+
+## 282. Active attempt metadata is bounded by its node contract
+
+A globally valid attempt number can still be impossible for a node with fewer configured retries. Accepting it lets corrupted recovery state fabricate attempts or retry waits the definition never allowed.
+
+- **Do:** validate running attempts against `maxRetries + 1` and retry waits against `maxRetries` for the owning node.
+- **Caught:** Graph state accepted attempt six, including a retry wait, for a node configured with no retries.
+
+## 283. A stored fingerprint must authenticate the stored payload
+
+Comparing a checkpoint's claimed fingerprint only with the requested definition trusts the claim without proving that the loaded definition produced it. A modified payload can retain the old digest and bypass the resume comparison.
+
+- **Do:** recompute the canonical or explicitly supported legacy digest from the loaded definition, then require that authenticated definition to match the requested canonical identity.
+- **Caught:** Graph resume accepted a matching fingerprint string without binding it back to the checkpoint's own definition.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

@@ -202,10 +202,14 @@ describe("runAutoLoop", () => {
   it("routes editing by the previous verification failure category", async () => {
     const base = alwaysDone("base");
     const routed = alwaysDone("test-specialist");
+    let resolutions = 0;
     const result = await runAutoLoop(
       {
         provider: base,
-        providerForModel: (model) => (model === "test-specialist" ? routed : base),
+        providerForModel: (model) => {
+          resolutions++;
+          return model === "test-specialist" ? routed : base;
+        },
         dispatcher: noopDispatcher,
         confirm: async () => true,
       },
@@ -217,6 +221,46 @@ describe("runAutoLoop", () => {
     expect(result.status).toBe("passed");
     expect(base.chats).toBe(0);
     expect(routed.chats).toBe(1);
+    expect(resolutions).toBe(1);
+  });
+
+  it("resolves routed providers only after pure validation and can route back to the default provider", async () => {
+    const base = alwaysDone("base");
+    const alternate = alwaysDone("alternate");
+    let resolutions = 0;
+    const providerForModel = (model: string) => {
+      resolutions++;
+      if (model === "alternate") return alternate;
+      throw new Error(`unexpected provider lookup: ${model}`);
+    };
+    await expect(
+      runAutoLoop(
+        { provider: base, providerForModel, dispatcher: noopDispatcher, confirm: async () => true },
+        {
+          ...baseOpts(workspace, failNTimes(1)),
+          modelByFailureCategory: { unknown: "alternate" },
+          verificationPlan: [
+            { id: "duplicate", command: "true" },
+            { id: "duplicate", command: "true" },
+          ],
+        },
+      ),
+    ).rejects.toThrow(/unique/);
+    expect(resolutions).toBe(0);
+    expect(existsSync(join(workspace, ".seekforge"))).toBe(false);
+
+    const result = await runAutoLoop(
+      { provider: base, providerForModel, dispatcher: noopDispatcher, confirm: async () => true },
+      {
+        ...baseOpts(workspace, failNTimes(1)),
+        model: "alternate",
+        modelByFailureCategory: { unknown: "base" },
+      },
+    );
+    expect(result.status).toBe("passed");
+    expect(resolutions).toBe(1);
+    expect(base.chats).toBe(1);
+    expect(alternate.chats).toBe(0);
   });
 
   it("writes an append-only JSONL log of the event stream", async () => {

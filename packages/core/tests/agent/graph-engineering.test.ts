@@ -1,9 +1,23 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { engineeringSubgraphStateId } from "../../src/agent/graph-contract.js";
+import {
+  engineeringSubgraphStateId,
+  graphDefinitionFingerprint,
+  parseEngineeringGraphDefinition,
+} from "../../src/agent/graph-contract.js";
 import { enqueueGraphControl } from "../../src/agent/graph-control-store.js";
 import { runEngineeringGraph, type GraphFunctionHandler } from "../../src/agent/graph-engineering.js";
 import { readEngineeringGraphHistory } from "../../src/agent/graph-history.js";
@@ -373,7 +387,7 @@ describe("runEngineeringGraph", () => {
       graphId: "retry-stop-recovery",
       nodes: [
         { id: "failed", kind: "function", handler: "failed" },
-        { id: "waiting", kind: "function", handler: "waiting" },
+        { id: "waiting", kind: "function", handler: "waiting", maxRetries: 1 },
       ],
     };
     await runEngineeringGraph(deps, definition, {
@@ -783,6 +797,97 @@ describe("runEngineeringGraph", () => {
       controlSeq: 0,
       controlRunId: "",
     });
+  });
+
+  it("resumes and canonicalizes checkpoints written with the explicit handler-map default", async () => {
+    const root = workspace();
+    const definition = {
+      graphId: "explicit-handler-map",
+      nodes: [
+        { id: "source", kind: "function", handler: "source" },
+        {
+          id: "map",
+          kind: "map",
+          handler: "map",
+          dependsOn: ["source"],
+          source: { nodeId: "source" },
+        },
+        { id: "gate", kind: "gate", dependsOn: ["map"] },
+      ],
+    };
+    let mapCalls = 0;
+    const handlers = {
+      source: () => ({ output: [1] }),
+      map: () => {
+        mapCalls++;
+        return { output: 1 };
+      },
+    };
+    const paused = await runEngineeringGraph(deps, definition, { workspace: root, handlers });
+    expect(paused.status).toBe("paused");
+    const legacyDefinition = {
+      ...paused.definition,
+      nodes: paused.definition.nodes.map((node) =>
+        node.id === "map"
+          ? {
+              id: node.id,
+              kind: node.kind,
+              dependsOn: node.dependsOn,
+              handler: node.handler,
+              source: node.source,
+              mapKind: "handler" as const,
+            }
+          : node,
+      ),
+    };
+    const physicalRoot = realpathSync.native(root);
+    const workspaces = new Map(legacyDefinition.nodes.map((node) => [node.id, physicalRoot]));
+    const legacyFingerprint = createHash("sha256")
+      .update(
+        JSON.stringify({
+          definition: legacyDefinition,
+          workspaces: [...workspaces].sort(([left], [right]) => left.localeCompare(right)),
+        }),
+      )
+      .digest("hex");
+    saveEngineeringGraphState(root, { ...paused, definition: legacyDefinition, fingerprint: legacyFingerprint });
+
+    const resumed = await runEngineeringGraph(deps, definition, {
+      workspace: root,
+      resume: true,
+      approvedNodeIds: ["gate"],
+      handlers,
+    });
+    expect(resumed.status).toBe("passed");
+    expect(mapCalls).toBe(1);
+    expect(resumed.fingerprint).toBe(
+      graphDefinitionFingerprint(parseEngineeringGraphDefinition(definition), workspaces),
+    );
+  });
+
+  it("rejects active attempts that exceed the node retry contract", async () => {
+    const root = workspace();
+    const completed = await runEngineeringGraph(
+      deps,
+      { graphId: "invalid-active-attempt", nodes: [{ id: "run", kind: "function", handler: "run" }] },
+      { workspace: root, handlers: { run: () => ({ output: "done" }) } },
+    );
+    saveEngineeringGraphState(root, {
+      ...completed,
+      status: "running",
+      completedAt: undefined,
+      results: [],
+      activeAttempts: [
+        {
+          nodeId: "run",
+          attempt: 2,
+          idempotencyKey: "invalid-retry",
+          startedAt: new Date().toISOString(),
+          phase: "running",
+        },
+      ],
+    });
+    expect(loadEngineeringGraphState(root, "invalid-active-attempt")).toBeNull();
   });
 
   it("pauses at a gate and resumes without rerunning ancestors", async () => {

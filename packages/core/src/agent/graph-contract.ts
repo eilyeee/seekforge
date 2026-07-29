@@ -130,6 +130,7 @@ export function engineeringGraphNeedsAgentRuntime(definition: EngineeringGraphDe
     (node) =>
       node.kind === "agent" ||
       node.kind === "loop" ||
+      (node.kind === "map" && (node.mapKind === "agent" || node.mapKind === "loop")) ||
       (node.graph !== undefined && engineeringGraphNeedsAgentRuntime(node.graph)),
   );
 }
@@ -593,7 +594,9 @@ function parseNode(value: unknown, depth: number): GraphNode {
     ...(source ? { source } : {}),
     ...(typeof value.maxItems === "number" ? { maxItems: value.maxItems } : {}),
     ...(typeof value.mapConcurrency === "number" ? { mapConcurrency: value.mapConcurrency } : {}),
-    ...(mapKind ? { mapKind } : {}),
+    // Keep the legacy handler default implicit so loading an old checkpoint
+    // does not rewrite its durable definition fingerprint.
+    ...(kind === "map" && value.mapKind !== undefined ? { mapKind } : {}),
     ...(typeof value.quorum === "number" ? { quorum: value.quorum } : {}),
     ...(typeof value.priority === "number" ? { priority: value.priority } : {}),
     ...(resources ? { resources } : {}),
@@ -816,9 +819,43 @@ export function graphDefinitionFingerprint(
   definition: EngineeringGraphDefinition,
   workspaces: ReadonlyMap<string, string>,
 ): string {
+  return rawGraphDefinitionFingerprint(canonicalFingerprintDefinition(definition), workspaces);
+}
+
+function canonicalFingerprintDefinition(definition: EngineeringGraphDefinition): EngineeringGraphDefinition {
+  const normalized = { ...definition };
+  normalized.nodes = definition.nodes.map((node) => {
+    const normalizedNode = { ...node };
+    if (normalizedNode.kind === "map" && normalizedNode.mapKind === "handler") delete normalizedNode.mapKind;
+    if (normalizedNode.graph) normalizedNode.graph = canonicalFingerprintDefinition(normalizedNode.graph);
+    return normalizedNode;
+  });
+  return normalized;
+}
+
+function rawGraphDefinitionFingerprint(
+  definition: EngineeringGraphDefinition,
+  workspaces: ReadonlyMap<string, string>,
+): string {
   return createHash("sha256")
     .update(
       JSON.stringify({ definition, workspaces: [...workspaces].sort(([left], [right]) => left.localeCompare(right)) }),
     )
     .digest("hex");
+}
+
+/** Accepts the one release that persisted the formerly implicit handler-map default. */
+export function graphDefinitionFingerprintMatches(
+  storedFingerprint: string,
+  storedDefinition: EngineeringGraphDefinition,
+  currentDefinition: EngineeringGraphDefinition,
+  workspaces: ReadonlyMap<string, string>,
+): boolean {
+  const currentFingerprint = graphDefinitionFingerprint(currentDefinition, workspaces);
+  const storedCanonicalFingerprint = graphDefinitionFingerprint(storedDefinition, workspaces);
+  if (storedCanonicalFingerprint !== currentFingerprint) return false;
+  return (
+    storedFingerprint === storedCanonicalFingerprint ||
+    storedFingerprint === rawGraphDefinitionFingerprint(storedDefinition, workspaces)
+  );
 }

@@ -1,5 +1,11 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { parseEngineeringGraphDefinition } from "../../src/agent/graph-contract.js";
+import {
+  engineeringGraphNeedsAgentRuntime,
+  graphDefinitionFingerprint,
+  graphDefinitionFingerprintMatches,
+  parseEngineeringGraphDefinition,
+} from "../../src/agent/graph-contract.js";
 import { planEngineeringGraph } from "../../src/agent/graph-plan.js";
 
 describe("parseEngineeringGraphDefinition", () => {
@@ -275,6 +281,7 @@ describe("parseEngineeringGraphDefinition", () => {
     });
     expect(graph.priorityAgingMs).toBe(5_000);
     expect(graph.nodes[1]).toMatchObject({ mapKind: "agent", mapConcurrency: 1 });
+    expect(engineeringGraphNeedsAgentRuntime(graph)).toBe(true);
     expect(() =>
       parseEngineeringGraphDefinition({
         graphId: "unsafe-map",
@@ -293,6 +300,40 @@ describe("parseEngineeringGraphDefinition", () => {
         ],
       }),
     ).toThrow(/mapConcurrency 1/);
+  });
+
+  it("keeps the legacy handler map default implicit for durable fingerprints", () => {
+    const graph = parseEngineeringGraphDefinition({
+      graphId: "legacy-map",
+      nodes: [
+        { id: "source", kind: "function", handler: "source" },
+        {
+          id: "map",
+          kind: "map",
+          handler: "map",
+          dependsOn: ["source"],
+          source: { nodeId: "source" },
+        },
+      ],
+    });
+    expect(graph.nodes[1]).not.toHaveProperty("mapKind");
+    expect(engineeringGraphNeedsAgentRuntime(graph)).toBe(false);
+    const explicitDefault = {
+      ...graph,
+      nodes: graph.nodes.map((node) => (node.id === "map" ? { ...node, mapKind: "handler" as const } : node)),
+    };
+    expect(graphDefinitionFingerprint(graph, new Map())).toBe(graphDefinitionFingerprint(explicitDefault, new Map()));
+    const releaseFingerprint = createHash("sha256")
+      .update(JSON.stringify({ definition: explicitDefault, workspaces: [] }))
+      .digest("hex");
+    expect(graphDefinitionFingerprintMatches(releaseFingerprint, explicitDefault, graph, new Map())).toBe(true);
+    const tampered = {
+      ...graph,
+      nodes: graph.nodes.map((node) => (node.id === "source" ? { ...node, handler: "tampered" } : node)),
+    };
+    expect(
+      graphDefinitionFingerprintMatches(graphDefinitionFingerprint(graph, new Map()), tampered, graph, new Map()),
+    ).toBe(false);
   });
 
   it("rejects sparse arrays and timer-overflow timeouts", () => {

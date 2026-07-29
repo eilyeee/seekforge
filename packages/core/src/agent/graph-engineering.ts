@@ -17,6 +17,7 @@ import {
   graphConditionMatches,
   graphNodeIsEffectful,
   graphDefinitionFingerprint,
+  graphDefinitionFingerprintMatches,
   engineeringSubgraphStateId,
   isValidEngineeringGraphNodePath,
   MAX_GRAPH_NODES,
@@ -1220,7 +1221,7 @@ export async function runEngineeringGraph(
     if (options.resume) {
       const restored = loadEngineeringGraphState(options.workspace, definition.graphId);
       if (!restored) throw new Error(`Persisted Graph not found or invalid: ${definition.graphId}`);
-      if (restored.fingerprint !== fingerprint)
+      if (!graphDefinitionFingerprintMatches(restored.fingerprint, restored.definition, definition, workspaces))
         throw new Error(`Persisted Graph does not match: ${definition.graphId}`);
       if (
         restored.parentGraph?.graphId !== options.parentGraph?.graphId ||
@@ -1229,7 +1230,7 @@ export async function runEngineeringGraph(
         throw new Error(`Persisted Graph parent provenance does not match: ${definition.graphId}`);
       }
       if (restored.completedAt) archiveEngineeringGraphRun(options.workspace, restored);
-      state = { ...restored, status: "running", completedAt: undefined, controlRunId };
+      state = { ...restored, fingerprint, status: "running", completedAt: undefined, controlRunId };
       if (options.recoveryAttemptId) {
         state.recoveryAttemptId = options.recoveryAttemptId;
       } else {
@@ -1322,12 +1323,16 @@ export async function runEngineeringGraph(
             nestedOverrides.set(nestedNode.id, entry.path);
           }
           const nestedWorkspaces = resolveNodeWorkspaces(workspaces.get(node.id)!, nestedDefinition, nestedOverrides);
-          if (child.fingerprint !== graphDefinitionFingerprint(nestedDefinition, nestedWorkspaces)) {
+          if (
+            !graphDefinitionFingerprintMatches(child.fingerprint, child.definition, nestedDefinition, nestedWorkspaces)
+          ) {
             throw new Error(`Persisted Graph does not match: ${childGraphId}`);
           }
         } else {
           const nestedWorkspaces = resolveNodeWorkspaces(workspaces.get(node.id)!, nestedDefinition);
-          if (child.fingerprint !== graphDefinitionFingerprint(nestedDefinition, nestedWorkspaces)) {
+          if (
+            !graphDefinitionFingerprintMatches(child.fingerprint, child.definition, nestedDefinition, nestedWorkspaces)
+          ) {
             throw new Error(`Persisted Graph does not match: ${childGraphId}`);
           }
         }

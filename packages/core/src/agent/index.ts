@@ -112,6 +112,7 @@ export {
   graphConditionMatches,
   graphConditionReferences,
   graphDefinitionFingerprint,
+  graphDefinitionFingerprintMatches,
   graphNodeIsEffectful,
   engineeringGraphNeedsAgentRuntime,
   engineeringSubgraphStateId,
