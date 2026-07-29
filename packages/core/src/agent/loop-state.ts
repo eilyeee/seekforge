@@ -17,8 +17,10 @@ import { isRecord } from "../util/guards.js";
 import { isDenseArray } from "./orchestration.js";
 import {
   automaticRecoveryEligible,
+  automaticRecoveryTime,
   compareAutomaticRecoveryCandidates,
   nextAutomaticRecoveryMetadata,
+  parseAutomaticRecoveryMetadata,
   type AutomaticRecoveryMetadata,
 } from "./recovery-policy.js";
 import {
@@ -83,6 +85,7 @@ export function hasCompleteLoopDeliveryEvidence(
   return typeof evidence.url === "string" && evidence.url === artifact;
 }
 export type LoopRecoveryMetadata = AutomaticRecoveryMetadata;
+export type LoopAutomaticRecoveryIdentity = { priorControlRunId: string; recoveryAttemptId: string };
 export type LoopPruneOptions = {
   /** Remove eligible terminal records older than this many days. */
   maxAgeDays?: number;
@@ -113,6 +116,8 @@ export type LoopState = {
   delivery?: LoopDeliveryState;
   priority?: number;
   recovery?: LoopRecoveryMetadata;
+  /** Internal identity for one automatic recovery invocation. */
+  recoveryAttemptId?: string;
   stageResults?: LoopStageResult[];
   snapshots?: LoopIterationSnapshot[];
   maxIterations: number;
@@ -519,7 +524,8 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
   const controlRunId = value.controlRunId === undefined ? "" : value.controlRunId;
   const delivery = value.delivery === undefined ? undefined : parseDelivery(value.delivery);
   const priority = value.priority === undefined ? 0 : value.priority;
-  const recovery = value.recovery;
+  const recovery = parseAutomaticRecoveryMetadata(value.recovery);
+  const recoveryAttemptId = value.recoveryAttemptId;
   const stageResults = value.stageResults === undefined ? [] : parseStageResults(value.stageResults);
   const snapshots = value.snapshots === undefined ? [] : parseSnapshots(value.snapshots);
   const rollbackOnRegression = value.rollbackOnRegression === undefined ? false : value.rollbackOnRegression;
@@ -557,16 +563,8 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
     !isSafeInteger(priority) ||
     priority < -10 ||
     priority > 10 ||
-    (recovery !== undefined &&
-      (!isRecord(recovery) ||
-        !isSafeInteger(recovery.attempts) ||
-        recovery.attempts <= 0 ||
-        !isIsoDate(recovery.lastAttemptAt) ||
-        (recovery.nextAttemptAt !== undefined && !isIsoDate(recovery.nextAttemptAt)) ||
-        (recovery.lastError !== undefined &&
-          (typeof recovery.lastError !== "string" ||
-            recovery.lastError.length === 0 ||
-            recovery.lastError.length > 8_192)))) ||
+    recovery === null ||
+    (recoveryAttemptId !== undefined && (typeof recoveryAttemptId !== "string" || !isValidLoopId(recoveryAttemptId))) ||
     stageResults === null ||
     snapshots === null ||
     typeof rollbackOnRegression !== "boolean" ||
@@ -651,16 +649,8 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
     controlRunId,
     ...(delivery ? { delivery } : {}),
     priority: priority as number,
-    ...(isRecord(recovery)
-      ? {
-          recovery: {
-            attempts: recovery.attempts as number,
-            lastAttemptAt: recovery.lastAttemptAt as string,
-            ...(typeof recovery.nextAttemptAt === "string" ? { nextAttemptAt: recovery.nextAttemptAt } : {}),
-            ...(typeof recovery.lastError === "string" ? { lastError: recovery.lastError } : {}),
-          },
-        }
-      : {}),
+    ...(recovery ? { recovery } : {}),
+    ...(typeof recoveryAttemptId === "string" ? { recoveryAttemptId } : {}),
     stageResults: stageResults as LoopStageResult[],
     snapshots: snapshots as LoopIterationSnapshot[],
     rollbackOnRegression,
@@ -811,8 +801,8 @@ export function listLoopStates(workspace: string): LoopState[] {
 
 /** Returns prioritized, retry-eligible interruptions, marking orphaned records first. */
 export function recoverInterruptedLoops(workspace: string, options: { now?: Date; limit?: number } = {}): LoopState[] {
-  const nowMs = (options.now ?? new Date()).getTime();
-  if (!Number.isFinite(nowMs)) throw new RangeError("Loop recovery time must be valid");
+  const now = options.now ?? new Date();
+  const { nowMs, nowIso } = automaticRecoveryTime(now);
   const limit = options.limit ?? Number.MAX_SAFE_INTEGER;
   if (!Number.isSafeInteger(limit) || limit <= 0) throw new RangeError("Loop recovery limit must be positive");
   const recovered: LoopState[] = [];
@@ -826,30 +816,114 @@ export function recoverInterruptedLoops(workspace: string, options: { now?: Date
     if (state.status === "interrupted") continue;
     // A durable user pause is intentional, not evidence that its owner crashed.
     if (state.status !== "running" || owned) continue;
-    const next = { ...state, status: "interrupted" as const, updatedAt: new Date().toISOString() };
+    const next = { ...state, status: "interrupted" as const, updatedAt: nowIso };
     saveLoopState(workspace, next);
     if (retryEligible) recovered.push(next);
   }
   return recovered.sort(compareAutomaticRecoveryCandidates).slice(0, limit);
 }
 
-/** Persists bounded exponential backoff after an automatic resume failure. */
+function persistLoopRecoveryFailure(
+  workspace: string,
+  loopId: string,
+  error: unknown,
+  now: Date,
+  identity?: LoopAutomaticRecoveryIdentity,
+  workspaceGuard?: SessionLease,
+): LoopState {
+  const { nowIso } = automaticRecoveryTime(now);
+  const lifecycleLease = acquireLoopLifecycleLease(workspace, loopId, workspaceGuard);
+  try {
+    const state = loadLoopState(workspace, loopId);
+    if (!state) throw new Error(`Persisted loop not found or invalid: ${loopId}`);
+    if (
+      identity &&
+      state.controlRunId !== identity.priorControlRunId &&
+      state.recoveryAttemptId !== identity.recoveryAttemptId
+    ) {
+      return state;
+    }
+    const next: LoopState = {
+      ...state,
+      status: "interrupted",
+      recovery: nextAutomaticRecoveryMetadata(state.recovery, error, now),
+      updatedAt: nowIso,
+    };
+    delete next.recoveryAttemptId;
+    saveLoopState(workspace, next);
+    return next;
+  } finally {
+    lifecycleLease.release();
+  }
+}
+
+/** Persists bounded exponential backoff for an explicitly coordinated failure. */
 export function recordLoopRecoveryFailure(
   workspace: string,
   loopId: string,
   error: unknown,
   now = new Date(),
 ): LoopState {
-  const state = loadLoopState(workspace, loopId);
-  if (!state) throw new Error(`Persisted loop not found or invalid: ${loopId}`);
-  const next: LoopState = {
-    ...state,
-    status: "interrupted",
-    recovery: nextAutomaticRecoveryMetadata(state.recovery, error, now),
-    updatedAt: now.toISOString(),
-  };
-  saveLoopState(workspace, next);
-  return next;
+  return persistLoopRecoveryFailure(workspace, loopId, error, now);
+}
+
+/** Records an automatic failure only while its adjacent checkpoint generation is still current. */
+export function recordLoopAutomaticRecoveryFailure(
+  workspace: string,
+  loopId: string,
+  identity: LoopAutomaticRecoveryIdentity,
+  error: unknown,
+  options: { now?: Date; workspaceGuard?: SessionLease } = {},
+): LoopState {
+  if (
+    (identity.priorControlRunId !== "" && !isValidLoopId(identity.priorControlRunId)) ||
+    !isValidLoopId(identity.recoveryAttemptId)
+  ) {
+    throw new Error("Loop recovery identity is invalid");
+  }
+  return persistLoopRecoveryFailure(
+    workspace,
+    loopId,
+    error,
+    options.now ?? new Date(),
+    identity,
+    options.workspaceGuard,
+  );
+}
+
+/** Clears automatic-recovery state only for the still-current Loop generation. */
+export function clearLoopRecovery(
+  workspace: string,
+  loopId: string,
+  controlRunId: string,
+  options: { now?: Date; workspaceGuard?: SessionLease; recoveryAttemptId?: string } = {},
+): LoopState {
+  if (
+    !isValidLoopId(loopId) ||
+    (controlRunId !== "" && !isValidLoopId(controlRunId)) ||
+    (options.recoveryAttemptId !== undefined && !isValidLoopId(options.recoveryAttemptId))
+  ) {
+    throw new Error("Loop recovery identity is invalid");
+  }
+  const { nowIso } = automaticRecoveryTime(options.now ?? new Date());
+  const lifecycleLease = acquireLoopLifecycleLease(workspace, loopId, options.workspaceGuard);
+  try {
+    const state = loadLoopState(workspace, loopId);
+    if (!state) throw new Error(`Persisted loop not found or invalid: ${loopId}`);
+    if (
+      ((state.controlRunId ?? "") !== controlRunId &&
+        (options.recoveryAttemptId === undefined || state.recoveryAttemptId !== options.recoveryAttemptId)) ||
+      (state.recovery === undefined && state.recoveryAttemptId === undefined)
+    ) {
+      return state;
+    }
+    const { recovery: _recovery, recoveryAttemptId: _recoveryAttemptId, ...retained } = state;
+    const next: LoopState = { ...retained, updatedAt: nowIso };
+    saveLoopState(workspace, next);
+    return next;
+  } finally {
+    lifecycleLease.release();
+  }
 }
 
 export function setLoopPriority(workspace: string, loopId: string, priority: number): LoopState {

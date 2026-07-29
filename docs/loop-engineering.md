@@ -294,7 +294,13 @@ seekforge loop-cleanup <worktree-name> [--force]
 - Automatic recovery uses `--priority -10..10`/`loop-priority`, processes at
   most three candidates per workspace tick, and isolates each failure with
   exponential retry backoff (30 seconds to one hour). A foreground run requests
-  preemption of idle recovery and waits for its guard to yield.
+  preemption of idle recovery and waits for its guard to yield. Each automatic
+  attempt has a separate identity: failure backoff is written only while the
+  checkpoint still matches the pre-attempt or newly published generation.
+  Successful cleanup uses that same identity, so a late completion cannot clear
+  a newer generation. Foreground resume overrides stale backoff, and a normally
+  completed automatic resume clears its attempt metadata. Desktop lists the bounded attempt count,
+  next eligible time, and last error beside the persisted Loop.
 - `seekforge serve --loop-auto-resume` opts into lifecycle-owned background
   recovery. It reserves the physical repository queue, takes a cross-process
   idle guard, skips rather than waits when work is active, and keeps that guard

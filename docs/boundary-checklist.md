@@ -2194,6 +2194,9 @@ background operation's own Agent and nested-Agent session leases.
   in-process guard capability only to child sessions owned by that operation.
 - **Caught:** Server Loop recovery released its workspace guard before resume,
   allowing an external CLI session to overlap the background edit.
+- **Also caught:** Loop and Graph recovery bookkeeping acquired child lifecycle
+  leases without forwarding the held guard capability, so the guard rejected
+  its own backoff write or successful cleanup.
 
 ## 176. Resumable status does not prove ownership is gone
 
@@ -2607,6 +2610,8 @@ while a field omitted by one decoder disappears without an error.
   validator; export reusable field decoders and predicates from that same owner.
 - **Caught:** CLI and Core Loop DAG validators disagreed on duplicate dependencies
   and NUL-containing artifact paths, while CLI silently discarded `verifierId`.
+- **Also caught:** Loop and Graph separately decoded the same automatic-recovery
+  subrecord, but only Graph rejected unknown keys and reversed retry timestamps.
 
 ## 216. Nested authorization needs qualified durable state
 
@@ -2950,6 +2955,8 @@ An automatic attempt can fail before publishing its new run identity or after do
 
 - **Do:** capture the pre-attempt identity, allocate the attempt identity up front, and persist failure metadata only if the checkpoint still matches one of those two known adjacent generations.
 - **Caught:** Graph recovery backoff could either miss provider-initialization failures or race with a newer foreground resume.
+- **Also caught:** Loop recovery failure bookkeeping had no attempt generation,
+  so a delayed failure could overwrite a newer foreground result.
 
 ## 265. New identity validation must preserve legacy sentinels
 
@@ -2957,6 +2964,27 @@ A persisted migration may represent a formerly absent identity with a sentinel t
 
 - **Do:** identify and narrowly accept documented migration sentinels when comparing old state, while requiring newly allocated identities to satisfy the current validator.
 - **Caught:** schema-v1 Graph checkpoints use an empty control-run identity, so automatic recovery failures could not persist backoff for those checkpoints.
+
+## 266. Retry metadata belongs to an attempt, not the workflow's history
+
+Backoff is transient scheduler state. Leaving it on a manually resumed or normally completed workflow misreports current health and can delay a later genuinely recoverable interruption.
+
+- **Do:** clear stale retry state when foreground ownership starts, and retire the automatic attempt identity plus backoff when that attempt completes normally. Keep durable failure history in the event log instead.
+- **Caught:** successfully resumed Loops retained old recovery errors and next-attempt timestamps indefinitely.
+
+## 267. Secondary failure bookkeeping must not stop a recovery batch
+
+Recording a primary failure can itself fail because its lease or checkpoint changed. Letting that secondary error escape hides the attempted run's original failure and prevents later independent candidates or retention work from running.
+
+- **Do:** isolate bookkeeping with its own error channel, preserve the primary error, and continue the bounded batch whenever the owner has not been cancelled.
+- **Caught:** one Loop backoff-write failure could abort the workspace maintenance tick and skip all remaining Loops and pruning.
+
+## 268. Cleanup must use the initiating generation, not a fresh read's identity
+
+Reading the latest checkpoint immediately before cleanup does not prove it still belongs to the operation that just completed. Using that freshly read identity can authorize a stale completion to clear metadata published by an adjacent owner.
+
+- **Do:** carry the pre-attempt identity and allocated attempt identity through the operation, then condition cleanup on either known adjacent generation.
+- **Caught:** Server Loop recovery used the latest persisted control-run id for successful cleanup instead of the completed attempt's captured identity.
 
 ---
 

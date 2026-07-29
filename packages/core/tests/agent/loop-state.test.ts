@@ -18,6 +18,7 @@ import {
   acquireLoopLifecycleLease,
   acquireLoopLease,
   createLoopState,
+  clearLoopRecovery,
   hasActiveLoopLease,
   isLoopLeaseActive,
   isLoopDeliveryActive,
@@ -29,9 +30,11 @@ import {
   readLoopHistory,
   recoverInterruptedLoops,
   pruneLoopStates,
+  recordLoopAutomaticRecoveryFailure,
   recordLoopRecoveryFailure,
   setLoopPriority,
 } from "../../src/agent/loop-state.js";
+import { acquireWorkspaceSessionGuard } from "../../src/agent/session-lease.js";
 
 describe("loop state persistence", () => {
   let workspace: string;
@@ -205,12 +208,95 @@ describe("loop state persistence", () => {
     saveLoopState(workspace, { ...high, status: "interrupted" });
     expect(recoverInterruptedLoops(workspace, { limit: 1 }).map((state) => state.loopId)).toEqual(["priority-high"]);
     const now = new Date("2026-01-01T00:00:00.000Z");
-    const backedOff = recordLoopRecoveryFailure(workspace, high.loopId, new Error("network"), now);
+    expect(
+      recordLoopAutomaticRecoveryFailure(
+        workspace,
+        high.loopId,
+        { priorControlRunId: "run-stale", recoveryAttemptId: "loop-recovery-stale" },
+        new Error("stale"),
+        { now },
+      ).recovery,
+    ).toBeUndefined();
+    saveLoopState(workspace, {
+      ...high,
+      status: "interrupted",
+      controlRunId: "run-next",
+      recoveryAttemptId: "loop-recovery-next",
+    });
+    const guard = acquireWorkspaceSessionGuard(workspace);
+    let backedOff: ReturnType<typeof recordLoopAutomaticRecoveryFailure>;
+    try {
+      backedOff = recordLoopAutomaticRecoveryFailure(
+        workspace,
+        high.loopId,
+        { priorControlRunId: "", recoveryAttemptId: "loop-recovery-next" },
+        new Error("network"),
+        { now, workspaceGuard: guard },
+      );
+    } finally {
+      guard.release();
+    }
     expect(backedOff.recovery).toMatchObject({ attempts: 1, lastError: "network" });
     expect(backedOff.recovery?.nextAttemptAt).toBe("2026-01-01T00:00:30.000Z");
+    expect(backedOff.recoveryAttemptId).toBeUndefined();
     expect(recoverInterruptedLoops(workspace, { now, limit: 2 }).map((state) => state.loopId)).toEqual([
       "priority-low",
     ]);
+    const { recovery: _recovery, ...newerGeneration } = backedOff;
+    saveLoopState(workspace, { ...newerGeneration, controlRunId: "run-foreground" });
+    expect(
+      recordLoopAutomaticRecoveryFailure(
+        workspace,
+        high.loopId,
+        { priorControlRunId: "run-next", recoveryAttemptId: "loop-recovery-next" },
+        new Error("late"),
+        { now },
+      ).recovery,
+    ).toBeUndefined();
+    const activeGeneration = acquireLoopLifecycleLease(workspace, high.loopId);
+    try {
+      expect(() =>
+        recordLoopAutomaticRecoveryFailure(
+          workspace,
+          high.loopId,
+          { priorControlRunId: "run-foreground", recoveryAttemptId: "loop-recovery-invalid-time" },
+          new Error("invalid time"),
+          { now: new Date(Number.NaN) },
+        ),
+      ).toThrow(/recovery time must be valid/);
+    } finally {
+      activeGeneration.release();
+    }
+
+    const legacy = createLoopState({
+      loopId: "legacy-recovery-api",
+      task: "legacy",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 1,
+    });
+    saveLoopState(workspace, { ...legacy, status: "interrupted" });
+    const legacyBackoff = recordLoopRecoveryFailure(workspace, legacy.loopId, new Error("legacy"), now);
+    expect(legacyBackoff.recovery?.attempts).toBe(1);
+    expect(clearLoopRecovery(workspace, legacy.loopId, "run-stale").recovery?.attempts).toBe(1);
+    expect(clearLoopRecovery(workspace, legacy.loopId, "").recovery).toBeUndefined();
+    saveLoopState(workspace, {
+      ...legacyBackoff,
+      controlRunId: "run-auto",
+      recoveryAttemptId: "loop-recovery-clear",
+    });
+    expect(
+      clearLoopRecovery(workspace, legacy.loopId, "", { recoveryAttemptId: "loop-recovery-clear", now }).recovery,
+    ).toBeUndefined();
+    saveLoopState(workspace, {
+      ...legacyBackoff,
+      controlRunId: "run-newer",
+      recoveryAttemptId: "loop-recovery-newer",
+    });
+    expect(
+      clearLoopRecovery(workspace, legacy.loopId, "", { recoveryAttemptId: "loop-recovery-clear", now }).recovery
+        ?.attempts,
+    ).toBe(1);
     const active = acquireLoopLifecycleLease(workspace, low.loopId);
     try {
       expect(() => setLoopPriority(workspace, low.loopId, 10)).toThrow(/already running or being modified/);

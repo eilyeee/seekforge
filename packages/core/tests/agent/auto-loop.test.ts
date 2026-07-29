@@ -18,6 +18,7 @@ import {
   createLoopState,
   loadLoopState,
   recoverInterruptedLoops,
+  saveLoopState,
 } from "../../src/agent/loop-state.js";
 import { createLoopControl } from "../../src/agent/loop-control.js";
 import { enqueueLoopControl } from "../../src/agent/loop-control-store.js";
@@ -285,16 +286,48 @@ describe("runAutoLoop", () => {
   });
 
   it("recovers and automatically resumes an orphaned durable loop", async () => {
-    createLoopState({
+    const orphan = createLoopState({
       loopId: "orphan-auto",
       task: "already done",
       workspace,
       verifyCommand: "true",
       maxIterations: 1,
     });
+    saveLoopState(workspace, {
+      ...orphan,
+      status: "interrupted",
+      recovery: { attempts: 1, lastAttemptAt: "2020-01-01T00:00:00.000Z", lastError: "offline" },
+    });
     const results = await autoResumeInterruptedLoops(mkDeps().deps, workspace);
     expect(results).toMatchObject([{ status: "passed", loopId: "orphan-auto", iterations: 0 }]);
-    expect(loadLoopState(workspace, "orphan-auto")?.status).toBe("passed");
+    expect(loadLoopState(workspace, "orphan-auto")).toMatchObject({ status: "passed" });
+    expect(loadLoopState(workspace, "orphan-auto")?.recovery).toBeUndefined();
+    expect(loadLoopState(workspace, "orphan-auto")?.recoveryAttemptId).toBeUndefined();
+  });
+
+  it("lets a foreground resume override automatic recovery backoff", async () => {
+    const state = createLoopState({
+      loopId: "manual-recovery-override",
+      task: "already done",
+      workspace,
+      verifyCommand: "true",
+      maxIterations: 1,
+    });
+    saveLoopState(workspace, {
+      ...state,
+      status: "interrupted",
+      recovery: {
+        attempts: 3,
+        lastAttemptAt: "2026-01-01T00:00:00.000Z",
+        nextAttemptAt: "2099-01-01T00:00:00.000Z",
+        lastError: "offline",
+      },
+      recoveryAttemptId: "loop-recovery-old",
+    });
+    const resumed = await resumeAutoLoop(mkDeps().deps, state.loopId, { workspace });
+    expect(resumed.status).toBe("passed");
+    expect(loadLoopState(workspace, state.loopId)?.recovery).toBeUndefined();
+    expect(loadLoopState(workspace, state.loopId)?.recoveryAttemptId).toBeUndefined();
   });
 
   it("runs an ordered verification pipeline and ignores optional stage failures", async () => {

@@ -16,8 +16,10 @@ import {
   createMemoryMaintenanceScheduler,
   graphExecutorsWithPlugins,
   clearEngineeringGraphRecovery,
+  clearLoopRecovery,
+  loadLoopState,
   loadPluginContributions,
-  recordLoopRecoveryFailure,
+  recordLoopAutomaticRecoveryFailure,
   recordEngineeringGraphRecoveryFailure,
   recoverInterruptedLoops,
   pruneLoopStates,
@@ -350,37 +352,72 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
                         ? recoverInterruptedLoops(workspace.path, { limit: opts.loopRecoveryMaxPerTick ?? 3 })
                         : []) {
                         recoverySignal.throwIfAborted();
+                        const recoveryAttemptId = `loop-recovery-${randomUUID()}`;
+                        let resumed: Awaited<ReturnType<typeof resumeLoop>>;
                         try {
-                          results.push(
-                            await resumeLoop(
-                              {
-                                workspace: workspace.path,
-                                confirm: async () => false,
-                                extractMemory: true,
-                                signal: recoverySignal,
-                              },
-                              state.loopId,
-                              {
-                                workspace: workspace.path,
-                                approvalMode: "acceptEdits",
-                                abortStatus: "interrupted",
-                                signal: recoverySignal,
-                                workspaceGuard: idleGuard,
-                              },
-                            ),
+                          resumed = await resumeLoop(
+                            {
+                              workspace: workspace.path,
+                              confirm: async () => false,
+                              extractMemory: true,
+                              signal: recoverySignal,
+                            },
+                            state.loopId,
+                            {
+                              workspace: workspace.path,
+                              approvalMode: "acceptEdits",
+                              abortStatus: "interrupted",
+                              signal: recoverySignal,
+                              workspaceGuard: idleGuard,
+                              recoveryAttemptId,
+                            },
                           );
                         } catch (error) {
                           if (recoverySignal.aborted) {
                             if (signal.aborted) throw error;
                             break;
                           }
-                          recordLoopRecoveryFailure(workspace.path, state.loopId, error);
+                          try {
+                            recordLoopAutomaticRecoveryFailure(
+                              workspace.path,
+                              state.loopId,
+                              { priorControlRunId: state.controlRunId ?? "", recoveryAttemptId },
+                              error,
+                              { workspaceGuard: idleGuard },
+                            );
+                          } catch (recoveryError) {
+                            logger.log("error", "loop.recovery.backoff_failed", {
+                              workspace: workspace.path,
+                              loopId: state.loopId,
+                              error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
+                            });
+                          }
                           logger.log("error", "loop.recovery.failed", {
                             workspace: workspace.path,
                             loopId: state.loopId,
                             error: error instanceof Error ? error.message : String(error),
                           });
+                          continue;
                         }
+                        try {
+                          const finalState = loadLoopState(workspace.path, state.loopId);
+                          if (
+                            resumed.status !== "interrupted" &&
+                            (finalState?.recovery || finalState?.recoveryAttemptId)
+                          ) {
+                            clearLoopRecovery(workspace.path, state.loopId, state.controlRunId ?? "", {
+                              workspaceGuard: idleGuard,
+                              recoveryAttemptId,
+                            });
+                          }
+                        } catch (cleanupError) {
+                          logger.log("error", "loop.recovery.cleanup_failed", {
+                            workspace: workspace.path,
+                            loopId: state.loopId,
+                            error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+                          });
+                        }
+                        results.push(resumed);
                       }
                       if (opts.loopAutoPrune) {
                         if (recoverySignal.aborted) return results;
@@ -450,8 +487,9 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
                         })) {
                           maintenanceSignal.throwIfAborted();
                           const recoveryAttemptId = `graph-recovery-${randomUUID()}`;
+                          let resumed: Awaited<ReturnType<typeof runGraph>>;
                           try {
-                            const resumed = await runGraph(
+                            resumed = await runGraph(
                               {
                                 workspace: workspace.path,
                                 confirm: async () => false,
@@ -467,11 +505,6 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
                                 executors: graphExecutorsFor(workspace.path),
                               },
                             );
-                            states.push(
-                              resumed.recovery || resumed.recoveryAttemptId
-                                ? clearEngineeringGraphRecovery(workspace.path, resumed.graphId, resumed.controlRunId)
-                                : resumed,
-                            );
                           } catch (error) {
                             if (maintenanceSignal.aborted) {
                               if (signal.aborted) throw error;
@@ -483,6 +516,8 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
                                 state.graphId,
                                 { priorControlRunId: state.controlRunId, recoveryAttemptId },
                                 error,
+                                new Date(),
+                                idleGuard,
                               );
                             } catch (recoveryError) {
                               logger.log("error", "graph.recovery.backoff_failed", {
@@ -496,7 +531,26 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
                               graphId: state.graphId,
                               error: error instanceof Error ? error.message : String(error),
                             });
+                            continue;
                           }
+                          let settled = resumed;
+                          if (resumed.recovery || resumed.recoveryAttemptId) {
+                            try {
+                              settled = clearEngineeringGraphRecovery(
+                                workspace.path,
+                                resumed.graphId,
+                                resumed.controlRunId,
+                                idleGuard,
+                              );
+                            } catch (cleanupError) {
+                              logger.log("error", "graph.recovery.cleanup_failed", {
+                                workspace: workspace.path,
+                                graphId: state.graphId,
+                                error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+                              });
+                            }
+                          }
+                          states.push(settled);
                         }
                       }
                       if (opts.graphAutoPrune && !maintenanceSignal.aborted) {

@@ -26,6 +26,7 @@ import {
   setEngineeringGraphPriority,
 } from "../../src/agent/graph-state.js";
 import type { AgentCoreDeps } from "../../src/agent/loop.js";
+import { acquireWorkspaceSessionGuard } from "../../src/agent/session-lease.js";
 import { listGitWorktrees } from "../../src/worktree.js";
 
 const deps = {} as AgentCoreDeps;
@@ -1397,13 +1398,20 @@ describe("runEngineeringGraph", () => {
       controlRunId: "graph-run-next",
       recoveryAttemptId: "graph-recovery-next",
     });
-    const backedOff = recordEngineeringGraphRecoveryFailure(
-      root,
-      "recovery-high",
-      { priorControlRunId: high.controlRunId, recoveryAttemptId: "graph-recovery-next" },
-      new Error("network"),
-      now,
-    );
+    const guard = acquireWorkspaceSessionGuard(root);
+    let backedOff: ReturnType<typeof recordEngineeringGraphRecoveryFailure>;
+    try {
+      backedOff = recordEngineeringGraphRecoveryFailure(
+        root,
+        "recovery-high",
+        { priorControlRunId: high.controlRunId, recoveryAttemptId: "graph-recovery-next" },
+        new Error("network"),
+        now,
+        guard,
+      );
+    } finally {
+      guard.release();
+    }
     expect(backedOff.recovery).toMatchObject({ attempts: 1, lastError: "network" });
     expect(backedOff.recovery?.nextAttemptAt).toBe("2026-01-01T00:00:30.000Z");
     expect(recoverableEngineeringGraphStates(root, { now }).map((state) => state.graphId)).toEqual(["recovery-low"]);
@@ -1412,7 +1420,13 @@ describe("runEngineeringGraph", () => {
         (state) => state.graphId,
       ),
     ).toEqual(["recovery-high", "recovery-low"]);
-    const cleared = clearEngineeringGraphRecovery(root, "recovery-high", backedOff.controlRunId);
+    const clearGuard = acquireWorkspaceSessionGuard(root);
+    let cleared: ReturnType<typeof clearEngineeringGraphRecovery>;
+    try {
+      cleared = clearEngineeringGraphRecovery(root, "recovery-high", backedOff.controlRunId, clearGuard);
+    } finally {
+      clearGuard.release();
+    }
     expect(cleared.recovery).toBeUndefined();
     expect(cleared.recoveryAttemptId).toBeUndefined();
 

@@ -20,9 +20,10 @@ import {
   acquireLoopLease,
   createLoopLogWriter,
   createLoopState,
+  isValidLoopId,
   loadLoopState,
   recoverInterruptedLoops,
-  recordLoopRecoveryFailure,
+  recordLoopAutomaticRecoveryFailure,
   saveLoopState,
   type LoopState,
 } from "./loop-state.js";
@@ -203,6 +204,8 @@ export type LoopOptions = {
   abortStatus?: "cancelled" | "interrupted";
   /** Internal: workspace idle guard held by a lifecycle owner. */
   workspaceGuard?: SessionLease;
+  /** Internal identity used only to bind automatic-recovery bookkeeping. */
+  recoveryAttemptId?: string;
   /** Per-iteration progress callback. */
   onEvent?: (event: LoopEvent) => void;
   /** Optional safe-boundary pause/resume/steering channel. */
@@ -497,6 +500,12 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
   }
   if (opts.adaptiveBudget !== undefined && typeof opts.adaptiveBudget !== "boolean") {
     throw new Error("Loop adaptiveBudget must be boolean");
+  }
+  if (
+    opts.recoveryAttemptId !== undefined &&
+    (opts.resumeState === undefined || !isValidLoopId(opts.recoveryAttemptId))
+  ) {
+    throw new Error("Loop recoveryAttemptId requires a resumed Loop and a safe id");
   }
   const configuredIterations = opts.maxIterations ?? opts.resumeState?.maxIterations;
   if (
@@ -805,6 +814,13 @@ async function runAutoLoopWithLease(
     }
   } else if (state !== undefined) {
     state = { ...state, status: "running", controlRunId, updatedAt: new Date().toISOString() };
+    if (opts.recoveryAttemptId) {
+      state.recoveryAttemptId = opts.recoveryAttemptId;
+    } else {
+      // A foreground resume overrides any pending automatic-recovery generation and backoff.
+      delete state.recoveryAttemptId;
+      delete state.recovery;
+    }
     try {
       saveLoopState(opts.workspace, state);
     } catch (error) {
@@ -864,6 +880,10 @@ async function runAutoLoopWithLease(
       ...(acceptanceReview ? { acceptanceReview } : {}),
     };
     const withId = state === undefined ? withRequirements : { ...withRequirements, loopId: state.loopId };
+    if (state !== undefined && opts.recoveryAttemptId) {
+      delete state.recoveryAttemptId;
+      if (withId.status !== "interrupted") delete state.recovery;
+    }
     persist(
       {
         status: withId.status,
@@ -2006,23 +2026,39 @@ export async function autoResumeInterruptedLoops(
     limit?: number;
     onEvent?: (loopId: string, event: LoopEvent) => void;
     onError?: (loopId: string, error: unknown) => void;
+    onRecoveryError?: (loopId: string, error: unknown) => void;
   } = {},
 ): Promise<LoopResult[]> {
   const recovered = recoverInterruptedLoops(workspace, options.limit !== undefined ? { limit: options.limit } : {});
   const results: LoopResult[] = [];
   for (const state of recovered) {
     options.signal?.throwIfAborted();
+    const recoveryAttemptId = `loop-recovery-${randomUUID()}`;
     try {
       results.push(
         await resumeAutoLoop(deps, state.loopId, {
           workspace,
           ...(options.signal ? { signal: options.signal } : {}),
+          recoveryAttemptId,
           ...(options.onEvent ? { onEvent: (event) => options.onEvent?.(state.loopId, event) } : {}),
         }),
       );
     } catch (error) {
       if (options.signal?.aborted) throw error;
-      recordLoopRecoveryFailure(workspace, state.loopId, error);
+      try {
+        recordLoopAutomaticRecoveryFailure(
+          workspace,
+          state.loopId,
+          { priorControlRunId: state.controlRunId ?? "", recoveryAttemptId },
+          error,
+        );
+      } catch (recoveryError) {
+        try {
+          options.onRecoveryError?.(state.loopId, recoveryError);
+        } catch {
+          // Recovery observability must not stop later independent candidates.
+        }
+      }
       options.onError?.(state.loopId, error);
     }
   }

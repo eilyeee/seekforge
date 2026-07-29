@@ -194,7 +194,8 @@ checkout 后会拒绝旧检查点，而不会复用另一个工作区产生的�
 `budgetReason`）、验证器错误、取消、无进展/迭代耗尽，以及带结构化 provider/session
 错误详情的 `agent_error`。
 `autoResumeInterruptedLoops` 会恢复失去 owner 的持久化 `running` 记录或已有的 `interrupted`
-记录；显式暂停的记录必须在前台明确恢复。最终成功时只抽取一次记忆，并对整个 Loop 只结算一次已选技能效果。
+记录；显式暂停的记录必须在前台明确恢复。可选的 `onRecoveryError` observer 会把退避记账失败与本次
+运行的 `onError` 分开报告，且记账失败会被隔离。最终成功时只抽取一次记忆，并对整个 Loop 只结算一次已选技能效果。
 通过后的交付入口会持久化严格的 `LoopState.delivery` 记录，包括 `mode`、`status`、
 `attempts`、`updatedAt`，并在交付终态中只保存 `artifact` 或 `error` 之一。
 

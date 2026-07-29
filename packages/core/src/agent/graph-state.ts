@@ -15,12 +15,14 @@ import { MANAGED_ORCHESTRATION_BRANCH_RE } from "./loop-managed-worktree.js";
 import { isDenseArray } from "./orchestration.js";
 import {
   automaticRecoveryEligible,
+  automaticRecoveryTime,
   compareAutomaticRecoveryCandidates,
   nextAutomaticRecoveryMetadata,
+  parseAutomaticRecoveryMetadata,
   type AutomaticRecoveryMetadata,
 } from "./recovery-policy.js";
 import { engineeringGraphSignalAvailable } from "./graph-signal-store.js";
-import { acquireSessionLease, isSessionRunActive } from "./session-lease.js";
+import { acquireSessionLease, isSessionRunActive, type SessionLease } from "./session-lease.js";
 
 export const MAX_GRAPH_STATE_BYTES = 1024 * 1024;
 export const MAX_GRAPH_EVENTS = 128;
@@ -296,7 +298,7 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
   const mapProgressValue = value.schemaVersion === 1 ? undefined : value.mapProgress;
   const elapsedMs = value.schemaVersion === 1 || value.elapsedMs === undefined ? 0 : value.elapsedMs;
   const priority = value.priority ?? 0;
-  const recovery = value.recovery;
+  const recovery = parseAutomaticRecoveryMetadata(value.recovery);
   const recoveryAttemptId = value.recoveryAttemptId;
   if (
     typeof value.fingerprint !== "string" ||
@@ -319,21 +321,7 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
     !Number.isSafeInteger(priority) ||
     (priority as number) < -10 ||
     (priority as number) > 10 ||
-    (recovery !== undefined &&
-      (!isRecord(recovery) ||
-        Object.keys(recovery).some(
-          (key) => key !== "attempts" && key !== "lastAttemptAt" && key !== "nextAttemptAt" && key !== "lastError",
-        ) ||
-        !Number.isSafeInteger(recovery.attempts) ||
-        (recovery.attempts as number) < 1 ||
-        !validTimestamp(recovery.lastAttemptAt) ||
-        (recovery.nextAttemptAt !== undefined && !validTimestamp(recovery.nextAttemptAt)) ||
-        (recovery.nextAttemptAt !== undefined &&
-          Date.parse(recovery.nextAttemptAt as string) < Date.parse(recovery.lastAttemptAt as string)) ||
-        (recovery.lastError !== undefined &&
-          (typeof recovery.lastError !== "string" ||
-            recovery.lastError.length < 1 ||
-            recovery.lastError.length > 8_192)))) ||
+    recovery === null ||
     (recoveryAttemptId !== undefined && !isValidLoopDagId(recoveryAttemptId)) ||
     !validTimestamp(value.createdAt) ||
     !validTimestamp(value.updatedAt) ||
@@ -494,16 +482,7 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
     controlSeq: controlSeq as number,
     controlRunId,
     priority: priority as number,
-    ...(isRecord(recovery)
-      ? {
-          recovery: {
-            attempts: recovery.attempts as number,
-            lastAttemptAt: recovery.lastAttemptAt as string,
-            ...(typeof recovery.nextAttemptAt === "string" ? { nextAttemptAt: recovery.nextAttemptAt } : {}),
-            ...(typeof recovery.lastError === "string" ? { lastError: recovery.lastError } : {}),
-          },
-        }
-      : {}),
+    ...(recovery ? { recovery } : {}),
     ...(typeof recoveryAttemptId === "string" ? { recoveryAttemptId } : {}),
     ...(pauseReason ? { pauseReason } : {}),
     ...(fanIn ? { fanIn } : {}),
@@ -615,6 +594,7 @@ export function recordEngineeringGraphRecoveryFailure(
   identity: { priorControlRunId: string; recoveryAttemptId: string },
   error: unknown,
   now = new Date(),
+  workspaceGuard?: SessionLease,
 ): EngineeringGraphState {
   if (
     !isValidLoopDagId(graphId) ||
@@ -623,7 +603,8 @@ export function recordEngineeringGraphRecoveryFailure(
   ) {
     throw new Error("Graph recovery identity is invalid");
   }
-  const lease = acquireSessionLease(workspace, `engineering-graph-${graphId}`);
+  const { nowIso } = automaticRecoveryTime(now);
+  const lease = acquireSessionLease(workspace, `engineering-graph-${graphId}`, workspaceGuard);
   try {
     const state = loadEngineeringGraphState(workspace, graphId);
     if (!state) throw new Error(`Persisted Graph not found or invalid: ${graphId}`);
@@ -633,7 +614,7 @@ export function recordEngineeringGraphRecoveryFailure(
     const next: EngineeringGraphState = {
       ...state,
       recovery: nextAutomaticRecoveryMetadata(state.recovery, error, now),
-      updatedAt: now.toISOString(),
+      updatedAt: nowIso,
     };
     saveEngineeringGraphState(workspace, next);
     return next;
@@ -647,10 +628,11 @@ export function clearEngineeringGraphRecovery(
   workspace: string,
   graphId: string,
   controlRunId: string,
+  workspaceGuard?: SessionLease,
 ): EngineeringGraphState {
   if (!isValidLoopDagId(graphId) || !isValidLoopDagId(controlRunId))
     throw new Error("Graph recovery identity is invalid");
-  const lease = acquireSessionLease(workspace, `engineering-graph-${graphId}`);
+  const lease = acquireSessionLease(workspace, `engineering-graph-${graphId}`, workspaceGuard);
   try {
     const state = loadEngineeringGraphState(workspace, graphId);
     if (!state) throw new Error(`Persisted Graph not found or invalid: ${graphId}`);

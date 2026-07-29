@@ -81,6 +81,17 @@ export function LoopListSection(props: {
               {t("chat.loop.manager.delete")}
             </Button>
           </div>
+          {loop.recovery && (
+            <p className="mt-1 text-tertiary">
+              {t("chat.loop.graph.recoveryAttempt", { value: loop.recovery.attempts })}
+              {loop.recovery.nextAttemptAt
+                ? ` · ${t("chat.loop.graph.recoveryNext", { value: loop.recovery.nextAttemptAt })}`
+                : ""}
+              {loop.recovery.lastError
+                ? ` · ${t("chat.loop.graph.recoveryError", { value: loop.recovery.lastError })}`
+                : ""}
+            </p>
+          )}
         </div>
       ))}
     </div>

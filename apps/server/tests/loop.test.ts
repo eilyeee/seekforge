@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
 import {
+  acquireLoopLifecycleLease,
   acquireSessionLease,
   createLoopState,
   loadLoopState,
@@ -197,8 +198,13 @@ describe("idle Loop recovery", () => {
 
     foreground.release();
     await vi.waitFor(() => expect(resumeLoop).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(loadLoopState(workspace, "idle-orphan")?.recovery).toMatchObject({
+        attempts: 1,
+        lastError: "temporary provider outage",
+      }),
+    );
     const backedOff = loadLoopState(workspace, "idle-orphan");
-    expect(backedOff?.recovery).toMatchObject({ attempts: 1, lastError: "temporary provider outage" });
     if (!backedOff?.recovery) throw new Error("missing recovery backoff");
     saveLoopState(workspace, {
       ...backedOff,
@@ -206,6 +212,7 @@ describe("idle Loop recovery", () => {
     });
     await vi.waitFor(() => expect(resumeLoop).toHaveBeenCalledTimes(2));
     expect(loadLoopState(workspace, "idle-orphan")?.status).toBe("passed");
+    expect(loadLoopState(workspace, "idle-orphan")?.recovery).toBeUndefined();
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(resumeLoop).toHaveBeenCalledTimes(2);
     expect(log).toHaveBeenCalledWith(
@@ -218,6 +225,58 @@ describe("idle Loop recovery", () => {
       "loop.recovery.completed",
       expect.objectContaining({ workspace, count: 1 }),
     );
+  });
+
+  it("keeps a successful recovery successful when metadata cleanup fails", async () => {
+    const workspace = makeWorkspace();
+    const state = createLoopState({
+      loopId: "idle-cleanup-failure",
+      task: "finish despite cleanup",
+      workspace,
+      verifyCommand: "true",
+      maxIterations: 1,
+    });
+    saveLoopState(workspace, {
+      ...state,
+      status: "interrupted",
+      recovery: { attempts: 1, lastAttemptAt: "2020-01-01T00:00:00.000Z", lastError: "old" },
+    });
+    let blocker: ReturnType<typeof acquireLoopLifecycleLease> | undefined;
+    const log = vi.fn();
+    server = await startServer({
+      workspace,
+      port: 0,
+      token: TOKEN,
+      createAgent: unusedAgentFactory,
+      resumeLoop: async (_agentOpts, loopId, loopOpts) => {
+        blocker = acquireLoopLifecycleLease(workspace, loopId, loopOpts.workspaceGuard);
+        const current = loadLoopState(workspace, loopId);
+        if (!current) throw new Error("missing recovered state");
+        saveLoopState(workspace, { ...current, status: "passed", updatedAt: new Date().toISOString() });
+        return loopResult({ loopId, iterations: 0 });
+      },
+      loopAutoResume: true,
+      loopRecoveryInitialDelayMs: 5,
+      loopRecoveryIntervalMs: 60_000,
+      logger: { log },
+    });
+    try {
+      await vi.waitFor(() =>
+        expect(log).toHaveBeenCalledWith(
+          "error",
+          "loop.recovery.cleanup_failed",
+          expect.objectContaining({ workspace, loopId: state.loopId }),
+        ),
+      );
+      expect(log).not.toHaveBeenCalledWith(
+        "error",
+        "loop.recovery.failed",
+        expect.objectContaining({ loopId: state.loopId }),
+      );
+      expect(loadLoopState(workspace, state.loopId)?.status).toBe("passed");
+    } finally {
+      blocker?.release();
+    }
   });
 
   it("prunes old terminal records only during opted-in idle maintenance", async () => {
