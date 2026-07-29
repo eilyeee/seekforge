@@ -944,6 +944,13 @@ export type LoopDeliverySummary = {
   error?: string;
 };
 
+export type AutomaticRecoverySummary = {
+  attempts: number;
+  lastAttemptAt: string;
+  nextAttemptAt?: string;
+  lastError?: string;
+};
+
 export type LoopStateSummary = {
   loopId: string;
   status: LoopPersistedStatus;
@@ -956,6 +963,7 @@ export type LoopStateSummary = {
   elapsedMs?: number;
   verifyRuns?: number;
   priority?: number;
+  recovery?: AutomaticRecoverySummary;
   updatedAt: string;
   delivery?: LoopDeliverySummary;
 };
@@ -1071,6 +1079,8 @@ export type EngineeringGraphSummary = {
   spentCost: number;
   spentTokens: number;
   elapsedMs: number;
+  priority: number;
+  recovery?: AutomaticRecoverySummary;
   activeAttempts?: Array<{ nodeId: string; attempt: number; idempotencyKey: string; startedAt: string }>;
   controlSeq?: number;
   controlRunId?: string;

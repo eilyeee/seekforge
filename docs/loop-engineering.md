@@ -286,10 +286,11 @@ seekforge loop-cleanup <worktree-name> [--force]
   regression only inside a retained Loop worktree, then reruns verification and
   replaces the convergence baseline with the restored result.
 - `loop-history <id> [--after N] [--limit N]` replays the rotated JSONL event
-  history. `loop-recover` marks orphaned `running` or `paused` records as `interrupted`;
+  history. `loop-recover` marks orphaned `running` records as `interrupted`;
   embedders can call `autoResumeInterruptedLoops` to continue them. Existing
   `interrupted` records remain resumable so a transient recovery failure can be
   retried; a record whose Loop lease is still live is never offered for recovery.
+  A durable user-paused record remains paused until an explicit continue/resume.
 - Automatic recovery uses `--priority -10..10`/`loop-priority`, processes at
   most three candidates per workspace tick, and isolates each failure with
   exponential retry backoff (30 seconds to one hour). A foreground run requests

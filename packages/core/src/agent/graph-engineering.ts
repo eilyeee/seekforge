@@ -115,6 +115,8 @@ export type RunEngineeringGraphOptions = {
   onEvent?: (event: GraphEvent) => void;
   /** Internal owner guard used by idle maintenance. */
   workspaceGuard?: SessionLease;
+  /** Internal attempt identity used only to bind automatic-recovery bookkeeping. */
+  recoveryAttemptId?: string;
 };
 
 type ExecutionResult = Omit<GraphNodeResult, "id" | "kind" | "status" | "attempts" | "startedAt" | "completedAt">;
@@ -387,6 +389,9 @@ export function validateEngineeringGraphRunOptions(
       !isValidLoopDagId(options.parentGraph.nodeId))
   ) {
     throw new Error("Graph parentGraph provenance is invalid");
+  }
+  if (options.recoveryAttemptId !== undefined && !isValidLoopDagId(options.recoveryAttemptId)) {
+    throw new Error("Graph recoveryAttemptId is invalid");
   }
   const declaredNodes = new Set<string>();
   const gateIds = new Set<string>();
@@ -897,10 +902,12 @@ async function executeNode(
       ...node.graph!,
       graphId: childGraphId,
     };
+    // A parent invocation identity must never alias a separately persisted child.
+    const { recoveryAttemptId: _parentRecoveryAttemptId, ...childOptions } = options;
     let nested: EngineeringGraphState;
     try {
       nested = await runEngineeringGraph(deps, nestedDefinition, {
-        ...options,
+        ...childOptions,
         workspace,
         persist: options.persist !== false,
         resume: restartChild ? false : resumeChild,
@@ -1000,6 +1007,7 @@ export async function runEngineeringGraph(
   let managedResourceLease: ReturnType<typeof acquireManagedOrchestrationWorktreeLease> | undefined;
   let managedWorktrees: Map<string, ManagedOrchestrationWorktree> | undefined;
   let durableCheckpointStarted = false;
+  let restartPriority = 0;
   try {
     if (persistenceEnabled && !options.resume && !options.restart) {
       if (engineeringGraphStateExists(options.workspace, definition.graphId)) {
@@ -1013,6 +1021,7 @@ export async function runEngineeringGraph(
         // only an observational claim; retire it before a new run generation.
         await acknowledgeCommittedWaitSignals(options.workspace, previous).catch(() => undefined);
         archiveEngineeringGraphRun(options.workspace, previous);
+        restartPriority = previous.priority;
       }
     }
     if (definition.managedWorktrees) {
@@ -1064,6 +1073,8 @@ export async function runEngineeringGraph(
       mapProgress: {},
       controlSeq: 0,
       controlRunId,
+      priority: restartPriority,
+      ...(options.recoveryAttemptId ? { recoveryAttemptId: options.recoveryAttemptId } : {}),
       createdAt: now,
       updatedAt: now,
       resourceGeneration: randomUUID(),
@@ -1082,6 +1093,13 @@ export async function runEngineeringGraph(
       }
       if (restored.completedAt) archiveEngineeringGraphRun(options.workspace, restored);
       state = { ...restored, status: "running", completedAt: undefined, controlRunId };
+      if (options.recoveryAttemptId) {
+        state.recoveryAttemptId = options.recoveryAttemptId;
+      } else {
+        // A manual resume overrides any pending automatic-recovery generation and backoff.
+        delete state.recoveryAttemptId;
+        delete state.recovery;
+      }
       delete state.pauseReason;
     }
     const priorElapsedMs = state.elapsedMs;

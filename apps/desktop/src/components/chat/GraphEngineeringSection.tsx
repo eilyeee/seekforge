@@ -35,6 +35,7 @@ export function GraphEngineeringSection(props: {
     priority?: number,
   ) => void;
   onSignal: (graphId: string, name: string) => void;
+  onRecoveryPriority: (graph: EngineeringGraphSummary, delta: number) => void;
   onRemove: (graphId: string) => void;
 }) {
   const t = useT();
@@ -65,7 +66,8 @@ export function GraphEngineeringSection(props: {
             <summary className="cursor-pointer">
               {graph.graphId} · <Badge tone={tone(graph.status)}>{graph.status}</Badge> · {graph.results.length}{" "}
               {t("chat.loop.manager.nodes")} · ${graph.spentCost.toFixed(4)} · {graph.spentTokens.toLocaleString()}{" "}
-              {t("chat.loop.graph.tokens")} · {(graph.elapsedMs / 1000).toFixed(1)}s
+              {t("chat.loop.graph.tokens")} · {(graph.elapsedMs / 1000).toFixed(1)}s ·{" "}
+              {t("chat.loop.manager.priority", { value: graph.priority })}
             </summary>
             <div className="mt-2 flex flex-wrap gap-1">
               {graph.results.map((node) => (
@@ -78,6 +80,17 @@ export function GraphEngineeringSection(props: {
               <p className="mt-1 text-tertiary">
                 {t("chat.loop.graph.activeAttempts")}:{" "}
                 {graph.activeAttempts.map((attempt) => `${attempt.nodeId}#${attempt.attempt}`).join(", ")}
+              </p>
+            )}
+            {graph.recovery && (
+              <p className="mt-1 text-tertiary">
+                {t("chat.loop.graph.recoveryAttempt", { value: graph.recovery.attempts })}
+                {graph.recovery.nextAttemptAt
+                  ? ` · ${t("chat.loop.graph.recoveryNext", { value: graph.recovery.nextAttemptAt })}`
+                  : ""}
+                {graph.recovery.lastError
+                  ? ` · ${t("chat.loop.graph.recoveryError", { value: graph.recovery.lastError })}`
+                  : ""}
               </p>
             )}
             {nodes.length > 0 && (
@@ -182,6 +195,22 @@ export function GraphEngineeringSection(props: {
               </p>
             )}
             <div className="mt-1 flex flex-wrap gap-1">
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={props.busy || graph.priority <= -10}
+                onClick={() => props.onRecoveryPriority(graph, -1)}
+              >
+                −
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={props.busy || graph.priority >= 10}
+                onClick={() => props.onRecoveryPriority(graph, 1)}
+              >
+                +
+              </Button>
               <Button size="sm" variant="ghost" disabled={props.busy} onClick={() => props.onInspect(graph.graphId)}>
                 {t("chat.loop.manager.inspect")}
               </Button>

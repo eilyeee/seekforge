@@ -16,11 +16,14 @@ import {
   pruneEngineeringGraphStates,
 } from "../../src/agent/graph-resources.js";
 import {
+  clearEngineeringGraphRecovery,
   listEngineeringGraphStates,
   loadEngineeringGraphState,
+  recordEngineeringGraphRecoveryFailure,
   recoverableEngineeringGraphStates,
   removeEngineeringGraphState,
   saveEngineeringGraphState,
+  setEngineeringGraphPriority,
 } from "../../src/agent/graph-state.js";
 import type { AgentCoreDeps } from "../../src/agent/loop.js";
 import { listGitWorktrees } from "../../src/worktree.js";
@@ -593,6 +596,7 @@ describe("runEngineeringGraph", () => {
     });
     await queued;
     expect(paused).toMatchObject({ status: "paused", pauseReason: "control" });
+    expect(recoverableEngineeringGraphStates(root).map((state) => state.graphId)).not.toContain("controlled");
     const resumed = await runEngineeringGraph(deps, definition, {
       workspace: root,
       resume: true,
@@ -1360,6 +1364,75 @@ describe("runEngineeringGraph", () => {
       version: 1,
       signals: [],
     });
+  });
+
+  it("prioritizes automatic recovery and backs off matching failed invocations", async () => {
+    const root = workspace();
+    const waitGraph = (graphId: string) => ({
+      graphId,
+      nodes: [{ id: "external", kind: "wait", waitFor: { signal: "continue" } }],
+    });
+    await runEngineeringGraph(deps, waitGraph("recovery-low"), { workspace: root });
+    await runEngineeringGraph(deps, waitGraph("recovery-high"), { workspace: root });
+    await enqueueEngineeringGraphSignal(root, "recovery-low", "continue");
+    await enqueueEngineeringGraphSignal(root, "recovery-high", "continue");
+    setEngineeringGraphPriority(root, "recovery-low", -5);
+    const high = setEngineeringGraphPriority(root, "recovery-high", 5);
+    expect(recoverableEngineeringGraphStates(root).map((state) => state.graphId)).toEqual([
+      "recovery-high",
+      "recovery-low",
+    ]);
+
+    const now = new Date("2026-01-01T00:00:00.000Z");
+    recordEngineeringGraphRecoveryFailure(
+      root,
+      "recovery-high",
+      { priorControlRunId: "graph-run-stale", recoveryAttemptId: "graph-recovery-stale" },
+      new Error("stale"),
+      now,
+    );
+    expect(loadEngineeringGraphState(root, "recovery-high")?.recovery).toBeUndefined();
+    saveEngineeringGraphState(root, {
+      ...high,
+      controlRunId: "graph-run-next",
+      recoveryAttemptId: "graph-recovery-next",
+    });
+    const backedOff = recordEngineeringGraphRecoveryFailure(
+      root,
+      "recovery-high",
+      { priorControlRunId: high.controlRunId, recoveryAttemptId: "graph-recovery-next" },
+      new Error("network"),
+      now,
+    );
+    expect(backedOff.recovery).toMatchObject({ attempts: 1, lastError: "network" });
+    expect(backedOff.recovery?.nextAttemptAt).toBe("2026-01-01T00:00:30.000Z");
+    expect(recoverableEngineeringGraphStates(root, { now }).map((state) => state.graphId)).toEqual(["recovery-low"]);
+    expect(
+      recoverableEngineeringGraphStates(root, { now: new Date("2026-01-01T00:00:30.000Z") }).map(
+        (state) => state.graphId,
+      ),
+    ).toEqual(["recovery-high", "recovery-low"]);
+    const cleared = clearEngineeringGraphRecovery(root, "recovery-high", backedOff.controlRunId);
+    expect(cleared.recovery).toBeUndefined();
+    expect(cleared.recoveryAttemptId).toBeUndefined();
+
+    const low = loadEngineeringGraphState(root, "recovery-low");
+    expect(low).toBeDefined();
+    saveEngineeringGraphState(root, { ...low!, controlRunId: "" });
+    recordEngineeringGraphRecoveryFailure(
+      root,
+      "recovery-low",
+      { priorControlRunId: "", recoveryAttemptId: "graph-recovery-manual" },
+      new Error("temporary"),
+      now,
+    );
+    const manuallyResumed = await runEngineeringGraph(deps, waitGraph("recovery-low"), {
+      workspace: root,
+      resume: true,
+    });
+    expect(manuallyResumed.status).toBe("passed");
+    expect(manuallyResumed.recovery).toBeUndefined();
+    expect(manuallyResumed.recoveryAttemptId).toBeUndefined();
   });
 
   it("keeps the total duration budget cumulative while excluding offline pause time", async () => {

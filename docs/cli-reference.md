@@ -131,9 +131,9 @@ Loop control:
 
 | Flag | Description |
 | --- | --- |
-| `--loop-auto-resume` | Opt in to recovering durable `running`, `paused`, or already-`interrupted` Loops while their workspace is idle. The first check runs after 30 seconds, then every 5 minutes. Busy workspaces and records with live Loop owners are skipped; an acquired idle guard remains active for the full recovery and permits only its own Agent sessions. Workspaces are handled sequentially, transient resume failures are retried on a later check, and server shutdown leaves an owned recovery `interrupted` for the next start. |
+| `--loop-auto-resume` | Opt in to recovering durable ownerless `running` or already-`interrupted` Loops while their workspace is idle. Explicitly paused Loops stay paused. The first check runs after 30 seconds, then every 5 minutes. Busy workspaces and records with live Loop owners are skipped; an acquired idle guard remains active for the full recovery and permits only its own Agent sessions. Workspaces are handled sequentially, transient resume failures are retried on a later check, and server shutdown leaves an owned recovery `interrupted` for the next start. |
 | `--loop-auto-prune` | Opt in to pruning terminal Loop records during idle maintenance. By default, eligible records are pruned when older than 30 days or beyond the newest 100; resumable states and unfinished deliveries are never eligible. |
-| `--graph-auto-resume` | Opt in to resuming ownerless running or operator-paused Engineering Graphs while the physical workspace is idle. Approval-paused Graphs remain paused. |
+| `--graph-auto-resume` | Opt in to resuming ownerless running Graphs or wait-paused Graphs with a ready timer/signal while the physical workspace is idle. Operator and approval pauses remain paused; candidates use mutable priority and persisted exponential backoff. |
 | `--graph-auto-prune` | Opt in to terminal Graph retention during idle maintenance. Eligible managed resources are archived and pruned first; dirty worktrees and resumable Graphs are retained. |
 
 Automatic Loop recovery is disabled by default because a resumed Loop can make
@@ -243,7 +243,7 @@ to cross a node gate and `--rerun <node-id>` to invalidate that node and its des
 `loop-speculate <file> --budget <usd>` persists two or three isolated strategies;
 `loop-speculation-list` and `loop-speculation-promote` inspect and explicitly merge the winner.
 `loop-evidence <id> --format json|sarif|junit [--compare <id>]` exports attestable evidence or compares runs.
-`graph validate|run|resume|list|show|history|delete` manages heterogeneous Engineering Graphs. Definitions can combine Agent, Loop, function, router, gate, and nested-graph nodes; `--approve` crosses a gate, `--rerun` invalidates a node plus descendants, and `--restart` explicitly replaces an existing checkpoint. See [Graph Engineering](graph-engineering.md).
+`graph validate|run|resume|list|show|history|priority|delete` manages heterogeneous Engineering Graphs. `graph priority <id> <-10..10>` changes automatic-recovery order. Definitions can combine Agent, Loop, function, router, gate, and nested-graph nodes; `--approve` crosses a gate, `--rerun` invalidates a node plus descendants, and `--restart` explicitly replaces an existing checkpoint. See [Graph Engineering](graph-engineering.md).
 TUI and Desktop/WebSocket Loop surfaces also support safe-boundary
 pause, resume, priority, and steering.
 `seekforge loop-cleanup <name>` removes a retained `seekforge/loop-*` worktree;

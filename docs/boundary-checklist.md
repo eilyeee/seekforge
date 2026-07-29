@@ -2937,6 +2937,27 @@ Correct claim ordering prevents event loss, but it does not by itself make a pau
 - **Do:** let recovery scans inspect durable event readiness, and reconcile claims already represented by committed workflow results before continuing or replacing a run.
 - **Caught:** an enqueued Graph signal did not wake idle recovery, while a crash after checkpointing a passed wait could leave its claimed signal permanently retained.
 
+## 263. A durable manual pause is not an orphaned run
+
+Both states lack a live owner after a process exits, but their intent is different: an orphaned running checkpoint requests recovery, while an explicit pause requests inactivity.
+
+- **Do:** classify recovery from the persisted lifecycle reason; recover ownerless running work and ready waits, but require an explicit continue for user/control and approval pauses.
+- **Caught:** idle recovery automatically continued explicitly paused Loops and control-paused Engineering Graphs.
+
+## 264. Recovery bookkeeping must accept only known adjacent generations
+
+An automatic attempt can fail before publishing its new run identity or after doing so. Recording against only one identity loses early failures; updating whichever identity is current lets a delayed failure corrupt a later run.
+
+- **Do:** capture the pre-attempt identity, allocate the attempt identity up front, and persist failure metadata only if the checkpoint still matches one of those two known adjacent generations.
+- **Caught:** Graph recovery backoff could either miss provider-initialization failures or race with a newer foreground resume.
+
+## 265. New identity validation must preserve legacy sentinels
+
+A persisted migration may represent a formerly absent identity with a sentinel that the current identifier validator rejects. Reusing the new validator at a recovery boundary can make valid legacy state permanently unrecoverable.
+
+- **Do:** identify and narrowly accept documented migration sentinels when comparing old state, while requiring newly allocated identities to satisfy the current validator.
+- **Caught:** schema-v1 Graph checkpoints use an empty control-run identity, so automatic recovery failures could not persist backoff for those checkpoints.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

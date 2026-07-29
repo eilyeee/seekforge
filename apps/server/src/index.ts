@@ -6,7 +6,7 @@
  * (Authorization header, or ?token= for WS upgrade / initial page load).
  */
 
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import { createRequire } from "node:module";
 import { WebSocketServer } from "ws";
@@ -15,8 +15,10 @@ import {
   createGraphMaintenanceScheduler,
   createMemoryMaintenanceScheduler,
   graphExecutorsWithPlugins,
+  clearEngineeringGraphRecovery,
   loadPluginContributions,
   recordLoopRecoveryFailure,
+  recordEngineeringGraphRecoveryFailure,
   recoverInterruptedLoops,
   pruneLoopStates,
   pruneEngineeringGraphStates,
@@ -447,28 +449,47 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
                           limit: opts.graphRecoveryMaxPerTick ?? 3,
                         })) {
                           maintenanceSignal.throwIfAborted();
+                          const recoveryAttemptId = `graph-recovery-${randomUUID()}`;
                           try {
+                            const resumed = await runGraph(
+                              {
+                                workspace: workspace.path,
+                                confirm: async () => false,
+                                extractMemory: true,
+                                signal: maintenanceSignal,
+                              },
+                              state.definition,
+                              {
+                                resume: true,
+                                signal: maintenanceSignal,
+                                workspaceGuard: idleGuard,
+                                recoveryAttemptId,
+                                executors: graphExecutorsFor(workspace.path),
+                              },
+                            );
                             states.push(
-                              await runGraph(
-                                {
-                                  workspace: workspace.path,
-                                  confirm: async () => false,
-                                  extractMemory: true,
-                                  signal: maintenanceSignal,
-                                },
-                                state.definition,
-                                {
-                                  resume: true,
-                                  signal: maintenanceSignal,
-                                  workspaceGuard: idleGuard,
-                                  executors: graphExecutorsFor(workspace.path),
-                                },
-                              ),
+                              resumed.recovery || resumed.recoveryAttemptId
+                                ? clearEngineeringGraphRecovery(workspace.path, resumed.graphId, resumed.controlRunId)
+                                : resumed,
                             );
                           } catch (error) {
                             if (maintenanceSignal.aborted) {
                               if (signal.aborted) throw error;
                               break;
+                            }
+                            try {
+                              recordEngineeringGraphRecoveryFailure(
+                                workspace.path,
+                                state.graphId,
+                                { priorControlRunId: state.controlRunId, recoveryAttemptId },
+                                error,
+                              );
+                            } catch (recoveryError) {
+                              logger.log("error", "graph.recovery.backoff_failed", {
+                                workspace: workspace.path,
+                                graphId: state.graphId,
+                                error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
+                              });
                             }
                             logger.log("error", "graph.recovery.failed", {
                               workspace: workspace.path,

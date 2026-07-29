@@ -16,6 +16,12 @@ import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/w
 import { isRecord } from "../util/guards.js";
 import { isDenseArray } from "./orchestration.js";
 import {
+  automaticRecoveryEligible,
+  compareAutomaticRecoveryCandidates,
+  nextAutomaticRecoveryMetadata,
+  type AutomaticRecoveryMetadata,
+} from "./recovery-policy.js";
+import {
   isLoopRequirementMode,
   parseLoopAcceptanceReview,
   parseLoopRequirementSpec,
@@ -76,12 +82,7 @@ export function hasCompleteLoopDeliveryEvidence(
   if (mode === "patch") return typeof evidence.sha256 === "string" && /^[0-9a-fA-F]{64}$/.test(evidence.sha256);
   return typeof evidence.url === "string" && evidence.url === artifact;
 }
-export type LoopRecoveryMetadata = {
-  attempts: number;
-  lastAttemptAt: string;
-  nextAttemptAt?: string;
-  lastError?: string;
-};
+export type LoopRecoveryMetadata = AutomaticRecoveryMetadata;
 export type LoopPruneOptions = {
   /** Remove eligible terminal records older than this many days. */
   maxAgeDays?: number;
@@ -817,21 +818,19 @@ export function recoverInterruptedLoops(workspace: string, options: { now?: Date
   const recovered: LoopState[] = [];
   for (const state of listLoopStates(workspace)) {
     const owned = isLoopLifecycleActive(workspace, state.loopId) || isLoopLeaseActive(workspace, state.loopId);
-    const retryEligible =
-      state.recovery?.nextAttemptAt === undefined || Date.parse(state.recovery.nextAttemptAt) <= nowMs;
+    const retryEligible = automaticRecoveryEligible(state.recovery, nowMs);
     if (state.status === "interrupted" && !owned && retryEligible) {
       recovered.push(state);
       continue;
     }
     if (state.status === "interrupted") continue;
-    if ((state.status !== "running" && state.status !== "paused") || owned) continue;
+    // A durable user pause is intentional, not evidence that its owner crashed.
+    if (state.status !== "running" || owned) continue;
     const next = { ...state, status: "interrupted" as const, updatedAt: new Date().toISOString() };
     saveLoopState(workspace, next);
     if (retryEligible) recovered.push(next);
   }
-  return recovered
-    .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0) || Date.parse(a.updatedAt) - Date.parse(b.updatedAt))
-    .slice(0, limit);
+  return recovered.sort(compareAutomaticRecoveryCandidates).slice(0, limit);
 }
 
 /** Persists bounded exponential backoff after an automatic resume failure. */
@@ -843,20 +842,10 @@ export function recordLoopRecoveryFailure(
 ): LoopState {
   const state = loadLoopState(workspace, loopId);
   if (!state) throw new Error(`Persisted loop not found or invalid: ${loopId}`);
-  const nowMs = now.getTime();
-  if (!Number.isFinite(nowMs)) throw new RangeError("Loop recovery time must be valid");
-  const attempts = (state.recovery?.attempts ?? 0) + 1;
-  const delayMs = Math.min(60 * 60_000, 30_000 * 2 ** Math.min(attempts - 1, 7));
-  const message = (error instanceof Error ? error.message : String(error)).trim().slice(0, 8_192) || "recovery failed";
   const next: LoopState = {
     ...state,
     status: "interrupted",
-    recovery: {
-      attempts,
-      lastAttemptAt: now.toISOString(),
-      nextAttemptAt: new Date(nowMs + delayMs).toISOString(),
-      lastError: message,
-    },
+    recovery: nextAutomaticRecoveryMetadata(state.recovery, error, now),
     updatedAt: now.toISOString(),
   };
   saveLoopState(workspace, next);

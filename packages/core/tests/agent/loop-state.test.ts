@@ -77,7 +77,7 @@ describe("loop state persistence", () => {
     ]);
   });
 
-  it("marks orphaned running or paused records as interrupted but preserves live owners", () => {
+  it("marks orphaned running records as interrupted while preserving durable pauses and live owners", () => {
     const orphan = createLoopState({ loopId: "orphan", task: "x", workspace, verifyCommand: "test", maxIterations: 1 });
     const paused = createLoopState({
       loopId: "paused-orphan",
@@ -103,16 +103,16 @@ describe("loop state persistence", () => {
         recoverInterruptedLoops(workspace)
           .map((state) => state.loopId)
           .sort(),
-      ).toEqual([orphan.loopId, paused.loopId].sort());
+      ).toEqual([orphan.loopId]);
       expect(loadLoopState(workspace, orphan.loopId)?.status).toBe("interrupted");
-      expect(loadLoopState(workspace, paused.loopId)?.status).toBe("interrupted");
+      expect(loadLoopState(workspace, paused.loopId)?.status).toBe("paused");
       expect(loadLoopState(workspace, live.loopId)?.status).toBe("running");
       saveLoopState(workspace, { ...live, status: "interrupted" });
       expect(
         recoverInterruptedLoops(workspace)
           .map((state) => state.loopId)
           .sort(),
-      ).toEqual([orphan.loopId, paused.loopId].sort());
+      ).toEqual([orphan.loopId]);
     } finally {
       lifecycleLease.release();
       lease.release();

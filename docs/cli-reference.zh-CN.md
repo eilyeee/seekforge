@@ -119,9 +119,9 @@
 
 | Flag | 说明 |
 | --- | --- |
-| `--loop-auto-resume` | 显式开启：工作区空闲时恢复持久化的 `running`、`paused` 或已有的 `interrupted` Loop。首次检查在 30 秒后执行，之后每 5 分钟检查一次。繁忙工作区及仍有存活 Loop owner 的记录会被跳过；取得的空闲 guard 会覆盖完整恢复，并只放行其自身 Agent 会话。多个工作区顺序处理；瞬时恢复失败会在之后的检查中重试，服务关闭会把其拥有的恢复任务保留为 `interrupted`，供下次启动继续。 |
+| `--loop-auto-resume` | 显式开启：工作区空闲时恢复失去 owner 的 `running` 或已有的 `interrupted` Loop；显式暂停的 Loop 保持暂停。首次检查在 30 秒后执行，之后每 5 分钟检查一次。繁忙工作区及仍有存活 Loop owner 的记录会被跳过；取得的空闲 guard 会覆盖完整恢复，并只放行其自身 Agent 会话。多个工作区顺序处理；瞬时恢复失败会在之后的检查中重试，服务关闭会把其拥有的恢复任务保留为 `interrupted`，供下次启动继续。 |
 | `--loop-auto-prune` | 显式开启空闲期终态 Loop 清理。默认清理超过 30 天或排在最新 100 条之外的合格记录；可恢复状态和未完成交付永不参与清理。 |
-| `--graph-auto-resume` | 显式开启：物理工作区空闲时恢复无 owner 的运行中或人工暂停 Engineering Graph；等待审批的 Graph 保持暂停。 |
+| `--graph-auto-resume` | 显式开启：物理工作区空闲时恢复失去 owner 的运行中 Graph，或定时器/信号已就绪的 wait 暂停 Graph。人工控制与审批暂停保持暂停；候选使用可变优先级和持久指数退避。 |
 | `--graph-auto-prune` | 显式开启空闲期终态 Graph 保留清理。合格托管资源会先归档和清理；脏 worktree 与可恢复 Graph 会保留。 |
 
 自动 Loop 恢复默认关闭，因为恢复后可能调用模型并编辑工作区。恢复沿用 Loop
@@ -213,7 +213,7 @@
 `loop-speculate <file> --budget <usd>` 持久运行两到三个隔离策略；`loop-speculation-list` 与
 `loop-speculation-promote` 用于查看并显式合并胜出结果。
 `loop-evidence <id> --format json|sarif|junit [--compare <id>]` 可导出完整性证据或比较运行。
-`graph validate|run|resume|list|show|history|delete` 管理异构工程图。定义可组合 Agent、Loop、函数、路由、审批门和嵌套图；`--approve` 通过审批门，`--rerun` 让一个节点及其下游失效，`--restart` 显式替换已有检查点。详见[图工程](graph-engineering.zh-CN.md)。
+`graph validate|run|resume|list|show|history|priority|delete` 管理异构工程图；`graph priority <id> <-10..10>` 调整自动恢复顺序。定义可组合 Agent、Loop、函数、路由、审批门和嵌套图；`--approve` 通过审批门，`--rerun` 让一个节点及其下游失效，`--restart` 显式替换已有检查点。详见[图工程](graph-engineering.zh-CN.md)。
 TUI 与 Desktop/WebSocket Loop 还支持在安全边界暂停、继续、设置优先级和引导。
 `seekforge loop-cleanup <name>` 删除一个保留的 `seekforge/loop-*` worktree；有未提交改动的
 worktree 因其改动会被丢弃，需要显式加 `--force`。清理会拒绝仍活跃的 Loop 生命周期操作，并保留

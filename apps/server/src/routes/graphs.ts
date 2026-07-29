@@ -1,6 +1,7 @@
 import {
   archiveEngineeringGraphResources,
   buildEngineeringGraphEvidenceReport,
+  clearEngineeringGraphRecovery,
   engineeringGraphStateExists,
   engineeringGraphHistoryExists,
   engineeringGraphNeedsAgentRuntime,
@@ -26,6 +27,7 @@ import {
   resolveEngineeringGraphTemplate,
   compareEngineeringGraphRuns,
   removeEngineeringGraphState,
+  setEngineeringGraphPriority,
   validateEngineeringGraphRunOptions,
   validateEngineeringGraphWorkspaces,
   type EngineeringGraphDefinition,
@@ -152,6 +154,9 @@ function startGraphRun(
           onEvent: (event) => rest.runManager.appendFrame(workspace, ledger.runId, { type: "graph.event", event }),
         },
       );
+      if (finalState.recovery || finalState.recoveryAttemptId) {
+        finalState = clearEngineeringGraphRecovery(workspace, definition.graphId, finalState.controlRunId);
+      }
       rest.runManager.update(workspace, ledger.runId, {
         status:
           finalState.status === "passed"
@@ -290,6 +295,8 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
         spentCost: state.spentCost,
         spentTokens: state.spentTokens,
         elapsedMs: state.elapsedMs,
+        priority: state.priority,
+        ...(state.recovery ? { recovery: state.recovery } : {}),
         ...(state.activeAttempts.length > 0 ? { activeAttempts: state.activeAttempts } : {}),
         ...(state.pauseReason ? { pauseReason: state.pauseReason } : {}),
         createdAt: state.createdAt,
@@ -420,6 +427,26 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
       baselineRunNumber: baseline.runNumber,
       comparison: compareEngineeringGraphRuns(baseline, state),
     });
+    return true;
+  }
+  if (method === "POST" && segs.length === 4 && segs[3] === "priority") {
+    const body = await readJsonBody(ctx.req, res);
+    if (body === undefined) return true;
+    if (
+      !isRecord(body) ||
+      Object.keys(body).some((key) => key !== "priority") ||
+      !Number.isSafeInteger(body.priority) ||
+      (body.priority as number) < -10 ||
+      (body.priority as number) > 10
+    ) {
+      sendApiError(res, 400, "bad_request", "priority must be an integer from -10 to 10");
+    } else {
+      try {
+        sendJson(res, 200, setEngineeringGraphPriority(workspace, graphId, body.priority as number));
+      } catch (error) {
+        sendApiError(res, 409, "busy", error instanceof Error ? error.message : String(error));
+      }
+    }
     return true;
   }
   if (method === "POST" && segs.length === 4 && segs[3] === "signals") {

@@ -341,7 +341,7 @@ export function registerLoopCommands(program: Command, registration: LoopCommand
     .action(loopSpeculationPromoteCommand);
   program
     .command("loop-recover")
-    .description("mark orphaned running or paused loops as interrupted and resumable")
+    .description("mark orphaned running loops as interrupted and resumable")
     .action(loopRecoverCommand);
   program
     .command("loop-priority")

@@ -13,6 +13,12 @@ import {
 import { isSafeLoopDagRelativePath, isValidLoopDagId } from "./loop-dag-validation.js";
 import { MANAGED_ORCHESTRATION_BRANCH_RE } from "./loop-managed-worktree.js";
 import { isDenseArray } from "./orchestration.js";
+import {
+  automaticRecoveryEligible,
+  compareAutomaticRecoveryCandidates,
+  nextAutomaticRecoveryMetadata,
+  type AutomaticRecoveryMetadata,
+} from "./recovery-policy.js";
 import { engineeringGraphSignalAvailable } from "./graph-signal-store.js";
 import { acquireSessionLease, isSessionRunActive } from "./session-lease.js";
 
@@ -117,6 +123,10 @@ export type EngineeringGraphState = {
   mapProgress?: Record<string, GraphMapItemResult[]>;
   controlSeq: number;
   controlRunId: string;
+  /** Mutable ordering for automatic recovery; independent from node priority. */
+  priority: number;
+  recovery?: AutomaticRecoveryMetadata;
+  recoveryAttemptId?: string;
   pauseReason?: "approval" | "control" | "wait";
   createdAt: string;
   updatedAt: string;
@@ -285,6 +295,9 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
   const pauseReason = value.schemaVersion === 1 && value.status === "paused" ? "approval" : value.pauseReason;
   const mapProgressValue = value.schemaVersion === 1 ? undefined : value.mapProgress;
   const elapsedMs = value.schemaVersion === 1 || value.elapsedMs === undefined ? 0 : value.elapsedMs;
+  const priority = value.priority ?? 0;
+  const recovery = value.recovery;
+  const recoveryAttemptId = value.recoveryAttemptId;
   if (
     typeof value.fingerprint !== "string" ||
     !/^[a-f0-9]{64}$/.test(value.fingerprint) ||
@@ -303,6 +316,25 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
     (controlSeq as number) < 0 ||
     typeof controlRunId !== "string" ||
     (controlRunId !== "" && !isValidLoopDagId(controlRunId)) ||
+    !Number.isSafeInteger(priority) ||
+    (priority as number) < -10 ||
+    (priority as number) > 10 ||
+    (recovery !== undefined &&
+      (!isRecord(recovery) ||
+        Object.keys(recovery).some(
+          (key) => key !== "attempts" && key !== "lastAttemptAt" && key !== "nextAttemptAt" && key !== "lastError",
+        ) ||
+        !Number.isSafeInteger(recovery.attempts) ||
+        (recovery.attempts as number) < 1 ||
+        !validTimestamp(recovery.lastAttemptAt) ||
+        (recovery.nextAttemptAt !== undefined && !validTimestamp(recovery.nextAttemptAt)) ||
+        (recovery.nextAttemptAt !== undefined &&
+          Date.parse(recovery.nextAttemptAt as string) < Date.parse(recovery.lastAttemptAt as string)) ||
+        (recovery.lastError !== undefined &&
+          (typeof recovery.lastError !== "string" ||
+            recovery.lastError.length < 1 ||
+            recovery.lastError.length > 8_192)))) ||
+    (recoveryAttemptId !== undefined && !isValidLoopDagId(recoveryAttemptId)) ||
     !validTimestamp(value.createdAt) ||
     !validTimestamp(value.updatedAt) ||
     (value.completedAt !== undefined && !validTimestamp(value.completedAt)) ||
@@ -461,6 +493,18 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
     ...(mapProgress ? { mapProgress } : {}),
     controlSeq: controlSeq as number,
     controlRunId,
+    priority: priority as number,
+    ...(isRecord(recovery)
+      ? {
+          recovery: {
+            attempts: recovery.attempts as number,
+            lastAttemptAt: recovery.lastAttemptAt as string,
+            ...(typeof recovery.nextAttemptAt === "string" ? { nextAttemptAt: recovery.nextAttemptAt } : {}),
+            ...(typeof recovery.lastError === "string" ? { lastError: recovery.lastError } : {}),
+          },
+        }
+      : {}),
+    ...(typeof recoveryAttemptId === "string" ? { recoveryAttemptId } : {}),
     ...(pauseReason ? { pauseReason } : {}),
     ...(fanIn ? { fanIn } : {}),
   };
@@ -515,11 +559,13 @@ export function listEngineeringGraphStates(workspace: string): EngineeringGraphS
 
 export function recoverableEngineeringGraphStates(
   workspace: string,
-  options: { limit?: number } = {},
+  options: { limit?: number; now?: Date } = {},
 ): EngineeringGraphState[] {
   const limit = options.limit ?? 3;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
     throw new RangeError("Graph recovery limit must be 1 to 100");
+  const nowMs = (options.now ?? new Date()).getTime();
+  if (!Number.isFinite(nowMs)) throw new RangeError("Graph recovery time must be valid");
   return listEngineeringGraphStates(workspace)
     .filter((state) => {
       const waitDue =
@@ -529,7 +575,7 @@ export function recoverableEngineeringGraphStates(
           if (result.status !== "waiting_signal") return false;
           const node = state.definition.nodes.find((candidate) => candidate.id === result.id);
           return [node?.waitFor?.notBefore, node?.waitFor?.expiresAt].some(
-            (timestamp) => timestamp !== undefined && Date.parse(timestamp) <= Date.now(),
+            (timestamp) => timestamp !== undefined && Date.parse(timestamp) <= nowMs,
           );
         });
       const signalReady =
@@ -553,15 +599,95 @@ export function recoverableEngineeringGraphStates(
         });
       return (
         state.parentGraph === undefined &&
-        (state.status === "running" ||
-          (state.status === "paused" && state.pauseReason === "control") ||
-          waitDue ||
-          signalReady) &&
+        (state.status === "running" || waitDue || signalReady) &&
+        automaticRecoveryEligible(state.recovery, nowMs) &&
         !isSessionRunActive(workspace, `engineering-graph-${state.graphId}`)
       );
     })
-    .sort((left, right) => Date.parse(left.updatedAt) - Date.parse(right.updatedAt))
+    .sort(compareAutomaticRecoveryCandidates)
     .slice(0, limit);
+}
+
+/** Persists bounded backoff only when the failed invocation still owns the checkpoint generation. */
+export function recordEngineeringGraphRecoveryFailure(
+  workspace: string,
+  graphId: string,
+  identity: { priorControlRunId: string; recoveryAttemptId: string },
+  error: unknown,
+  now = new Date(),
+): EngineeringGraphState {
+  if (
+    !isValidLoopDagId(graphId) ||
+    (identity.priorControlRunId !== "" && !isValidLoopDagId(identity.priorControlRunId)) ||
+    !isValidLoopDagId(identity.recoveryAttemptId)
+  ) {
+    throw new Error("Graph recovery identity is invalid");
+  }
+  const lease = acquireSessionLease(workspace, `engineering-graph-${graphId}`);
+  try {
+    const state = loadEngineeringGraphState(workspace, graphId);
+    if (!state) throw new Error(`Persisted Graph not found or invalid: ${graphId}`);
+    if (state.controlRunId !== identity.priorControlRunId && state.recoveryAttemptId !== identity.recoveryAttemptId) {
+      return state;
+    }
+    const next: EngineeringGraphState = {
+      ...state,
+      recovery: nextAutomaticRecoveryMetadata(state.recovery, error, now),
+      updatedAt: now.toISOString(),
+    };
+    saveEngineeringGraphState(workspace, next);
+    return next;
+  } finally {
+    lease.release();
+  }
+}
+
+/** Clears recovery backoff after the matching invocation returns normally. */
+export function clearEngineeringGraphRecovery(
+  workspace: string,
+  graphId: string,
+  controlRunId: string,
+): EngineeringGraphState {
+  if (!isValidLoopDagId(graphId) || !isValidLoopDagId(controlRunId))
+    throw new Error("Graph recovery identity is invalid");
+  const lease = acquireSessionLease(workspace, `engineering-graph-${graphId}`);
+  try {
+    const state = loadEngineeringGraphState(workspace, graphId);
+    if (!state) throw new Error(`Persisted Graph not found or invalid: ${graphId}`);
+    if (
+      state.controlRunId !== controlRunId ||
+      (state.recovery === undefined && state.recoveryAttemptId === undefined)
+    ) {
+      return state;
+    }
+    const { recovery: _recovery, recoveryAttemptId: _recoveryAttemptId, ...retained } = state;
+    const next: EngineeringGraphState = { ...retained, updatedAt: new Date().toISOString() };
+    saveEngineeringGraphState(workspace, next);
+    return next;
+  } finally {
+    lease.release();
+  }
+}
+
+export function setEngineeringGraphPriority(
+  workspace: string,
+  graphId: string,
+  priority: number,
+): EngineeringGraphState {
+  if (!isValidLoopDagId(graphId)) throw new Error(`Graph id must be safe: ${graphId}`);
+  if (!Number.isSafeInteger(priority) || priority < -10 || priority > 10) {
+    throw new RangeError("Graph priority must be an integer from -10 to 10");
+  }
+  const lease = acquireSessionLease(workspace, `engineering-graph-${graphId}`);
+  try {
+    const state = loadEngineeringGraphState(workspace, graphId);
+    if (!state) throw new Error(`Persisted Graph not found or invalid: ${graphId}`);
+    const next = { ...state, priority, updatedAt: new Date().toISOString() };
+    saveEngineeringGraphState(workspace, next);
+    return next;
+  } finally {
+    lease.release();
+  }
 }
 
 export function removeEngineeringGraphState(workspace: string, graphId: string): boolean {

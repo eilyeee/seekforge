@@ -3,11 +3,21 @@ import { InvalidArgumentError } from "commander";
 import {
   graphDeleteCommand,
   graphListCommand,
+  graphPriorityCommand,
   graphRunCommand,
   graphResourcesCommand,
   graphShowCommand,
   graphValidateCommand,
 } from "./commands/graph.js";
+
+function graphPriority(value: string): number {
+  if (!/^-?[0-9]+$/.test(value)) throw new InvalidArgumentError("priority must be an integer from -10 to 10");
+  const priority = Number(value);
+  if (!Number.isSafeInteger(priority) || priority < -10 || priority > 10) {
+    throw new InvalidArgumentError("priority must be an integer from -10 to 10");
+  }
+  return priority;
+}
 
 export function registerGraphCommands(
   program: Command,
@@ -78,6 +88,12 @@ export function registerGraphCommands(
         }),
     );
   graph.command("list").action(graphListCommand);
+  graph
+    .command("priority")
+    .argument("<graph-id>")
+    .argument("<priority>", "integer from -10 to 10", graphPriority)
+    .description("set automatic recovery priority for a persisted Graph")
+    .action(graphPriorityCommand);
   graph
     .command("show")
     .argument("<graph-id>")

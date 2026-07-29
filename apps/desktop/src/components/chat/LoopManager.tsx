@@ -437,6 +437,20 @@ export function LoopManager({ running, onResume }: Props) {
       if (operationRequests.current.isCurrent(request)) setResourceBusy(false);
     }
   };
+  const graphRecoveryPriority = async (graph: EngineeringGraphSummary, delta: number) => {
+    const request = operationRequests.current.begin();
+    setResourceBusy(true);
+    try {
+      await api.graphPriority(graph.graphId, Math.max(-10, Math.min(10, graph.priority + delta)));
+      if (operationRequests.current.isCurrent(request)) await refresh();
+    } catch (caught) {
+      if (operationRequests.current.isCurrent(request)) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    } finally {
+      if (operationRequests.current.isCurrent(request)) setResourceBusy(false);
+    }
+  };
 
   return (
     <details className="mt-2 rounded border border-subtle p-2">
@@ -505,6 +519,7 @@ export function LoopManager({ running, onResume }: Props) {
         onLifecycle={(graphId, operation, nodeIds) => void graphLifecycle(graphId, operation, nodeIds)}
         onControl={(graphId, operation, nodeId, priority) => void graphControl(graphId, operation, nodeId, priority)}
         onSignal={(graphId, name) => void graphSignal(graphId, name)}
+        onRecoveryPriority={(graph, delta) => void graphRecoveryPriority(graph, delta)}
         onRemove={(graphId) => void removeGraph(graphId)}
       />
       <LoopSpeculationSection

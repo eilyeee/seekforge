@@ -383,11 +383,20 @@ describe("loop management API", () => {
       }),
     );
     const listed = (await jsonOf(await authed("/api/graphs"))) as Array<Record<string, unknown>>;
-    expect(listed).toEqual([expect.objectContaining({ graphId: "rest-graph", status: "passed" })]);
+    expect(listed).toEqual([expect.objectContaining({ graphId: "rest-graph", status: "passed", priority: 0 })]);
     const first = listed[0]!;
     expect(first).not.toHaveProperty("definition");
     expect((first.results as Array<Record<string, unknown>>)[0]).not.toHaveProperty("output");
     expect(await jsonOf(await authed("/api/graphs/rest-graph"))).toMatchObject({ graphId: "rest-graph" });
+    expect(
+      await jsonOf(
+        await authed("/api/graphs/rest-graph/priority", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ priority: 7 }),
+        }),
+      ),
+    ).toMatchObject({ graphId: "rest-graph", priority: 7 });
     expect(await jsonOf(await authed("/api/graphs/rest-graph/history"))).toEqual([
       expect.objectContaining({ sequence: 1, type: "graph.completed" }),
     ]);
@@ -600,6 +609,7 @@ describe("loop management API", () => {
             activeAttempts: [],
             controlSeq: 0,
             controlRunId: "",
+            priority: 0,
             createdAt: now,
             updatedAt: now,
             completedAt: now,

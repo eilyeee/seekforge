@@ -1,6 +1,7 @@
 import {
   graphHandlersWithPlugins,
   archiveEngineeringGraphResources,
+  clearEngineeringGraphRecovery,
   engineeringGraphStateExists,
   engineeringGraphNeedsAgentRuntime,
   inspectEngineeringGraphResources,
@@ -13,6 +14,7 @@ import {
   pruneEngineeringGraphResources,
   readFileIfExists,
   removeEngineeringGraphState,
+  setEngineeringGraphPriority,
   runEngineeringGraph,
   validateEngineeringGraphRunOptions,
   validateEngineeringGraphWorkspaces,
@@ -146,7 +148,7 @@ export async function graphRunCommand(file: string, opts: GraphRunCliOptions): P
   }
   if (!(await ensureWorkspaceAuthorized(workspace, { yes: opts.yes === true, machine: false }))) return;
   const execute = async (deps: AgentCoreDeps, signal?: AbortSignal): Promise<void> => {
-    const state = await runEngineeringGraph(deps, graph, {
+    let state = await runEngineeringGraph(deps, graph, {
       workspace,
       handlers: graphHandlers,
       ...(signal ? { signal } : {}),
@@ -159,6 +161,9 @@ export async function graphRunCommand(file: string, opts: GraphRunCliOptions): P
           `[${event.sequence}] ${event.type}${event.nodeId ? ` ${event.nodeId}` : ""}${event.status ? ` ${event.status}` : ""}`,
         ),
     });
+    if (state.recovery || state.recoveryAttemptId) {
+      state = clearEngineeringGraphRecovery(workspace, state.graphId, state.controlRunId);
+    }
     console.log(
       `Graph ${state.graphId}: ${state.status} · $${state.spentCost.toFixed(4)} · ${state.spentTokens} tokens`,
     );
@@ -181,9 +186,22 @@ export async function graphRunCommand(file: string, opts: GraphRunCliOptions): P
 export function graphListCommand(): void {
   console.log(
     listEngineeringGraphStates(process.cwd())
-      .map((state) => `${state.graphId}\t${state.status}\t${state.results.length}\t${state.updatedAt}`)
+      .map(
+        (state) =>
+          `${state.graphId}\t${state.status}\t${state.results.length}\tpriority=${state.priority}\t${state.updatedAt}`,
+      )
       .join("\n"),
   );
+}
+
+export function graphPriorityCommand(graphId: string, priority: number): void {
+  try {
+    const state = setEngineeringGraphPriority(process.cwd(), graphId, priority);
+    console.log(`Updated Graph priority: ${state.graphId}\t${state.priority}`);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
 }
 
 export function graphShowCommand(graphId: string, historyOnly = false): void {

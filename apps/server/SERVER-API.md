@@ -131,6 +131,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/graphs/:id/history | bounded rotating lifecycle history; `format=entries` adds log sequence/cursor metadata |
 | GET /api/graphs/:id/evidence | node/usage/active-duration evidence summary with SHA-256 integrity digest and no node outputs |
 | GET /api/graphs/:id/compare | compare the latest archived terminal run (or `runNumber`) with current state |
+| POST /api/graphs/:id/priority | body `{priority:-10..10}`; update automatic recovery order under the Graph lease |
 | POST /api/graphs/:id/signals | enqueue a declared external wait signal and resume a wait-paused Graph |
 | GET /api/graphs/:id/resources | retained managed-worktree paths, disk usage, archival, and active status |
 | POST /api/graphs/:id/resources | `archive`, `prune` (`dryRun`/`force`), or `promote` a passed node/`fan-in` branch |

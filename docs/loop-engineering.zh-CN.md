@@ -246,9 +246,10 @@ seekforge loop-cleanup <worktree-name> [--force]
   `--rollback-regressions` 只允许在保留的 Loop worktree 中回滚退化迭代；回滚后会重新验证，
   并用恢复后的结果替换收敛基线。
 - `loop-history <id> [--after N] [--limit N]` 回放轮转后的 JSONL 事件历史；
-  `loop-recover` 把失去 owner 的 `running` 或 `paused` 记录标为 `interrupted`，嵌入方可调用
+  `loop-recover` 把失去 owner 的 `running` 记录标为 `interrupted`，嵌入方可调用
   `autoResumeInterruptedLoops` 自动继续。已有的 `interrupted` 记录仍可恢复，因此瞬时恢复失败
-  能在之后重试；但只要 Loop 租约仍存活，该记录就绝不会进入恢复候选。
+  能在之后重试；但只要 Loop 租约仍存活，该记录就绝不会进入恢复候选。用户显式暂停的持久记录
+  会保持暂停，直到收到明确的继续/恢复操作。
 - 自动恢复通过 `--priority -10..10` / `loop-priority` 排序，每个工作区每次最多处理三个候选；
   单个失败会隔离，并按 30 秒到 1 小时的指数退避重试。前台运行会请求抢占空闲恢复并等待 guard 让出。
 - `seekforge serve --loop-auto-resume` 显式开启由服务生命周期托管的后台恢复。它先占用物理仓库
