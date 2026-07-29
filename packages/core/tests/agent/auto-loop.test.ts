@@ -199,6 +199,26 @@ describe("runAutoLoop", () => {
     });
   });
 
+  it("routes editing by the previous verification failure category", async () => {
+    const base = alwaysDone("base");
+    const routed = alwaysDone("test-specialist");
+    const result = await runAutoLoop(
+      {
+        provider: base,
+        providerForModel: (model) => (model === "test-specialist" ? routed : base),
+        dispatcher: noopDispatcher,
+        confirm: async () => true,
+      },
+      {
+        ...baseOpts(workspace, failNTimes(1)),
+        modelByFailureCategory: { unknown: "test-specialist" },
+      },
+    );
+    expect(result.status).toBe("passed");
+    expect(base.chats).toBe(0);
+    expect(routed.chats).toBe(1);
+  });
+
   it("writes an append-only JSONL log of the event stream", async () => {
     const { deps } = mkDeps();
     const events: LoopEvent[] = [];
@@ -252,7 +272,7 @@ describe("runAutoLoop", () => {
     );
     expect(sawTask).toBe(true);
     expect(sawContinuation).toBe(true);
-  });
+  }, 20_000);
 
   it("keeps verifier diagnostics visibly untrusted in continuation prompts", async () => {
     const { deps, provider } = mkDeps();
@@ -301,6 +321,7 @@ describe("runAutoLoop", () => {
     const results = await autoResumeInterruptedLoops(mkDeps().deps, workspace);
     expect(results).toMatchObject([{ status: "passed", loopId: "orphan-auto", iterations: 0 }]);
     expect(loadLoopState(workspace, "orphan-auto")).toMatchObject({ status: "passed" });
+    expect(loadLoopState(workspace, "orphan-auto")?.phase).toBe("settled");
     expect(loadLoopState(workspace, "orphan-auto")?.recovery).toBeUndefined();
     expect(loadLoopState(workspace, "orphan-auto")?.recoveryAttemptId).toBeUndefined();
   });
@@ -535,6 +556,69 @@ describe("runAutoLoop", () => {
     expect(commands).toEqual(["test-cli", "test-cli", "test-all", "test-cli", "test-server", "test-all"]);
   });
 
+  it("uses a cross-run verification hint only before an authoritative full pass", async () => {
+    const editingProvider = () => {
+      const provider = alwaysDone("flash");
+      provider.chat = async (): Promise<ChatResponse> => {
+        provider.chats++;
+        if (provider.chats === 1) {
+          return {
+            content: "editing source",
+            toolCalls: [{ id: "edit-source", name: "apply_patch", argumentsJson: '{"path":"src/a.ts"}' }],
+            usage: USAGE,
+            finishReason: "tool_calls",
+          };
+        }
+        return text("done");
+      };
+      return provider;
+    };
+    const dispatcher: ToolDispatcher = {
+      list: () => [{ name: "apply_patch", description: "edit", parameters: {} }],
+      execute: async () => ({ ok: true, meta: { path: "src/a.ts" } }),
+    };
+    let firstChecks = 0;
+    await runAutoLoop(
+      { provider: editingProvider(), dispatcher, confirm: async () => true },
+      {
+        ...baseOpts(workspace, async () =>
+          ++firstChecks === 1 ? { code: 1, output: "initial failure" } : { code: 0, output: "ok" },
+        ),
+        verificationPlan: [{ id: "source", command: "echo test", paths: ["src"], cacheable: true }],
+        maxIterations: 1,
+      },
+    );
+    expect(firstChecks).toBe(2);
+
+    let secondChecks = 0;
+    const events: LoopEvent[] = [];
+    const second = await runAutoLoop(
+      { provider: editingProvider(), dispatcher, confirm: async () => true },
+      {
+        ...baseOpts(workspace, async () =>
+          ++secondChecks === 1 ? { code: 1, output: "initial failure" } : { code: 0, output: "full pass" },
+        ),
+        verificationPlan: [{ id: "source", command: "echo test", paths: ["src"], cacheable: true }],
+        maxIterations: 1,
+        onEvent: (event) => events.push(event),
+      },
+    );
+    expect(second.status).toBe("passed");
+    expect(secondChecks).toBe(2);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "verify.stage.completed",
+        result: expect.objectContaining({ id: "source", selection: "cached" }),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "loop.warning",
+        message: "Persistent verification hints were reused; running the full pipeline before accepting success.",
+      }),
+    );
+  });
+
   it("detects flaky verification and requires consecutive stable passes", async () => {
     let checks = 0;
     const events: LoopEvent[] = [];
@@ -659,6 +743,7 @@ describe("runAutoLoop", () => {
     );
     expect(first.status).toBe("requirements_pending");
     expect(first.iterations).toBe(0);
+    expect(loadLoopState(workspace, first.loopId!)?.phase).toBe("requirements");
     expect(loadLoopState(workspace, first.loopId!)?.requirementsApprovedAt).toBeNull();
 
     const secondProvider = scripted("flash", [acceptance("met")]);
@@ -676,6 +761,7 @@ describe("runAutoLoop", () => {
     expect(resumed.status).toBe("passed");
     expect(resumed.iterations).toBe(0);
     expect(resumedEvents).toContain("requirements.completed");
+    expect(loadLoopState(workspace, first.loopId!)?.phase).toBe("settled");
     expect(loadLoopState(workspace, first.loopId!)?.requirementsApprovedAt).not.toBeNull();
   });
 

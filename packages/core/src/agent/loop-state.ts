@@ -86,6 +86,7 @@ export function hasCompleteLoopDeliveryEvidence(
 }
 export type LoopRecoveryMetadata = AutomaticRecoveryMetadata;
 export type LoopAutomaticRecoveryIdentity = { priorControlRunId: string; recoveryAttemptId: string };
+export type LoopPhase = "requirements" | "precheck" | "editing" | "verification" | "acceptance" | "settled";
 export type LoopPruneOptions = {
   /** Remove eligible terminal records older than this many days. */
   maxAgeDays?: number;
@@ -118,6 +119,8 @@ export type LoopState = {
   recovery?: LoopRecoveryMetadata;
   /** Internal identity for one automatic recovery invocation. */
   recoveryAttemptId?: string;
+  /** Last durably entered orchestration phase for crash diagnosis and safe resume. */
+  phase?: LoopPhase;
   stageResults?: LoopStageResult[];
   snapshots?: LoopIterationSnapshot[];
   maxIterations: number;
@@ -526,6 +529,7 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
   const priority = value.priority === undefined ? 0 : value.priority;
   const recovery = parseAutomaticRecoveryMetadata(value.recovery);
   const recoveryAttemptId = value.recoveryAttemptId;
+  const phase = value.phase;
   const stageResults = value.stageResults === undefined ? [] : parseStageResults(value.stageResults);
   const snapshots = value.snapshots === undefined ? [] : parseSnapshots(value.snapshots);
   const rollbackOnRegression = value.rollbackOnRegression === undefined ? false : value.rollbackOnRegression;
@@ -565,6 +569,13 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
     priority > 10 ||
     recovery === null ||
     (recoveryAttemptId !== undefined && (typeof recoveryAttemptId !== "string" || !isValidLoopId(recoveryAttemptId))) ||
+    (phase !== undefined &&
+      phase !== "requirements" &&
+      phase !== "precheck" &&
+      phase !== "editing" &&
+      phase !== "verification" &&
+      phase !== "acceptance" &&
+      phase !== "settled") ||
     stageResults === null ||
     snapshots === null ||
     typeof rollbackOnRegression !== "boolean" ||
@@ -651,6 +662,7 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
     priority: priority as number,
     ...(recovery ? { recovery } : {}),
     ...(typeof recoveryAttemptId === "string" ? { recoveryAttemptId } : {}),
+    ...(typeof phase === "string" ? { phase: phase as LoopPhase } : {}),
     stageResults: stageResults as LoopStageResult[],
     snapshots: snapshots as LoopIterationSnapshot[],
     rollbackOnRegression,
@@ -723,6 +735,7 @@ export function createLoopState(input: CreateLoopStateInput): LoopState {
     controlSeq: 0,
     controlRunId: input.controlRunId ?? "",
     priority: input.priority ?? 0,
+    phase: input.requirementMode && input.requirementMode !== "quick" ? "requirements" : "precheck",
     stageResults: [],
     snapshots: [],
     rollbackOnRegression: input.rollbackOnRegression ?? false,
@@ -783,6 +796,10 @@ export function loadLoopState(workspace: string, loopId: string): LoopState | nu
   } catch {
     return null;
   }
+}
+
+export function loopStateExists(workspace: string, loopId: string): boolean {
+  return existsSync(loopFile(requireWorkspace(workspace), loopId));
 }
 
 export function listLoopStates(workspace: string): LoopState[] {

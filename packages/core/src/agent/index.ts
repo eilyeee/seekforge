@@ -182,6 +182,10 @@ export {
   buildEngineeringGraphEvidenceReport,
   verifyEngineeringGraphEvidenceIntegrity,
 } from "./graph-evidence.js";
+export {
+  buildEngineeringGraphArtifactCatalog,
+  type EngineeringGraphArtifactCatalogEntry,
+} from "./graph-artifact-catalog.js";
 export { BUILTIN_GRAPH_HANDLERS, graphExecutorsWithPlugins, graphHandlersWithPlugins } from "./graph-handlers.js";
 export {
   engineeringGraphCriticality,
@@ -194,6 +198,10 @@ export {
   type EngineeringGraphRunComparison,
 } from "./graph-observability.js";
 export {
+  planEngineeringGraphMigration,
+  type EngineeringGraphMigrationPlan,
+} from "./graph-migration.js";
+export {
   archiveEngineeringGraphRun,
   readEngineeringGraphRunSnapshots,
   type EngineeringGraphRunSnapshot,
@@ -203,6 +211,11 @@ export {
   recordGraphSchedulingObservation,
   type GraphSchedulingObservation,
 } from "./graph-scheduling-history.js";
+export {
+  DEFAULT_GRAPH_RETRY_POLICY,
+  graphRetryDelayMs,
+  type GraphRetryPolicy,
+} from "./graph-retry-policy.js";
 export {
   materializeEngineeringGraph,
   parseEngineeringGraphTemplate,
@@ -275,6 +288,7 @@ export {
   discoverLoopVerificationPlan,
   type DiscoveredLoopVerificationPlan,
 } from "./loop-verification-plan.js";
+export { readLoopVerificationCache, recordLoopVerificationCache } from "./loop-verification-cache.js";
 export {
   buildLoopEvidenceReport,
   compareLoopEvidence,
@@ -332,6 +346,7 @@ export {
   isValidLoopId,
   listLoopStates,
   loadLoopState,
+  loopStateExists,
   readLoopHistory,
   recoverInterruptedLoops,
   pruneLoopStates,
@@ -351,6 +366,7 @@ export {
   type LoopPruneResult,
   type LoopRecoveryMetadata,
   type LoopAutomaticRecoveryIdentity,
+  type LoopPhase,
   type LoopDeliveryState,
   type LoopDeliveryStatus,
   type LoopHistoryEntry,

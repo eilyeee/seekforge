@@ -86,6 +86,8 @@ flowchart LR
 
 `priority` 决定同时就绪节点的顺序；同一优先级内，剩余依赖路径最长的工作先启动。`resources` 声明逻辑锁；点号分隔的 id 构成层级，因此 `provider.deepseek` 与 `provider.deepseek.chat` 冲突。`resourceCapacities` 可放宽同名资源的并发数，但父子资源仍互斥。`adaptiveScheduling: true` 使用有界历史耗时/失败观测作为静态关键层级内的次序。Auto Loop 验证、Loop DAG 与 Graph 共享同一个确定性、资源感知 ready queue 实现。
 
+`priorityAgingMs` 会按依赖就绪后的等待时长增加有界优先级，避免饥饿。节点可声明绝对 `deadlineAt`；到期仍未启动时，Graph 会记录零次尝试失败，而不是启动已过期工作。有重试的节点可声明精确 `retryPolicy`（`initialDelayMs`、`maxDelayMs`、`multiplier`、`jitterRatio`）。抖动是确定性的，下一次尝试时间和最近错误会在可取消等待前写入检查点，因此 owner 重启后仍保持原退避。
+
 `failurePolicy: "stop"` 会在首个节点失败后跳过未开始工作；`"continue"` 允许独立分支完成。失败节点的普通下游会被跳过，除非显式条件接受该状态。`maxRetries` 针对单个节点，`timeoutMs` 针对单次尝试。
 
 当 `maxConcurrency > 1` 时，实际可能重叠执行的有副作用节点必须解析到图工作区之内互不重叠的物理目录；由依赖关系确定先后顺序的节点可以安全复用同一工作区。祖先目录与其子目录不能作为两个独立并行分支运行。路由器与审批门不需要独立工作区。
@@ -125,6 +127,8 @@ seekforge graph delete release
 ```
 
 服务器提供校验/空跑计划（`POST /api/graphs/validate`）、后台启动（`POST /api/graphs`）、显式恢复/审批/重跑/重启/取消、Graph 级暂停，以及待执行节点的暂停、指导、取消与重排优先级（`POST /api/graphs/:id/control`）、外部信号（`POST /api/graphs/:id/signals`）、自动恢复优先级（`POST /api/graphs/:id/priority`）、运行对比（`GET /api/graphs/:id/compare`）、有界历史、证据导出、列表/详情与删除。空闲恢复只选择失去 owner 的 `running` Graph，以及定时器到期或信号就绪的 wait 暂停 Graph；显式控制暂停与审批暂停保持粘性。候选按 -10 到 10 的可变优先级排序，失败后持久执行 30 秒到 1 小时的指数退避。Loop 与 Graph 通过同一个精确字段、时间戳有序的持久契约解析恢复子记录。恢复记账同时绑定尝试前和新写入检查点的运行身份，因此迟到失败不会修改后续运行。schema-v2 模板可通过 `/api/graphs/templates` 精确版本注册和解析，版本不会静默漂移；可选的 `interface.outputSchema` 与节点使用同一套有界递归 schema 解析器。空跑计划把正常执行波次与补偿顺序分开返回，并包含关键路径、资源容量、最大并行宽度、最大尝试/动态元素数和输入绑定。Graph 运行会进入统一 Run Ledger，并在服务器关闭时排空。由服务器启动且包含 Agent 或 Loop 节点的 Graph 必须声明 `costBudgetUsd`。
+
+`mapKind: "agent" | "loop"` 允许有界 map 逐项顺序运行 Agent 或自主 Loop；item 会被封装为不可信数据，每个完成项都保留独立的持久用量检查点。直接及 map 子 Loop 会从 Graph attempt 幂等键派生稳定 id，因此 Graph 中断后会恢复同一个子 Loop，而不会复制其编辑历史。Gate 可返回 `approve`、`reject` 或 `request_changes`，并附带有界结构化上下文。Remote 节点可在预检阶段要求执行器协议版本 1 与协作取消能力。`GET /api/graphs/:id/artifacts` 返回确定性的内容寻址血缘目录；`POST /api/graphs/:id/migration-plan` 会校验候选定义并预览新增、删除、变化、保留及传递失效节点，不修改现有运行。Graph 指标增加活跃/暂停、恢复退避、待执行节点、重试等待、用量、尝试与重试统计；运行对比增加逐节点尝试次数和耗时变化。
 
 `seekforge serve --graph-auto-resume` 会在工作区空闲时顺序恢复失去 owner 的运行中 Graph，或定时器/信号已就绪的 wait 暂停 Graph；单个恢复失败会被隔离，后续 Graph 与保留清理仍会继续。`--graph-auto-prune` 在同一空闲窗口执行终态年龄/数量保留策略，安全归档并清理托管资源，保留脏 worktree，并在父 Graph 仍可恢复时保留子检查点。持久化控制可作用于任何存活的 Graph owner，包括其他进程或空闲恢复运行。Desktop 通过 WebSocket 订阅 Graph Run Ledger，同时保留低频轮询兜底，显示运行差异，并提供 Graph/节点控制、信号、审批、重跑、重启及完整资源生命周期操作。
 

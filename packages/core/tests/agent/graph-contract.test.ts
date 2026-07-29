@@ -212,6 +212,89 @@ describe("parseEngineeringGraphDefinition", () => {
     ).toThrow(/maxDurationMs/);
   });
 
+  it("validates exact bounded retry policies", () => {
+    const graph = parseEngineeringGraphDefinition({
+      graphId: "retry-policy",
+      nodes: [
+        {
+          id: "run",
+          kind: "function",
+          handler: "noop",
+          maxRetries: 2,
+          retryPolicy: { initialDelayMs: 100, maxDelayMs: 1_000, multiplier: 2, jitterRatio: 0.1 },
+        },
+      ],
+    });
+    expect(graph.nodes[0]?.retryPolicy).toEqual({
+      initialDelayMs: 100,
+      maxDelayMs: 1_000,
+      multiplier: 2,
+      jitterRatio: 0.1,
+    });
+    expect(() =>
+      parseEngineeringGraphDefinition({
+        graphId: "bad-retry-policy",
+        nodes: [
+          {
+            id: "run",
+            kind: "function",
+            handler: "noop",
+            maxRetries: 1,
+            retryPolicy: { initialDelayMs: 100, maxDelayMs: 50, multiplier: 2, jitterRatio: 0 },
+          },
+        ],
+      }),
+    ).toThrow(/retryPolicy/);
+  });
+
+  it("validates scheduling, dynamic map, and remote capability contracts", () => {
+    const graph = parseEngineeringGraphDefinition({
+      graphId: "expanded-contract",
+      priorityAgingMs: 5_000,
+      nodes: [
+        { id: "source", kind: "function", handler: "source" },
+        {
+          id: "repair",
+          kind: "map",
+          mapKind: "agent",
+          task: "Repair this item",
+          dependsOn: ["source"],
+          source: { nodeId: "source" },
+          mapConcurrency: 1,
+          deadlineAt: "2030-01-01T00:00:00.000Z",
+        },
+        {
+          id: "remote",
+          kind: "remote",
+          executor: "worker",
+          executorProtocolVersion: 1,
+          requiresCancellation: true,
+          dependsOn: ["repair"],
+        },
+      ],
+    });
+    expect(graph.priorityAgingMs).toBe(5_000);
+    expect(graph.nodes[1]).toMatchObject({ mapKind: "agent", mapConcurrency: 1 });
+    expect(() =>
+      parseEngineeringGraphDefinition({
+        graphId: "unsafe-map",
+        nodes: [
+          { id: "source", kind: "function", handler: "source" },
+          {
+            id: "repair",
+            kind: "map",
+            mapKind: "loop",
+            task: "Repair",
+            verifyCommand: "true",
+            source: { nodeId: "source" },
+            dependsOn: ["source"],
+            mapConcurrency: 2,
+          },
+        ],
+      }),
+    ).toThrow(/mapConcurrency 1/);
+  });
+
   it("rejects sparse arrays and timer-overflow timeouts", () => {
     const sparseNodes = new Array(1);
     expect(() => parseEngineeringGraphDefinition({ graphId: "sparse", nodes: sparseNodes })).toThrow(/nodes/);

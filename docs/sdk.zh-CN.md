@@ -196,6 +196,7 @@ checkout 后会拒绝旧检查点，而不会复用另一个工作区产生的�
 `autoResumeInterruptedLoops` 会恢复失去 owner 的持久化 `running` 记录或已有的 `interrupted`
 记录；显式暂停的记录必须在前台明确恢复。可选的 `onRecoveryError` observer 会把退避记账失败与本次
 运行的 `onError` 分开报告，且记账失败会被隔离。最终成功时只抽取一次记忆，并对整个 Loop 只结算一次已选技能效果。
+当 `providerForModel` 可用时，`LoopOptions.modelByFailureCategory` 可按上一次结构化失败类别选择编辑模型。Graph 嵌入方可使用 `decideGate`、重试策略、动态 Agent/Loop map、执行器能力要求、`buildEngineeringGraphArtifactCatalog` 与 `planEngineeringGraphMigration`；迁移规划是纯函数，绝不会改写检查点。
 通过后的交付入口会持久化严格的 `LoopState.delivery` 记录，包括 `mode`、`status`、
 `attempts`、`updatedAt`，并在交付终态中只保存 `artifact` 或 `error` 之一。
 

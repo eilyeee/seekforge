@@ -12,7 +12,13 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { DEFAULT_MODEL, DEPRECATED_MODELS, MODEL_PRICING, resolveProviderPreset } from "@seekforge/core";
+import {
+  DEFAULT_MODEL,
+  DEPRECATED_MODELS,
+  listEngineeringGraphStates,
+  MODEL_PRICING,
+  resolveProviderPreset,
+} from "@seekforge/core";
 import { ConfigValueError, loadConfig } from "./config.js";
 import { FileBrowseError, RawFileError, UploadError } from "./files.js";
 import { sendApiError, sendJson } from "./http.js";
@@ -91,6 +97,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
     if (method === "GET" && path === "/api/metrics") {
       const metrics = ctx.runManager.metrics();
       const loops = ctx.registry.summary.flatMap((workspace) => listLoopStates(workspace.path));
+      const graphs = ctx.registry.summary.flatMap((workspace) => listEngineeringGraphStates(workspace.path));
       const loopMetrics: Record<string, number> = {
         seekforge_loops_total: loops.length,
         seekforge_loops_active: loops.filter((loop) => loop.status === "running" || loop.status === "paused").length,
@@ -98,10 +105,43 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
         seekforge_loops_tokens_total: loops.reduce((sum, loop) => sum + (loop.tokensUsed ?? 0), 0),
         seekforge_loops_verify_runs_total: loops.reduce((sum, loop) => sum + (loop.verifyRuns ?? 0), 0),
       };
+      const graphMetrics: Record<string, number> = {
+        seekforge_graphs_total: graphs.length,
+        seekforge_graphs_active: graphs.filter((graph) => graph.status === "running" || graph.status === "paused")
+          .length,
+        seekforge_graphs_paused: graphs.filter((graph) => graph.status === "paused").length,
+        seekforge_graphs_recovery_backoff: graphs.filter((graph) => graph.recovery?.nextAttemptAt !== undefined).length,
+        seekforge_graph_node_retry_waits: graphs.reduce(
+          (sum, graph) => sum + graph.activeAttempts.filter((attempt) => attempt.phase === "waiting_retry").length,
+          0,
+        ),
+        seekforge_graph_pending_nodes: graphs.reduce(
+          (sum, graph) =>
+            sum + Math.max(0, graph.definition.nodes.length - graph.results.length - graph.activeAttempts.length),
+          0,
+        ),
+        seekforge_graphs_cost_usd_total: graphs.reduce((sum, graph) => sum + graph.spentCost, 0),
+        seekforge_graphs_tokens_total: graphs.reduce((sum, graph) => sum + graph.spentTokens, 0),
+        seekforge_graph_node_attempts_total: graphs.reduce(
+          (sum, graph) =>
+            sum +
+            graph.results.reduce((nodeSum, node) => nodeSum + node.attempts, 0) +
+            graph.activeAttempts.reduce((nodeSum, attempt) => nodeSum + attempt.attempt, 0),
+          0,
+        ),
+        seekforge_graph_node_retries_total: graphs.reduce(
+          (sum, graph) =>
+            sum +
+            graph.results.reduce((nodeSum, node) => nodeSum + Math.max(0, node.attempts - 1), 0) +
+            graph.activeAttempts.reduce((nodeSum, attempt) => nodeSum + Math.max(0, attempt.attempt - 1), 0),
+          0,
+        ),
+      };
       res.writeHead(200, { "content-type": "text/plain; version=0.0.4; charset=utf-8" });
       res.end(
         `${Object.entries(metrics)
           .concat(Object.entries(loopMetrics))
+          .concat(Object.entries(graphMetrics))
           .map(([name, value]) => `${name} ${value}`)
           .join("\n")}\n`,
       );

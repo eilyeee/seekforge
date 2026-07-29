@@ -18,6 +18,8 @@ export type EngineeringGraphRunComparison = {
     after?: string;
     costDeltaUsd: number;
     tokenDelta: number;
+    attemptDelta: number;
+    durationDeltaMs?: number;
   }>;
 };
 
@@ -39,12 +41,23 @@ export function compareEngineeringGraphRuns(
     nodes: ids.map((id) => {
       const previous = beforeNodes.get(id);
       const current = afterNodes.get(id);
+      const duration = (result: typeof previous): number | undefined => {
+        if (!result?.startedAt || !result.completedAt) return undefined;
+        const value = Date.parse(result.completedAt) - Date.parse(result.startedAt);
+        return Number.isFinite(value) ? Math.max(0, value) : undefined;
+      };
+      const beforeDuration = duration(previous);
+      const afterDuration = duration(current);
       return {
         id,
         ...(previous ? { before: previous.status } : {}),
         ...(current ? { after: current.status } : {}),
         costDeltaUsd: (current?.costUsd ?? 0) - (previous?.costUsd ?? 0),
         tokenDelta: (current?.tokensUsed ?? 0) - (previous?.tokensUsed ?? 0),
+        attemptDelta: (current?.attempts ?? 0) - (previous?.attempts ?? 0),
+        ...(beforeDuration !== undefined || afterDuration !== undefined
+          ? { durationDeltaMs: (afterDuration ?? 0) - (beforeDuration ?? 0) }
+          : {}),
       };
     }),
   };

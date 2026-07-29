@@ -72,6 +72,7 @@ import { currentLoopBudgetReason, forecastLoopBudgetReason } from "./loop-budget
 import { isVerificationPathPrefix, selectLoopVerificationStage } from "./loop-verification-selection.js";
 import { isDenseArray } from "./orchestration.js";
 import { selectOrchestrationReadyNodes } from "./orchestration-scheduler.js";
+import { readLoopVerificationCache, recordLoopVerificationCache } from "./loop-verification-cache.js";
 
 export type LoopStatus =
   | "passed" // verification command exited 0
@@ -196,6 +197,8 @@ export type LoopOptions = {
   approvalMode?: ApprovalMode;
   model?: string;
   planModel?: string;
+  /** Optional edit-model routing by the previous verification failure category. */
+  modelByFailureCategory?: Partial<Record<LoopFailureCategory, string>>;
   /** Hand failing runs to planModel (mirrors AgentCoreDeps.escalateOnFailure). */
   escalateOnFailure?: boolean;
   /** Cooperative stop (Ctrl-C / a Stop button). */
@@ -507,6 +510,46 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
   ) {
     throw new Error("Loop recoveryAttemptId requires a resumed Loop and a safe id");
   }
+  if (opts.modelByFailureCategory !== undefined) {
+    if (!isRecord(opts.modelByFailureCategory)) throw new Error("Loop modelByFailureCategory must be an object");
+    const categories = new Set<LoopFailureCategory>([
+      "none",
+      "test",
+      "compile",
+      "lint",
+      "review",
+      "environment",
+      "timeout",
+      "permission",
+      "network",
+      "unknown",
+    ]);
+    const routedModels = new Set<string>();
+    for (const [category, model] of Object.entries(opts.modelByFailureCategory)) {
+      if (
+        !categories.has(category as LoopFailureCategory) ||
+        typeof model !== "string" ||
+        !model.trim() ||
+        model.length > 256
+      ) {
+        throw new Error("Loop modelByFailureCategory contains an invalid category or model");
+      }
+      routedModels.add(model);
+    }
+    if (!deps.providerForModel) throw new Error("Loop modelByFailureCategory requires providerForModel");
+    for (const model of routedModels) {
+      if (model === deps.provider.model) continue;
+      const provider = deps.providerForModel(model);
+      if (
+        !provider ||
+        typeof provider.model !== "string" ||
+        typeof provider.chat !== "function" ||
+        typeof provider.chatStream !== "function"
+      ) {
+        throw new Error(`Loop modelByFailureCategory provider is invalid: ${model}`);
+      }
+    }
+  }
   const configuredIterations = opts.maxIterations ?? opts.resumeState?.maxIterations;
   if (
     configuredIterations !== undefined &&
@@ -760,6 +803,19 @@ async function runAutoLoopWithLease(
     ...(opts.escalateOnFailure !== undefined ? { escalateOnFailure: opts.escalateOnFailure } : {}),
     ...(opts.planModel ? { planModel: opts.planModel } : {}),
   });
+  const editAgentForModel = (model: string | undefined): ReturnType<typeof createAgentCore> => {
+    if (!model || model === loopProvider.model) return agent;
+    const provider = deps.providerForModel?.(model);
+    if (!provider) throw new Error(`Cannot route Loop failure category without providerForModel: ${model}`);
+    return createAgentCore({
+      ...deps,
+      extractMemory: false,
+      deferSkillOutcome: true,
+      provider,
+      ...(opts.escalateOnFailure !== undefined ? { escalateOnFailure: opts.escalateOnFailure } : {}),
+      ...(opts.planModel ? { planModel: opts.planModel } : {}),
+    });
+  };
   // Analysis/review may inspect through read-only tools, but must not execute
   // lifecycle hooks or dispatch subagents that could mutate outside mode checks.
   const reviewAgent =
@@ -886,6 +942,7 @@ async function runAutoLoopWithLease(
     }
     persist(
       {
+        phase: withId.status === "requirements_pending" ? "requirements" : "settled",
         status: withId.status,
         iterations: withId.iterations,
         costUsd: withId.costUsd,
@@ -1075,7 +1132,10 @@ async function runAutoLoopWithLease(
   const executeVerify = async (
     iteration: number,
     changedPaths?: ReadonlySet<string>,
-    verificationCache?: Map<string, { result: LoopStageResult; workspaceFingerprint: string }>,
+    verificationCache?: Map<
+      string,
+      { result: LoopStageResult; workspaceFingerprint: string; source: "current" | "persistent" }
+    >,
   ): Promise<
     | {
         kind: "result";
@@ -1083,12 +1143,14 @@ async function runAutoLoopWithLease(
         diagnostics: string;
         stages: LoopStageResult[];
         skippedStageIds: string[];
+        requiresFullVerification: boolean;
       }
     | { kind: "budget"; reason: LoopBudgetReason }
   > => {
     const stages: LoopStageResult[] = [];
     const skippedStageIds: string[] = [];
     const decisions: LoopVerificationDecision[] = [];
+    let requiresFullVerification = false;
     let failedDiagnostics = "";
     let failedCode = 0;
     const pending = new Set(verificationPlan.map((stage) => stage.id));
@@ -1174,11 +1236,14 @@ async function runAutoLoopWithLease(
         decision: LoopVerificationDecision;
         result?: LoopStageResult;
         diagnostics: string;
+        persistentCacheHit?: boolean;
         budget?: { kind: "budget"; reason: LoopBudgetReason };
       };
       const wave = await Promise.allSettled(
         runnable.map(async ({ stage, decision }) => {
-          const cached = changedPaths === undefined && stage.cacheable ? verificationCache?.get(stage.id) : undefined;
+          const candidate = stage.cacheable ? verificationCache?.get(stage.id) : undefined;
+          const cached =
+            candidate && (changedPaths !== undefined || candidate.source === "current") ? candidate : undefined;
           if (cached) {
             const currentFingerprint = await fingerprinter.fingerprint({ forceAll: true });
             if (currentFingerprint !== null && currentFingerprint === cached.workspaceFingerprint) {
@@ -1192,6 +1257,7 @@ async function runAutoLoopWithLease(
                 } satisfies LoopVerificationDecision,
                 result: { ...cached.result, selection: "cached" as const },
                 diagnostics: "",
+                persistentCacheHit: cached.source === "persistent",
               };
             }
           }
@@ -1227,6 +1293,7 @@ async function runAutoLoopWithLease(
         const item = settled.find((candidate) => candidate.stage.id === stage.id);
         if (!item?.result) continue;
         let completed = item.result;
+        if (item.persistentCacheHit) requiresFullVerification = true;
         decisionById.set(stage.id, item.decision);
         if (completed.code === 0 && completed.attempts > 1) {
           completed = { ...completed, flaky: true };
@@ -1235,10 +1302,29 @@ async function runAutoLoopWithLease(
         }
         stages.push(completed);
         outcomes.set(stage.id, completed);
-        if (completed.code === 0 && changedPaths !== undefined && stage.cacheable && verificationCache) {
+        if (
+          completed.code === 0 &&
+          changedPaths !== undefined &&
+          stage.cacheable &&
+          verificationCache &&
+          item.decision.reason !== "cache_hit"
+        ) {
           const workspaceFingerprint = await fingerprinter.fingerprint({ forceAll: true });
-          if (workspaceFingerprint !== null)
-            verificationCache.set(stage.id, { result: completed, workspaceFingerprint });
+          if (workspaceFingerprint !== null) {
+            verificationCache.set(stage.id, { result: completed, workspaceFingerprint, source: "current" });
+            try {
+              recordLoopVerificationCache(
+                opts.workspace,
+                stage.id,
+                stage.command,
+                workspaceFingerprint,
+                completed,
+                opts.workspaceGuard,
+              );
+            } catch {
+              // Cross-run cache is advisory; the current verification remains authoritative.
+            }
+          }
         }
         emit({ type: "verify.stage.completed", iteration, result: completed });
         if (failedCode === 0 && completed.code !== 0 && stage.required !== false) {
@@ -1269,6 +1355,7 @@ async function runAutoLoopWithLease(
       diagnostics: failedDiagnostics || stages.map((stage) => stage.output).join("\n"),
       stages,
       skippedStageIds,
+      requiresFullVerification,
     };
   };
 
@@ -1279,14 +1366,30 @@ async function runAutoLoopWithLease(
     // Results are reusable only inside this incremental-to-full transition and
     // only while an authoritative workspace fingerprint remains unchanged.
     // Never carry them into a later stable pass, rollback, or iteration.
-    const verificationCache = new Map<string, { result: LoopStageResult; workspaceFingerprint: string }>();
+    const verificationCache = new Map<
+      string,
+      { result: LoopStageResult; workspaceFingerprint: string; source: "current" | "persistent" }
+    >();
+    if (changedPaths !== undefined) {
+      const workspaceFingerprint = await fingerprinter.fingerprint({ forceAll: true });
+      if (workspaceFingerprint !== null) {
+        for (const stage of verificationPlan) {
+          if (!stage.cacheable) continue;
+          const result = readLoopVerificationCache(opts.workspace, stage.id, stage.command, workspaceFingerprint);
+          if (result) verificationCache.set(stage.id, { result, workspaceFingerprint, source: "persistent" });
+        }
+      }
+    }
     let captured = await executeVerify(iteration, changedPaths, verificationCache);
     if (captured.kind === "budget") return captured;
-    if (captured.result.code === 0 && captured.skippedStageIds.length > 0) {
+    if (captured.result.code === 0 && (captured.skippedStageIds.length > 0 || captured.requiresFullVerification)) {
       emit({
         type: "loop.warning",
         warning: "observer",
-        message: `Incremental verification skipped ${captured.skippedStageIds.join(", ")}; running the full pipeline before accepting success.`,
+        message:
+          captured.skippedStageIds.length > 0
+            ? `Incremental verification skipped ${captured.skippedStageIds.join(", ")}; running the full pipeline before accepting success.`
+            : "Persistent verification hints were reused; running the full pipeline before accepting success.",
       });
       captured = await executeVerify(iteration, undefined, verificationCache);
       if (captured.kind === "budget") return captured;
@@ -1368,6 +1471,7 @@ async function runAutoLoopWithLease(
 
   const reviewRequirements = async (verifyResult: { code: number; output: string }): Promise<LoopAcceptanceReview> => {
     if (requirements === null) throw new Error("Cannot review missing loop requirements");
+    persist({ phase: "acceptance" }, true);
     emit({ type: "requirements.started", phase: "review" });
     const phase = await runReadOnlyPhase(buildAcceptanceReviewPrompt(requirements, verifyResult), false);
     const parsedRaw =
@@ -1399,6 +1503,7 @@ async function runAutoLoopWithLease(
   const canApprovePersistedRequirements = opts.resumeState !== undefined && requirements !== null;
   if (requirementMode !== "quick" && requirements === null) {
     if (opts.signal?.aborted) return finishAbort();
+    persist({ phase: "requirements" }, true);
     emit({ type: "requirements.started", phase: "analysis" });
     const phase = await runReadOnlyPhase(buildRequirementAnalysisPrompt(opts.task, opts.verifyCommand), true);
     if (!phase.completed) {
@@ -1453,6 +1558,7 @@ async function runAutoLoopWithLease(
   // --- Pre-check: maybe it's already green. ---------------------------------
   let preVerify: { code: number; output: string };
   let preVerifyDiagnostics = "";
+  persist({ phase: "precheck" }, true);
   if (opts.signal?.aborted) {
     return finishAbort();
   }
@@ -1550,6 +1656,7 @@ async function runAutoLoopWithLease(
       throw new Error("Loop control failed while paused");
     }
     emit({ type: "iteration.start", iteration: i });
+    persist({ phase: "editing" }, true);
     const iterationStartedAt = Date.now();
     const iterationStartingCost = costUsd;
     const iterationStartingTokens = tokensUsed;
@@ -1581,6 +1688,8 @@ async function runAutoLoopWithLease(
     }
 
     let runSucceeded = false;
+    const priorFailureCategory = verificationFailureCategory(previousDiagnostics, lastVerify.output);
+    const editingAgent = editAgentForModel(opts.modelByFailureCategory?.[priorFailureCategory]);
     const changedPaths = new Set<string>();
     let forceFullFingerprint = false;
     for (let attempt = 0; attempt <= maxAgentRetries && !runSucceeded; attempt++) {
@@ -1598,7 +1707,7 @@ async function runAutoLoopWithLease(
         timeoutController.signal,
         ...(opts.signal ? [opts.signal] : []),
       ]);
-      const events = agent.runTask({
+      const events = editingAgent.runTask({
         task: continuation,
         projectPath: opts.workspace,
         mode: "edit",
@@ -1685,6 +1794,7 @@ async function runAutoLoopWithLease(
     let v: { code: number; output: string };
     let verifyDiagnostics = "";
     try {
+      persist({ phase: "verification" }, true);
       const captured = await executeStableVerify(i, changedPaths);
       if (captured.kind === "budget") return finishBudget(captured.reason, lastVerify);
       v = captured.result;

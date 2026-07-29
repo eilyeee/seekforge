@@ -372,6 +372,7 @@ describe("loop management API", () => {
             startedAt: now,
             completedAt: now,
             output: { private: "detail" },
+            artifacts: [{ name: "report", path: "dist/report.json", sha256: "d".repeat(64) }],
           },
         ],
         events: [{ sequence: 1, type: "graph.completed", timestamp: now, status: "passed" }],
@@ -400,6 +401,28 @@ describe("loop management API", () => {
     expect(await jsonOf(await authed("/api/graphs/rest-graph/history"))).toEqual([
       expect.objectContaining({ sequence: 1, type: "graph.completed" }),
     ]);
+    expect(await jsonOf(await authed("/api/graphs/rest-graph/artifacts"))).toMatchObject({
+      graphId: "rest-graph",
+      artifacts: [
+        expect.objectContaining({
+          key: `sha256:${"d".repeat(64)}`,
+          producerNodeId: "done",
+          consumers: [],
+        }),
+      ],
+    });
+    expect(
+      await jsonOf(
+        await authed("/api/graphs/rest-graph/migration-plan", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            graphId: "rest-graph",
+            nodes: [{ id: "done", kind: "function", handler: "collect" }],
+          }),
+        }),
+      ),
+    ).toMatchObject({ graphId: "rest-graph", changed: ["done"], invalidated: ["done"], preserved: [] });
     expect(await jsonOf(await authed("/api/graphs/rest-graph", { method: "DELETE" }))).toEqual({
       removed: true,
       graphId: "rest-graph",
@@ -718,7 +741,10 @@ describe("loop management API", () => {
 
   it("exports aggregate Loop metrics", async () => {
     const metrics = await authed("/api/metrics");
-    expect(await metrics.text()).toMatch(/seekforge_loops_total \d+/);
+    const text = await metrics.text();
+    expect(text).toMatch(/seekforge_loops_total \d+/);
+    expect(text).toMatch(/seekforge_graphs_total \d+/);
+    expect(text).toMatch(/seekforge_graph_node_retries_total \d+/);
   });
 
   it("updates priority and safely deletes one loop", async () => {

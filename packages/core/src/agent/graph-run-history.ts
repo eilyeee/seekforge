@@ -14,7 +14,10 @@ export type EngineeringGraphRunSnapshot = {
   elapsedMs: number;
   createdAt: string;
   completedAt: string;
-  results: Array<Pick<GraphNodeResult, "id" | "status" | "costUsd" | "tokensUsed">>;
+  results: Array<
+    Pick<GraphNodeResult, "id" | "status" | "costUsd" | "tokensUsed"> &
+      Partial<Pick<GraphNodeResult, "attempts" | "startedAt" | "completedAt">>
+  >;
 };
 
 const MAX_RUN_SNAPSHOTS = 16;
@@ -66,7 +69,16 @@ export function readEngineeringGraphRunSnapshots(workspace: string, graphId: str
           !Number.isFinite(result.costUsd) ||
           result.costUsd < 0 ||
           !Number.isSafeInteger(result.tokensUsed) ||
-          (result.tokensUsed as number) < 0
+          (result.tokensUsed as number) < 0 ||
+          (result.attempts !== undefined &&
+            (!Number.isSafeInteger(result.attempts) || (result.attempts as number) < 0)) ||
+          (result.startedAt !== undefined &&
+            (typeof result.startedAt !== "string" || !Number.isFinite(Date.parse(result.startedAt)))) ||
+          (result.completedAt !== undefined &&
+            (typeof result.completedAt !== "string" || !Number.isFinite(Date.parse(result.completedAt)))) ||
+          (typeof result.startedAt === "string" &&
+            typeof result.completedAt === "string" &&
+            Date.parse(result.completedAt) < Date.parse(result.startedAt))
         ) {
           return [];
         }
@@ -109,7 +121,15 @@ export function archiveEngineeringGraphRun(workspace: string, state: Engineering
     elapsedMs: state.elapsedMs,
     createdAt: state.createdAt,
     completedAt: state.completedAt,
-    results: state.results.map(({ id, status, costUsd, tokensUsed }) => ({ id, status, costUsd, tokensUsed })),
+    results: state.results.map(({ id, status, costUsd, tokensUsed, attempts, startedAt, completedAt }) => ({
+      id,
+      status,
+      costUsd,
+      tokensUsed,
+      attempts,
+      ...(startedAt ? { startedAt } : {}),
+      ...(completedAt ? { completedAt } : {}),
+    })),
   };
   writeWorkspaceStateFileAtomic(
     workspace,

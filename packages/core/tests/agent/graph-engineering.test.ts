@@ -26,6 +26,7 @@ import {
   setEngineeringGraphPriority,
 } from "../../src/agent/graph-state.js";
 import type { AgentCoreDeps } from "../../src/agent/loop.js";
+import { listLoopStates } from "../../src/agent/loop-state.js";
 import { acquireWorkspaceSessionGuard } from "../../src/agent/session-lease.js";
 import { listGitWorktrees } from "../../src/worktree.js";
 
@@ -173,6 +174,122 @@ describe("runEngineeringGraph", () => {
     expect(state.activeAttempts).toEqual([]);
   });
 
+  it("runs bounded dynamic map items through autonomous Loops", async () => {
+    const root = workspace();
+    const state = await runEngineeringGraph(
+      deps,
+      {
+        graphId: "map-loop",
+        nodes: [
+          { id: "source", kind: "function", handler: "source" },
+          {
+            id: "repair",
+            kind: "map",
+            mapKind: "loop",
+            task: "Confirm the item",
+            verifyCommand: "true",
+            dependsOn: ["source"],
+            source: { nodeId: "source" },
+            maxItems: 2,
+            mapConcurrency: 1,
+          },
+        ],
+      },
+      { workspace: root, handlers: { source: () => ({ output: ["a", "b"] }) } },
+    );
+    expect(state.status).toBe("passed");
+    expect(state.results.find((result) => result.id === "repair")?.output).toEqual([
+      expect.objectContaining({ status: "passed", iterations: 0 }),
+      expect.objectContaining({ status: "passed", iterations: 0 }),
+    ]);
+  });
+
+  it("resumes the same durable child Loop after a Graph attempt interruption", async () => {
+    const root = workspace();
+    const definition = {
+      graphId: "durable-child-loop",
+      nodes: [{ id: "repair", kind: "loop", task: "Repair safely", verifyCommand: "true" }],
+    };
+    const first = await runEngineeringGraph(deps, definition, { workspace: root });
+    const firstLoopId = (first.results[0]?.output as { loopId?: string } | undefined)?.loopId;
+    const attemptKey = first.events.find(
+      (event) => event.type === "node.attempt.started" && event.nodeId === "repair",
+    )?.message;
+    expect(firstLoopId).toMatch(/^graph-loop-[0-9a-f]{32}$/);
+    expect(attemptKey).toBeDefined();
+    saveEngineeringGraphState(root, {
+      ...first,
+      status: "running",
+      completedAt: undefined,
+      results: [],
+      activeAttempts: [
+        {
+          nodeId: "repair",
+          attempt: 1,
+          idempotencyKey: attemptKey!,
+          startedAt: new Date().toISOString(),
+          phase: "running",
+        },
+      ],
+    });
+    const resumed = await runEngineeringGraph(deps, definition, { workspace: root, resume: true });
+    expect((resumed.results[0]?.output as { loopId?: string } | undefined)?.loopId).toBe(firstLoopId);
+    expect(listLoopStates(root).filter((loop) => loop.loopId.startsWith("graph-loop-"))).toHaveLength(1);
+  });
+
+  it("runs bounded dynamic map items through sequential Agents", async () => {
+    const root = workspace();
+    let chats = 0;
+    const response = () => ({
+      content: "item complete",
+      toolCalls: [],
+      usage: { promptTokens: 2, completionTokens: 1, cacheHitTokens: 0, costUsd: 0.001 },
+      finishReason: "stop" as const,
+    });
+    const agentDeps: AgentCoreDeps = {
+      provider: {
+        model: "test-agent",
+        chat: async () => {
+          chats++;
+          return response();
+        },
+        chatStream: async () => {
+          chats++;
+          return response();
+        },
+      },
+      dispatcher: { list: () => [], execute: async () => ({ ok: true }) },
+      confirm: async () => true,
+    };
+    const state = await runEngineeringGraph(
+      agentDeps,
+      {
+        graphId: "map-agent",
+        nodes: [
+          { id: "source", kind: "function", handler: "source" },
+          {
+            id: "repair",
+            kind: "map",
+            mapKind: "agent",
+            task: "Process the item",
+            dependsOn: ["source"],
+            source: { nodeId: "source" },
+            maxItems: 2,
+            mapConcurrency: 1,
+          },
+        ],
+      },
+      { workspace: root, handlers: { source: () => ({ output: ["a", "b"] }) } },
+    );
+    expect(state.status).toBe("passed");
+    expect(chats).toBe(2);
+    expect(state.results.find((result) => result.id === "repair")).toMatchObject({
+      attempts: 1,
+      costUsd: 0.002,
+      tokensUsed: 6,
+    });
+  });
+
   it("waits for every started map item before publishing a failed batch", async () => {
     const root = workspace();
     let peerSettled = false;
@@ -208,6 +325,132 @@ describe("runEngineeringGraph", () => {
     expect(state.status).toBe("failed");
     expect(peerSettled).toBe(true);
     expect(state.activeAttempts).toEqual([]);
+  });
+
+  it("persists bounded retry waits before the next node attempt", async () => {
+    const root = workspace();
+    let calls = 0;
+    const run = runEngineeringGraph(
+      deps,
+      {
+        graphId: "retry-wait",
+        nodes: [
+          {
+            id: "work",
+            kind: "function",
+            handler: "work",
+            maxRetries: 1,
+            retryPolicy: { initialDelayMs: 100, maxDelayMs: 100, multiplier: 1, jitterRatio: 0 },
+          },
+        ],
+      },
+      {
+        workspace: root,
+        handlers: {
+          work: () => {
+            calls++;
+            if (calls === 1) throw new Error("temporary");
+            return { output: "done" };
+          },
+        },
+      },
+    );
+    await vi.waitFor(() =>
+      expect(loadEngineeringGraphState(root, "retry-wait")?.activeAttempts[0]).toMatchObject({
+        phase: "waiting_retry",
+        lastError: "temporary",
+      }),
+    );
+    const waiting = loadEngineeringGraphState(root, "retry-wait")?.activeAttempts[0];
+    expect(waiting?.nextAttemptAt).toBeDefined();
+    const state = await run;
+    expect(state).toMatchObject({ status: "passed", results: [{ attempts: 2 }] });
+  });
+
+  it("clears a recovered retry marker when the stop policy terminalizes its node", async () => {
+    const root = workspace();
+    const definition = {
+      graphId: "retry-stop-recovery",
+      nodes: [
+        { id: "failed", kind: "function", handler: "failed" },
+        { id: "waiting", kind: "function", handler: "waiting" },
+      ],
+    };
+    await runEngineeringGraph(deps, definition, {
+      workspace: root,
+      handlers: {
+        failed: () => {
+          throw new Error("failed");
+        },
+        waiting: () => ({ output: "unexpected" }),
+      },
+    });
+    const checkpoint = loadEngineeringGraphState(root, definition.graphId)!;
+    saveEngineeringGraphState(root, {
+      ...checkpoint,
+      status: "running",
+      completedAt: undefined,
+      results: checkpoint.results.filter((result) => result.id === "failed"),
+      activeAttempts: [
+        {
+          nodeId: "waiting",
+          attempt: 1,
+          idempotencyKey: "waiting-retry-key",
+          startedAt: new Date().toISOString(),
+          phase: "waiting_retry",
+          nextAttemptAt: new Date(Date.now() + 60_000).toISOString(),
+          lastError: "temporary",
+        },
+      ],
+    });
+    const waiting = vi.fn(() => ({ output: "unexpected" }));
+    const resumed = await runEngineeringGraph(deps, definition, {
+      workspace: root,
+      resume: true,
+      handlers: {
+        failed: () => ({ output: "unexpected" }),
+        waiting,
+      },
+    });
+    expect(waiting).not.toHaveBeenCalled();
+    expect(resumed.activeAttempts).toEqual([]);
+    expect(resumed.results.find((result) => result.id === "waiting")).toMatchObject({ status: "skipped" });
+    expect(loadEngineeringGraphState(root, definition.graphId)?.activeAttempts).toEqual([]);
+  });
+
+  it("reapplies the stop policy when a start deadline fails inside the scheduling pass", async () => {
+    const root = workspace();
+    let siblingCalls = 0;
+    let gateCalls = 0;
+    const state = await runEngineeringGraph(
+      deps,
+      {
+        graphId: "deadline-stop",
+        nodes: [
+          { id: "expired", kind: "gate", deadlineAt: "2000-01-01T00:00:00.000Z" },
+          { id: "sibling", kind: "function", handler: "sibling" },
+        ],
+      },
+      {
+        workspace: root,
+        decideGate: () => {
+          gateCalls++;
+          return { decision: "approve" };
+        },
+        handlers: {
+          sibling: () => {
+            siblingCalls++;
+            return { output: "unexpected" };
+          },
+        },
+      },
+    );
+    expect(gateCalls).toBe(0);
+    expect(siblingCalls).toBe(0);
+    expect(state.results).toEqual([
+      expect.objectContaining({ id: "expired", status: "failed", attempts: 0 }),
+      expect.objectContaining({ id: "sibling", status: "skipped", attempts: 0 }),
+    ]);
   });
 
   it("reuses an interrupted handler key but allocates a new key for explicit rerun", async () => {
@@ -619,6 +862,19 @@ describe("runEngineeringGraph", () => {
       },
     );
     expect(gate.status).toBe("paused");
+
+    const rejectedGate = await runEngineeringGraph(
+      deps,
+      { graphId: "rejected-gate", nodes: [{ id: "review", kind: "gate" }] },
+      {
+        workspace: root,
+        decideGate: () => ({ decision: "reject", reason: "security review failed", data: { ticket: "SEC-1" } }),
+      },
+    );
+    expect(rejectedGate).toMatchObject({
+      status: "failed",
+      results: [{ status: "failed", error: "security review failed", output: { decision: "reject" } }],
+    });
 
     const controller = new AbortController();
     const cancelledHandler = vi.fn(({ signal }: { signal: AbortSignal }) => {
@@ -1741,6 +1997,8 @@ describe("runEngineeringGraph", () => {
           worker: {
             trusted: true,
             locality: "remote",
+            protocolVersion: 1,
+            supportsCancellation: true,
             execute: () => ({
               output: { items: [1] },
               artifacts: [{ name: "report", path: "report.json" }],
@@ -1756,5 +2014,27 @@ describe("runEngineeringGraph", () => {
       sizeBytes: 3,
     });
     expect(state.results[0]?.artifacts?.[0]?.sha256).toMatch(/^[0-9a-f]{64}$/);
+
+    await expect(
+      runEngineeringGraph(
+        deps,
+        {
+          graphId: "remote-capability",
+          nodes: [
+            {
+              id: "remote",
+              kind: "remote",
+              executor: "worker",
+              executorProtocolVersion: 1,
+              requiresCancellation: true,
+            },
+          ],
+        },
+        {
+          workspace: root,
+          executors: { worker: { trusted: true, locality: "remote", execute: () => ({ output: null }) } },
+        },
+      ),
+    ).rejects.toThrow(/trusted/);
   });
 });

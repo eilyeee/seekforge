@@ -1,3 +1,4 @@
+import { clipLine } from "@seekforge/shared/format";
 import { useT } from "../../lib/i18n";
 import type {
   EngineeringGraphDetail,
@@ -79,7 +80,14 @@ export function GraphEngineeringSection(props: {
             {graph.activeAttempts && graph.activeAttempts.length > 0 && (
               <p className="mt-1 text-tertiary">
                 {t("chat.loop.graph.activeAttempts")}:{" "}
-                {graph.activeAttempts.map((attempt) => `${attempt.nodeId}#${attempt.attempt}`).join(", ")}
+                {graph.activeAttempts
+                  .map((attempt) => {
+                    const retryAt = attempt.nextAttemptAt;
+                    return `${attempt.nodeId}#${attempt.attempt}${retryAt ? ` → ${retryAt}` : ""}${
+                      attempt.lastError ? ` (${clipLine(attempt.lastError, 160)})` : ""
+                    }`;
+                  })
+                  .join(", ")}
               </p>
             )}
             {graph.recovery && (
@@ -186,13 +194,33 @@ export function GraphEngineeringSection(props: {
               </p>
             )}
             {comparison && (
-              <p className="mt-1 text-tertiary">
-                Δ ${comparison.costDeltaUsd.toFixed(4)} · Δ {comparison.tokenDelta.toLocaleString()}{" "}
-                {t("chat.loop.graph.tokens")}
-                {comparison.durationDeltaMs !== undefined
-                  ? ` · Δ ${(comparison.durationDeltaMs / 1000).toFixed(1)}s`
-                  : ""}
-              </p>
+              <div className="mt-1 text-tertiary">
+                <p>
+                  Δ ${comparison.costDeltaUsd.toFixed(4)} · Δ {comparison.tokenDelta.toLocaleString()}{" "}
+                  {t("chat.loop.graph.tokens")}
+                  {comparison.durationDeltaMs !== undefined
+                    ? ` · Δ ${(comparison.durationDeltaMs / 1000).toFixed(1)}s`
+                    : ""}
+                </p>
+                {comparison.nodes.some(
+                  (node) => (node.attemptDelta ?? 0) !== 0 || node.durationDeltaMs !== undefined,
+                ) && (
+                  <p>
+                    {comparison.nodes
+                      .filter((node) => (node.attemptDelta ?? 0) !== 0 || node.durationDeltaMs !== undefined)
+                      .slice(0, 8)
+                      .map(
+                        (node) =>
+                          `${node.id}: Δ ${node.attemptDelta ?? 0} attempts${
+                            node.durationDeltaMs !== undefined
+                              ? ` · Δ ${(node.durationDeltaMs / 1000).toFixed(1)}s`
+                              : ""
+                          }`,
+                      )
+                      .join("; ")}
+                  </p>
+                )}
+              </div>
             )}
             <div className="mt-1 flex flex-wrap gap-1">
               <Button

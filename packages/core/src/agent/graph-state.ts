@@ -80,6 +80,9 @@ export type GraphActiveAttempt = {
   attempt: number;
   idempotencyKey: string;
   startedAt: string;
+  phase?: "running" | "waiting_retry";
+  nextAttemptAt?: string;
+  lastError?: string;
 };
 
 export type GraphEvent = {
@@ -357,7 +360,14 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
       typeof attempt.idempotencyKey !== "string" ||
       attempt.idempotencyKey.length === 0 ||
       attempt.idempotencyKey.length > 512 ||
-      !validTimestamp(attempt.startedAt)
+      !validTimestamp(attempt.startedAt) ||
+      (attempt.phase !== undefined && attempt.phase !== "running" && attempt.phase !== "waiting_retry") ||
+      (attempt.nextAttemptAt !== undefined && !validTimestamp(attempt.nextAttemptAt)) ||
+      (attempt.lastError !== undefined &&
+        (typeof attempt.lastError !== "string" || attempt.lastError.length < 1 || attempt.lastError.length > 8_192)) ||
+      (attempt.phase === "waiting_retry" &&
+        (!validTimestamp(attempt.nextAttemptAt) || typeof attempt.lastError !== "string")) ||
+      (attempt.phase !== "waiting_retry" && (attempt.nextAttemptAt !== undefined || attempt.lastError !== undefined))
     ) {
       return null;
     }

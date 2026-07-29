@@ -954,6 +954,7 @@ export type AutomaticRecoverySummary = {
 export type LoopStateSummary = {
   loopId: string;
   status: LoopPersistedStatus;
+  phase?: "requirements" | "precheck" | "editing" | "verification" | "acceptance" | "settled";
   task: string;
   workspace: string;
   iterations: number;
@@ -1081,7 +1082,15 @@ export type EngineeringGraphSummary = {
   elapsedMs: number;
   priority: number;
   recovery?: AutomaticRecoverySummary;
-  activeAttempts?: Array<{ nodeId: string; attempt: number; idempotencyKey: string; startedAt: string }>;
+  activeAttempts?: Array<{
+    nodeId: string;
+    attempt: number;
+    idempotencyKey: string;
+    startedAt: string;
+    phase?: "running" | "waiting_retry";
+    nextAttemptAt?: string;
+    lastError?: string;
+  }>;
   controlSeq?: number;
   controlRunId?: string;
   pauseReason?: "approval" | "control" | "wait";
@@ -1113,6 +1122,8 @@ export type EngineeringGraphRunComparison = {
     after?: string;
     costDeltaUsd: number;
     tokenDelta: number;
+    attemptDelta?: number;
+    durationDeltaMs?: number;
   }>;
 };
 export type EngineeringGraphComparisonResponse = {

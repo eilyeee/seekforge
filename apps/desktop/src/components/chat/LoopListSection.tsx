@@ -23,6 +23,7 @@ export function LoopListSection(props: {
               {loop.loopId}
             </button>
             <Badge tone="neutral">{loop.status}</Badge>
+            {loop.phase && <Badge tone="neutral">{loop.phase}</Badge>}
             <span className="min-w-0 flex-1 truncate text-secondary">{loop.task}</span>
             <span className="text-tertiary">
               {loop.iterations}/{loop.maxIterations}

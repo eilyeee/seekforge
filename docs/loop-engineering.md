@@ -411,6 +411,8 @@ state is touched. Loop
 success performs memory extraction once and records selected-skill effectiveness
 once for the whole Loop rather than once per internal agent iteration.
 
+The state also checkpoints the last entered `requirements`, `precheck`, `editing`, `verification`, `acceptance`, or `settled` phase for crash diagnosis and resume presentation. Cacheable verification stages publish a bounded seven-day cross-run hint keyed by the exact command, authoritative workspace fingerprint, and Node platform/runtime identity. A persistent hint may skip incremental work, but it always forces and can never authorize the mandatory full pipeline. Embedders may route edit iterations by the previous failure category through `modelByFailureCategory`; routing requires an explicit `providerForModel` and never changes verification, permissions, or budgets.
+
 Edit iterations reuse **one worker session**. Requirement analysis and acceptance
 review reuse a separate reviewer session recorded in Loop state, keeping evaluator
 context out of the worker conversation while preserving both auditable traces.

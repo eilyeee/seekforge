@@ -1,6 +1,7 @@
 import {
   archiveEngineeringGraphResources,
   buildEngineeringGraphEvidenceReport,
+  buildEngineeringGraphArtifactCatalog,
   clearEngineeringGraphRecovery,
   engineeringGraphStateExists,
   engineeringGraphHistoryExists,
@@ -19,6 +20,7 @@ import {
   loadEngineeringGraphState,
   materializeEngineeringGraph,
   planEngineeringGraph,
+  planEngineeringGraphMigration,
   promoteEngineeringGraphResult,
   pruneEngineeringGraphResources,
   readEngineeringGraphHistory,
@@ -405,6 +407,12 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
     else sendApiError(res, 404, "not_found", `unknown Graph: ${graphId}`);
     return true;
   }
+  if (method === "GET" && segs.length === 4 && segs[3] === "artifacts") {
+    const state = loadEngineeringGraphState(workspace, graphId);
+    if (state) sendJson(res, 200, { graphId, artifacts: buildEngineeringGraphArtifactCatalog(state) });
+    else sendApiError(res, 404, "not_found", `unknown Graph: ${graphId}`);
+    return true;
+  }
   if (method === "GET" && segs.length === 4 && segs[3] === "compare") {
     const state = loadEngineeringGraphState(workspace, graphId);
     if (!state) {
@@ -427,6 +435,24 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
       baselineRunNumber: baseline.runNumber,
       comparison: compareEngineeringGraphRuns(baseline, state),
     });
+    return true;
+  }
+  if (method === "POST" && segs.length === 4 && segs[3] === "migration-plan") {
+    const state = loadEngineeringGraphState(workspace, graphId);
+    if (!state) {
+      sendApiError(res, 404, "not_found", `unknown Graph: ${graphId}`);
+      return true;
+    }
+    const body = await readJsonBody(ctx.req, res);
+    if (body === undefined) return true;
+    try {
+      const definition = materializeEngineeringGraph(body, {});
+      if (definition.graphId !== graphId) throw new Error("Graph migration id must match the route");
+      validateRun(workspace, definition, {}, graphExecutionRegistry(ctx));
+      sendJson(res, 200, planEngineeringGraphMigration(state.definition, definition));
+    } catch (error) {
+      sendApiError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
+    }
     return true;
   }
   if (method === "POST" && segs.length === 4 && segs[3] === "priority") {

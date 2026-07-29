@@ -2986,6 +2986,76 @@ Reading the latest checkpoint immediately before cleanup does not prove it still
 - **Do:** carry the pre-attempt identity and allocated attempt identity through the operation, then condition cleanup on either known adjacent generation.
 - **Caught:** Server Loop recovery used the latest persisted control-run id for successful cleanup instead of the completed attempt's captured identity.
 
+## 269. A cache file must not change the identity it indexes
+
+Writing an advisory cache inside the workspace can change the workspace fingerprint immediately after the cache key was computed. The new entry is then stale by construction and can invalidate an otherwise reusable in-process result.
+
+- **Do:** exclude narrowly named internal cache files from authoritative workspace identity while still binding every entry to command, content fingerprint, size, age, and full-gate rules.
+- **Caught:** the persistent Loop verification cache caused an extra full-stage execution because its own write changed the cached fingerprint.
+
+## 270. Retry delay is durable workflow state
+
+Sleeping only in process forgets the delay after a crash and can retry an external side effect earlier than the declared policy.
+
+- **Do:** checkpoint the settled attempt, bounded error, and absolute next-attempt time before an abortable wait; on recovery, distinguish interrupted execution from a settled retry wait.
+- **Caught:** Engineering Graph node retries were immediate and had no recoverable waiting generation.
+
+## 271. A failure created during scheduling must reapply the stop policy
+
+A scheduler may check `failurePolicy` and then create a new zero-attempt failure while processing deadlines, gates, or waits. Continuing the same pass can launch independent work after a stop-policy failure.
+
+- **Do:** after any scheduler-local transition creates a failure, re-evaluate the stop policy before selecting or launching ready work.
+- **Caught:** an expired Graph start deadline could fail one node and still launch its independent sibling in the same scheduling pass.
+
+## 272. Time-derived priority needs both bounds
+
+Clock skew or a future persisted timestamp can make a computed wait duration negative. Applying only an upper cap turns starvation prevention into an unbounded priority penalty.
+
+- **Do:** clamp time-derived aging to the declared lower and upper bounds before adding it to a scheduling score.
+- **Caught:** Graph priority aging capped bonuses at 20 but allowed negative values.
+
+## 273. Structural equality must not depend on object key insertion order
+
+`JSON.stringify` preserves object insertion order, so semantically identical typed objects can compare as changed when constructed through different adapters.
+
+- **Do:** use structural equality or a shared canonical representation for migration and cache identity decisions.
+- **Caught:** Graph migration planning could invalidate unchanged nodes solely because their property insertion order differed.
+
+## 274. An advisory cache hit cannot authorize acceptance
+
+A cross-run cache may be correctly keyed and still be less authoritative than a fresh release gate. Treating a hit as a successful incremental run is unsafe when no unrelated stage happens to trigger the full fallback.
+
+- **Do:** track persistent-cache provenance explicitly and force the complete authoritative pipeline before accepting success.
+- **Caught:** an all-cacheable Loop verification plan could pass entirely from persistent hints.
+
+## 275. Advisory persistence is still a deserialization boundary
+
+Ignoring malformed cache files is safe only when unknown fields, sparse arrays, runtime identity, byte limits, and nested result shape are all validated before a record is reused.
+
+- **Do:** parse cache envelopes and entries with dense arrays, exact keys, bounded bytes, strict hashes/timestamps, and the same nested invariants as the producing contract.
+- **Caught:** Loop verification cache entries accepted extra result fields and loosely shaped fingerprints.
+
+## 276. Terminalizing recovered work must clear its active marker
+
+A recovered attempt can be skipped without re-entering the execution path when a stop policy, cancellation, or control transition has already decided its outcome. Cleanup that exists only in the normal completion handler will never run.
+
+- **Do:** every terminalization owner must atomically remove both the recovered-attempt lookup and persisted active-attempt marker before publishing the result.
+- **Caught:** a persisted Graph retry wait skipped by an existing stop-policy failure could remain active beside its terminal result.
+
+## 277. Nested durable workflows need a stable parent-attempt identity
+
+Persisting a child workflow is not enough when a recovered parent creates a new random child id. A crash after child completion but before the parent checkpoint can duplicate edits and leave orphan histories.
+
+- **Do:** derive the child workflow id from the parent's durable attempt idempotency key and item identity, then resume that exact child on parent recovery; allocate a new child only for a genuinely new parent attempt.
+- **Caught:** recovered Graph Loop nodes and dynamic Loop map items started unrelated Loop records instead of continuing their persisted child.
+
+## 278. A missing checkpoint and an invalid checkpoint are different states
+
+A loader that returns `null` for both absence and corruption is convenient for listing, but a deterministic recovery owner must not interpret corruption as permission to create replacement state.
+
+- **Do:** pair validated loading with a physical existence probe at recovery boundaries; create only when absent and fail closed when a file exists but cannot be validated.
+- **Caught:** a corrupt deterministic Graph child-Loop checkpoint could otherwise fall through to a new unpersisted child execution.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

@@ -3,6 +3,7 @@ import { isRecord } from "../util/guards.js";
 import { isValidLoopDagId } from "./loop-dag-validation.js";
 import { isDenseArray } from "./orchestration.js";
 import { isValidOrchestrationResourceId } from "./orchestration-scheduler.js";
+import type { GraphRetryPolicy } from "./graph-retry-policy.js";
 
 export const MAX_GRAPH_NODES = 128;
 export const MAX_GRAPH_DEPTH = 4;
@@ -58,6 +59,8 @@ export type GraphNode = {
   approvalMode?: "auto" | "acceptEdits" | "confirm" | "manual";
   handler?: string;
   executor?: string;
+  executorProtocolVersion?: 1;
+  requiresCancellation?: boolean;
   /** Explicit, typed data-flow edges resolved from direct dependencies. */
   inputs?: Record<string, GraphInputBinding>;
   outputSchema?: GraphValueSchema;
@@ -65,6 +68,8 @@ export type GraphNode = {
   source?: GraphInputBinding;
   maxItems?: number;
   mapConcurrency?: number;
+  /** Execute each map item through a registered handler, Agent, or autonomous Loop. */
+  mapKind?: "handler" | "agent" | "loop";
   /** Number of passed dependencies required by a join node. */
   quorum?: number;
   /** Higher-priority ready nodes are scheduled first. */
@@ -77,7 +82,10 @@ export type GraphNode = {
   routes?: GraphRoute[];
   graph?: EngineeringGraphDefinition;
   maxRetries?: number;
+  retryPolicy?: GraphRetryPolicy;
   timeoutMs?: number;
+  /** Absolute start deadline; a node that has not started by then fails closed. */
+  deadlineAt?: string;
 };
 
 export type EngineeringGraphDefinition = {
@@ -91,6 +99,8 @@ export type EngineeringGraphDefinition = {
   maxDurationMs?: number;
   resourceCapacities?: Record<string, number>;
   adaptiveScheduling?: boolean;
+  /** Waiting ready nodes gain one priority point per interval, capped at 20. */
+  priorityAgingMs?: number;
   managedWorktrees?: { integrateDependencies: boolean; limit: number };
   fanIn?: { verifyCommand: string; maxIterations: number };
 };
@@ -295,6 +305,38 @@ function parseNode(value: unknown, depth: number): GraphNode {
   ) {
     throw new Error(`Graph node ${value.id} maxRetries must be 0 to 5`);
   }
+  let retryPolicy: GraphRetryPolicy | undefined;
+  if (value.retryPolicy !== undefined) {
+    if (
+      !isRecord(value.retryPolicy) ||
+      Object.keys(value.retryPolicy).some(
+        (key) => key !== "initialDelayMs" && key !== "maxDelayMs" && key !== "multiplier" && key !== "jitterRatio",
+      ) ||
+      !Number.isSafeInteger(value.retryPolicy.initialDelayMs) ||
+      (value.retryPolicy.initialDelayMs as number) < 1 ||
+      (value.retryPolicy.initialDelayMs as number) > MAX_GRAPH_NODE_TIMEOUT_MS ||
+      !Number.isSafeInteger(value.retryPolicy.maxDelayMs) ||
+      (value.retryPolicy.maxDelayMs as number) < (value.retryPolicy.initialDelayMs as number) ||
+      (value.retryPolicy.maxDelayMs as number) > MAX_GRAPH_NODE_TIMEOUT_MS ||
+      typeof value.retryPolicy.multiplier !== "number" ||
+      !Number.isFinite(value.retryPolicy.multiplier) ||
+      value.retryPolicy.multiplier < 1 ||
+      value.retryPolicy.multiplier > 10 ||
+      typeof value.retryPolicy.jitterRatio !== "number" ||
+      !Number.isFinite(value.retryPolicy.jitterRatio) ||
+      value.retryPolicy.jitterRatio < 0 ||
+      value.retryPolicy.jitterRatio > 1 ||
+      (value.maxRetries ?? 0) < 1
+    ) {
+      throw new Error(`Graph node ${value.id} retryPolicy requires retries and valid bounded delays`);
+    }
+    retryPolicy = {
+      initialDelayMs: value.retryPolicy.initialDelayMs as number,
+      maxDelayMs: value.retryPolicy.maxDelayMs as number,
+      multiplier: value.retryPolicy.multiplier,
+      jitterRatio: value.retryPolicy.jitterRatio,
+    };
+  }
   if (
     value.timeoutMs !== undefined &&
     (typeof value.timeoutMs !== "number" ||
@@ -303,6 +345,12 @@ function parseNode(value: unknown, depth: number): GraphNode {
       value.timeoutMs > MAX_GRAPH_NODE_TIMEOUT_MS)
   ) {
     throw new Error(`Graph node ${value.id} timeoutMs must be 1 to ${MAX_GRAPH_NODE_TIMEOUT_MS}`);
+  }
+  if (
+    value.deadlineAt !== undefined &&
+    (typeof value.deadlineAt !== "string" || !Number.isFinite(Date.parse(value.deadlineAt)))
+  ) {
+    throw new Error(`Graph node ${value.id} deadlineAt is invalid`);
   }
   const kind = value.kind as GraphNodeKind;
   if (
@@ -317,11 +365,38 @@ function parseNode(value: unknown, depth: number): GraphNode {
   ) {
     throw new Error(`Graph loop node ${value.id} requires a bounded verifyCommand`);
   }
-  if ((kind === "function" || kind === "map" || kind === "compensation") && !isValidLoopDagId(value.handler)) {
+  const mapKind = kind === "map" ? (value.mapKind ?? "handler") : undefined;
+  if (mapKind !== undefined && mapKind !== "handler" && mapKind !== "agent" && mapKind !== "loop") {
+    throw new Error(`Graph map node ${value.id} mapKind is invalid`);
+  }
+  if (
+    (kind === "function" || kind === "compensation" || (kind === "map" && mapKind === "handler")) &&
+    !isValidLoopDagId(value.handler)
+  ) {
     throw new Error(`Graph ${kind} node ${value.id} requires a safe handler id`);
+  }
+  if (
+    kind === "map" &&
+    mapKind !== "handler" &&
+    (typeof value.task !== "string" || !value.task.trim() || value.task.length > 64 * 1024)
+  ) {
+    throw new Error(`Graph map ${mapKind} node ${value.id} requires a bounded task`);
+  }
+  if (
+    kind === "map" &&
+    mapKind === "loop" &&
+    (typeof value.verifyCommand !== "string" || !value.verifyCommand.trim() || value.verifyCommand.length > 8_192)
+  ) {
+    throw new Error(`Graph map loop node ${value.id} requires a bounded verifyCommand`);
   }
   if (kind === "remote" && !isValidLoopDagId(value.executor)) {
     throw new Error(`Graph remote node ${value.id} requires a safe executor id`);
+  }
+  if (
+    (value.executorProtocolVersion !== undefined && (kind !== "remote" || value.executorProtocolVersion !== 1)) ||
+    (value.requiresCancellation !== undefined && (kind !== "remote" || typeof value.requiresCancellation !== "boolean"))
+  ) {
+    throw new Error(`Graph remote node ${value.id} executor capabilities are invalid`);
   }
   if (
     value.priority !== undefined &&
@@ -383,8 +458,16 @@ function parseNode(value: unknown, depth: number): GraphNode {
     ) {
       throw new Error(`Graph map node ${value.id} mapConcurrency must be 1 to 16`);
     }
-  } else if (value.source !== undefined || value.maxItems !== undefined || value.mapConcurrency !== undefined) {
-    throw new Error(`Graph node ${value.id} source/maxItems/mapConcurrency require map kind`);
+    if (mapKind !== "handler" && value.mapConcurrency !== undefined && value.mapConcurrency !== 1) {
+      throw new Error(`Graph map ${mapKind} node ${value.id} requires mapConcurrency 1`);
+    }
+  } else if (
+    value.source !== undefined ||
+    value.maxItems !== undefined ||
+    value.mapConcurrency !== undefined ||
+    value.mapKind !== undefined
+  ) {
+    throw new Error(`Graph node ${value.id} source/maxItems/mapConcurrency/mapKind require map kind`);
   }
   if (kind === "join") {
     if (
@@ -503,11 +586,14 @@ function parseNode(value: unknown, depth: number): GraphNode {
       : {}),
     ...(typeof value.handler === "string" ? { handler: value.handler } : {}),
     ...(typeof value.executor === "string" ? { executor: value.executor } : {}),
+    ...(value.executorProtocolVersion === 1 ? { executorProtocolVersion: 1 as const } : {}),
+    ...(typeof value.requiresCancellation === "boolean" ? { requiresCancellation: value.requiresCancellation } : {}),
     ...(inputs ? { inputs } : {}),
     ...(outputSchema ? { outputSchema } : {}),
     ...(source ? { source } : {}),
     ...(typeof value.maxItems === "number" ? { maxItems: value.maxItems } : {}),
     ...(typeof value.mapConcurrency === "number" ? { mapConcurrency: value.mapConcurrency } : {}),
+    ...(mapKind ? { mapKind } : {}),
     ...(typeof value.quorum === "number" ? { quorum: value.quorum } : {}),
     ...(typeof value.priority === "number" ? { priority: value.priority } : {}),
     ...(resources ? { resources } : {}),
@@ -517,7 +603,9 @@ function parseNode(value: unknown, depth: number): GraphNode {
     ...(routes ? { routes } : {}),
     ...(kind === "subgraph" ? { graph: parseEngineeringGraphDefinition(value.graph, depth + 1) } : {}),
     ...(typeof value.maxRetries === "number" ? { maxRetries: value.maxRetries } : {}),
+    ...(retryPolicy ? { retryPolicy } : {}),
     ...(typeof value.timeoutMs === "number" ? { timeoutMs: value.timeoutMs } : {}),
+    ...(typeof value.deadlineAt === "string" ? { deadlineAt: value.deadlineAt } : {}),
   };
 }
 
@@ -626,6 +714,14 @@ export function parseEngineeringGraphDefinition(value: unknown, depth = 0): Engi
   if (value.adaptiveScheduling !== undefined && typeof value.adaptiveScheduling !== "boolean") {
     throw new Error("Graph adaptiveScheduling must be boolean");
   }
+  if (
+    value.priorityAgingMs !== undefined &&
+    (!Number.isSafeInteger(value.priorityAgingMs) ||
+      (value.priorityAgingMs as number) < 1_000 ||
+      (value.priorityAgingMs as number) > MAX_GRAPH_NODE_TIMEOUT_MS)
+  ) {
+    throw new Error(`Graph priorityAgingMs must be 1000 to ${MAX_GRAPH_NODE_TIMEOUT_MS}`);
+  }
   const failurePolicy = value.failurePolicy ?? "stop";
   if (failurePolicy !== "stop" && failurePolicy !== "continue") throw new Error("Graph failurePolicy is invalid");
   if (
@@ -703,6 +799,7 @@ export function parseEngineeringGraphDefinition(value: unknown, depth = 0): Engi
     ...(typeof value.maxDurationMs === "number" ? { maxDurationMs: value.maxDurationMs } : {}),
     ...(resourceCapacities ? { resourceCapacities } : {}),
     ...(typeof value.adaptiveScheduling === "boolean" ? { adaptiveScheduling: value.adaptiveScheduling } : {}),
+    ...(typeof value.priorityAgingMs === "number" ? { priorityAgingMs: value.priorityAgingMs } : {}),
     ...(managedWorktrees ? { managedWorktrees } : {}),
     ...(fanIn ? { fanIn } : {}),
   };
