@@ -44,7 +44,8 @@ Every plugin has a strict `plugin.json`:
     },
     "hooks": {
       "sessionStart": [{ "command": "node scripts/check-environment.mjs" }]
-    }
+    },
+    "graphHandlers": { "summarize": "collect" }
   }
 }
 ```
@@ -54,6 +55,8 @@ Contribution roots are relative directories confined to the plugin. MCP server
 names are exposed as `<plugin-id>__<server-name>` to avoid ambiguous collisions. User
 configuration wins over a plugin MCP server with the same effective name;
 plugin hooks run before user-configured hooks.
+
+`graphHandlers` contributes namespaced aliases such as `team-workflows__summarize` for the deterministic built-ins `noop` and `collect`. Manifests cannot contain Graph handler code or shell commands; all aliases are resolved before any Graph effect.
 
 Plugin skill/agent roots load in plugin-id order. A later plugin can replace an
 earlier plugin's same-id contribution, while user global/project definitions

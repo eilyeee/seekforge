@@ -11,7 +11,7 @@ export const MAX_GRAPH_NODE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 export const MAX_GRAPH_HISTORY_SEGMENTS = 3;
 export const ENGINEERING_GRAPH_FAN_IN_WORKTREE_ID = "@fan-in";
 
-export type GraphNodeKind = "agent" | "loop" | "function" | "router" | "gate" | "subgraph";
+export type GraphNodeKind = "agent" | "loop" | "function" | "map" | "join" | "router" | "gate" | "subgraph";
 export type GraphNodeStatus = "passed" | "failed" | "skipped" | "waiting_approval";
 export type GraphRunStatus = "running" | "paused" | "passed" | "failed" | "cancelled";
 export type GraphCondition =
@@ -21,6 +21,12 @@ export type GraphCondition =
   | { not: GraphCondition };
 
 export type GraphRoute = { id: string; when?: GraphCondition };
+export type GraphValueType = "string" | "number" | "boolean" | "object" | "array" | "null";
+export type GraphValueSchema = {
+  type: GraphValueType;
+  required?: string[];
+};
+export type GraphInputBinding = { nodeId: string; pointer?: string };
 export type GraphNode = {
   id: string;
   kind: GraphNodeKind;
@@ -33,6 +39,16 @@ export type GraphNode = {
   mode?: "ask" | "edit";
   approvalMode?: "auto" | "acceptEdits" | "confirm" | "manual";
   handler?: string;
+  /** Explicit, typed data-flow edges resolved from direct dependencies. */
+  inputs?: Record<string, GraphInputBinding>;
+  outputSchema?: GraphValueSchema;
+  /** Bounded dynamic fan-out source for map nodes. */
+  source?: GraphInputBinding;
+  maxItems?: number;
+  /** Number of passed dependencies required by a join node. */
+  quorum?: number;
+  /** Higher-priority ready nodes are scheduled first. */
+  priority?: number;
   routes?: GraphRoute[];
   graph?: EngineeringGraphDefinition;
   maxRetries?: number;
@@ -49,6 +65,10 @@ export type EngineeringGraphDefinition = {
   managedWorktrees?: { integrateDependencies: boolean; limit: number };
   fanIn?: { verifyCommand: string; maxIterations: number };
 };
+
+export function graphNodeIsEffectful(node: Pick<GraphNode, "kind">): boolean {
+  return node.kind !== "gate" && node.kind !== "router" && node.kind !== "join";
+}
 
 export function isValidEngineeringGraphNodePath(value: unknown): value is string {
   if (typeof value !== "string" || value.length > 512) return false;
@@ -131,7 +151,7 @@ export function graphConditionMatches(
 
 function parseNode(value: unknown, depth: number): GraphNode {
   if (!isRecord(value) || !isValidLoopDagId(value.id)) throw new Error("Every Graph node requires a safe id");
-  const kinds: GraphNodeKind[] = ["agent", "loop", "function", "router", "gate", "subgraph"];
+  const kinds: GraphNodeKind[] = ["agent", "loop", "function", "map", "join", "router", "gate", "subgraph"];
   if (typeof value.kind !== "string" || !kinds.includes(value.kind as GraphNodeKind)) {
     throw new Error(`Graph node ${value.id} has an invalid kind`);
   }
@@ -175,8 +195,86 @@ function parseNode(value: unknown, depth: number): GraphNode {
   ) {
     throw new Error(`Graph loop node ${value.id} requires a bounded verifyCommand`);
   }
-  if (kind === "function" && !isValidLoopDagId(value.handler)) {
-    throw new Error(`Graph function node ${value.id} requires a safe handler id`);
+  if ((kind === "function" || kind === "map") && !isValidLoopDagId(value.handler)) {
+    throw new Error(`Graph ${kind} node ${value.id} requires a safe handler id`);
+  }
+  if (
+    value.priority !== undefined &&
+    (!Number.isSafeInteger(value.priority) || (value.priority as number) < -10 || (value.priority as number) > 10)
+  ) {
+    throw new Error(`Graph node ${value.id} priority must be -10 to 10`);
+  }
+  const parseBinding = (input: unknown, label: string): GraphInputBinding => {
+    if (
+      !isRecord(input) ||
+      !isValidLoopDagId(input.nodeId) ||
+      (input.pointer !== undefined &&
+        (typeof input.pointer !== "string" ||
+          input.pointer.length > 512 ||
+          !/^(?:\/(?:[^~]|~[01])*)*$/.test(input.pointer)))
+    ) {
+      throw new Error(`Graph node ${value.id} ${label} binding is invalid`);
+    }
+    return { nodeId: input.nodeId, ...(typeof input.pointer === "string" ? { pointer: input.pointer } : {}) };
+  };
+  let inputs: Record<string, GraphInputBinding> | undefined;
+  if (value.inputs !== undefined) {
+    if (!isRecord(value.inputs) || Object.keys(value.inputs).length > 32) {
+      throw new Error(`Graph node ${value.id} inputs are invalid`);
+    }
+    inputs = Object.create(null) as Record<string, GraphInputBinding>;
+    for (const [name, binding] of Object.entries(value.inputs)) {
+      if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(name)) throw new Error(`Graph node ${value.id} input name is invalid`);
+      inputs[name] = parseBinding(binding, `input ${name}`);
+    }
+  }
+  let outputSchema: GraphValueSchema | undefined;
+  if (value.outputSchema !== undefined) {
+    const types: GraphValueType[] = ["string", "number", "boolean", "object", "array", "null"];
+    if (!isRecord(value.outputSchema) || !types.includes(value.outputSchema.type as GraphValueType)) {
+      throw new Error(`Graph node ${value.id} outputSchema is invalid`);
+    }
+    const required = value.outputSchema.required;
+    if (
+      required !== undefined &&
+      (!isDenseArray(required) ||
+        required.length > 32 ||
+        !required.every((name) => typeof name === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(name)))
+    ) {
+      throw new Error(`Graph node ${value.id} outputSchema required fields are invalid`);
+    }
+    if (required !== undefined && value.outputSchema.type !== "object") {
+      throw new Error(`Graph node ${value.id} outputSchema required fields need object type`);
+    }
+    outputSchema = {
+      type: value.outputSchema.type as GraphValueType,
+      ...(required ? { required: [...new Set(required as string[])] } : {}),
+    };
+  }
+  let source: GraphInputBinding | undefined;
+  if (kind === "map") {
+    source = parseBinding(value.source, "source");
+    if (
+      value.maxItems !== undefined &&
+      (!Number.isSafeInteger(value.maxItems) || (value.maxItems as number) < 1 || (value.maxItems as number) > 64)
+    ) {
+      throw new Error(`Graph map node ${value.id} maxItems must be 1 to 64`);
+    }
+  } else if (value.source !== undefined || value.maxItems !== undefined) {
+    throw new Error(`Graph node ${value.id} source/maxItems require map kind`);
+  }
+  if (kind === "join") {
+    if (
+      dependsOn.length === 0 ||
+      (value.quorum !== undefined &&
+        (!Number.isSafeInteger(value.quorum) ||
+          (value.quorum as number) < 1 ||
+          (value.quorum as number) > dependsOn.length))
+    ) {
+      throw new Error(`Graph join node ${value.id} quorum is invalid`);
+    }
+  } else if (value.quorum !== undefined) {
+    throw new Error(`Graph node ${value.id} quorum requires join kind`);
   }
   let routes: GraphRoute[] | undefined;
   if (kind === "router") {
@@ -225,6 +323,12 @@ function parseNode(value: unknown, depth: number): GraphNode {
       ? { approvalMode: value.approvalMode as GraphNode["approvalMode"] }
       : {}),
     ...(typeof value.handler === "string" ? { handler: value.handler } : {}),
+    ...(inputs ? { inputs } : {}),
+    ...(outputSchema ? { outputSchema } : {}),
+    ...(source ? { source } : {}),
+    ...(typeof value.maxItems === "number" ? { maxItems: value.maxItems } : {}),
+    ...(typeof value.quorum === "number" ? { quorum: value.quorum } : {}),
+    ...(typeof value.priority === "number" ? { priority: value.priority } : {}),
     ...(routes ? { routes } : {}),
     ...(kind === "subgraph" ? { graph: parseEngineeringGraphDefinition(value.graph, depth + 1) } : {}),
     ...(typeof value.maxRetries === "number" ? { maxRetries: value.maxRetries } : {}),
@@ -251,6 +355,14 @@ export function parseEngineeringGraphDefinition(value: unknown, depth = 0): Engi
     for (const dependency of node.dependsOn ?? []) {
       if (dependency === node.id || !byId.has(dependency))
         throw new Error(`Graph node ${node.id} has invalid dependency: ${dependency}`);
+    }
+    for (const [name, binding] of Object.entries(node.inputs ?? {})) {
+      if (!(node.dependsOn ?? []).includes(binding.nodeId)) {
+        throw new Error(`Graph node ${node.id} input ${name} must reference a dependency`);
+      }
+    }
+    if (node.source && !(node.dependsOn ?? []).includes(node.source.nodeId)) {
+      throw new Error(`Graph map node ${node.id} source must reference a dependency`);
     }
     for (const reference of node.condition ? graphConditionReferences(node.condition) : []) {
       if (!(node.dependsOn ?? []).includes(reference))
@@ -309,7 +421,6 @@ export function parseEngineeringGraphDefinition(value: unknown, depth = 0): Engi
   }
   let managedWorktrees: EngineeringGraphDefinition["managedWorktrees"];
   if (value.managedWorktrees !== undefined) {
-    if (depth > 0) throw new Error("Nested Graph managedWorktrees are not supported");
     if (value.managedWorktrees === true) {
       managedWorktrees = { integrateDependencies: true, limit: 64 };
     } else if (
@@ -334,8 +445,8 @@ export function parseEngineeringGraphDefinition(value: unknown, depth = 0): Engi
   }
   let fanIn: EngineeringGraphDefinition["fanIn"];
   if (value.fanIn !== undefined) {
-    if (depth > 0 || !managedWorktrees || !isRecord(value.fanIn)) {
-      throw new Error("Graph fanIn requires top-level managedWorktrees");
+    if (!managedWorktrees || !isRecord(value.fanIn)) {
+      throw new Error("Graph fanIn requires managedWorktrees");
     }
     if (
       typeof value.fanIn.verifyCommand !== "string" ||

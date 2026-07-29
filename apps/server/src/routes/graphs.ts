@@ -1,14 +1,17 @@
 import {
-  BUILTIN_GRAPH_HANDLERS,
   archiveEngineeringGraphResources,
   buildEngineeringGraphEvidenceReport,
   engineeringGraphStateExists,
   engineeringGraphHistoryExists,
   engineeringGraphNeedsAgentRuntime,
+  enqueueGraphControl,
+  graphHandlersWithPlugins,
   inspectEngineeringGraphResources,
   isRecord,
+  isSessionRunActive,
   isValidLoopDagId,
   listEngineeringGraphStates,
+  loadPluginContributions,
   loadEngineeringGraphState,
   materializeEngineeringGraph,
   planEngineeringGraph,
@@ -43,7 +46,7 @@ function validateRun(
   validateEngineeringGraphRunOptions(definition, {
     ...options,
     workspace,
-    handlers: BUILTIN_GRAPH_HANDLERS,
+    handlers: graphHandlersWithPlugins(loadPluginContributions(workspace)),
   });
   validateEngineeringGraphWorkspaces(definition, workspace);
   if (engineeringGraphNeedsAgentRuntime(definition) && definition.costBudgetUsd === undefined) {
@@ -82,6 +85,15 @@ function startGraphRun(
   }
   try {
     validateRun(workspace, definition, options);
+  } catch (error) {
+    sendApiError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
+    return;
+  }
+  if (isSessionRunActive(workspace, `engineering-graph-${definition.graphId}`)) {
+    sendApiError(res, 409, "busy", `Graph is already running: ${definition.graphId}`);
+    return;
+  }
+  try {
     if (!options.resume && !options.restart && engineeringGraphStateExists(workspace, definition.graphId)) {
       throw new Error(`Persisted Graph already exists; use resume or restart: ${definition.graphId}`);
     }
@@ -252,6 +264,8 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
         events: state.events.slice(-16),
         spentCost: state.spentCost,
         spentTokens: state.spentTokens,
+        ...(state.activeAttempts.length > 0 ? { activeAttempts: state.activeAttempts } : {}),
+        ...(state.pauseReason ? { pauseReason: state.pauseReason } : {}),
         createdAt: state.createdAt,
         updatedAt: state.updatedAt,
         ...(state.completedAt ? { completedAt: state.completedAt } : {}),
@@ -355,6 +369,46 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
     const runId = rest.graphRuns?.get(graphRunKey(workspace, graphId));
     if (!runId) sendApiError(res, 409, "not_running", `Graph is not running: ${graphId}`);
     else sendJson(res, 200, rest.runManager.cancel(workspace, runId));
+    return true;
+  }
+  if (method === "POST" && segs.length === 4 && segs[3] === "control") {
+    const state = loadEngineeringGraphState(workspace, graphId);
+    if (!state) {
+      sendApiError(res, 404, "not_found", `unknown Graph: ${graphId}`);
+      return true;
+    }
+    if (
+      state.status !== "running" ||
+      !state.controlRunId ||
+      !isSessionRunActive(workspace, `engineering-graph-${graphId}`)
+    ) {
+      sendApiError(res, 409, "not_running", `Graph is not running: ${graphId}`);
+      return true;
+    }
+    const body = await readJsonBody(ctx.req, res);
+    if (body === undefined) return true;
+    if (
+      !isRecord(body) ||
+      (body.operation !== "pause" && body.operation !== "resume" && body.operation !== "steer") ||
+      (body.operation === "steer" && typeof body.message !== "string") ||
+      (body.operation !== "steer" && body.message !== undefined)
+    ) {
+      sendApiError(res, 400, "bad_request", "Graph control requires pause, resume, or steer");
+      return true;
+    }
+    try {
+      const entry = await enqueueGraphControl(
+        workspace,
+        graphId,
+        state.controlRunId,
+        body.operation === "steer"
+          ? { operation: "steer", message: body.message as string }
+          : { operation: body.operation },
+      );
+      sendJson(res, 202, entry);
+    } catch (error) {
+      sendApiError(res, 409, "conflict", error instanceof Error ? error.message : String(error));
+    }
     return true;
   }
   if (method === "POST" && segs.length === 4 && ["resume", "approve", "rerun", "restart"].includes(segs[3]!)) {

@@ -133,6 +133,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | POST /api/graphs/:id/rerun | resume and invalidate exactly the supplied `rerun` or `nodeIds` array plus descendants |
 | POST /api/graphs/:id/restart | explicitly restart from the persisted normalized definition |
 | POST /api/graphs/:id/cancel | cancel only the active run for this workspace and Graph id |
+| POST /api/graphs/:id/control | enqueue durable `pause`, `resume`, or bounded `steer` guidance for the active control run; commands apply only at safe node boundaries |
 | DELETE /api/graphs/:id | delete one inactive graph checkpoint/history after retained managed resources are pruned |
 | GET /api/loop-speculations | persisted speculative runs and winners |
 | GET /api/loop-speculations/:id | one persisted speculative run |

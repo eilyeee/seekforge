@@ -51,6 +51,7 @@ export function measureManagedWorktreeDirectory(
   path: string,
   root: string,
   budget = 100_000,
+  excludedPaths: ReadonlySet<string> = new Set(),
 ): { bytes: number; truncated: boolean } {
   const pending = [path];
   let bytes = 0;
@@ -58,6 +59,7 @@ export function measureManagedWorktreeDirectory(
   while (pending.length > 0) {
     const current = pending.pop()!;
     if (++visited > budget) return { bytes, truncated: true };
+    if (current !== path && excludedPaths.has(current)) continue;
     const stat = lstatSync(current);
     if (stat.isSymbolicLink()) continue;
     if (stat.isFile()) {

@@ -133,6 +133,8 @@ Loop control:
 | --- | --- |
 | `--loop-auto-resume` | Opt in to recovering durable `running`, `paused`, or already-`interrupted` Loops while their workspace is idle. The first check runs after 30 seconds, then every 5 minutes. Busy workspaces and records with live Loop owners are skipped; an acquired idle guard remains active for the full recovery and permits only its own Agent sessions. Workspaces are handled sequentially, transient resume failures are retried on a later check, and server shutdown leaves an owned recovery `interrupted` for the next start. |
 | `--loop-auto-prune` | Opt in to pruning terminal Loop records during idle maintenance. By default, eligible records are pruned when older than 30 days or beyond the newest 100; resumable states and unfinished deliveries are never eligible. |
+| `--graph-auto-resume` | Opt in to resuming ownerless running or operator-paused Engineering Graphs while the physical workspace is idle. Approval-paused Graphs remain paused. |
+| `--graph-auto-prune` | Opt in to terminal Graph retention during idle maintenance. Eligible managed resources are archived and pruned first; dirty worktrees and resumable Graphs are retained. |
 
 Automatic Loop recovery is disabled by default because a resumed Loop can make
 model calls and edit its workspace. Recovery uses the Loop's persisted limits

@@ -6,7 +6,14 @@ import { startServer, type RunGraphFn, type RunningServer } from "../src/index.j
 import { makeWorkspace, unusedAgentFactory, writeFileIn } from "./helpers.js";
 import { writeFixtureServer } from "./mcp-fixture.js";
 import { MAX_STATIC_FILE_BYTES } from "../src/static.js";
-import { acquireLoopLease, appendLoopLog, createLoopState, readLoopControlEntries } from "@seekforge/core";
+import {
+  acquireLoopLease,
+  acquireSessionLease,
+  appendLoopLog,
+  createLoopState,
+  readGraphControlEntries,
+  readLoopControlEntries,
+} from "@seekforge/core";
 
 const TOKEN = "test-token-rest";
 
@@ -465,7 +472,7 @@ describe("loop management API", () => {
         const finish = () => {
           const now = new Date().toISOString();
           resolve({
-            schemaVersion: 1,
+            schemaVersion: 2,
             graphId: definition.graphId,
             fingerprint: "d".repeat(64),
             status: "cancelled",
@@ -474,6 +481,9 @@ describe("loop management API", () => {
             events: [],
             spentCost: 0,
             spentTokens: 0,
+            activeAttempts: [],
+            controlSeq: 0,
+            controlRunId: "",
             createdAt: now,
             updatedAt: now,
             completedAt: now,
@@ -531,6 +541,49 @@ describe("loop management API", () => {
       expect(controlled.status).toBe(202);
       expect(readLoopControlEntries(workspace, "rest-control", "control-run", 0)).toEqual([
         expect.objectContaining({ operation: "steer", message: "focus the parser" }),
+      ]);
+    } finally {
+      lease.release();
+    }
+  });
+
+  it("queues Graph controls for a live owner outside the server run ledger", async () => {
+    const now = new Date().toISOString();
+    writeFileIn(
+      workspace,
+      ".seekforge/graphs/rest-graph-control.json",
+      JSON.stringify({
+        schemaVersion: 2,
+        graphId: "rest-graph-control",
+        fingerprint: "a".repeat(64),
+        status: "running",
+        definition: {
+          graphId: "rest-graph-control",
+          nodes: [{ id: "work", kind: "function", handler: "noop" }],
+          maxConcurrency: 1,
+          failurePolicy: "stop",
+        },
+        results: [],
+        events: [],
+        spentCost: 0,
+        spentTokens: 0,
+        activeAttempts: [],
+        controlSeq: 0,
+        controlRunId: "graph-control-run",
+        createdAt: now,
+        updatedAt: now,
+      }),
+    );
+    const lease = acquireSessionLease(workspace, "engineering-graph-rest-graph-control");
+    try {
+      const controlled = await authed("/api/graphs/rest-graph-control/control", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ operation: "steer", message: "focus the integration" }),
+      });
+      expect(controlled.status).toBe(202);
+      expect(readGraphControlEntries(workspace, "rest-graph-control", "graph-control-run", 0)).toEqual([
+        expect.objectContaining({ operation: "steer", message: "focus the integration" }),
       ]);
     } finally {
       lease.release();

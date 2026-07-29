@@ -7,6 +7,7 @@ import {
   verifyEngineeringGraphEvidenceIntegrity,
 } from "../../src/agent/graph-evidence.js";
 import { createEngineeringGraphLogWriter, readEngineeringGraphHistory } from "../../src/agent/graph-history.js";
+import { compareEngineeringGraphRuns } from "../../src/agent/graph-observability.js";
 import {
   removeEngineeringGraphState,
   saveEngineeringGraphState,
@@ -18,6 +19,34 @@ describe("Engineering Graph history and evidence", () => {
   const workspaces: string[] = [];
   afterEach(() => {
     for (const workspace of workspaces.splice(0)) rmSync(workspace, { recursive: true, force: true });
+  });
+
+  it("compares run and node usage without reading persistence", () => {
+    const before = {
+      graphId: "compare",
+      status: "failed",
+      spentCost: 1,
+      spentTokens: 100,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:00:10.000Z",
+      results: [{ id: "work", status: "failed", costUsd: 1, tokensUsed: 100 }],
+    } as EngineeringGraphState;
+    const after = {
+      graphId: "compare",
+      status: "passed",
+      spentCost: 1.5,
+      spentTokens: 140,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:00:12.000Z",
+      results: [{ id: "work", status: "passed", costUsd: 1.5, tokensUsed: 140 }],
+    } as EngineeringGraphState;
+    expect(compareEngineeringGraphRuns(before, after)).toMatchObject({
+      statusChanged: true,
+      costDeltaUsd: 0.5,
+      tokenDelta: 40,
+      durationDeltaMs: 2_000,
+      nodes: [{ id: "work", before: "failed", after: "passed", costDeltaUsd: 0.5, tokenDelta: 40 }],
+    });
   });
 
   it("appends JSONL history across writers with a monotonic log sequence", () => {
@@ -62,7 +91,7 @@ describe("Engineering Graph history and evidence", () => {
     workspaces.push(workspace);
     const now = new Date().toISOString();
     const state = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       graphId: "remove",
       fingerprint: "b".repeat(64),
       status: "passed",
@@ -87,6 +116,9 @@ describe("Engineering Graph history and evidence", () => {
       events: [],
       spentCost: 0,
       spentTokens: 0,
+      activeAttempts: [],
+      controlSeq: 0,
+      controlRunId: "",
       createdAt: now,
       updatedAt: now,
       completedAt: now,
@@ -103,7 +135,7 @@ describe("Engineering Graph history and evidence", () => {
   it("builds tamper-evident evidence without node outputs", () => {
     const now = new Date().toISOString();
     const state = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       graphId: "evidence",
       fingerprint: "a".repeat(64),
       status: "passed",
@@ -124,6 +156,9 @@ describe("Engineering Graph history and evidence", () => {
       events: [],
       spentCost: 0,
       spentTokens: 0,
+      activeAttempts: [],
+      controlSeq: 0,
+      controlRunId: "",
       createdAt: now,
       updatedAt: now,
       completedAt: now,

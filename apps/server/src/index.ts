@@ -12,10 +12,14 @@ import { createRequire } from "node:module";
 import { WebSocketServer } from "ws";
 import {
   createLoopRecoveryScheduler,
+  createGraphMaintenanceScheduler,
   createMemoryMaintenanceScheduler,
   recordLoopRecoveryFailure,
   recoverInterruptedLoops,
   pruneLoopStates,
+  pruneEngineeringGraphStates,
+  recoverableEngineeringGraphStates,
+  type GraphMaintenanceScheduler,
   type LoopRecoveryScheduler,
   type LoopResult,
 } from "@seekforge/core";
@@ -113,6 +117,15 @@ export type StartServerOptions = {
   loopRetentionMaxAgeDays?: number;
   /** Maximum retained eligible terminal Loop records. Default 100. */
   loopRetentionMaxCount?: number;
+  /** Resume interrupted durable Graphs while their workspace is idle. */
+  graphAutoResume?: boolean;
+  /** Prune old terminal Graph records and clean managed resources while idle. */
+  graphAutoPrune?: boolean;
+  graphMaintenanceInitialDelayMs?: number;
+  graphMaintenanceIntervalMs?: number;
+  graphRecoveryMaxPerTick?: number;
+  graphRetentionMaxAgeDays?: number;
+  graphRetentionMaxCount?: number;
 };
 
 export type RunningServer = {
@@ -141,6 +154,30 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     (!Number.isSafeInteger(opts.loopRetentionMaxCount) || opts.loopRetentionMaxCount < 0)
   )
     throw new RangeError("loopRetentionMaxCount must be a non-negative integer");
+  if (
+    opts.graphRecoveryMaxPerTick !== undefined &&
+    (!Number.isSafeInteger(opts.graphRecoveryMaxPerTick) ||
+      opts.graphRecoveryMaxPerTick < 1 ||
+      opts.graphRecoveryMaxPerTick > 100)
+  ) {
+    throw new RangeError("graphRecoveryMaxPerTick must be 1 to 100");
+  }
+  if (
+    opts.graphRetentionMaxAgeDays !== undefined &&
+    (!Number.isSafeInteger(opts.graphRetentionMaxAgeDays) ||
+      opts.graphRetentionMaxAgeDays < 0 ||
+      opts.graphRetentionMaxAgeDays > 3_650)
+  ) {
+    throw new RangeError("graphRetentionMaxAgeDays must be 0 to 3650");
+  }
+  if (
+    opts.graphRetentionMaxCount !== undefined &&
+    (!Number.isSafeInteger(opts.graphRetentionMaxCount) ||
+      opts.graphRetentionMaxCount < 0 ||
+      opts.graphRetentionMaxCount > 10_000)
+  ) {
+    throw new RangeError("graphRetentionMaxCount must be 0 to 10000");
+  }
   const paths = opts.workspaces ?? (opts.workspace !== undefined ? [opts.workspace] : []);
   if (paths.length === 0) {
     throw new Error("startServer requires `workspaces` or `workspace`");
@@ -380,6 +417,94 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     throw error;
   }
 
+  let graphMaintenanceScheduler: GraphMaintenanceScheduler | undefined;
+  try {
+    graphMaintenanceScheduler =
+      opts.graphAutoResume || opts.graphAutoPrune
+        ? createGraphMaintenanceScheduler({
+            targets: () =>
+              registry.list.map((workspace) => ({
+                workspace: workspace.path,
+                maintain: async (signal) => {
+                  const attempt = await coordinator.tryWithIdleAgentMutation(
+                    workspace.path,
+                    signal,
+                    async (idleGuard, maintenanceSignal) => {
+                      const states = [];
+                      if (opts.graphAutoResume) {
+                        for (const state of recoverableEngineeringGraphStates(workspace.path, {
+                          limit: opts.graphRecoveryMaxPerTick ?? 3,
+                        })) {
+                          maintenanceSignal.throwIfAborted();
+                          try {
+                            states.push(
+                              await runGraph(
+                                {
+                                  workspace: workspace.path,
+                                  confirm: async () => false,
+                                  extractMemory: true,
+                                  signal: maintenanceSignal,
+                                },
+                                state.definition,
+                                {
+                                  resume: true,
+                                  signal: maintenanceSignal,
+                                  workspaceGuard: idleGuard,
+                                },
+                              ),
+                            );
+                          } catch (error) {
+                            if (maintenanceSignal.aborted) {
+                              if (signal.aborted) throw error;
+                              break;
+                            }
+                            logger.log("error", "graph.recovery.failed", {
+                              workspace: workspace.path,
+                              graphId: state.graphId,
+                              error: error instanceof Error ? error.message : String(error),
+                            });
+                          }
+                        }
+                      }
+                      if (opts.graphAutoPrune && !maintenanceSignal.aborted) {
+                        await pruneEngineeringGraphStates(workspace.path, {
+                          maxAgeDays: opts.graphRetentionMaxAgeDays ?? 30,
+                          maxTerminalCount: opts.graphRetentionMaxCount ?? 100,
+                        });
+                      }
+                      return states;
+                    },
+                  );
+                  return attempt.acquired ? attempt.value : undefined;
+                },
+              })),
+            onResults: (results) => {
+              for (const result of results) {
+                if (result.outcome.status === "completed" && result.outcome.states.length > 0) {
+                  logger.log("info", "graph.maintenance.completed", {
+                    workspace: result.workspace,
+                    graphs: result.outcome.states.map((state) => ({ graphId: state.graphId, status: state.status })),
+                  });
+                } else if (result.outcome.status === "failed") {
+                  logger.log("error", "graph.maintenance.failed", {
+                    workspace: result.workspace,
+                    error: result.outcome.error,
+                  });
+                }
+              }
+            },
+            ...(opts.graphMaintenanceInitialDelayMs !== undefined
+              ? { initialDelayMs: opts.graphMaintenanceInitialDelayMs }
+              : {}),
+            ...(opts.graphMaintenanceIntervalMs !== undefined ? { intervalMs: opts.graphMaintenanceIntervalMs } : {}),
+          })
+        : undefined;
+  } catch (error) {
+    memoryMaintenanceScheduler.dispose();
+    loopRecoveryScheduler?.dispose();
+    throw error;
+  }
+
   try {
     await new Promise<void>((resolveListen, rejectListen) => {
       server.once("error", rejectListen);
@@ -391,12 +516,14 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   } catch (error) {
     memoryMaintenanceScheduler.dispose();
     loopRecoveryScheduler?.dispose();
+    graphMaintenanceScheduler?.dispose();
     throw error;
   }
   const address = server.address();
   if (address === null || typeof address === "string") {
     memoryMaintenanceScheduler.dispose();
     loopRecoveryScheduler?.dispose();
+    graphMaintenanceScheduler?.dispose();
     server.close();
     throw new Error("could not determine the listen port");
   }
@@ -408,6 +535,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     closePromise ??= (async () => {
       memoryMaintenanceScheduler.dispose();
       loopRecoveryScheduler?.dispose();
+      graphMaintenanceScheduler?.dispose();
       for (const run of triggerRuns) run.abort();
       const closing = new Promise<void>((resolveClose, rejectClose) => {
         // Terminating sockets triggers their close handlers, which abort active

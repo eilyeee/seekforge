@@ -83,10 +83,11 @@ export function LoopManager({ running, onResume }: Props) {
     [],
   );
   useEffect(() => {
-    if (!running && !selected) return;
+    const graphRunning = graphs.some((graph) => graph.status === "running");
+    if (!running && !selected && !graphRunning) return;
     const timer = window.setInterval(() => void refresh(), 5_000);
     return () => window.clearInterval(timer);
-  }, [refresh, running, selected]);
+  }, [graphs, refresh, running, selected]);
 
   const inspect = async (loopId: string) => {
     const request = historyRequests.current.begin();
@@ -318,6 +319,57 @@ export function LoopManager({ running, onResume }: Props) {
       if (operationRequests.current.isCurrent(request)) setResourceBusy(false);
     }
   };
+  const graphLifecycle = async (
+    graphId: string,
+    operation: "resume" | "approve" | "rerun" | "restart" | "cancel",
+    nodeIds: string[] = [],
+  ) => {
+    if ((operation === "restart" || operation === "cancel") && !window.confirm(`${operation} ${graphId}?`)) return;
+    const request = operationRequests.current.begin();
+    setResourceBusy(true);
+    try {
+      let selectors = nodeIds;
+      if (operation === "approve") {
+        const detail = graphDetails[graphId] ?? (await api.graph(graphId));
+        selectors = detail.results.flatMap((node) => {
+          if (node.status !== "waiting_approval") return [];
+          if (
+            node.kind === "subgraph" &&
+            typeof node.output === "object" &&
+            node.output !== null &&
+            Array.isArray((node.output as { waitingFor?: unknown }).waitingFor)
+          ) {
+            return (node.output as { waitingFor: unknown[] }).waitingFor.filter(
+              (path): path is string => typeof path === "string",
+            );
+          }
+          return [node.id];
+        });
+      }
+      await api.graphLifecycle(graphId, operation, selectors.length > 0 ? { nodeIds: selectors } : {});
+      if (operationRequests.current.isCurrent(request)) await refresh();
+    } catch (caught) {
+      if (operationRequests.current.isCurrent(request))
+        setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      if (operationRequests.current.isCurrent(request)) setResourceBusy(false);
+    }
+  };
+  const graphControl = async (graphId: string, operation: "pause" | "steer") => {
+    const message = operation === "steer" ? window.prompt("Graph guidance")?.trim() : undefined;
+    if (operation === "steer" && !message) return;
+    const request = operationRequests.current.begin();
+    setResourceBusy(true);
+    try {
+      await api.graphControl(graphId, { operation, ...(message ? { message } : {}) });
+      if (operationRequests.current.isCurrent(request)) await refresh();
+    } catch (caught) {
+      if (operationRequests.current.isCurrent(request))
+        setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      if (operationRequests.current.isCurrent(request)) setResourceBusy(false);
+    }
+  };
 
   return (
     <details className="mt-2 rounded border border-subtle p-2">
@@ -381,7 +433,9 @@ export function LoopManager({ running, onResume }: Props) {
         resources={graphResources}
         busy={resourceBusy}
         onInspect={(graphId) => void inspectGraph(graphId)}
-        onAction={(graphId, operation) => void graphAction(graphId, operation)}
+        onAction={(graphId, operation, target) => void graphAction(graphId, operation, target)}
+        onLifecycle={(graphId, operation, nodeIds) => void graphLifecycle(graphId, operation, nodeIds)}
+        onControl={(graphId, operation) => void graphControl(graphId, operation)}
         onRemove={(graphId) => void removeGraph(graphId)}
       />
       <LoopSpeculationSection

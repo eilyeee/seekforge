@@ -319,6 +319,66 @@ describe("runAutoLoop", () => {
     ]);
   });
 
+  it("runs independent verification stages concurrently and waits for DAG prerequisites", async () => {
+    let active = 0;
+    let maxActive = 0;
+    const completed: string[] = [];
+    const result = await runAutoLoop(mkDeps().deps, {
+      ...baseOpts(workspace, async (_workspace, command) => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        active--;
+        completed.push(command);
+        return { code: 0, output: "ok" };
+      }),
+      verificationPlan: [
+        { id: "types", command: "types", parallel: true, resources: ["typescript"] },
+        { id: "lint", command: "lint", parallel: true, resources: ["lint"] },
+        { id: "tests", command: "tests", dependsOn: ["types", "lint"] },
+      ],
+    });
+    expect(result.status).toBe("passed");
+    expect(maxActive).toBe(2);
+    expect(completed.slice(0, 2).sort()).toEqual(["lint", "types"]);
+    expect(completed[2]).toBe("tests");
+  });
+
+  it("settles every started parallel verifier when a peer throws", async () => {
+    let peerSettled = false;
+    const result = await runAutoLoop(mkDeps().deps, {
+      ...baseOpts(workspace, async (_workspace, command) => {
+        if (command === "types") throw new Error("verifier crashed");
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        peerSettled = true;
+        return { code: 0, output: "ok" };
+      }),
+      verificationPlan: [
+        { id: "types", command: "types", parallel: true, resources: ["typescript"] },
+        { id: "lint", command: "lint", parallel: true, resources: ["lint"] },
+      ],
+    });
+    expect(result).toMatchObject({ status: "verify_error", finalVerify: { output: "verifier crashed" } });
+    expect(peerSettled).toBe(true);
+  });
+
+  it("rejects verification dependency cycles before running commands", async () => {
+    let calls = 0;
+    await expect(
+      runAutoLoop(mkDeps().deps, {
+        ...baseOpts(workspace, async () => {
+          calls++;
+          return { code: 0, output: "ok" };
+        }),
+        verificationPlan: [
+          { id: "a", command: "a", dependsOn: ["b"] },
+          { id: "b", command: "b", dependsOn: ["a"] },
+        ],
+      }),
+    ).rejects.toThrow(/dependency cycle/);
+    expect(calls).toBe(0);
+  });
+
   it("selects path-scoped stages incrementally but requires a full pipeline before success", async () => {
     const commands: string[] = [];
     const events: LoopEvent[] = [];

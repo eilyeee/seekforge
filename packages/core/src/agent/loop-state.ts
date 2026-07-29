@@ -14,6 +14,7 @@ import { resolveForWrite } from "../tools/sandbox.js";
 import { FileTooLargeError } from "../util/fs.js";
 import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 import { isRecord } from "../util/guards.js";
+import { isDenseArray } from "./orchestration.js";
 import {
   isLoopRequirementMode,
   parseLoopAcceptanceReview,
@@ -196,7 +197,7 @@ function compactLoopSnapshots(state: LoopState): LoopState {
 }
 
 function parseVerificationPlan(value: unknown): LoopVerificationStage[] | null {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 16) return null;
+  if (!isDenseArray(value) || value.length === 0 || value.length > 16) return null;
   const ids = new Set<string>();
   const result: LoopVerificationStage[] = [];
   for (const item of value) {
@@ -210,14 +211,30 @@ function parseVerificationPlan(value: unknown): LoopVerificationStage[] | null {
       item.command.length > 8_192 ||
       (item.required !== undefined && typeof item.required !== "boolean") ||
       (item.cacheable !== undefined && typeof item.cacheable !== "boolean") ||
+      (item.parallel !== undefined && typeof item.parallel !== "boolean") ||
+      (item.resources !== undefined &&
+        (!isDenseArray(item.resources) ||
+          item.resources.length === 0 ||
+          item.resources.length > 16 ||
+          new Set(item.resources).size !== item.resources.length ||
+          item.resources.some(
+            (resource) => typeof resource !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(resource),
+          ))) ||
+      (item.parallel === true && !isDenseArray(item.resources)) ||
+      (item.dependsOn !== undefined &&
+        (!isDenseArray(item.dependsOn) ||
+          item.dependsOn.length === 0 ||
+          item.dependsOn.length > 15 ||
+          new Set(item.dependsOn).size !== item.dependsOn.length ||
+          item.dependsOn.some((id) => typeof id !== "string" || !LOOP_ID_RE.test(id)))) ||
       (item.dependencyPaths !== undefined &&
-        (!Array.isArray(item.dependencyPaths) ||
+        (!isDenseArray(item.dependencyPaths) ||
           item.dependencyPaths.length === 0 ||
           item.dependencyPaths.length > 64 ||
-          !item.dependencyPaths.every((path) => Array.isArray(item.paths) && item.paths.includes(path)))) ||
+          !item.dependencyPaths.every((path) => isDenseArray(item.paths) && item.paths.includes(path)))) ||
       (item.timeoutMs !== undefined && (!isSafeInteger(item.timeoutMs) || item.timeoutMs <= 0)) ||
       (item.paths !== undefined &&
-        (!Array.isArray(item.paths) ||
+        (!isDenseArray(item.paths) ||
           item.paths.length === 0 ||
           item.paths.length > 64 ||
           !item.paths.every(
@@ -241,11 +258,30 @@ function parseVerificationPlan(value: unknown): LoopVerificationStage[] | null {
       command: item.command,
       ...(typeof item.required === "boolean" ? { required: item.required } : {}),
       ...(typeof item.timeoutMs === "number" ? { timeoutMs: item.timeoutMs } : {}),
-      ...(Array.isArray(item.paths) ? { paths: item.paths as string[] } : {}),
-      ...(Array.isArray(item.dependencyPaths) ? { dependencyPaths: item.dependencyPaths as string[] } : {}),
+      ...(isDenseArray(item.paths) ? { paths: item.paths as string[] } : {}),
+      ...(isDenseArray(item.dependencyPaths) ? { dependencyPaths: item.dependencyPaths as string[] } : {}),
       ...(typeof item.cacheable === "boolean" ? { cacheable: item.cacheable } : {}),
+      ...(isDenseArray(item.dependsOn) ? { dependsOn: item.dependsOn as string[] } : {}),
+      ...(typeof item.parallel === "boolean" ? { parallel: item.parallel } : {}),
+      ...(isDenseArray(item.resources) ? { resources: item.resources as string[] } : {}),
     });
   }
+  const known = new Set(result.map((stage) => stage.id));
+  const remaining = new Map(result.map((stage) => [stage.id, new Set(stage.dependsOn ?? [])]));
+  for (const stage of result) {
+    if (stage.dependsOn?.some((id) => id === stage.id || !known.has(id))) return null;
+  }
+  const ready = [...remaining].filter(([, dependencies]) => dependencies.size === 0).map(([id]) => id);
+  let visited = 0;
+  while (ready.length > 0) {
+    const id = ready.shift()!;
+    remaining.delete(id);
+    visited++;
+    for (const [candidate, dependencies] of remaining) {
+      if (dependencies.delete(id) && dependencies.size === 0) ready.push(candidate);
+    }
+  }
+  if (visited !== result.length) return null;
   return result;
 }
 

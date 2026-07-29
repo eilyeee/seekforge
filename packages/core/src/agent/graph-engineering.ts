@@ -11,7 +11,10 @@ import {
   type EngineeringGraphDefinition,
   ENGINEERING_GRAPH_FAN_IN_WORKTREE_ID,
   type GraphNode,
+  type GraphInputBinding,
+  type GraphValueSchema,
   graphConditionMatches,
+  graphNodeIsEffectful,
   graphDefinitionFingerprint,
   engineeringSubgraphStateId,
   isValidEngineeringGraphNodePath,
@@ -30,12 +33,15 @@ import {
   loadEngineeringGraphState,
   saveEngineeringGraphState,
 } from "./graph-state.js";
-import { acquireSessionLeaseWithPreemption } from "./session-lease.js";
+import { acquireSessionLeaseWithPreemption, type SessionLease } from "./session-lease.js";
 import { isValidLoopDagId } from "./loop-dag-validation.js";
+import { isSafeLoopDagRelativePath } from "./loop-dag-validation.js";
 import { acquireManagedOrchestrationWorktreeLease } from "./loop-managed-worktree.js";
 import { createEngineeringGraphLogWriter, type GraphLogWriter } from "./graph-history.js";
+import { readGraphControlEntries } from "./graph-control-store.js";
 import {
   assertNonOverlappingOrchestrationPaths,
+  isDenseArray,
   orchestrationDescendantClosure,
   orchestrationDependsOn,
   validateOrchestrationSelection,
@@ -50,12 +56,22 @@ export type GraphFunctionContext = {
   node: GraphNode;
   workspace: string;
   dependencies: ReadonlyMap<string, GraphNodeResult>;
+  inputs: Readonly<Record<string, unknown>>;
+  /** Stable for one logical attempt, so effectful handlers can deduplicate retries. */
+  idempotencyKey: string;
+  item?: unknown;
+  itemIndex?: number;
   costBudgetUsd?: number;
   tokenBudget?: number;
   signal: AbortSignal;
 };
 
-export type GraphFunctionResult = { output?: unknown; costUsd?: number; tokensUsed?: number };
+export type GraphFunctionResult = {
+  output?: unknown;
+  costUsd?: number;
+  tokensUsed?: number;
+  artifacts?: Array<{ name: string; path: string; sha256?: string }>;
+};
 export type GraphFunctionHandler = (
   context: GraphFunctionContext,
 ) => GraphFunctionResult | Promise<GraphFunctionResult>;
@@ -81,6 +97,8 @@ export type RunEngineeringGraphOptions = {
   handlers?: Readonly<Record<string, GraphFunctionHandler>>;
   signal?: AbortSignal;
   onEvent?: (event: GraphEvent) => void;
+  /** Internal owner guard used by idle maintenance. */
+  workspaceGuard?: SessionLease;
 };
 
 type ExecutionResult = Omit<GraphNodeResult, "id" | "kind" | "status" | "attempts" | "startedAt" | "completedAt">;
@@ -150,6 +168,67 @@ function graphHandler(options: RunEngineeringGraphOptions, id: string): GraphFun
     : undefined;
 }
 
+function bindingValue(binding: GraphInputBinding, completed: ReadonlyMap<string, GraphNodeResult>): unknown {
+  let value = completed.get(binding.nodeId)?.output;
+  if (!binding.pointer) return value;
+  for (const encoded of binding.pointer.slice(1).split("/")) {
+    const key = encoded.replaceAll("~1", "/").replaceAll("~0", "~");
+    if (key === "__proto__" || key === "prototype" || key === "constructor" || value === null) return undefined;
+    if (Array.isArray(value)) {
+      if (!/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= value.length) return undefined;
+      value = value[Number(key)];
+    } else if (isRecord(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !("value" in descriptor)) return undefined;
+      value = descriptor.value;
+    } else return undefined;
+  }
+  return value;
+}
+
+function graphInputs(node: GraphNode, completed: ReadonlyMap<string, GraphNodeResult>): Record<string, unknown> {
+  const inputs = Object.create(null) as Record<string, unknown>;
+  for (const [name, binding] of Object.entries(node.inputs ?? {})) inputs[name] = bindingValue(binding, completed);
+  return inputs;
+}
+
+function assertGraphOutput(value: unknown, schema: GraphValueSchema | undefined, nodeId: string): void {
+  if (!schema) return;
+  const actual = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+  if (actual !== schema.type)
+    throw new GraphNodeNonRetryableError(`Graph node ${nodeId} output must be ${schema.type}`);
+  if (schema.type === "object") {
+    if (!isRecord(value)) throw new GraphNodeNonRetryableError(`Graph node ${nodeId} output must be an object`);
+    for (const name of schema.required ?? []) {
+      if (!Object.hasOwn(value, name))
+        throw new GraphNodeNonRetryableError(`Graph node ${nodeId} output is missing ${name}`);
+    }
+  }
+}
+
+function graphArtifacts(
+  value: GraphFunctionResult["artifacts"],
+  nodeId: string,
+): Array<{ name: string; path: string; sha256?: string }> | undefined {
+  if (value === undefined) return undefined;
+  if (
+    !isDenseArray(value) ||
+    value.length > 32 ||
+    value.some(
+      (artifact) =>
+        !isRecord(artifact) ||
+        typeof artifact.name !== "string" ||
+        !/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(artifact.name) ||
+        !isSafeLoopDagRelativePath(artifact.path) ||
+        (artifact.sha256 !== undefined &&
+          (typeof artifact.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(artifact.sha256))),
+    )
+  ) {
+    throw new GraphNodeNonRetryableError(`Graph function ${nodeId} returned invalid artifacts`);
+  }
+  return value.map((artifact) => ({ ...artifact }));
+}
+
 export function validateEngineeringGraphRunOptions(
   definition: EngineeringGraphDefinition,
   options: RunEngineeringGraphOptions,
@@ -212,7 +291,7 @@ export function validateEngineeringGraphRunOptions(
   if (rerunFrom.length && !options.resume) throw new Error("Graph rerunFrom requires resume");
   const validateHandlers = (graph: EngineeringGraphDefinition): void => {
     for (const node of graph.nodes) {
-      if (node.kind === "function" && !graphHandler(options, node.handler!)) {
+      if ((node.kind === "function" || node.kind === "map") && !graphHandler(options, node.handler!)) {
         throw new Error(`Graph function handler is not registered: ${node.handler}`);
       }
       if (node.graph) validateHandlers(node.graph);
@@ -263,7 +342,7 @@ function resolveNodeWorkspaces(
       if (node.graph) visit(node.graph, physical, `${key}/`);
     }
     if ((graph.maxConcurrency ?? 1) > 1) {
-      const effectful = graph.nodes.filter((node) => node.kind !== "router" && node.kind !== "gate");
+      const effectful = graph.nodes.filter(graphNodeIsEffectful);
       for (let leftIndex = 0; leftIndex < effectful.length; leftIndex++) {
         for (let rightIndex = leftIndex + 1; rightIndex < effectful.length; rightIndex++) {
           const left = effectful[leftIndex]!;
@@ -328,6 +407,7 @@ async function executeAgent(
   node: GraphNode,
   workspace: string,
   signal: AbortSignal,
+  workspaceGuard?: SessionLease,
 ): Promise<ExecutionResult> {
   let sessionId: string | undefined;
   let output: unknown;
@@ -340,6 +420,7 @@ async function executeAgent(
     mode: node.mode ?? "edit",
     approvalMode: node.approvalMode ?? "acceptEdits",
     signal,
+    ...(workspaceGuard ? { workspaceGuard } : {}),
   })) {
     if (event.type === "session.created") sessionId = event.sessionId;
     if (event.type === "usage.updated") {
@@ -386,8 +467,9 @@ async function executeNode(
   tokenBudget: number | undefined,
   signal: AbortSignal,
   attempt: number,
+  idempotencyKey: string,
 ): Promise<ExecutionResult> {
-  if (node.kind === "agent") return executeAgent(deps, node, workspace, signal);
+  if (node.kind === "agent") return executeAgent(deps, node, workspace, signal, options.workspaceGuard);
   if (node.kind === "loop") {
     const result = await runAutoLoop(deps, {
       task: node.task!,
@@ -398,6 +480,7 @@ async function executeNode(
       ...(tokenBudget !== undefined ? { tokenBudget } : {}),
       ...(node.timeoutMs !== undefined ? { maxDurationMs: node.timeoutMs } : {}),
       signal,
+      ...(options.workspaceGuard ? { workspaceGuard: options.workspaceGuard } : {}),
     });
     if (result.status !== "passed") {
       throw new GraphNodeExecutionError(`Loop finished with status ${result.status}`, {
@@ -421,18 +504,97 @@ async function executeNode(
   if (node.kind === "function") {
     const handler = graphHandler(options, node.handler!);
     if (!handler) throw new Error(`Graph function handler is not registered: ${node.handler}`);
-    const result = await handler({ node, workspace, dependencies: completed, costBudgetUsd, tokenBudget, signal });
+    const result = await handler({
+      node,
+      workspace,
+      dependencies: completed,
+      inputs: graphInputs(node, completed),
+      idempotencyKey,
+      costBudgetUsd,
+      tokenBudget,
+      signal,
+    });
     if (result.costUsd !== undefined && (!Number.isFinite(result.costUsd) || result.costUsd < 0)) {
-      throw new Error(`Graph function ${node.id} returned invalid costUsd`);
+      throw new GraphNodeNonRetryableError(`Graph function ${node.id} returned invalid costUsd`);
     }
     if (result.tokensUsed !== undefined && (!Number.isSafeInteger(result.tokensUsed) || result.tokensUsed < 0)) {
-      throw new Error(`Graph function ${node.id} returned invalid tokensUsed`);
+      throw new GraphNodeNonRetryableError(`Graph function ${node.id} returned invalid tokensUsed`);
     }
+    const artifacts = graphArtifacts(result.artifacts, node.id);
     return {
       output: boundedOutput(result.output),
       costUsd: result.costUsd ?? 0,
       tokensUsed: result.tokensUsed ?? 0,
+      ...(artifacts ? { artifacts } : {}),
     };
+  }
+  if (node.kind === "map") {
+    const handler = graphHandler(options, node.handler!);
+    if (!handler) throw new Error(`Graph map handler is not registered: ${node.handler}`);
+    const source = bindingValue(node.source!, completed);
+    if (!Array.isArray(source))
+      throw new GraphNodeNonRetryableError(`Graph map ${node.id} source must resolve to an array`);
+    const maxItems = node.maxItems ?? 32;
+    if (source.length > maxItems) {
+      throw new GraphNodeNonRetryableError(`Graph map ${node.id} source exceeds maxItems ${maxItems}`);
+    }
+    const outputs: unknown[] = [];
+    const artifacts: NonNullable<GraphFunctionResult["artifacts"]> = [];
+    let costUsd = 0;
+    let tokensUsed = 0;
+    const inputs = graphInputs(node, completed);
+    for (let offset = 0; offset < source.length; offset += 4) {
+      const batch = source.slice(offset, offset + 4);
+      const settled = await Promise.allSettled(
+        batch.map((item, index) =>
+          handler({
+            node,
+            workspace,
+            dependencies: completed,
+            inputs,
+            item,
+            itemIndex: offset + index,
+            idempotencyKey: `${idempotencyKey}:${offset + index}`,
+            costBudgetUsd,
+            tokenBudget,
+            signal,
+          }),
+        ),
+      );
+      const rejected = settled.find((result) => result.status === "rejected");
+      if (rejected?.status === "rejected") throw rejected.reason;
+      for (const item of settled) {
+        if (item.status !== "fulfilled") continue;
+        const result = item.value;
+        if (result.costUsd !== undefined && (!Number.isFinite(result.costUsd) || result.costUsd < 0)) {
+          throw new GraphNodeNonRetryableError(`Graph map ${node.id} returned invalid costUsd`);
+        }
+        if (result.tokensUsed !== undefined && (!Number.isSafeInteger(result.tokensUsed) || result.tokensUsed < 0)) {
+          throw new GraphNodeNonRetryableError(`Graph map ${node.id} returned invalid tokensUsed`);
+        }
+        costUsd += result.costUsd ?? 0;
+        tokensUsed += result.tokensUsed ?? 0;
+        outputs.push(result.output);
+        artifacts.push(...(graphArtifacts(result.artifacts, node.id) ?? []));
+        if (artifacts.length > 32) {
+          throw new GraphNodeNonRetryableError(`Graph map ${node.id} returned more than 32 artifacts`);
+        }
+      }
+    }
+    return {
+      output: boundedOutput(outputs),
+      costUsd,
+      tokensUsed,
+      ...(artifacts.length > 0 ? { artifacts } : {}),
+    };
+  }
+  if (node.kind === "join") {
+    const passed = [...completed.values()].filter((result) => result.status === "passed").map((result) => result.id);
+    const quorum = node.quorum ?? completed.size;
+    if (passed.length < quorum) {
+      throw new GraphNodeNonRetryableError(`Graph join ${node.id} received ${passed.length}/${quorum} required passes`);
+    }
+    return { output: { quorum, passed }, costUsd: 0, tokensUsed: 0 };
   }
   if (node.kind === "router") {
     const branch =
@@ -597,9 +759,7 @@ export async function runEngineeringGraph(
     }
     if (definition.managedWorktrees) {
       managedResourceLease = acquireManagedOrchestrationWorktreeLease(options.workspace);
-      const effectfulNodeIds = definition.nodes
-        .filter((node) => node.kind !== "gate" && node.kind !== "router")
-        .map((node) => node.id);
+      const effectfulNodeIds = definition.nodes.filter(graphNodeIsEffectful).map((node) => node.id);
       const managedNodeIds = [...effectfulNodeIds, ...(definition.fanIn ? [ENGINEERING_GRAPH_FAN_IN_WORKTREE_ID] : [])];
       const expectedBranches = [...managedNodeIds].map(
         (nodeId) => `seekforge/${managedOrchestrationWorktreeSlug("graph", definition.graphId, nodeId)}`,
@@ -630,8 +790,9 @@ export async function runEngineeringGraph(
     const workspaces = staticWorkspaces ?? resolveNodeWorkspaces(options.workspace, definition, workspaceOverrides);
     const fingerprint = graphDefinitionFingerprint(definition, workspaces);
     const now = new Date().toISOString();
+    const controlRunId = `graph-run-${randomUUID()}`;
     let state: EngineeringGraphState = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       graphId: definition.graphId,
       fingerprint,
       status: "running",
@@ -640,6 +801,9 @@ export async function runEngineeringGraph(
       events: [],
       spentCost: 0,
       spentTokens: 0,
+      activeAttempts: [],
+      controlSeq: 0,
+      controlRunId,
       createdAt: now,
       updatedAt: now,
       resourceGeneration: randomUUID(),
@@ -656,13 +820,18 @@ export async function runEngineeringGraph(
       ) {
         throw new Error(`Persisted Graph parent provenance does not match: ${definition.graphId}`);
       }
-      state = { ...restored, status: "running", completedAt: undefined };
+      state = { ...restored, status: "running", completedAt: undefined, controlRunId };
+      delete state.pauseReason;
     }
+    const recoveredAttempts = new Map(state.activeAttempts.map((attempt) => [attempt.nodeId, attempt]));
     const results = new Map(state.results.map((result) => [result.id, result]));
     if (options.rerunFrom?.length) {
       const rootSelections = [...new Set(options.rerunFrom.map((id) => id.split("/", 1)[0]!))];
       const invalidated = orchestrationDescendantClosure(definition.nodes, rootSelections);
-      for (const id of invalidated) results.delete(id);
+      for (const id of invalidated) {
+        results.delete(id);
+        recoveredAttempts.delete(id);
+      }
       delete state.fanIn;
     }
     for (const [id, result] of results) {
@@ -680,6 +849,7 @@ export async function runEngineeringGraph(
     const costReservations = new Map<string, number>();
     const tokenReservations = new Map<string, number>();
     const resumedChildUsage = new Map<string, { costUsd: number; tokensUsed: number }>();
+    let resumeWorktreeEntries: Awaited<ReturnType<typeof listGitWorktrees>> | undefined;
     if (persistenceEnabled && options.resume) {
       for (const node of definition.nodes) {
         if (node.kind !== "subgraph" || results.has(node.id) || options.rerunFrom?.includes(node.id)) continue;
@@ -692,9 +862,25 @@ export async function runEngineeringGraph(
           throw new Error(`Persisted Graph parent provenance does not match: ${childGraphId}`);
         }
         const nestedDefinition: EngineeringGraphDefinition = { ...node.graph!, graphId: childGraphId };
-        const nestedWorkspaces = resolveNodeWorkspaces(workspaces.get(node.id)!, nestedDefinition);
-        if (child.fingerprint !== graphDefinitionFingerprint(nestedDefinition, nestedWorkspaces)) {
-          throw new Error(`Persisted Graph does not match: ${childGraphId}`);
+        if (nestedDefinition.managedWorktrees) {
+          resumeWorktreeEntries ??= await listGitWorktrees(options.workspace);
+          const nestedOverrides = new Map<string, string>();
+          for (const nestedNode of nestedDefinition.nodes.filter(graphNodeIsEffectful)) {
+            const branch = `seekforge/${managedOrchestrationWorktreeSlug("graph", childGraphId, nestedNode.id)}`;
+            const entry = resumeWorktreeEntries.find((candidate) => candidate.branch === branch);
+            if (!entry)
+              throw new Error(`Persisted Graph managed worktree is missing: ${childGraphId}/${nestedNode.id}`);
+            nestedOverrides.set(nestedNode.id, entry.path);
+          }
+          const nestedWorkspaces = resolveNodeWorkspaces(workspaces.get(node.id)!, nestedDefinition, nestedOverrides);
+          if (child.fingerprint !== graphDefinitionFingerprint(nestedDefinition, nestedWorkspaces)) {
+            throw new Error(`Persisted Graph does not match: ${childGraphId}`);
+          }
+        } else {
+          const nestedWorkspaces = resolveNodeWorkspaces(workspaces.get(node.id)!, nestedDefinition);
+          if (child.fingerprint !== graphDefinitionFingerprint(nestedDefinition, nestedWorkspaces)) {
+            throw new Error(`Persisted Graph does not match: ${childGraphId}`);
+          }
         }
         resumedChildUsage.set(node.id, { costUsd: child.spentCost, tokensUsed: child.spentTokens });
       }
@@ -754,7 +940,48 @@ export async function runEngineeringGraph(
       persist();
     };
     emit({ type: options.resume ? "graph.resumed" : "graph.started", status: "running" });
+    if (state.activeAttempts.length > 0) {
+      const interrupted = state.activeAttempts.map((attempt) => attempt.nodeId).join(", ");
+      state.activeAttempts = [];
+      emit({
+        type: "graph.warning",
+        message: `Recovering interrupted attempts (${interrupted}); handlers receive the same idempotency keys on retry`,
+      });
+    }
     durableCheckpointStarted = true;
+    let controlPaused = false;
+    let controlMailboxWarning: string | undefined;
+    const steeringGuidance: string[] = [];
+    const processControl = (): void => {
+      if (!persistenceEnabled) return;
+      let entries: ReturnType<typeof readGraphControlEntries>;
+      try {
+        entries = readGraphControlEntries(options.workspace, definition.graphId, state.controlRunId, state.controlSeq);
+        controlMailboxWarning = undefined;
+      } catch (error) {
+        const message = retryableError(error);
+        if (message !== controlMailboxWarning) {
+          controlMailboxWarning = message;
+          emit({ type: "graph.warning", message });
+        }
+        return;
+      }
+      for (const entry of entries) {
+        state.controlSeq = entry.seq;
+        if (entry.operation === "pause") controlPaused = true;
+        else if (entry.operation === "resume") controlPaused = false;
+        else {
+          steeringGuidance.push(entry.message);
+          if (steeringGuidance.length > 16) steeringGuidance.shift();
+        }
+      }
+      if (entries.length > 0) {
+        emit({
+          type: "graph.controlled",
+          message: `Applied ${entries.length} durable Graph control command${entries.length === 1 ? "" : "s"}`,
+        });
+      }
+    };
 
     const completeWithoutRun = (node: GraphNode, status: "skipped" | "waiting_approval", message: string): void => {
       const timestamp = new Date().toISOString();
@@ -796,6 +1023,8 @@ export async function runEngineeringGraph(
 
     const startNode = (node: GraphNode, costShare?: number, tokenShare?: number): void => {
       pending.delete(node.id);
+      const recoveredAttempt = recoveredAttempts.get(node.id);
+      recoveredAttempts.delete(node.id);
       const startedAt = new Date().toISOString();
       emit({ type: "node.started", nodeId: node.id });
       const resumedUsage = resumedChildUsage.get(node.id);
@@ -811,9 +1040,18 @@ export async function runEngineeringGraph(
       const dependencySnapshot = new Map(
         (node.dependsOn ?? []).map((dependency) => [dependency, results.get(dependency)!]),
       );
+      const executionNode =
+        steeringGuidance.length > 0 && (node.kind === "agent" || node.kind === "loop")
+          ? {
+              ...node,
+              task: `${node.task!}\n\nCurrent Graph steering guidance (the frozen verification and permission boundaries remain authoritative):\n${steeringGuidance
+                .map((message) => `- ${message}`)
+                .join("\n")}`,
+            }
+          : node;
       const promise = (async (): Promise<{ id: string; result: GraphNodeResult }> => {
         const managed = managedWorktrees?.get(node.id);
-        let attempts = 0;
+        let attempts = recoveredAttempt ? recoveredAttempt.attempt - 1 : 0;
         let lastError = "Graph node failed";
         let consumedCost = 0;
         let consumedTokens = 0;
@@ -829,6 +1067,15 @@ export async function runEngineeringGraph(
             break;
           }
           attempts++;
+          const idempotencyKey =
+            recoveredAttempt?.attempt === attempts
+              ? recoveredAttempt.idempotencyKey
+              : `${definition.graphId}:${node.id}:${randomUUID()}`;
+          state.activeAttempts = [
+            ...state.activeAttempts.filter((active) => active.nodeId !== node.id),
+            { nodeId: node.id, attempt: attempts, idempotencyKey, startedAt: new Date().toISOString() },
+          ];
+          emit({ type: "node.attempt.started", nodeId: node.id, message: idempotencyKey });
           try {
             if (attempts === 1 && managed && definition.managedWorktrees?.integrateDependencies) {
               const sourceIds = new Set<string>();
@@ -856,7 +1103,7 @@ export async function runEngineeringGraph(
                 executeNode(
                   deps,
                   definition.graphId,
-                  node,
+                  executionNode,
                   workspaces.get(node.id)!,
                   dependencySnapshot,
                   options,
@@ -864,10 +1111,12 @@ export async function runEngineeringGraph(
                   attemptTokenBudget,
                   signal,
                   attempts,
+                  idempotencyKey,
                 ),
               node.timeoutMs,
               runController.signal,
             );
+            assertGraphOutput(execution.output, node.outputSchema, node.id);
             if (managed) {
               try {
                 await checkpointWorktree(managed.path, `chore: checkpoint Graph node ${node.id}`);
@@ -892,6 +1141,7 @@ export async function runEngineeringGraph(
                 tokensUsed: baseTokens + consumedTokens + execution.tokensUsed,
                 ...(execution.sessionId ? { sessionId: execution.sessionId } : {}),
                 ...(execution.output !== undefined ? { output: execution.output } : {}),
+                ...(execution.artifacts ? { artifacts: execution.artifacts } : {}),
                 ...(managed ? { managedBranch: managed.branch } : {}),
               },
             };
@@ -956,8 +1206,12 @@ export async function runEngineeringGraph(
         completed.result.output === undefined
           ? completed.result
           : { ...completed.result, output: fitOutputBudget(completed.result.output, results) };
+      state.activeAttempts = state.activeAttempts.filter((active) => active.nodeId !== completed.id);
       results.set(completed.id, result);
-      if (result.status === "waiting_approval") state.status = "paused";
+      if (result.status === "waiting_approval") {
+        state.status = "paused";
+        state.pauseReason = "approval";
+      }
       emit({
         type: result.status === "waiting_approval" ? "node.waiting_approval" : "node.completed",
         nodeId: completed.id,
@@ -995,11 +1249,35 @@ export async function runEngineeringGraph(
       inFlight.size ||
       [...results.values()].some((result) => result.status === "waiting_approval")
     ) {
+      processControl();
+      if (controlPaused) {
+        await settleInFlight();
+        processControl();
+        const approvalWaiting = [...results.values()].find((result) => result.status === "waiting_approval");
+        if (approvalWaiting) {
+          state.status = "paused";
+          state.pauseReason = "approval";
+          emit({
+            type: "graph.paused",
+            status: "paused",
+            nodeId: approvalWaiting.id,
+            message: `Subgraph node ${approvalWaiting.id} is waiting for approval`,
+          });
+          return state;
+        }
+        if (controlPaused) {
+          state.status = "paused";
+          state.pauseReason = "control";
+          emit({ type: "graph.paused", status: "paused", message: "Graph paused by durable control" });
+          return state;
+        }
+      }
       if (runController.signal.aborted) {
         await settleInFlight();
         cancelWaitingResults();
         for (const id of [...pending]) completeWithoutRun(byId.get(id)!, "skipped", "Graph cancelled");
         state.status = "cancelled";
+        delete state.pauseReason;
         state.completedAt = new Date().toISOString();
         emit({ type: "graph.completed", status: "cancelled", message: "Graph cancelled" });
         return state;
@@ -1010,6 +1288,7 @@ export async function runEngineeringGraph(
         if (runController.signal.aborted) continue;
         const settledWaiting = [...results.values()].find((result) => result.status === "waiting_approval")!;
         state.status = "paused";
+        state.pauseReason = "approval";
         emit({
           type: "graph.paused",
           status: "paused",
@@ -1046,7 +1325,7 @@ export async function runEngineeringGraph(
             changed = true;
             continue;
           }
-          if (!node.condition && dependencies.some((result) => result?.status !== "passed")) {
+          if (node.kind !== "join" && !node.condition && dependencies.some((result) => result?.status !== "passed")) {
             completeWithoutRun(node, "skipped", "A dependency did not pass");
             changed = true;
             continue;
@@ -1058,12 +1337,14 @@ export async function runEngineeringGraph(
             }
             if (!approved) {
               state.status = "paused";
+              state.pauseReason = "approval";
               completeWithoutRun(node, "waiting_approval", "Explicit approval is required");
               await settleInFlight();
               if (runController.signal.aborted) {
                 cancelWaitingResults();
                 for (const id of [...pending]) completeWithoutRun(byId.get(id)!, "skipped", "Graph cancelled");
                 state.status = "cancelled";
+                delete state.pauseReason;
                 state.completedAt = new Date().toISOString();
                 emit({ type: "graph.completed", status: "cancelled", message: "Graph cancelled" });
                 return state;
@@ -1104,7 +1385,8 @@ export async function runEngineeringGraph(
       const availableSlots = (definition.maxConcurrency ?? 1) - inFlight.size;
       const readyNodes = [...pending]
         .map((id) => byId.get(id)!)
-        .filter((node) => (node.dependsOn ?? []).every((dependency) => results.has(dependency)));
+        .filter((node) => (node.dependsOn ?? []).every((dependency) => results.has(dependency)))
+        .sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0));
       const reservedCost =
         [...costReservations.values()].reduce((sum, value) => sum + value, 0) +
         [...resumedChildUsage.values()].reduce((sum, usage) => sum + usage.costUsd, 0);
@@ -1138,6 +1420,7 @@ export async function runEngineeringGraph(
     }
     if (runController.signal.aborted) {
       state.status = "cancelled";
+      delete state.pauseReason;
       state.completedAt = new Date().toISOString();
       emit({ type: "graph.completed", status: "cancelled", message: "Graph cancelled" });
       return state;
@@ -1155,6 +1438,7 @@ export async function runEngineeringGraph(
       [...results.values()].some((result) => result.status === "failed")
         ? "failed"
         : "passed";
+    delete state.pauseReason;
     if (state.status === "passed" && definition.fanIn && state.fanIn?.status !== "passed") {
       const integration = managedWorktrees?.get(ENGINEERING_GRAPH_FAN_IN_WORKTREE_ID);
       if (!integration) throw new Error("Graph fan-in integration worktree is unavailable");

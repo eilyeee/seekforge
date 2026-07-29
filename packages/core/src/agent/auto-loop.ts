@@ -40,6 +40,7 @@ import { recordProgressFingerprint } from "./loop-logic.js";
 import { createWorkspaceFingerprinter } from "./workspace-fingerprint.js";
 import { classifyAgentError } from "./errors.js";
 import { abortablePromise } from "../util/abort.js";
+import { isRecord } from "../util/guards.js";
 import { createLoopControl, type LoopControl } from "./loop-control.js";
 import { readLoopControlEntries } from "./loop-control-store.js";
 import { extractMemoryFromSession } from "../memory/extract.js";
@@ -68,6 +69,7 @@ import {
 } from "./loop-recovery-policy.js";
 import { currentLoopBudgetReason, forecastLoopBudgetReason } from "./loop-budget-policy.js";
 import { isVerificationPathPrefix, selectLoopVerificationStage } from "./loop-verification-selection.js";
+import { isDenseArray } from "./orchestration.js";
 
 export type LoopStatus =
   | "passed" // verification command exited 0
@@ -114,6 +116,11 @@ export type LoopVerificationStage = {
   dependencyPaths?: string[];
   /** Reuse a successful path-scoped result within the same iteration's full fallback pass. */
   cacheable?: boolean;
+  /** Explicit prerequisites; ready stages in the same wave may run concurrently. */
+  dependsOn?: string[];
+  /** Explicit opt-in for concurrent execution with disjoint logical resources. */
+  parallel?: boolean;
+  resources?: string[];
 };
 
 export type LoopStageResult = {
@@ -535,12 +542,20 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
   }
   const configuredPlan = opts.verificationPlan ?? opts.resumeState?.verificationPlan;
   if (configuredPlan !== undefined) {
-    if (!Array.isArray(configuredPlan) || configuredPlan.length === 0 || configuredPlan.length > 16) {
+    if (!isDenseArray(configuredPlan) || configuredPlan.length === 0 || configuredPlan.length > 16) {
       throw new RangeError("Loop verificationPlan must contain 1 to 16 stages");
     }
     const ids = new Set<string>();
     for (const stage of configuredPlan) {
-      if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(stage.id) || ids.has(stage.id)) {
+      if (
+        !isRecord(stage) ||
+        typeof stage.id !== "string" ||
+        typeof stage.command !== "string" ||
+        !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(stage.id)
+      ) {
+        throw new Error("Loop verification stage must have a unique safe id and command");
+      }
+      if (ids.has(stage.id)) {
         throw new Error(`Loop verification stage id must be unique and safe: ${stage.id}`);
       }
       ids.add(stage.id);
@@ -549,7 +564,7 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
       }
       positiveSafeInteger(`verificationPlan.${stage.id}.timeoutMs`, stage.timeoutMs);
       if (stage.paths !== undefined) {
-        if (!Array.isArray(stage.paths) || stage.paths.length === 0 || stage.paths.length > 64) {
+        if (!isDenseArray(stage.paths) || stage.paths.length === 0 || stage.paths.length > 64) {
           throw new Error(`Loop verification stage paths are invalid: ${stage.id}`);
         }
         for (const path of stage.paths) {
@@ -560,7 +575,7 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
       }
       if (stage.dependencyPaths !== undefined) {
         if (
-          !Array.isArray(stage.dependencyPaths) ||
+          !isDenseArray(stage.dependencyPaths) ||
           stage.dependencyPaths.length === 0 ||
           stage.dependencyPaths.length > 64 ||
           stage.dependencyPaths.some((path) => !isVerificationPathPrefix(path)) ||
@@ -572,7 +587,51 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
       if (stage.cacheable !== undefined && typeof stage.cacheable !== "boolean") {
         throw new Error(`Loop verification stage cacheable flag is invalid: ${stage.id}`);
       }
+      if (
+        stage.dependsOn !== undefined &&
+        (!isDenseArray(stage.dependsOn) ||
+          stage.dependsOn.length === 0 ||
+          stage.dependsOn.length > 15 ||
+          new Set(stage.dependsOn).size !== stage.dependsOn.length ||
+          stage.dependsOn.some((id) => !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id)))
+      ) {
+        throw new Error(`Loop verification stage dependencies are invalid: ${stage.id}`);
+      }
+      if (stage.parallel !== undefined && typeof stage.parallel !== "boolean") {
+        throw new Error(`Loop verification stage parallel flag is invalid: ${stage.id}`);
+      }
+      if (
+        stage.resources !== undefined &&
+        (!isDenseArray(stage.resources) ||
+          stage.resources.length === 0 ||
+          stage.resources.length > 16 ||
+          new Set(stage.resources).size !== stage.resources.length ||
+          stage.resources.some((resource) => !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(resource)))
+      ) {
+        throw new Error(`Loop verification stage resources are invalid: ${stage.id}`);
+      }
+      if (stage.parallel === true && !stage.resources?.length) {
+        throw new Error(`Loop parallel verification stage requires resources: ${stage.id}`);
+      }
     }
+    const known = new Set(configuredPlan.map((stage) => stage.id));
+    const remaining = new Map(configuredPlan.map((stage) => [stage.id, new Set(stage.dependsOn ?? [])]));
+    for (const stage of configuredPlan) {
+      if (stage.dependsOn?.some((id) => id === stage.id || !known.has(id))) {
+        throw new Error(`Loop verification stage has an unknown dependency: ${stage.id}`);
+      }
+    }
+    const ready = [...remaining].filter(([, dependencies]) => dependencies.size === 0).map(([id]) => id);
+    let visited = 0;
+    while (ready.length > 0) {
+      const id = ready.shift()!;
+      remaining.delete(id);
+      visited++;
+      for (const [candidate, dependencies] of remaining) {
+        if (dependencies.delete(id) && dependencies.size === 0) ready.push(candidate);
+      }
+    }
+    if (visited !== configuredPlan.length) throw new Error("Loop verificationPlan contains a dependency cycle");
   }
   const persistenceEnabled = opts.persist !== false;
   const loopId = opts.resumeState?.loopId ?? opts.loopId ?? `loop-${randomUUID()}`;
@@ -1011,77 +1070,157 @@ async function runAutoLoopWithLease(
     const decisions: LoopVerificationDecision[] = [];
     let failedDiagnostics = "";
     let failedCode = 0;
-    for (const stage of verificationPlan) {
-      let decision: LoopVerificationDecision = {
-        stageId: stage.id,
-        action: "run",
-        reason: "full",
-        matchedPaths: [],
-      };
-      if (changedPaths !== undefined) {
-        decision = selectLoopVerificationStage(opts.workspace, stage, changedPaths);
-      }
-      decisions.push(decision);
-      if (decision.action === "skip") {
-        skippedStageIds.push(stage.id);
-        continue;
-      }
-      let completed: LoopStageResult | undefined;
-      let diagnostics = "";
-      const cached = changedPaths === undefined && stage.cacheable ? verificationCache?.get(stage.id) : undefined;
-      if (cached) {
-        const currentFingerprint = await fingerprinter.fingerprint({ forceAll: true });
-        if (currentFingerprint !== null && currentFingerprint === cached.workspaceFingerprint) {
-          decisions[decisions.length - 1] = {
+    const pending = new Set(verificationPlan.map((stage) => stage.id));
+    const outcomes = new Map<string, LoopStageResult | null>();
+    const decisionById = new Map<string, LoopVerificationDecision>();
+    while (pending.size > 0) {
+      if (failedCode !== 0) {
+        for (const stage of verificationPlan) {
+          if (!pending.delete(stage.id)) continue;
+          decisionById.set(stage.id, {
             stageId: stage.id,
-            action: "reuse",
-            reason: "cache_hit",
+            action: "blocked",
+            reason: "prior_failure",
             matchedPaths: [],
-          };
-          const reused = { ...cached.result, selection: "cached" as const };
-          stages.push(reused);
-          emit({ type: "verify.stage.completed", iteration, result: reused });
-          continue;
+          });
         }
-      }
-      for (let attempt = 1; attempt <= flakyRetries + 1; attempt++) {
-        const captured = await executeStage(iteration, stage, attempt);
-        if (captured.kind === "budget") return captured;
-        completed = captured.result;
-        diagnostics = captured.diagnostics;
-        if (completed.code === 0 || attempt > flakyRetries) break;
-      }
-      if (!completed) throw new Error(`verification stage ended without a result: ${stage.id}`);
-      completed = {
-        ...completed,
-        selection: decision.reason === "dependency" ? "dependency" : decision.reason === "direct" ? "direct" : "full",
-        ...(decision.matchedPaths.length > 0 ? { matchedPaths: decision.matchedPaths } : {}),
-      };
-      if (completed.code === 0 && completed.attempts > 1) {
-        completed = { ...completed, flaky: true };
-        flakyObserved = true;
-        emit({ type: "verify.flaky", iteration, stageId: stage.id, attempts: completed.attempts });
-      }
-      stages.push(completed);
-      if (completed.code === 0 && changedPaths !== undefined && stage.cacheable && verificationCache) {
-        const workspaceFingerprint = await fingerprinter.fingerprint({ forceAll: true });
-        if (workspaceFingerprint !== null) {
-          verificationCache.set(stage.id, { result: completed, workspaceFingerprint });
-        }
-      }
-      emit({ type: "verify.stage.completed", iteration, result: completed });
-      if (completed.code !== 0 && stage.required !== false) {
-        failedCode = completed.code;
-        failedDiagnostics = diagnostics;
         break;
       }
-    }
-    const decided = new Set(decisions.map((decision) => decision.stageId));
-    for (const stage of verificationPlan) {
-      if (!decided.has(stage.id)) {
-        decisions.push({ stageId: stage.id, action: "blocked", reason: "prior_failure", matchedPaths: [] });
+      const historicalFailureScore = (id: string): number =>
+        (opts.resumeState?.snapshots ?? []).reduce((score, snapshot) => {
+          const result = snapshot.stageResults.find((stage) => stage.id === id);
+          return score + (result?.code ? 1_000_000 : 0) + (result?.durationMs ?? 0);
+        }, 0);
+      const candidates = verificationPlan.filter(
+        (stage) => pending.has(stage.id) && (stage.dependsOn ?? []).every((dependency) => outcomes.has(dependency)),
+      );
+      const ready: LoopVerificationStage[] = [];
+      const usedResources = new Set<string>();
+      if (candidates[0]?.parallel === true) {
+        for (const stage of [...candidates].sort(
+          (left, right) => historicalFailureScore(right.id) - historicalFailureScore(left.id),
+        )) {
+          if (stage.parallel !== true || stage.resources?.some((resource) => usedResources.has(resource))) continue;
+          ready.push(stage);
+          for (const resource of stage.resources ?? []) usedResources.add(resource);
+        }
+      } else if (candidates[0]) ready.push(candidates[0]);
+      if (ready.length === 0) throw new Error("Loop verification scheduler made no progress");
+      const runnable: Array<{ stage: LoopVerificationStage; decision: LoopVerificationDecision }> = [];
+      for (const stage of ready) {
+        pending.delete(stage.id);
+        if ((stage.dependsOn ?? []).some((dependency) => (outcomes.get(dependency)?.code ?? 0) !== 0)) {
+          const blocked: LoopVerificationDecision = {
+            stageId: stage.id,
+            action: "blocked",
+            reason: "prior_failure",
+            matchedPaths: [],
+          };
+          decisionById.set(stage.id, blocked);
+          outcomes.set(stage.id, {
+            id: stage.id,
+            command: stage.command,
+            code: 1,
+            output: "Blocked by a failed verification prerequisite",
+            attempts: 1,
+            flaky: false,
+            durationMs: 0,
+          });
+          if (failedCode === 0 && stage.required !== false) {
+            failedCode = 1;
+            failedDiagnostics = `Verification stage ${stage.id} was blocked by a failed prerequisite`;
+          }
+          continue;
+        }
+        const decision: LoopVerificationDecision =
+          changedPaths === undefined
+            ? { stageId: stage.id, action: "run", reason: "full", matchedPaths: [] }
+            : selectLoopVerificationStage(opts.workspace, stage, changedPaths);
+        decisionById.set(stage.id, decision);
+        if (decision.action === "skip") {
+          skippedStageIds.push(stage.id);
+          outcomes.set(stage.id, null);
+        } else runnable.push({ stage, decision });
+      }
+      type SettledStage = {
+        stage: LoopVerificationStage;
+        decision: LoopVerificationDecision;
+        result?: LoopStageResult;
+        diagnostics: string;
+        budget?: { kind: "budget"; reason: LoopBudgetReason };
+      };
+      const wave = await Promise.allSettled(
+        runnable.map(async ({ stage, decision }) => {
+          const cached = changedPaths === undefined && stage.cacheable ? verificationCache?.get(stage.id) : undefined;
+          if (cached) {
+            const currentFingerprint = await fingerprinter.fingerprint({ forceAll: true });
+            if (currentFingerprint !== null && currentFingerprint === cached.workspaceFingerprint) {
+              return {
+                stage,
+                decision: {
+                  stageId: stage.id,
+                  action: "reuse",
+                  reason: "cache_hit",
+                  matchedPaths: [],
+                } satisfies LoopVerificationDecision,
+                result: { ...cached.result, selection: "cached" as const },
+                diagnostics: "",
+              };
+            }
+          }
+          let completed: LoopStageResult | undefined;
+          let diagnostics = "";
+          for (let attempt = 1; attempt <= flakyRetries + 1; attempt++) {
+            const captured = await executeStage(iteration, stage, attempt);
+            if (captured.kind === "budget") return { stage, decision, budget: captured, diagnostics: "" };
+            completed = captured.result;
+            diagnostics = captured.diagnostics;
+            if (completed.code === 0 || attempt > flakyRetries) break;
+          }
+          if (!completed) throw new Error(`verification stage ended without a result: ${stage.id}`);
+          return {
+            stage,
+            decision,
+            result: {
+              ...completed,
+              selection:
+                decision.reason === "dependency" ? "dependency" : decision.reason === "direct" ? "direct" : "full",
+              ...(decision.matchedPaths.length > 0 ? { matchedPaths: decision.matchedPaths } : {}),
+            } satisfies LoopStageResult,
+            diagnostics,
+          };
+        }),
+      );
+      const rejected = wave.find((item) => item.status === "rejected");
+      if (rejected?.status === "rejected") throw rejected.reason;
+      const settled: SettledStage[] = wave.flatMap((item) => (item.status === "fulfilled" ? [item.value] : []));
+      const budget = settled.find((item) => item.budget !== undefined)?.budget;
+      if (budget) return budget;
+      for (const stage of ready) {
+        const item = settled.find((candidate) => candidate.stage.id === stage.id);
+        if (!item?.result) continue;
+        let completed = item.result;
+        decisionById.set(stage.id, item.decision);
+        if (completed.code === 0 && completed.attempts > 1) {
+          completed = { ...completed, flaky: true };
+          flakyObserved = true;
+          emit({ type: "verify.flaky", iteration, stageId: stage.id, attempts: completed.attempts });
+        }
+        stages.push(completed);
+        outcomes.set(stage.id, completed);
+        if (completed.code === 0 && changedPaths !== undefined && stage.cacheable && verificationCache) {
+          const workspaceFingerprint = await fingerprinter.fingerprint({ forceAll: true });
+          if (workspaceFingerprint !== null)
+            verificationCache.set(stage.id, { result: completed, workspaceFingerprint });
+        }
+        emit({ type: "verify.stage.completed", iteration, result: completed });
+        if (failedCode === 0 && completed.code !== 0 && stage.required !== false) {
+          failedCode = completed.code;
+          failedDiagnostics = item.diagnostics;
+        }
       }
     }
+    decisions.push(...verificationPlan.map((stage) => decisionById.get(stage.id)!));
     lastStageResults = stages;
     emit({
       type: "verify.impact",

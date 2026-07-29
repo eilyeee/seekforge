@@ -11,6 +11,10 @@ export type ServeOptions = {
   loopAutoResume?: boolean;
   /** Prune old terminal Loop records while a workspace is idle. */
   loopAutoPrune?: boolean;
+  /** Resume interrupted durable Graphs only when a workspace is idle. */
+  graphAutoResume?: boolean;
+  /** Prune old terminal Graph records/resources while a workspace is idle. */
+  graphAutoPrune?: boolean;
 };
 
 /**
@@ -49,6 +53,8 @@ export async function serveCommand(opts: ServeOptions): Promise<void> {
     staticDir,
     loopAutoResume: opts.loopAutoResume,
     loopAutoPrune: opts.loopAutoPrune,
+    graphAutoResume: opts.graphAutoResume,
+    graphAutoPrune: opts.graphAutoPrune,
   });
 
   console.log(t("cmd.serve.url", { port: String(port), token }));

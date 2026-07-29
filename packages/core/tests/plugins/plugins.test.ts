@@ -12,6 +12,7 @@ import {
 } from "../../src/plugins/index.js";
 import { loadSkills } from "../../src/skills/index.js";
 import { loadAgentDefinitions } from "../../src/subagents/index.js";
+import { graphHandlersWithPlugins } from "../../src/agent/graph-handlers.js";
 
 const previousHome = process.env.SEEKFORGE_HOME;
 const roots: string[] = [];
@@ -62,6 +63,7 @@ describe("first-class plugins", () => {
           ...scaffold.manifest.contributes,
           mcpServers: { docs: { url: "https://example.test/mcp", permission: "readonly" } },
           hooks: { sessionStart: [{ command: "node check.mjs" }] },
+          graphHandlers: { summarize: "collect" },
         },
       })}\n`,
     );
@@ -78,6 +80,9 @@ describe("first-class plugins", () => {
       permission: "readonly",
     });
     expect(loadPluginContributions(workspace).hooks.sessionStart).toEqual([{ command: "node check.mjs" }]);
+    const contributions = loadPluginContributions(workspace);
+    expect(contributions.graphHandlers).toEqual({ "demo-plugin__summarize": "collect" });
+    expect(graphHandlersWithPlugins(contributions)["demo-plugin__summarize"]).toBeTypeOf("function");
     expect(loadSkills(workspace).find((skill) => skill.id === "plugin-skill")).toMatchObject({
       description: "from plugin",
       scope: "global",

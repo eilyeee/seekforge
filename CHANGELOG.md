@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### round 75: recoverable dynamic Graphs and verification DAGs
+- Added Graph v2 state migration, attempt/idempotency journals, durable pause/steer controls, idle recovery/retention, and complete Desktop lifecycle actions.
+- Added typed input/output and artifact contracts, bounded map/quorum-join nodes, priority/critical-path planning, nested managed worktrees, run comparison, and safe plugin handler aliases.
+- Added explicit resource-scoped Loop verification DAG parallelism with history ordering while preserving sequential compatibility and the authoritative full gate.
+
 ### round 74: durable Graph operations and explainable Loop recovery
 - Added nested Graph pause/resume and scoped reruns, rotating JSONL history, tamper-evident evidence, shared handler/run-ledger integration, and full REST lifecycle controls.
 - Added deterministic managed Graph worktrees, dependency propagation through control nodes, verified fan-in, generation-bound archive/prune/promotion, templates with typed parameters, recursive dry-run plans, and Desktop resource/dependency inspection.

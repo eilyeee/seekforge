@@ -1,10 +1,11 @@
 import {
-  BUILTIN_GRAPH_HANDLERS,
+  graphHandlersWithPlugins,
   archiveEngineeringGraphResources,
   engineeringGraphStateExists,
   engineeringGraphNeedsAgentRuntime,
   inspectEngineeringGraphResources,
   listEngineeringGraphStates,
+  loadPluginContributions,
   loadEngineeringGraphState,
   materializeEngineeringGraph,
   planEngineeringGraph,
@@ -92,8 +93,10 @@ export async function graphValidateCommand(
 
 export async function graphRunCommand(file: string, opts: GraphRunCliOptions): Promise<void> {
   const workspace = process.cwd();
+  let graphHandlers: ReturnType<typeof graphHandlersWithPlugins>;
   let graph: EngineeringGraphDefinition;
   try {
+    graphHandlers = graphHandlersWithPlugins(loadPluginContributions(workspace));
     graph = readEngineeringGraphFile(file, workspace, opts.params);
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
@@ -104,7 +107,7 @@ export async function graphRunCommand(file: string, opts: GraphRunCliOptions): P
   try {
     validateEngineeringGraphRunOptions(graph, {
       workspace,
-      handlers: BUILTIN_GRAPH_HANDLERS,
+      handlers: graphHandlers,
       ...(opts.resume ? { resume: true } : {}),
       ...(opts.restart ? { restart: true } : {}),
       ...(opts.rerun?.length ? { rerunFrom: opts.rerun } : {}),
@@ -145,7 +148,7 @@ export async function graphRunCommand(file: string, opts: GraphRunCliOptions): P
   const execute = async (deps: AgentCoreDeps, signal?: AbortSignal): Promise<void> => {
     const state = await runEngineeringGraph(deps, graph, {
       workspace,
-      handlers: BUILTIN_GRAPH_HANDLERS,
+      handlers: graphHandlers,
       ...(signal ? { signal } : {}),
       ...(opts.resume ? { resume: true } : {}),
       ...(opts.restart ? { restart: true } : {}),

@@ -298,6 +298,14 @@ export const api = {
     input: { operation: "archive" | "prune" | "promote"; dryRun?: boolean; force?: boolean; target?: string },
     ws?: string,
   ) => request<unknown>("POST", withWorkspace(`/api/graphs/${encodeURIComponent(id)}/resources`, ws), input),
+  graphLifecycle: (
+    id: string,
+    operation: "resume" | "approve" | "rerun" | "restart" | "cancel",
+    input: Record<string, unknown> = {},
+    ws?: string,
+  ) => request<unknown>("POST", withWorkspace(`/api/graphs/${encodeURIComponent(id)}/${operation}`, ws), input),
+  graphControl: (id: string, input: { operation: "pause" | "resume" | "steer"; message?: string }, ws?: string) =>
+    request<unknown>("POST", withWorkspace(`/api/graphs/${encodeURIComponent(id)}/control`, ws), input),
   graphDelete: (id: string, ws?: string) =>
     request<{ removed: true; graphId: string }>("DELETE", withWorkspace(`/api/graphs/${encodeURIComponent(id)}`, ws)),
   loopDelete: (id: string, ws?: string) =>

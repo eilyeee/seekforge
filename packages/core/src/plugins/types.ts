@@ -20,6 +20,8 @@ export type PluginManifest = {
     mcpServers?: Record<string, McpServerConfig>;
     /** Shell hooks activate only after the installed digest is explicitly enabled. */
     hooks?: HookConfig;
+    /** Safe aliases to deterministic built-in Graph handlers. */
+    graphHandlers?: Record<string, "noop" | "collect">;
   };
 };
 
@@ -41,5 +43,6 @@ export type PluginContributions = {
   agentRoots: string[];
   mcpServers: Record<string, McpServerConfig>;
   hooks: HookConfig;
+  graphHandlers?: Record<string, "noop" | "collect">;
   plugins: PluginRecord[];
 };

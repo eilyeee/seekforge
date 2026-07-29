@@ -667,11 +667,20 @@ program
   )
   .option("--loop-auto-resume", "resume interrupted durable Loops while their workspace is idle")
   .option("--loop-auto-prune", "prune old terminal Loop records while their workspace is idle")
+  .option("--graph-auto-resume", "resume interrupted durable Graphs while their workspace is idle")
+  .option("--graph-auto-prune", "prune old terminal Graph records and resources while their workspace is idle")
   .description("serve the web UI and agent API for one or more workspaces (127.0.0.1 only)")
   .action(
     async (
       paths: string[],
-      opts: { port: string; workspace: string[]; loopAutoResume?: boolean; loopAutoPrune?: boolean },
+      opts: {
+        port: string;
+        workspace: string[];
+        loopAutoResume?: boolean;
+        loopAutoPrune?: boolean;
+        graphAutoResume?: boolean;
+        graphAutoPrune?: boolean;
+      },
     ) => {
       const port = /^\d+$/.test(opts.port) ? Number(opts.port) : Number.NaN;
       if (!Number.isSafeInteger(port) || port < 0 || port > 65535) {
@@ -683,6 +692,8 @@ program
         workspaces: [...paths, ...opts.workspace],
         loopAutoResume: opts.loopAutoResume,
         loopAutoPrune: opts.loopAutoPrune,
+        graphAutoResume: opts.graphAutoResume,
+        graphAutoPrune: opts.graphAutoPrune,
       });
     },
   );

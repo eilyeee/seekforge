@@ -2,7 +2,7 @@
 
 > [English](graph-engineering.md) | **简体中文**
 
-图工程是 SeekForge 的持久化编排层，用于组合 Agent、自主 Loop、确定性函数、路由器、审批门和嵌套子图。它与 `loop-dag` 互补：Loop DAG 针对同构的「运行→验证」节点和托管 worktree 优化，工程图则负责协调异构工作。
+图工程是 SeekForge 的持久化编排层，用于组合 Agent、自主 Loop、确定性函数、有界 map、quorum join、路由器、审批门和嵌套子图。它与 `loop-dag` 互补：Loop DAG 针对同构的「运行→验证」节点和托管 worktree 优化，工程图则负责协调异构工作。
 
 ## 执行模型
 
@@ -71,19 +71,23 @@ flowchart LR
 - `agent`：单次 Agent 任务；`mode` 与 `approvalMode` 继续使用常规权限策略。
 - `loop`：完整的自主 Loop，拥有验证器，并获得剩余图预算的一部分。
 - `function`：由嵌入方提供的命名处理器。所有处理器会在副作用前解析完成。CLI 只提供安全的 `noop` 与 `collect`；不会把处理器名称转换成 shell 命令。可重试处理器必须具备幂等性。处理器 id 会进入恢复指纹，因此行为变化时也必须更换 id。
+- `map`：通过有界 JSON Pointer 读取已声明依赖的输出，最多对 `maxItems` 个值调用注册处理器（默认 32，硬上限 64）；每个元素都有稳定幂等键，失败批次发布前会等待同批所有已启动元素结算。
+- `join`：依赖全部结算后，只要至少 `quorum` 个依赖通过就成功，用于有界 quorum/reduce 流程。
 - `router`：先选择首个匹配的条件路由，再选择可选默认路由。下游通过 `route.routerId` 和 `route.branch` 绑定。
 - `gate`：暂停整张图，直到调用方明确批准该节点。
 - `subgraph`：在有界嵌套层数内运行另一张已校验图。每个子图都会获得确定性、抗碰撞的检查点 id，并记录父 Graph/节点来源；其用量计入父图并受父级份额约束。子图重试会恢复子检查点，并只让失败节点及其下游失效。
+
+节点可以通过 `inputs` 把名称绑定到直接依赖输出，并声明浅层 `outputSchema`。函数和 map 处理器每个节点最多返回 32 个仓库相对 artifact 引用，可附 SHA-256。`priority` 决定同时就绪节点的启动顺序；补偿流程继续用接受依赖 `failed` 状态的显式普通节点表达，使恢复拓扑保持可见、可恢复。
 
 `failurePolicy: "stop"` 会在首个节点失败后跳过未开始工作；`"continue"` 允许独立分支完成。失败节点的普通下游会被跳过，除非显式条件接受该状态。`maxRetries` 针对单个节点，`timeoutMs` 针对单次尝试。
 
 当 `maxConcurrency > 1` 时，实际可能重叠执行的有副作用节点必须解析到图工作区之内互不重叠的物理目录；由依赖关系确定先后顺序的节点可以安全复用同一工作区。祖先目录与其子目录不能作为两个独立并行分支运行。路由器与审批门不需要独立工作区。
 
-顶层 `managedWorktrees` 会在仓库级共享资源锁下，为每个有副作用节点创建确定性、可保留的 Git worktree；此时禁止显式节点工作区。启用 `integrateDependencies: true` 后，节点首次尝试前会合并已通过的依赖分支。`limit` 在创建前统计仓库内全部现有 `seekforge/` worktree。可选 `fanIn` 按定义顺序把所有通过节点合并到专用集成分支，针对 `verifyCommand` 运行有界自主 Loop，提交修复，并把每次尝试计入图预算。冲突或验证失败会让 Graph 失败，不会弱化验证门。
+`managedWorktrees` 会在仓库级共享资源锁下，为每个有副作用节点创建确定性、可保留的 Git worktree，并支持嵌套 Graph；托管作用域内禁止显式节点工作区。启用 `integrateDependencies: true` 后，节点首次尝试前会合并已通过的依赖分支。`limit` 在创建前统计仓库内全部现有 `seekforge/` worktree。父图的资源检查、归档和清理会递归包含子图分支。可选 `fanIn` 继续执行有界集成验证。
 
 ## 持久化与恢复
 
-每次持久运行持有 `engineering-graph-<graphId>` 租约，并原子写入 `.seekforge/graphs/<graphId>.json`。新运行默认拒绝替换已有 id，只有显式 `restart` / `--restart` 才会覆盖。检查点包含标准化定义、定义加物理工作区映射的指纹、节点结果、累计用量和最近 128 个生命周期事件。单节点输出不超过 16 KiB，整张图的保留输出也有总量上限；完整检查点不超过 1 MiB。
+每次持久运行持有 `engineering-graph-<graphId>` 租约，并原子写入 `.seekforge/graphs/<graphId>.json`。状态 schema v2 会读取并规范化 v1 检查点，记录进行中 attempt、稳定处理器幂等键、控制序号/运行身份以及暂停来源。attempt 开始记录先于处理器副作用；成功或终态结果会与活动日志移除在同一检查点发布。恢复中断 attempt 时会显式告警，并用相同逻辑键重试；显式重跑则获得新键。新运行默认拒绝替换已有 id，只有显式 `restart` / `--restart` 才会覆盖。
 
 完整生命周期轨迹同时追加到 `.seekforge/graphs/<graphId>.jsonl`，使用独立单调序号、1 MiB 分段、最多三个有界分段、断尾修复和物理路径检查。观察性历史写入失败时，检查点仍是权威状态。证据导出汇总状态、用量和节点结果但不包含节点输出，并携带 SHA-256 完整性摘要。
 
@@ -112,7 +116,11 @@ seekforge graph resources release promote --target fan-in
 seekforge graph delete release
 ```
 
-服务器提供校验/空跑计划（`POST /api/graphs/validate`）、后台启动（`POST /api/graphs`）、显式恢复/审批/重跑/重启/取消、有界历史、证据导出、列表/详情与删除。共享空跑计划器会返回执行波次、递归节点路径、运行时需求以及确定性的托管/fan-in 分支，但不会创建资源。Graph 运行会进入统一 Run Ledger，并在服务器关闭时排空。由服务器启动且包含 Agent 或 Loop 节点的 Graph 必须声明 `costBudgetUsd`。Server 与 CLI 共享确定性的 `noop`、`collect` 处理器注册表；处理器名永远不会转换成 shell 命令。
+服务器提供校验/空跑计划（`POST /api/graphs/validate`）、后台启动（`POST /api/graphs`）、显式恢复/审批/重跑/重启/取消、持久化暂停/指导（`POST /api/graphs/:id/control`）、有界历史、证据导出、列表/详情与删除。空跑计划还返回关键路径、最大并行宽度、最大尝试/动态元素数和输入绑定。Graph 运行会进入统一 Run Ledger，并在服务器关闭时排空。由服务器启动且包含 Agent 或 Loop 节点的 Graph 必须声明 `costBudgetUsd`。
+
+`seekforge serve --graph-auto-resume` 会在工作区空闲时顺序恢复无 owner 的运行中或人工暂停 Graph；单个恢复失败会被隔离，后续 Graph 与保留清理仍会继续。`--graph-auto-prune` 在同一空闲窗口执行终态年龄/数量保留策略，安全归档并清理托管资源，保留脏 worktree，并在父 Graph 仍可恢复时保留子检查点。持久化暂停/指导可控制任何存活的 Graph owner，包括其他进程或空闲恢复运行。Desktop 会跟踪活动 Graph，并提供暂停、指导、取消、审批、恢复、失败节点重跑、重启以及完整资源生命周期操作。
+
+Server 与 CLI 共享确定性的 `noop`、`collect` 注册表。已启用插件可以通过命名空间化 `graphHandlers` 声明这些内建处理器的安全别名；插件清单不能提供可执行代码，也不能把处理器名转换成 shell 命令。
 
 `GET /api/graphs/:id/history` 默认保留原有事件数组响应；添加 `?format=entries&afterSeq=<n>&limit=<n>` 可获得带游标的 JSONL 记录。`GET /api/graphs/:id/evidence` 返回防篡改摘要，其中包含托管分支和 fan-in 来源，但不暴露 fan-in 的绝对工作区路径。`GET`/`POST /api/graphs/:id/resources` 用于检查或执行 `archive`、`prune`、`promote` 操作；仍有托管资源时删除会被拒绝。列表接口省略定义与节点输出，并只保留近期事件；详情接口返回完整的有界检查点。Desktop 检查视图会从标准化详情渲染依赖箭头，并提供同一套归档、提升、清理生命周期操作。
 

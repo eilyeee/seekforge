@@ -2811,6 +2811,62 @@ Awaiting in-flight work after cancellation can produce a fresh `waiting_approval
 - **Do:** settle in-flight work, convert every waiting result to a usage-preserving cancelled skip under valid intermediate statuses, then materialize pending skips and publish the terminal checkpoint.
 - **Caught:** a subgraph could pause while its parent was draining cancellation, leaving an unloadable cancelled checkpoint.
 
+## 245. Parallel verification requires explicit disjoint resources
+
+A verifier may format files, generate code, update snapshots, or warm a shared cache even when it is described as a read-only gate. Topological independence alone does not make two commands safe to overlap.
+
+- **Do:** keep stages sequential by default; require explicit parallel opt-in and non-overlapping logical resource declarations, settle the started wave, and stop launching new waves after a required failure.
+- **Caught:** making every dependency-free Loop verification stage concurrent changed stop-on-failure behavior and let a later workspace-mutating verifier invalidate another stage's cache while both were running.
+
+## 246. Crash journals bracket effects and settlement
+
+A `started` event is observability, not a durable retry contract. After a process dies, an owner must distinguish work that never began from an effect whose result was not published.
+
+- **Do:** persist a stable attempt/idempotency identity before invoking the effect, publish terminal result plus journal removal atomically, reuse the key only for crash recovery (not explicit reruns), and surface interrupted attempts explicitly.
+- **Caught:** Engineering Graph resume previously had only a node-start event, so function effects could be repeated without a stable deduplication key.
+
+## 247. Paused states need a durable reason
+
+Approval pause and operator pause have different loader invariants and recovery policies. Inferring both from the presence of a waiting node makes a valid control pause unloadable or lets idle recovery cross an approval boundary.
+
+- **Do:** persist a closed pause-reason enum, require waiting approval only for approval pauses, and auto-resume only the explicitly recoverable pause class.
+- **Caught:** adding safe-boundary Graph pause could not reuse the existing `paused implies waiting_approval` invariant.
+
+## 248. Nested resources remain owned by the parent lifecycle
+
+A child workflow may create branches or worktrees whose checkpoint lives below the parent. Inspecting only direct result branches hides those resources from parent archival, pruning, restart, and deletion checks.
+
+- **Do:** derive child identities recursively through the same owner function, exclude separately measured descendants from parent totals, clean descendants before ancestors, and retain every ancestor of a dirty descendant.
+- **Caught:** enabling nested Graph managed worktrees initially left child branches outside the parent resource lifecycle.
+
+## 249. Failed parallel batches must settle every started peer
+
+Fail-fast aggregation can return after one operation rejects while sibling effects still run, allowing retry, cleanup, or result publication to overlap orphaned work.
+
+- **Do:** use all-settled aggregation for started effect batches, then publish the first bounded failure only after every peer settles.
+- **Caught:** a failed Graph map item let its batch return while other handler effects were still running.
+
+## 250. Durable control must bind to owner liveness, not a process-local registry
+
+A valid workflow owner may run in another process or in idle recovery without appearing in the receiving server's in-memory run map.
+
+- **Do:** authorize durable control against the validated run identity and shared live lease; use local registries only for locally owned cancellation handles.
+- **Caught:** Graph pause/steer rejected live cross-process and idle-recovery owners.
+
+## 251. Child checkpoint retention follows the resumable parent
+
+A terminal child is not independently disposable while its parent can still resume and expects that checkpoint for usage and effect recovery.
+
+- **Do:** apply terminal retention to root workflows, preserve descendants of resumable parents, and remove same-root descendants with their terminal owner.
+- **Caught:** age/count pruning could delete a passed child underneath a paused Engineering Graph.
+
+## 252. Pointer syntax must be validated before traversal
+
+Checking only a leading slash accepts malformed escape sequences that different JSON Pointer implementations may interpret differently.
+
+- **Do:** validate the complete bounded pointer grammar, then decode only `~0` and `~1` while blocking prototype keys and accessors.
+- **Caught:** Graph input bindings accepted `~2` escapes even though the resolver did not define them.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

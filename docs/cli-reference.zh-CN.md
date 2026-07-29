@@ -121,6 +121,8 @@
 | --- | --- |
 | `--loop-auto-resume` | 显式开启：工作区空闲时恢复持久化的 `running`、`paused` 或已有的 `interrupted` Loop。首次检查在 30 秒后执行，之后每 5 分钟检查一次。繁忙工作区及仍有存活 Loop owner 的记录会被跳过；取得的空闲 guard 会覆盖完整恢复，并只放行其自身 Agent 会话。多个工作区顺序处理；瞬时恢复失败会在之后的检查中重试，服务关闭会把其拥有的恢复任务保留为 `interrupted`，供下次启动继续。 |
 | `--loop-auto-prune` | 显式开启空闲期终态 Loop 清理。默认清理超过 30 天或排在最新 100 条之外的合格记录；可恢复状态和未完成交付永不参与清理。 |
+| `--graph-auto-resume` | 显式开启：物理工作区空闲时恢复无 owner 的运行中或人工暂停 Engineering Graph；等待审批的 Graph 保持暂停。 |
+| `--graph-auto-prune` | 显式开启空闲期终态 Graph 保留清理。合格托管资源会先归档和清理；脏 worktree 与可恢复 Graph 会保留。 |
 
 自动 Loop 恢复默认关闭，因为恢复后可能调用模型并编辑工作区。恢复沿用 Loop
 持久化的额度和 `acceptEdits`；没有用户连接时，超出该模式的权限请求会被拒绝。

@@ -113,6 +113,7 @@ export type PluginRecord = {
       agentRoots?: string[];
       mcpServers?: Record<string, unknown>;
       hooks?: Record<string, unknown>;
+      graphHandlers?: Record<string, "noop" | "collect">;
     };
   };
   error?: string;

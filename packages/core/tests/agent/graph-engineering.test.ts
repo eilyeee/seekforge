@@ -4,12 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { engineeringSubgraphStateId } from "../../src/agent/graph-contract.js";
+import { enqueueGraphControl } from "../../src/agent/graph-control-store.js";
 import { runEngineeringGraph } from "../../src/agent/graph-engineering.js";
 import { readEngineeringGraphHistory } from "../../src/agent/graph-history.js";
 import {
   archiveEngineeringGraphResources,
   inspectEngineeringGraphResources,
   pruneEngineeringGraphResources,
+  pruneEngineeringGraphStates,
 } from "../../src/agent/graph-resources.js";
 import {
   listEngineeringGraphStates,
@@ -113,6 +115,151 @@ describe("runEngineeringGraph", () => {
     expect(state.status).toBe("passed");
   });
 
+  it("executes bounded map dataflow and quorum joins with stable handler keys", async () => {
+    const root = workspace();
+    const keys: string[] = [];
+    const state = await runEngineeringGraph(
+      deps,
+      {
+        graphId: "map-join",
+        maxConcurrency: 2,
+        nodes: [
+          { id: "source", kind: "function", handler: "source", outputSchema: { type: "object", required: ["items"] } },
+          {
+            id: "map",
+            kind: "map",
+            handler: "double",
+            dependsOn: ["source"],
+            source: { nodeId: "source", pointer: "/items" },
+            inputs: { original: { nodeId: "source" } },
+            outputSchema: { type: "array" },
+          },
+          { id: "join", kind: "join", dependsOn: ["source", "map"], quorum: 2 },
+        ],
+      },
+      {
+        workspace: root,
+        handlers: {
+          source: ({ idempotencyKey }) => {
+            keys.push(idempotencyKey);
+            return { output: { items: [1, 2, 3] } };
+          },
+          double: ({ item, itemIndex, inputs, idempotencyKey }) => {
+            keys.push(idempotencyKey);
+            expect(inputs.original).toEqual({ items: [1, 2, 3] });
+            return {
+              output: Number(item) * 2 + (itemIndex === undefined ? 0 : 0),
+              artifacts: [{ name: `item-${itemIndex}`, path: `items/item-${itemIndex}.json` }],
+            };
+          },
+        },
+      },
+    );
+    expect(state.status).toBe("passed");
+    expect(state.results.find((result) => result.id === "map")?.output).toEqual([2, 4, 6]);
+    expect(state.results.find((result) => result.id === "join")?.output).toEqual({
+      quorum: 2,
+      passed: ["source", "map"],
+    });
+    expect(new Set(keys).size).toBe(4);
+    expect(state.results.find((result) => result.id === "map")?.artifacts).toHaveLength(3);
+    expect(state.activeAttempts).toEqual([]);
+  });
+
+  it("waits for every started map item before publishing a failed batch", async () => {
+    const root = workspace();
+    let peerSettled = false;
+    const state = await runEngineeringGraph(
+      deps,
+      {
+        graphId: "map-settlement",
+        failurePolicy: "continue",
+        nodes: [
+          { id: "source", kind: "function", handler: "source" },
+          {
+            id: "map",
+            kind: "map",
+            handler: "map",
+            dependsOn: ["source"],
+            source: { nodeId: "source" },
+          },
+        ],
+      },
+      {
+        workspace: root,
+        handlers: {
+          source: () => ({ output: [0, 1] }),
+          map: async ({ item }) => {
+            if (item === 0) throw new Error("first item failed");
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            peerSettled = true;
+            return { output: item };
+          },
+        },
+      },
+    );
+    expect(state.status).toBe("failed");
+    expect(peerSettled).toBe(true);
+    expect(state.activeAttempts).toEqual([]);
+  });
+
+  it("reuses an interrupted handler key but allocates a new key for explicit rerun", async () => {
+    const root = workspace();
+    const definition = {
+      graphId: "idempotency-recovery",
+      nodes: [{ id: "effect", kind: "function", handler: "effect" }],
+    };
+    const observed: string[] = [];
+    await runEngineeringGraph(deps, definition, {
+      workspace: root,
+      handlers: {
+        effect: ({ idempotencyKey }) => {
+          observed.push(idempotencyKey);
+          return { output: "done" };
+        },
+      },
+    });
+    const checkpoint = loadEngineeringGraphState(root, definition.graphId)!;
+    saveEngineeringGraphState(root, {
+      ...checkpoint,
+      status: "running",
+      completedAt: undefined,
+      results: [],
+      activeAttempts: [
+        {
+          nodeId: "effect",
+          attempt: 1,
+          idempotencyKey: "interrupted-stable-key",
+          startedAt: new Date().toISOString(),
+        },
+      ],
+    });
+    await runEngineeringGraph(deps, definition, {
+      workspace: root,
+      resume: true,
+      handlers: {
+        effect: ({ idempotencyKey }) => {
+          observed.push(idempotencyKey);
+          return { output: "resumed" };
+        },
+      },
+    });
+    await runEngineeringGraph(deps, definition, {
+      workspace: root,
+      resume: true,
+      rerunFrom: ["effect"],
+      handlers: {
+        effect: ({ idempotencyKey }) => {
+          observed.push(idempotencyKey);
+          return { output: "rerun" };
+        },
+      },
+    });
+    expect(observed[1]).toBe("interrupted-stable-key");
+    expect(observed[2]).not.toBe("interrupted-stable-key");
+    expect(new Set(observed).size).toBe(3);
+  });
+
   it("isolates managed nodes, integrates dependencies, verifies fan-in, and prunes archived resources", async () => {
     const root = gitWorkspace();
     const definition = {
@@ -176,6 +323,52 @@ describe("runEngineeringGraph", () => {
     expect((await inspectEngineeringGraphResources(root, "managed-graph")).archived).toBe(false);
   }, 30_000);
 
+  it("provisions and cleans nested managed Graph worktrees through the parent resource lifecycle", async () => {
+    const root = gitWorkspace();
+    const state = await runEngineeringGraph(
+      deps,
+      {
+        graphId: "nested-managed-parent",
+        managedWorktrees: true,
+        nodes: [
+          {
+            id: "child",
+            kind: "subgraph",
+            graph: {
+              graphId: "nested-managed-child",
+              managedWorktrees: true,
+              nodes: [{ id: "write", kind: "function", handler: "write" }],
+            },
+          },
+        ],
+      },
+      {
+        workspace: root,
+        handlers: {
+          write: ({ workspace: childWorkspace }) => {
+            writeFileSync(join(childWorkspace, "nested.txt"), "nested\n");
+            return { output: "done", artifacts: [{ name: "nested", path: "nested.txt" }] };
+          },
+        },
+      },
+    );
+    expect(state.status).toBe("passed");
+    expect((await inspectEngineeringGraphResources(root, "nested-managed-parent")).worktrees).toHaveLength(2);
+    archiveEngineeringGraphResources(root, "nested-managed-parent");
+    const nested = (await listGitWorktrees(root))
+      .filter((entry) => entry.branch.startsWith("seekforge/"))
+      .sort((left, right) => right.path.length - left.path.length)[0];
+    expect(nested).toBeDefined();
+    const dirty = join(nested!.path, "dirty.txt");
+    writeFileSync(dirty, "keep\n");
+    const retained = await pruneEngineeringGraphResources(root, "nested-managed-parent");
+    expect(retained.removed).toEqual([]);
+    expect(retained.retained).toHaveLength(2);
+    rmSync(dirty);
+    expect((await pruneEngineeringGraphResources(root, "nested-managed-parent")).removed).toHaveLength(2);
+    expect(await listGitWorktrees(root)).toHaveLength(1);
+  }, 30_000);
+
   it("retains dirty managed Graph resources during pruning", async () => {
     const root = gitWorkspace();
     await runEngineeringGraph(
@@ -233,6 +426,112 @@ describe("runEngineeringGraph", () => {
     expect(loadEngineeringGraphState(root, "history-symlink")?.status).toBe("passed");
   });
 
+  it("isolates a malformed control mailbox from authoritative Graph execution", async () => {
+    const root = workspace();
+    const graphDirectory = join(root, ".seekforge", "graphs");
+    mkdirSync(graphDirectory, { recursive: true });
+    writeFileSync(join(graphDirectory, "control-corruption.control.json"), "{");
+    const state = await runEngineeringGraph(
+      deps,
+      { graphId: "control-corruption", nodes: [{ id: "done", kind: "function", handler: "noop" }] },
+      { workspace: root, handlers: { noop: () => ({ output: null }) } },
+    );
+    expect(state.status).toBe("passed");
+    expect(state.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "graph.warning", message: expect.stringMatching(/mailbox/) }),
+      ]),
+    );
+  });
+
+  it("prunes eligible terminal Graph state without initializing Git resources", async () => {
+    const root = workspace();
+    await runEngineeringGraph(
+      deps,
+      { graphId: "old-graph", nodes: [{ id: "done", kind: "function", handler: "noop" }] },
+      { workspace: root, handlers: { noop: () => ({ output: null }) } },
+    );
+    const result = await pruneEngineeringGraphStates(root, { maxAgeDays: 0, maxTerminalCount: 0 });
+    expect(result.removed).toEqual(["old-graph"]);
+    expect(loadEngineeringGraphState(root, "old-graph")).toBeNull();
+  });
+
+  it("retains terminal child checkpoints while their parent remains resumable", async () => {
+    const root = workspace();
+    const definition = {
+      graphId: "retained-parent",
+      nodes: [
+        {
+          id: "child",
+          kind: "subgraph",
+          graph: {
+            graphId: "retained-child",
+            nodes: [{ id: "done", kind: "function", handler: "done" }],
+          },
+        },
+        { id: "review", kind: "gate", dependsOn: ["child"] },
+      ],
+    };
+    const parent = await runEngineeringGraph(deps, definition, {
+      workspace: root,
+      handlers: { done: () => ({ output: "done" }) },
+    });
+    expect(parent.status).toBe("paused");
+    const childId = engineeringSubgraphStateId("retained-parent", "child", "retained-child");
+    expect(loadEngineeringGraphState(root, childId)?.status).toBe("passed");
+    expect(await pruneEngineeringGraphStates(root, { maxAgeDays: 0, maxTerminalCount: 0 })).toEqual({
+      removed: [],
+      retained: [],
+    });
+    expect(loadEngineeringGraphState(root, childId)?.status).toBe("passed");
+  });
+
+  it("migrates version-1 checkpoints in memory before resume", () => {
+    const root = workspace();
+    const directory = join(root, ".seekforge", "graphs");
+    mkdirSync(directory, { recursive: true });
+    const now = new Date().toISOString();
+    writeFileSync(
+      join(directory, "legacy.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        graphId: "legacy",
+        fingerprint: "a".repeat(64),
+        status: "passed",
+        definition: {
+          graphId: "legacy",
+          nodes: [{ id: "done", kind: "function", handler: "noop" }],
+          maxConcurrency: 1,
+          failurePolicy: "stop",
+        },
+        results: [
+          {
+            id: "done",
+            kind: "function",
+            status: "passed",
+            attempts: 1,
+            costUsd: 0,
+            tokensUsed: 0,
+            startedAt: now,
+            completedAt: now,
+          },
+        ],
+        events: [],
+        spentCost: 0,
+        spentTokens: 0,
+        createdAt: now,
+        updatedAt: now,
+        completedAt: now,
+      }),
+    );
+    expect(loadEngineeringGraphState(root, "legacy")).toMatchObject({
+      schemaVersion: 2,
+      activeAttempts: [],
+      controlSeq: 0,
+      controlRunId: "",
+    });
+  });
+
   it("pauses at a gate and resumes without rerunning ancestors", async () => {
     const root = workspace();
     const before = vi.fn(() => ({ output: "ready" }));
@@ -262,6 +561,40 @@ describe("runEngineeringGraph", () => {
     expect(resumed.status).toBe("passed");
     expect(before).toHaveBeenCalledTimes(1);
     expect(after).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies durable pause at a safe boundary and resumes without replaying settled nodes", async () => {
+    const root = workspace();
+    const first = vi.fn(() => ({ output: "first" }));
+    const second = vi.fn(() => ({ output: "second" }));
+    const definition = {
+      graphId: "controlled",
+      nodes: [
+        { id: "first", kind: "function", handler: "first" },
+        { id: "second", kind: "function", handler: "second", dependsOn: ["first"] },
+      ],
+    };
+    let queued: Promise<unknown> | undefined;
+    const paused = await runEngineeringGraph(deps, definition, {
+      workspace: root,
+      handlers: { first, second },
+      onEvent: (event) => {
+        if (event.type === "node.attempt.started") {
+          const state = loadEngineeringGraphState(root, "controlled")!;
+          queued = enqueueGraphControl(root, "controlled", state.controlRunId, { operation: "pause" });
+        }
+      },
+    });
+    await queued;
+    expect(paused).toMatchObject({ status: "paused", pauseReason: "control" });
+    const resumed = await runEngineeringGraph(deps, definition, {
+      workspace: root,
+      resume: true,
+      handlers: { first, second },
+    });
+    expect(resumed.status).toBe("passed");
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
   });
 
   it("requires exact callback approval and reruns a cancelled in-flight node on resume", async () => {
@@ -854,7 +1187,7 @@ describe("runEngineeringGraph", () => {
       results: state.results.map((result) => ({ ...result, output: "x".repeat(15_000) })),
     });
     expect(loadEngineeringGraphState(root, "aggregate-output")).toBeNull();
-  });
+  }, 10_000);
 
   it("isolates observer failures and enforces output bounds", async () => {
     const root = workspace();

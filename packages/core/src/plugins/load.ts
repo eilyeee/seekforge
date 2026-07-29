@@ -79,6 +79,7 @@ const manifestSchema = z
         agentRoots: z.array(z.string()).max(20).optional(),
         mcpServers: z.record(z.string().regex(PLUGIN_ID_RE), mcpServer).optional(),
         hooks: hookConfig.optional(),
+        graphHandlers: z.record(z.string().regex(PLUGIN_ID_RE), z.enum(["noop", "collect"])).optional(),
       })
       .strict()
       .optional(),
@@ -281,7 +282,14 @@ function mergeHooks(target: HookConfig, incoming: HookConfig | undefined): void 
 
 export function loadPluginContributions(workspace: string): PluginContributions {
   const plugins = listPlugins(workspace);
-  const result: PluginContributions = { skillRoots: [], agentRoots: [], mcpServers: {}, hooks: {}, plugins };
+  const result: PluginContributions = {
+    skillRoots: [],
+    agentRoots: [],
+    mcpServers: {},
+    hooks: {},
+    graphHandlers: {},
+    plugins,
+  };
   for (const plugin of plugins) {
     if (plugin.scope !== "global" || plugin.status !== "enabled" || !plugin.manifest) continue;
     const root = realpathSync(plugin.path);
@@ -297,6 +305,9 @@ export function loadPluginContributions(workspace: string): PluginContributions 
       result.mcpServers[`${plugin.id}__${name}`] = { ...config, trusted: true };
     }
     mergeHooks(result.hooks, plugin.manifest.contributes?.hooks);
+    for (const [name, handler] of Object.entries(plugin.manifest.contributes?.graphHandlers ?? {})) {
+      result.graphHandlers![`${plugin.id}__${name}`] = handler;
+    }
   }
   return result;
 }

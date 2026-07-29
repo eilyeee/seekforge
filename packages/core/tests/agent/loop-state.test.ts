@@ -507,6 +507,43 @@ describe("loop state persistence", () => {
     }
   });
 
+  it("rejects duplicate verification DAG dependencies and resources in persisted state", () => {
+    expect(() =>
+      createLoopState({
+        loopId: "duplicate-dependencies",
+        task: "x",
+        workspace,
+        verifyCommand: "test",
+        maxIterations: 1,
+        verificationPlan: [
+          { id: "first", command: "first" },
+          { id: "second", command: "second", dependsOn: ["first", "first"] },
+        ],
+      }),
+    ).toThrow(/Invalid loop state/);
+    expect(() =>
+      createLoopState({
+        loopId: "duplicate-resources",
+        task: "x",
+        workspace,
+        verifyCommand: "test",
+        maxIterations: 1,
+        verificationPlan: [{ id: "first", command: "first", parallel: true, resources: ["repo", "repo"] }],
+      }),
+    ).toThrow(/Invalid loop state/);
+    const sparseResources = new Array<string>(1);
+    expect(() =>
+      createLoopState({
+        loopId: "sparse-resources",
+        task: "x",
+        workspace,
+        verifyCommand: "test",
+        maxIterations: 1,
+        verificationPlan: [{ id: "first", command: "first", parallel: true, resources: sparseResources }],
+      }),
+    ).toThrow(/Invalid loop state/);
+  });
+
   it("rejects an unknown explicit schema version", () => {
     const state = createLoopState({ loopId: "future", task: "x", workspace, verifyCommand: "test", maxIterations: 1 });
     writeFileSync(

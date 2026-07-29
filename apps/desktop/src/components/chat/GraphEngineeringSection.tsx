@@ -17,6 +17,12 @@ export function GraphEngineeringSection(props: {
   busy: boolean;
   onInspect: (graphId: string) => void;
   onAction: (graphId: string, operation: "archive" | "prune" | "promote", target?: string) => void;
+  onLifecycle: (
+    graphId: string,
+    operation: "resume" | "approve" | "rerun" | "restart" | "cancel",
+    nodeIds?: string[],
+  ) => void;
+  onControl: (graphId: string, operation: "pause" | "steer") => void;
   onRemove: (graphId: string) => void;
 }) {
   const t = useT();
@@ -45,6 +51,12 @@ export function GraphEngineeringSection(props: {
                 </Badge>
               ))}
             </div>
+            {graph.activeAttempts && graph.activeAttempts.length > 0 && (
+              <p className="mt-1 text-tertiary">
+                {t("chat.loop.graph.activeAttempts")}:{" "}
+                {graph.activeAttempts.map((attempt) => `${attempt.nodeId}#${attempt.attempt}`).join(", ")}
+              </p>
+            )}
             {nodes.length > 0 && (
               <div className="mt-2 space-y-1 rounded border border-subtle p-2 text-tertiary">
                 {nodes.map((node, index) => (
@@ -77,6 +89,79 @@ export function GraphEngineeringSection(props: {
               <Button size="sm" variant="ghost" disabled={props.busy} onClick={() => props.onInspect(graph.graphId)}>
                 {t("chat.loop.manager.inspect")}
               </Button>
+              {graph.status === "running" && (
+                <>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={props.busy}
+                    onClick={() => props.onControl(graph.graphId, "pause")}
+                  >
+                    {t("chat.loop.graph.pause")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={props.busy}
+                    onClick={() => props.onControl(graph.graphId, "steer")}
+                  >
+                    {t("chat.loop.graph.steer")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={props.busy}
+                    onClick={() => props.onLifecycle(graph.graphId, "cancel")}
+                  >
+                    {t("chat.loop.graph.cancel")}
+                  </Button>
+                </>
+              )}
+              {graph.status === "paused" && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={props.busy}
+                  onClick={() => {
+                    const waiting = graph.results
+                      .filter((node) => node.status === "waiting_approval")
+                      .map((node) => node.id);
+                    props.onLifecycle(graph.graphId, waiting.length > 0 ? "approve" : "resume", waiting);
+                  }}
+                >
+                  {graph.results.some((node) => node.status === "waiting_approval")
+                    ? t("chat.loop.graph.approve")
+                    : t("chat.loop.graph.resume")}
+                </Button>
+              )}
+              {(graph.status === "failed" || graph.status === "cancelled" || graph.status === "passed") && (
+                <>
+                  {graph.results.some((node) => node.status === "failed") && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={props.busy}
+                      onClick={() =>
+                        props.onLifecycle(
+                          graph.graphId,
+                          "rerun",
+                          graph.results.filter((node) => node.status === "failed").map((node) => node.id),
+                        )
+                      }
+                    >
+                      {t("chat.loop.graph.rerun")}
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={props.busy || (resources?.worktrees.length ?? 0) > 0}
+                    onClick={() => props.onLifecycle(graph.graphId, "restart")}
+                  >
+                    {t("chat.loop.graph.restart")}
+                  </Button>
+                </>
+              )}
               <Button
                 size="sm"
                 variant="ghost"

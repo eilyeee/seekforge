@@ -1017,7 +1017,7 @@ export type LoopDagSummary = {
 /** Durable multi-Agent / multi-Loop engineering graph contracts. */
 export type GraphRunStatus = "running" | "paused" | "passed" | "failed" | "cancelled";
 export type GraphNodeStatus = "passed" | "failed" | "skipped" | "waiting_approval";
-export type GraphNodeKind = "agent" | "loop" | "function" | "router" | "gate" | "subgraph";
+export type GraphNodeKind = "agent" | "loop" | "function" | "map" | "join" | "router" | "gate" | "subgraph";
 export type GraphNodeSummary = {
   id: string;
   kind: GraphNodeKind;
@@ -1031,6 +1031,7 @@ export type GraphNodeSummary = {
   output?: unknown;
   error?: string;
   managedBranch?: string;
+  artifacts?: Array<{ name: string; path: string; sha256?: string }>;
 };
 export type GraphEventSummary = {
   sequence: number;
@@ -1041,7 +1042,7 @@ export type GraphEventSummary = {
   message?: string;
 };
 export type EngineeringGraphSummary = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   graphId: string;
   fingerprint: string;
   status: GraphRunStatus;
@@ -1049,6 +1050,10 @@ export type EngineeringGraphSummary = {
   events: GraphEventSummary[];
   spentCost: number;
   spentTokens: number;
+  activeAttempts?: Array<{ nodeId: string; attempt: number; idempotencyKey: string; startedAt: string }>;
+  controlSeq?: number;
+  controlRunId?: string;
+  pauseReason?: "approval" | "control";
   createdAt: string;
   updatedAt: string;
   completedAt?: string;

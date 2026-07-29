@@ -10,8 +10,9 @@ import {
   MAX_GRAPH_HISTORY_SEGMENTS,
   parseEngineeringGraphDefinition,
 } from "./graph-contract.js";
-import { isValidLoopDagId } from "./loop-dag-validation.js";
+import { isSafeLoopDagRelativePath, isValidLoopDagId } from "./loop-dag-validation.js";
 import { MANAGED_ORCHESTRATION_BRANCH_RE } from "./loop-managed-worktree.js";
+import { isDenseArray } from "./orchestration.js";
 import { acquireSessionLease, isSessionRunActive } from "./session-lease.js";
 
 export const MAX_GRAPH_STATE_BYTES = 1024 * 1024;
@@ -33,6 +34,7 @@ export type GraphNodeResult = {
   output?: unknown;
   error?: string;
   managedBranch?: string;
+  artifacts?: Array<{ name: string; path: string; sha256?: string }>;
 };
 
 export type EngineeringGraphFanInResult = {
@@ -45,14 +47,24 @@ export type EngineeringGraphFanInResult = {
   error?: string;
 };
 
+export type GraphActiveAttempt = {
+  nodeId: string;
+  attempt: number;
+  idempotencyKey: string;
+  startedAt: string;
+};
+
 export type GraphEvent = {
   sequence: number;
   type:
     | "graph.started"
     | "graph.resumed"
     | "graph.paused"
+    | "graph.controlled"
     | "graph.completed"
     | "node.started"
+    | "node.attempt.started"
+    | "node.attempt.settled"
     | "node.completed"
     | "node.skipped"
     | "node.waiting_approval"
@@ -66,7 +78,7 @@ export type GraphEvent = {
 };
 
 export type EngineeringGraphState = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   graphId: string;
   fingerprint: string;
   status: GraphRunStatus;
@@ -75,6 +87,10 @@ export type EngineeringGraphState = {
   events: GraphEvent[];
   spentCost: number;
   spentTokens: number;
+  activeAttempts: GraphActiveAttempt[];
+  controlSeq: number;
+  controlRunId: string;
+  pauseReason?: "approval" | "control";
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -114,7 +130,19 @@ function parseNodeResult(value: unknown, definition: EngineeringGraphDefinition)
     (value.error !== undefined && (typeof value.error !== "string" || value.error.length > 8_192)) ||
     (value.output !== undefined && Buffer.byteLength(JSON.stringify(value.output)) > MAX_GRAPH_OUTPUT_BYTES) ||
     (value.managedBranch !== undefined &&
-      (typeof value.managedBranch !== "string" || !MANAGED_ORCHESTRATION_BRANCH_RE.test(value.managedBranch)))
+      (typeof value.managedBranch !== "string" || !MANAGED_ORCHESTRATION_BRANCH_RE.test(value.managedBranch))) ||
+    (value.artifacts !== undefined &&
+      (!isDenseArray(value.artifacts) ||
+        value.artifacts.length > 32 ||
+        value.artifacts.some(
+          (artifact) =>
+            !isRecord(artifact) ||
+            typeof artifact.name !== "string" ||
+            !/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(artifact.name) ||
+            !isSafeLoopDagRelativePath(artifact.path) ||
+            (artifact.sha256 !== undefined &&
+              (typeof artifact.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(artifact.sha256))),
+        )))
   ) {
     return null;
   }
@@ -159,8 +187,11 @@ export function parseGraphEvent(value: unknown, previousSequence = 0): GraphEven
     "graph.started",
     "graph.resumed",
     "graph.paused",
+    "graph.controlled",
     "graph.completed",
     "node.started",
+    "node.attempt.started",
+    "node.attempt.settled",
     "node.completed",
     "node.skipped",
     "node.waiting_approval",
@@ -193,8 +224,18 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
   } catch {
     return null;
   }
-  if (!isRecord(value) || value.schemaVersion !== 1 || !isValidLoopDagId(value.graphId)) return null;
+  if (
+    !isRecord(value) ||
+    (value.schemaVersion !== 1 && value.schemaVersion !== 2) ||
+    !isValidLoopDagId(value.graphId)
+  ) {
+    return null;
+  }
   if (expectedId !== undefined && value.graphId !== expectedId) return null;
+  const activeAttempts = value.schemaVersion === 1 ? [] : value.activeAttempts;
+  const controlSeq = value.schemaVersion === 1 ? 0 : value.controlSeq;
+  const controlRunId = value.schemaVersion === 1 ? "" : value.controlRunId;
+  const pauseReason = value.schemaVersion === 1 && value.status === "paused" ? "approval" : value.pauseReason;
   if (
     typeof value.fingerprint !== "string" ||
     !/^[a-f0-9]{64}$/.test(value.fingerprint) ||
@@ -205,6 +246,12 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
     !finiteNonNegative(value.spentCost) ||
     !Number.isSafeInteger(value.spentTokens) ||
     (value.spentTokens as number) < 0 ||
+    !Array.isArray(activeAttempts) ||
+    activeAttempts.length > definitionNodeLimit(value.definition) ||
+    !Number.isSafeInteger(controlSeq) ||
+    (controlSeq as number) < 0 ||
+    typeof controlRunId !== "string" ||
+    (controlRunId !== "" && !isValidLoopDagId(controlRunId)) ||
     !validTimestamp(value.createdAt) ||
     !validTimestamp(value.updatedAt) ||
     (value.completedAt !== undefined && !validTimestamp(value.completedAt)) ||
@@ -214,7 +261,8 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
         !isValidLoopDagId(value.parentGraph.nodeId))) ||
     (value.resourceGeneration !== undefined &&
       (typeof value.resourceGeneration !== "string" ||
-        !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value.resourceGeneration)))
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value.resourceGeneration))) ||
+    (pauseReason !== undefined && pauseReason !== "approval" && pauseReason !== "control")
   ) {
     return null;
   }
@@ -225,10 +273,30 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
     return null;
   }
   if (definition.graphId !== value.graphId || value.results.length > definition.nodes.length) return null;
+  const parsedAttempts: GraphActiveAttempt[] = [];
+  const attemptNodes = new Set<string>();
+  for (const attempt of activeAttempts) {
+    if (
+      !isRecord(attempt) ||
+      !definition.nodes.some((node) => node.id === attempt.nodeId) ||
+      attemptNodes.has(attempt.nodeId as string) ||
+      !Number.isSafeInteger(attempt.attempt) ||
+      (attempt.attempt as number) < 1 ||
+      (attempt.attempt as number) > 6 ||
+      typeof attempt.idempotencyKey !== "string" ||
+      attempt.idempotencyKey.length === 0 ||
+      attempt.idempotencyKey.length > 512 ||
+      !validTimestamp(attempt.startedAt)
+    ) {
+      return null;
+    }
+    attemptNodes.add(attempt.nodeId as string);
+    parsedAttempts.push(attempt as GraphActiveAttempt);
+  }
   const results = value.results.map((result) => parseNodeResult(result, definition));
   if (results.some((result) => result === null)) return null;
   const resultIds = new Set(results.map((result) => result!.id));
-  if (resultIds.size !== results.length) return null;
+  if (resultIds.size !== results.length || parsedAttempts.some((attempt) => resultIds.has(attempt.nodeId))) return null;
   const retainedOutputBytes = results.reduce(
     (total, result) => total + (result!.output === undefined ? 0 : Buffer.byteLength(JSON.stringify(result!.output))),
     0,
@@ -251,8 +319,11 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
   const hasFailed = results.some((result) => result!.status === "failed");
   const terminal = status === "passed" || status === "failed" || status === "cancelled";
   if (
-    (status === "paused" && !hasWaiting) ||
+    (status === "paused" && pauseReason === undefined) ||
+    (status === "paused" && pauseReason === "approval" && !hasWaiting) ||
+    (status === "paused" && pauseReason === "control" && hasWaiting) ||
     (status !== "paused" && hasWaiting) ||
+    (status !== "paused" && pauseReason !== undefined) ||
     (status === "passed" && hasFailed) ||
     (terminal && results.length !== definition.nodes.length) ||
     (terminal && value.completedAt === undefined) ||
@@ -262,6 +333,7 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
   ) {
     return null;
   }
+  if (status !== "running" && parsedAttempts.length > 0) return null;
   let sequence = 0;
   const events: GraphEvent[] = [];
   for (const event of value.events) {
@@ -272,11 +344,20 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
   }
   return {
     ...(value as EngineeringGraphState),
+    schemaVersion: 2,
     definition,
     results: results as GraphNodeResult[],
     events,
+    activeAttempts: parsedAttempts,
+    controlSeq: controlSeq as number,
+    controlRunId,
+    ...(pauseReason ? { pauseReason } : {}),
     ...(fanIn ? { fanIn } : {}),
   };
+}
+
+function definitionNodeLimit(value: unknown): number {
+  return isRecord(value) && Array.isArray(value.nodes) ? Math.min(value.nodes.length, 128) : 128;
 }
 
 export function saveEngineeringGraphState(workspace: string, state: EngineeringGraphState): void {
@@ -322,6 +403,24 @@ export function listEngineeringGraphStates(workspace: string): EngineeringGraphS
   }
 }
 
+export function recoverableEngineeringGraphStates(
+  workspace: string,
+  options: { limit?: number } = {},
+): EngineeringGraphState[] {
+  const limit = options.limit ?? 3;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+    throw new RangeError("Graph recovery limit must be 1 to 100");
+  return listEngineeringGraphStates(workspace)
+    .filter(
+      (state) =>
+        state.parentGraph === undefined &&
+        (state.status === "running" || (state.status === "paused" && state.pauseReason === "control")) &&
+        !isSessionRunActive(workspace, `engineering-graph-${state.graphId}`),
+    )
+    .sort((left, right) => Date.parse(left.updatedAt) - Date.parse(right.updatedAt))
+    .slice(0, limit);
+}
+
 export function removeEngineeringGraphState(workspace: string, graphId: string): boolean {
   if (!isValidLoopDagId(graphId)) throw new Error(`Graph id must be safe: ${graphId}`);
   const leaseId = `engineering-graph-${graphId}`;
@@ -332,6 +431,7 @@ export function removeEngineeringGraphState(workspace: string, graphId: string):
     const directory = join(root, ".seekforge", "graphs");
     const targets = [
       join(directory, `${graphId}.json`),
+      join(directory, `${graphId}.control.json`),
       ...Array.from({ length: MAX_GRAPH_HISTORY_SEGMENTS }, (_, index) =>
         join(directory, `${graphId}.jsonl${index === 0 ? "" : `.${index}`}`),
       ),

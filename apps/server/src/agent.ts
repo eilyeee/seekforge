@@ -9,7 +9,7 @@
 import { existsSync } from "node:fs";
 import {
   buildAgentCoreDeps,
-  BUILTIN_GRAPH_HANDLERS,
+  graphHandlersWithPlugins,
   createAgentCore,
   createDefaultDispatcher,
   createRuntimeClient,
@@ -242,18 +242,19 @@ export const resumeDefaultLoop: ResumeLoopFn = async (opts, loopId, loopOpts) =>
 
 /** Runs a REST/embedding Graph with the same provider, MCP, plugin, and skill assembly as other Server runs. */
 export const runDefaultGraph: RunGraphFn = async (opts, definition, graphOpts) => {
+  const graphHandlers = graphHandlersWithPlugins(loadPluginContributions(opts.workspace));
   if (!engineeringGraphNeedsAgentRuntime(definition)) {
     return runEngineeringGraph({} as AgentCoreDeps, definition, {
       ...graphOpts,
       workspace: opts.workspace,
-      handlers: BUILTIN_GRAPH_HANDLERS,
+      handlers: graphHandlers,
     });
   }
   const { deps, disposeMcp } = await prepareAgentDeps(opts, graphOpts.signal);
   return runEngineeringGraph(deps, definition, {
     ...graphOpts,
     workspace: opts.workspace,
-    handlers: BUILTIN_GRAPH_HANDLERS,
+    handlers: graphHandlers,
   }).finally(() => {
     deps.runtime?.dispose();
     disposeMcp();

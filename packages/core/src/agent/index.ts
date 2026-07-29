@@ -112,6 +112,7 @@ export {
   graphConditionMatches,
   graphConditionReferences,
   graphDefinitionFingerprint,
+  graphNodeIsEffectful,
   engineeringGraphNeedsAgentRuntime,
   engineeringSubgraphStateId,
   isValidEngineeringGraphNodePath,
@@ -124,10 +125,13 @@ export {
   MAX_GRAPH_HISTORY_SEGMENTS,
   type EngineeringGraphDefinition,
   type GraphCondition,
+  type GraphInputBinding,
   type GraphNode,
   type GraphNodeKind,
   type GraphNodeStatus,
   type GraphRoute,
+  type GraphValueSchema,
+  type GraphValueType,
   type GraphRunStatus,
 } from "./graph-contract.js";
 export {
@@ -144,10 +148,18 @@ export {
   engineeringGraphStateExists,
   loadEngineeringGraphState,
   removeEngineeringGraphState,
+  recoverableEngineeringGraphStates,
   type EngineeringGraphState,
   type GraphEvent,
   type GraphNodeResult,
+  type GraphActiveAttempt,
 } from "./graph-state.js";
+export {
+  enqueueGraphControl,
+  readGraphControlEntries,
+  type DurableGraphControlCommand,
+  type DurableGraphControlEntry,
+} from "./graph-control-store.js";
 export {
   createEngineeringGraphLogWriter,
   engineeringGraphHistoryExists,
@@ -159,8 +171,12 @@ export {
   buildEngineeringGraphEvidenceReport,
   verifyEngineeringGraphEvidenceIntegrity,
 } from "./graph-evidence.js";
-export { BUILTIN_GRAPH_HANDLERS } from "./graph-handlers.js";
+export { BUILTIN_GRAPH_HANDLERS, graphHandlersWithPlugins } from "./graph-handlers.js";
 export { planEngineeringGraph, type EngineeringGraphPlan, type EngineeringGraphPlanNode } from "./graph-plan.js";
+export {
+  compareEngineeringGraphRuns,
+  type EngineeringGraphRunComparison,
+} from "./graph-observability.js";
 export {
   materializeEngineeringGraph,
   parseEngineeringGraphTemplate,
@@ -168,10 +184,20 @@ export {
   type EngineeringGraphTemplateParameter,
 } from "./graph-template.js";
 export {
+  createGraphMaintenanceScheduler,
+  DEFAULT_GRAPH_IDLE_CHECK_INTERVAL_MS,
+  DEFAULT_GRAPH_IDLE_INITIAL_DELAY_MS,
+  type GraphMaintenanceScheduler,
+  type IdleGraphMaintenanceResult,
+  type IdleGraphMaintenanceTarget,
+} from "./graph-idle.js";
+export {
   archiveEngineeringGraphResources,
   inspectEngineeringGraphResources,
   promoteEngineeringGraphResult,
   pruneEngineeringGraphResources,
+  pruneEngineeringGraphStates,
+  type EngineeringGraphRetentionResult,
   type EngineeringGraphResourcePruneResult,
   type EngineeringGraphResourceReport,
 } from "./graph-resources.js";
