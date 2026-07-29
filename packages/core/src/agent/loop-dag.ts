@@ -153,11 +153,13 @@ export type LoopDagFanInResult = {
 type ManagedNodeWorktree = ManagedOrchestrationWorktree;
 
 export type PersistedLoopDagState = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   dagId: string;
   fingerprint: string;
   spentCost: number;
   spentTokens: number;
+  /** Cumulative active scheduler time across durable resumes. */
+  elapsedMs: number;
   results: LoopDagNodeResult[];
   createdAt: string;
   updatedAt: string;
@@ -288,7 +290,7 @@ function parseDagState(raw: string, dagId: string, fingerprint?: string): Persis
   }
   if (
     !isRecord(value) ||
-    value.schemaVersion !== 1 ||
+    (value.schemaVersion !== 1 && value.schemaVersion !== 2) ||
     value.dagId !== dagId ||
     typeof value.fingerprint !== "string" ||
     !/^[0-9a-f]{64}$/.test(value.fingerprint) ||
@@ -298,6 +300,7 @@ function parseDagState(raw: string, dagId: string, fingerprint?: string): Persis
     value.spentCost < 0 ||
     !Number.isSafeInteger(value.spentTokens) ||
     (value.spentTokens as number) < 0 ||
+    (value.elapsedMs !== undefined && (!Number.isSafeInteger(value.elapsedMs) || (value.elapsedMs as number) < 0)) ||
     !Array.isArray(value.results) ||
     value.results.length > 64 ||
     typeof value.createdAt !== "string" ||
@@ -379,7 +382,13 @@ function parseDagState(raw: string, dagId: string, fingerprint?: string): Persis
         : {}),
     });
   }
-  return { ...(value as PersistedLoopDagState), results, ...(fanIn ? { fanIn } : {}) };
+  return {
+    ...(value as PersistedLoopDagState),
+    schemaVersion: 2,
+    elapsedMs: value.schemaVersion === 1 || value.elapsedMs === undefined ? 0 : (value.elapsedMs as number),
+    results,
+    ...(fanIn ? { fanIn } : {}),
+  };
 }
 
 export function loadLoopDagState(workspace: string, dagId: string): PersistedLoopDagState | null {
@@ -610,11 +619,12 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
       typeof options.managedWorktrees !== "object" || options.managedWorktrees.integrateDependencies !== false;
     const now = new Date().toISOString();
     let checkpoint: PersistedLoopDagState = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       dagId,
       fingerprint,
       spentCost: 0,
       spentTokens: 0,
+      elapsedMs: 0,
       results: [],
       createdAt: now,
       updatedAt: now,
@@ -658,13 +668,17 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
     const pending = new Set([...byId.keys()].filter((id) => !results.has(id)));
     let spentCost = [...results.values()].reduce((sum, result) => sum + (result.result?.costUsd ?? 0), 0);
     let spentTokens = [...results.values()].reduce((sum, result) => sum + (result.result?.tokensUsed ?? 0), 0);
+    const priorElapsedMs = checkpoint.elapsedMs;
     const startedAt = Date.now();
+    const elapsedMs = (): number =>
+      Math.min(Number.MAX_SAFE_INTEGER, priorElapsedMs + Math.max(0, Date.now() - startedAt));
     const persist = (completed = false): void => {
       if (!persistenceEnabled) return;
       checkpoint = {
         ...checkpoint,
         spentCost,
         spentTokens,
+        elapsedMs: elapsedMs(),
         results: options.nodes.flatMap((node) => {
           const result =
             results.get(node.id) ??
@@ -688,8 +702,7 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
     ): Promise<LoopDagNodeResult> => {
       const node = byId.get(id)!;
       const workspace = nodeWorkspaces.get(id)!;
-      const remainingDuration =
-        options.maxDurationMs === undefined ? undefined : options.maxDurationMs - (Date.now() - startedAt);
+      const remainingDuration = options.maxDurationMs === undefined ? undefined : options.maxDurationMs - elapsedMs();
       if (
         (remainingCost !== undefined && remainingCost <= 0) ||
         (remainingTokens !== undefined && remainingTokens <= 0) ||
@@ -729,8 +742,7 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
           }
           const attemptCost = remainingCost === undefined ? undefined : remainingCost - nodeCost;
           const attemptTokens = remainingTokens === undefined ? undefined : remainingTokens - nodeTokens;
-          const attemptDuration =
-            options.maxDurationMs === undefined ? undefined : options.maxDurationMs - (Date.now() - startedAt);
+          const attemptDuration = options.maxDurationMs === undefined ? undefined : options.maxDurationMs - elapsedMs();
           if (
             (attemptCost !== undefined && attemptCost <= 0) ||
             (attemptTokens !== undefined && attemptTokens <= 0) ||
@@ -950,25 +962,29 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
       );
       running.delete(settled.id);
       approvals.delete(settled.id);
-      results.set(settled.id, settled.result);
-      spentCost += settled.result.result?.costUsd ?? 0;
-      spentTokens += settled.result.result?.tokensUsed ?? 0;
-      if (options.predictiveBudget && settled.result.result) {
+      const settledResult =
+        settled.result.status === "passed" && options.maxDurationMs !== undefined && elapsedMs() > options.maxDurationMs
+          ? { ...settled.result, status: "failed" as const, reason: "shared DAG duration budget exhausted" }
+          : settled.result;
+      results.set(settled.id, settledResult);
+      spentCost += settledResult.result?.costUsd ?? 0;
+      spentTokens += settledResult.result?.tokensUsed ?? 0;
+      if (options.predictiveBudget && settledResult.result) {
         const node = byId.get(settled.id)!;
         try {
           recordLoopBudgetObservation(options.workspace, {
             key: loopBudgetObservationKey(node.id, node.verifyCommand),
-            costUsd: settled.result.result.costUsd,
-            tokens: settled.result.result.tokensUsed ?? 0,
-            durationMs: settled.result.result.elapsedMs ?? 0,
-            passed: settled.result.status === "passed",
+            costUsd: settledResult.result.costUsd,
+            tokens: settledResult.result.tokensUsed ?? 0,
+            durationMs: settledResult.result.elapsedMs ?? 0,
+            passed: settledResult.status === "passed",
             recordedAt: new Date().toISOString(),
           });
         } catch {
           /* advisory scheduling history only */
         }
       }
-      if (settled.result.status === "failed" && byId.get(settled.id)?.failurePolicy === "stop") {
+      if (settledResult.status === "failed" && byId.get(settled.id)?.failurePolicy === "stop") {
         stopRequested = true;
       }
       persist(false);
@@ -1022,8 +1038,7 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
           options.costBudgetUsd === undefined ? undefined : Math.max(0, options.costBudgetUsd - spentCost);
         const remainingTokens =
           options.tokenBudget === undefined ? undefined : Math.max(0, options.tokenBudget - spentTokens);
-        const remainingDuration =
-          options.maxDurationMs === undefined ? undefined : options.maxDurationMs - (Date.now() - startedAt);
+        const remainingDuration = options.maxDurationMs === undefined ? undefined : options.maxDurationMs - elapsedMs();
         if (
           (remainingCost !== undefined && remainingCost <= 0) ||
           (remainingTokens !== undefined && remainingTokens <= 0) ||

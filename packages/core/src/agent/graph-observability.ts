@@ -3,7 +3,7 @@ import type { EngineeringGraphState } from "./graph-state.js";
 
 type ComparableEngineeringGraphRun = Pick<
   EngineeringGraphState | EngineeringGraphRunSnapshot,
-  "graphId" | "status" | "spentCost" | "spentTokens" | "createdAt" | "completedAt" | "results"
+  "graphId" | "status" | "spentCost" | "spentTokens" | "elapsedMs" | "createdAt" | "completedAt" | "results"
 >;
 
 export type EngineeringGraphRunComparison = {
@@ -30,16 +30,12 @@ export function compareEngineeringGraphRuns(
   const beforeNodes = new Map(before.results.map((result) => [result.id, result]));
   const afterNodes = new Map(after.results.map((result) => [result.id, result]));
   const ids = [...new Set([...beforeNodes.keys(), ...afterNodes.keys()])].sort();
-  const beforeDuration = before.completedAt ? Date.parse(before.completedAt) - Date.parse(before.createdAt) : undefined;
-  const afterDuration = after.completedAt ? Date.parse(after.completedAt) - Date.parse(after.createdAt) : undefined;
   return {
     graphId: after.graphId,
     statusChanged: before.status !== after.status,
     costDeltaUsd: after.spentCost - before.spentCost,
     tokenDelta: after.spentTokens - before.spentTokens,
-    ...(beforeDuration !== undefined && afterDuration !== undefined
-      ? { durationDeltaMs: afterDuration - beforeDuration }
-      : {}),
+    durationDeltaMs: after.elapsedMs - before.elapsedMs,
     nodes: ids.map((id) => {
       const previous = beforeNodes.get(id);
       const current = afterNodes.get(id);

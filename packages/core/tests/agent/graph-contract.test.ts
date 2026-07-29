@@ -196,6 +196,22 @@ describe("parseEngineeringGraphDefinition", () => {
     ).toThrow(/enum is invalid/);
   });
 
+  it("validates and exposes a cumulative graph duration budget", () => {
+    const graph = parseEngineeringGraphDefinition({
+      graphId: "duration-budget",
+      maxDurationMs: 30_000,
+      nodes: [{ id: "run", kind: "function", handler: "noop" }],
+    });
+    expect(planEngineeringGraph(graph).maxDurationMs).toBe(30_000);
+    expect(() =>
+      parseEngineeringGraphDefinition({
+        graphId: "invalid-duration",
+        maxDurationMs: 0,
+        nodes: [{ id: "run", kind: "function", handler: "noop" }],
+      }),
+    ).toThrow(/maxDurationMs/);
+  });
+
   it("rejects sparse arrays and timer-overflow timeouts", () => {
     const sparseNodes = new Array(1);
     expect(() => parseEngineeringGraphDefinition({ graphId: "sparse", nodes: sparseNodes })).toThrow(/nodes/);

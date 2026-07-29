@@ -37,6 +37,7 @@ export type EngineeringGraphPlan = {
   maxParallelWidth: number;
   maxAttempts: number;
   maxDynamicItems: number;
+  maxDurationMs?: number;
   resourceCapacities: Record<string, number>;
   adaptiveScheduling: boolean;
   nodes: EngineeringGraphPlanNode[];
@@ -121,6 +122,7 @@ export function planEngineeringGraph(definition: EngineeringGraphDefinition, pre
       (total, node) => total + (node.kind === "map" ? (node.maxItems ?? 32) : 0),
       0,
     ),
+    ...(definition.maxDurationMs !== undefined ? { maxDurationMs: definition.maxDurationMs } : {}),
     resourceCapacities: definition.resourceCapacities ?? {},
     adaptiveScheduling: definition.adaptiveScheduling === true,
     nodes: definition.nodes.map((node) => ({

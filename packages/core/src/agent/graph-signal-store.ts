@@ -65,6 +65,25 @@ function loadSignals(workspace: string, graphId: string): EngineeringGraphSignal
   }
 }
 
+export function engineeringGraphSignalAvailable(
+  workspace: string,
+  graphId: string,
+  nodeId: string,
+  name: string,
+  notAfter?: string,
+): boolean {
+  if (!isValidLoopDagId(nodeId) || !isValidLoopDagId(name) || (notAfter !== undefined && !validTimestamp(notAfter))) {
+    throw new Error("Graph signal lookup is invalid");
+  }
+  const deadline = notAfter === undefined ? undefined : Date.parse(notAfter);
+  return loadSignals(workspace, graphId).some(
+    (entry) =>
+      entry.name === name &&
+      (entry.claimedBy === undefined || entry.claimedBy === nodeId) &&
+      (deadline === undefined || Date.parse(entry.createdAt) <= deadline),
+  );
+}
+
 async function withSignalLease<T>(workspace: string, graphId: string, operation: () => T): Promise<T> {
   const deadline = Date.now() + 2_000;
   let lease: ReturnType<typeof acquireSessionLease>;

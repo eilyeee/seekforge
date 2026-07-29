@@ -65,7 +65,7 @@ export function GraphEngineeringSection(props: {
             <summary className="cursor-pointer">
               {graph.graphId} · <Badge tone={tone(graph.status)}>{graph.status}</Badge> · {graph.results.length}{" "}
               {t("chat.loop.manager.nodes")} · ${graph.spentCost.toFixed(4)} · {graph.spentTokens.toLocaleString()}{" "}
-              {t("chat.loop.graph.tokens")}
+              {t("chat.loop.graph.tokens")} · {(graph.elapsedMs / 1000).toFixed(1)}s
             </summary>
             <div className="mt-2 flex flex-wrap gap-1">
               {graph.results.map((node) => (

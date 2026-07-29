@@ -116,20 +116,20 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | POST /api/loops/prune | body `{maxAgeDays?,maxTerminalCount?,dryRun?}`; prune only retention-eligible terminal records |
 | POST /api/loops/:id/priority | body `{priority:-10..10}`; update recovery order under the Loop lifecycle guard |
 | DELETE /api/loops/:id | delete one inactive persisted Loop and its retained history |
-| GET /api/loop-dags | persisted Loop DAG states |
-| GET /api/loop-dags/:id | one persisted Loop DAG state |
+| GET /api/loop-dags | persisted Loop DAG states, including cumulative active `elapsedMs` |
+| GET /api/loop-dags/:id | one persisted Loop DAG state, including cumulative active `elapsedMs` |
 | GET /api/loop-dags/:id/resources | retained managed-worktree count and bounded disk use |
 | POST /api/loop-dags/:id/resources | body `{operation:"archive"|"prune"|"promote",dryRun?,force?,target?}`; explicit resource lifecycle operation |
-| GET /api/graphs | bounded Engineering Graph summaries (definitions/node outputs omitted, latest events only) |
+| GET /api/graphs | bounded Engineering Graph summaries with cumulative active `elapsedMs` (definitions/node outputs omitted, latest events only) |
 | POST /api/graphs/validate | validate a definition/template with optional `parameters` and return its normalized recursive dry-run plan |
 | GET /api/graphs/templates | list exact-version schema-v2 Graph templates registered in this workspace |
 | POST /api/graphs/templates | register or replace one exact `templateId@version` schema-v2 template |
 | GET /api/graphs/templates/:id/:version | resolve one exact registered template |
 | POST /api/graphs/templates/:id/:version/materialize | materialize one exact template with optional typed `parameters` |
 | POST /api/graphs | materialize a definition/template with optional `parameters` and start a durable Graph (`{definition,parameters?,restart?}`) |
-| GET /api/graphs/:id | one normalized graph, node results, usage, and recent events |
+| GET /api/graphs/:id | one normalized graph, node results, usage, cumulative active `elapsedMs`, and recent events |
 | GET /api/graphs/:id/history | bounded rotating lifecycle history; `format=entries` adds log sequence/cursor metadata |
-| GET /api/graphs/:id/evidence | node/usage evidence summary with SHA-256 integrity digest and no node outputs |
+| GET /api/graphs/:id/evidence | node/usage/active-duration evidence summary with SHA-256 integrity digest and no node outputs |
 | GET /api/graphs/:id/compare | compare the latest archived terminal run (or `runNumber`) with current state |
 | POST /api/graphs/:id/signals | enqueue a declared external wait signal and resume a wait-paused Graph |
 | GET /api/graphs/:id/resources | retained managed-worktree paths, disk usage, archival, and active status |

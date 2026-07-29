@@ -165,6 +165,22 @@ function boundedOutput(value: unknown): unknown {
   return JSON.parse(serialized) as unknown;
 }
 
+async function acknowledgeCommittedWaitSignals(workspace: string, state: EngineeringGraphState): Promise<void> {
+  const failures: string[] = [];
+  for (const result of state.results) {
+    const node = state.definition.nodes.find((candidate) => candidate.id === result.id);
+    if (node?.kind !== "wait" || result.status !== "passed" || !isRecord(result.output)) continue;
+    const signalId = result.output.signalId;
+    if (typeof signalId !== "string") continue;
+    try {
+      await acknowledgeEngineeringGraphSignal(workspace, state.graphId, node.id, signalId);
+    } catch (error) {
+      failures.push(retryableError(error));
+    }
+  }
+  if (failures.length > 0) throw new Error(failures[0]);
+}
+
 function fitOutputBudget(value: unknown, results: ReadonlyMap<string, GraphNodeResult>): unknown {
   if (value === undefined) return undefined;
   const used = [...results.values()].reduce(
@@ -977,6 +993,7 @@ export async function runEngineeringGraph(
       })
     : undefined;
   const runController = new AbortController();
+  const invocationStartedAt = Date.now();
   const detachParentAbort = onAbortOnce(options.signal, () => runController.abort(options.signal?.reason));
   let emergencyDrain: (() => Promise<void>) | undefined;
   let historyWriter: GraphLogWriter | undefined;
@@ -991,7 +1008,12 @@ export async function runEngineeringGraph(
     }
     if (persistenceEnabled && options.restart) {
       const previous = loadEngineeringGraphState(options.workspace, definition.graphId);
-      if (previous) archiveEngineeringGraphRun(options.workspace, previous);
+      if (previous) {
+        // A crash after the Graph checkpoint but before mailbox cleanup leaves
+        // only an observational claim; retire it before a new run generation.
+        await acknowledgeCommittedWaitSignals(options.workspace, previous).catch(() => undefined);
+        archiveEngineeringGraphRun(options.workspace, previous);
+      }
     }
     if (definition.managedWorktrees) {
       managedResourceLease = acquireManagedOrchestrationWorktreeLease(options.workspace);
@@ -1037,6 +1059,7 @@ export async function runEngineeringGraph(
       events: [],
       spentCost: 0,
       spentTokens: 0,
+      elapsedMs: 0,
       activeAttempts: [],
       mapProgress: {},
       controlSeq: 0,
@@ -1061,6 +1084,11 @@ export async function runEngineeringGraph(
       state = { ...restored, status: "running", completedAt: undefined, controlRunId };
       delete state.pauseReason;
     }
+    const priorElapsedMs = state.elapsedMs;
+    const elapsedMs = (): number =>
+      Math.min(Number.MAX_SAFE_INTEGER, priorElapsedMs + Math.max(0, Date.now() - invocationStartedAt));
+    const remainingDurationMs = (): number | undefined =>
+      definition.maxDurationMs === undefined ? undefined : Math.max(0, definition.maxDurationMs - elapsedMs());
     const recoveredAttempts = new Map(state.activeAttempts.map((attempt) => [attempt.nodeId, attempt]));
     const results = new Map(state.results.map((result) => [result.id, result]));
     if (options.rerunFrom?.length) {
@@ -1172,6 +1200,7 @@ export async function runEngineeringGraph(
           [...results.values()].reduce((sum, result) => sum + result.tokensUsed, 0) +
           pendingMapItems().reduce((sum, item) => sum + item.tokensUsed, 0) +
           (state.fanIn?.tokensUsed ?? 0),
+        elapsedMs: elapsedMs(),
         updatedAt: new Date().toISOString(),
       };
       state.spentCost += pendingMapItems().reduce((sum, item) => sum + item.costUsd, 0);
@@ -1209,6 +1238,13 @@ export async function runEngineeringGraph(
       persist();
     };
     emit({ type: options.resume ? "graph.resumed" : "graph.started", status: "running" });
+    if (options.resume) {
+      try {
+        await acknowledgeCommittedWaitSignals(options.workspace, state);
+      } catch (error) {
+        emit({ type: "graph.warning", message: `Graph signal cleanup failed: ${retryableError(error)}` });
+      }
+    }
     if (state.activeAttempts.length > 0) {
       const interrupted = state.activeAttempts.map((attempt) => attempt.nodeId).join(", ");
       state.activeAttempts = [];
@@ -1346,11 +1382,16 @@ export async function runEngineeringGraph(
         while (attempts <= (node.maxRetries ?? 0)) {
           const attemptCostBudget = costShare === undefined ? undefined : costShare - consumedCost;
           const attemptTokenBudget = tokenShare === undefined ? undefined : tokenShare - consumedTokens;
+          const attemptDurationBudget = remainingDurationMs();
           if (
             (attemptCostBudget !== undefined && attemptCostBudget <= 0) ||
-            (attemptTokenBudget !== undefined && attemptTokenBudget <= 0)
+            (attemptTokenBudget !== undefined && attemptTokenBudget <= 0) ||
+            (attemptDurationBudget !== undefined && attemptDurationBudget <= 0)
           ) {
-            lastError = "Graph node retry budget exhausted";
+            lastError =
+              attemptDurationBudget !== undefined && attemptDurationBudget <= 0
+                ? "Graph duration budget exhausted"
+                : "Graph node retry budget exhausted";
             break;
           }
           attempts++;
@@ -1450,7 +1491,9 @@ export async function runEngineeringGraph(
                       }
                     : undefined,
                 ),
-              node.timeoutMs,
+              attemptDurationBudget === undefined
+                ? node.timeoutMs
+                : Math.max(1, Math.min(node.timeoutMs ?? attemptDurationBudget, attemptDurationBudget)),
               runController.signal,
             );
             assertGraphValue(execution.output, node.outputSchema, `Graph node ${node.id} output`);
@@ -1511,6 +1554,10 @@ export async function runEngineeringGraph(
             }
             if (runController.signal.aborted) {
               lastError = "Graph cancelled";
+              break;
+            }
+            if (remainingDurationMs() === 0) {
+              lastError = "Graph duration budget exhausted";
               break;
             }
             if (error instanceof GraphNodeNonRetryableError) break;
@@ -1842,10 +1889,12 @@ export async function runEngineeringGraph(
             effectiveCostBudget) ||
           (effectiveTokenBudget !== undefined &&
             state.spentTokens + [...resumedChildUsage.values()].reduce((sum, usage) => sum + usage.tokensUsed, 0) >=
-              effectiveTokenBudget));
+              effectiveTokenBudget) ||
+          remainingDurationMs() === 0);
       if (budgetExhausted) {
         budgetStopped = pending.size > 0;
-        for (const id of [...pending]) completeWithoutRun(byId.get(id)!, "skipped", "Graph budget exhausted");
+        const message = remainingDurationMs() === 0 ? "Graph duration budget exhausted" : "Graph budget exhausted";
+        for (const id of [...pending]) completeWithoutRun(byId.get(id)!, "skipped", message);
       }
       const availableSlots = (definition.maxConcurrency ?? 1) - inFlight.size;
       const readyNodes = [...pending]
@@ -1915,7 +1964,8 @@ export async function runEngineeringGraph(
     }
     const exceededBudget =
       (effectiveCostBudget !== undefined && state.spentCost > effectiveCostBudget) ||
-      (effectiveTokenBudget !== undefined && state.spentTokens > effectiveTokenBudget);
+      (effectiveTokenBudget !== undefined && state.spentTokens > effectiveTokenBudget) ||
+      (definition.maxDurationMs !== undefined && elapsedMs() > definition.maxDurationMs);
     const hasBudgetSkip = [...results.values()].some(
       (result) => result.status === "skipped" && result.error === "Graph budget exhausted",
     );
@@ -1997,9 +2047,11 @@ export async function runEngineeringGraph(
           effectiveCostBudget === undefined ? undefined : Math.max(0, effectiveCostBudget - state.spentCost);
         const remainingTokens =
           effectiveTokenBudget === undefined ? undefined : Math.max(0, effectiveTokenBudget - state.spentTokens);
+        const remainingDuration = remainingDurationMs();
         if (
           (remainingCost !== undefined && remainingCost <= 0) ||
-          (remainingTokens !== undefined && remainingTokens <= 0)
+          (remainingTokens !== undefined && remainingTokens <= 0) ||
+          (remainingDuration !== undefined && remainingDuration <= 0)
         ) {
           throw new Error("Graph budget exhausted before fan-in verification");
         }
@@ -2013,6 +2065,7 @@ export async function runEngineeringGraph(
           persist: false,
           ...(remainingCost !== undefined ? { costBudgetUsd: remainingCost } : {}),
           ...(remainingTokens !== undefined ? { tokenBudget: remainingTokens } : {}),
+          ...(remainingDuration !== undefined ? { maxDurationMs: remainingDuration } : {}),
           signal: runController.signal,
         });
         costUsd += loop.costUsd;

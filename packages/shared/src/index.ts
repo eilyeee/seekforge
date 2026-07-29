@@ -1008,6 +1008,7 @@ export type LoopDagSummary = {
   dagId: string;
   spentCost: number;
   spentTokens: number;
+  elapsedMs: number;
   updatedAt: string;
   completedAt?: string;
   results: Array<{ id: string; status: string; reason?: string }>;
@@ -1069,6 +1070,7 @@ export type EngineeringGraphSummary = {
   events: GraphEventSummary[];
   spentCost: number;
   spentTokens: number;
+  elapsedMs: number;
   activeAttempts?: Array<{ nodeId: string; attempt: number; idempotencyKey: string; startedAt: string }>;
   controlSeq?: number;
   controlRunId?: string;
@@ -1114,6 +1116,7 @@ export type EngineeringGraphEvidenceReport = {
   generatedAt: string;
   status: GraphRunStatus;
   usage: { costUsd: number; tokensUsed: number };
+  elapsedMs: number;
   nodes: GraphNodeSummary[];
   retainedEventCount: number;
   createdAt: string;

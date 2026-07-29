@@ -333,7 +333,10 @@ seekforge loop-cleanup <worktree-name> [--force]
   into a retained integration worktree and runs a final bounded Loop gate over the
   combined tree. Managed paths are physically rebound and all resolved workspace identities are part of
   the durable graph fingerprint, so `--resume` rejects a remapped node instead
-  of reusing work completed in another checkout.
+  of reusing work completed in another checkout. A DAG-level `maxDurationMs`
+  is cumulative across resumes; checkpoints store active elapsed time and do not
+  charge time spent paused or stopped between invocations. Legacy schema-v1 DAG
+  checkpoints normalize to schema v2 with zero previously measured active time.
   `--predictive-budget` learns bounded historical resource demand, while
   `--worktree-limit` caps retained managed worktrees. `loop-dag-resources`
   inspects disk use and explicitly archives, promotes, or prunes completed graphs;

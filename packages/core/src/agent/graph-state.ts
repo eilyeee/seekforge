@@ -13,6 +13,7 @@ import {
 import { isSafeLoopDagRelativePath, isValidLoopDagId } from "./loop-dag-validation.js";
 import { MANAGED_ORCHESTRATION_BRANCH_RE } from "./loop-managed-worktree.js";
 import { isDenseArray } from "./orchestration.js";
+import { engineeringGraphSignalAvailable } from "./graph-signal-store.js";
 import { acquireSessionLease, isSessionRunActive } from "./session-lease.js";
 
 export const MAX_GRAPH_STATE_BYTES = 1024 * 1024;
@@ -109,6 +110,8 @@ export type EngineeringGraphState = {
   events: GraphEvent[];
   spentCost: number;
   spentTokens: number;
+  /** Cumulative active runtime; paused/offline wall time is excluded. */
+  elapsedMs: number;
   activeAttempts: GraphActiveAttempt[];
   /** Successful map items are committed before their sibling batch settles. */
   mapProgress?: Record<string, GraphMapItemResult[]>;
@@ -281,6 +284,7 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
   const controlRunId = value.schemaVersion === 1 ? "" : value.controlRunId;
   const pauseReason = value.schemaVersion === 1 && value.status === "paused" ? "approval" : value.pauseReason;
   const mapProgressValue = value.schemaVersion === 1 ? undefined : value.mapProgress;
+  const elapsedMs = value.schemaVersion === 1 || value.elapsedMs === undefined ? 0 : value.elapsedMs;
   if (
     typeof value.fingerprint !== "string" ||
     !/^[a-f0-9]{64}$/.test(value.fingerprint) ||
@@ -291,6 +295,8 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
     !finiteNonNegative(value.spentCost) ||
     !Number.isSafeInteger(value.spentTokens) ||
     (value.spentTokens as number) < 0 ||
+    !Number.isSafeInteger(elapsedMs) ||
+    (elapsedMs as number) < 0 ||
     !Array.isArray(activeAttempts) ||
     activeAttempts.length > definitionNodeLimit(value.definition) ||
     !Number.isSafeInteger(controlSeq) ||
@@ -451,6 +457,7 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
     results: results as GraphNodeResult[],
     events,
     activeAttempts: parsedAttempts,
+    elapsedMs: elapsedMs as number,
     ...(mapProgress ? { mapProgress } : {}),
     controlSeq: controlSeq as number,
     controlRunId,
@@ -525,9 +532,31 @@ export function recoverableEngineeringGraphStates(
             (timestamp) => timestamp !== undefined && Date.parse(timestamp) <= Date.now(),
           );
         });
+      const signalReady =
+        state.status === "paused" &&
+        state.pauseReason === "wait" &&
+        state.results.some((result) => {
+          if (result.status !== "waiting_signal") return false;
+          const node = state.definition.nodes.find((candidate) => candidate.id === result.id);
+          if (!node?.waitFor?.signal) return false;
+          try {
+            return engineeringGraphSignalAvailable(
+              workspace,
+              state.graphId,
+              node.id,
+              node.waitFor.signal,
+              node.waitFor.expiresAt,
+            );
+          } catch {
+            return false;
+          }
+        });
       return (
         state.parentGraph === undefined &&
-        (state.status === "running" || (state.status === "paused" && state.pauseReason === "control") || waitDue) &&
+        (state.status === "running" ||
+          (state.status === "paused" && state.pauseReason === "control") ||
+          waitDue ||
+          signalReady) &&
         !isSessionRunActive(workspace, `engineering-graph-${state.graphId}`)
       );
     })

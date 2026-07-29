@@ -87,6 +87,8 @@ export type EngineeringGraphDefinition = {
   failurePolicy?: "stop" | "continue";
   costBudgetUsd?: number;
   tokenBudget?: number;
+  /** Cumulative active execution time across durable resumes. */
+  maxDurationMs?: number;
   resourceCapacities?: Record<string, number>;
   adaptiveScheduling?: boolean;
   managedWorktrees?: { integrateDependencies: boolean; limit: number };
@@ -638,6 +640,14 @@ export function parseEngineeringGraphDefinition(value: unknown, depth = 0): Engi
   ) {
     throw new Error("Graph tokenBudget must be a positive safe integer");
   }
+  if (
+    value.maxDurationMs !== undefined &&
+    (!Number.isSafeInteger(value.maxDurationMs) ||
+      (value.maxDurationMs as number) < 1 ||
+      (value.maxDurationMs as number) > MAX_GRAPH_NODE_TIMEOUT_MS)
+  ) {
+    throw new Error(`Graph maxDurationMs must be 1 to ${MAX_GRAPH_NODE_TIMEOUT_MS}`);
+  }
   let managedWorktrees: EngineeringGraphDefinition["managedWorktrees"];
   if (value.managedWorktrees !== undefined) {
     if (value.managedWorktrees === true) {
@@ -690,6 +700,7 @@ export function parseEngineeringGraphDefinition(value: unknown, depth = 0): Engi
     failurePolicy,
     ...(typeof value.costBudgetUsd === "number" ? { costBudgetUsd: value.costBudgetUsd } : {}),
     ...(typeof value.tokenBudget === "number" ? { tokenBudget: value.tokenBudget } : {}),
+    ...(typeof value.maxDurationMs === "number" ? { maxDurationMs: value.maxDurationMs } : {}),
     ...(resourceCapacities ? { resourceCapacities } : {}),
     ...(typeof value.adaptiveScheduling === "boolean" ? { adaptiveScheduling: value.adaptiveScheduling } : {}),
     ...(managedWorktrees ? { managedWorktrees } : {}),

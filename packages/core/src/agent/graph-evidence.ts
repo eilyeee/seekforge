@@ -14,6 +14,7 @@ export function buildEngineeringGraphEvidenceReport(
     generatedAt: now.toISOString(),
     status: state.status,
     usage: { costUsd: state.spentCost, tokensUsed: state.spentTokens },
+    elapsedMs: state.elapsedMs,
     nodes: state.results.map(
       ({
         id,

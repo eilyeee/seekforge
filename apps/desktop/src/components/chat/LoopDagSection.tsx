@@ -18,7 +18,8 @@ export function LoopDagSection(props: {
         return (
           <div key={dag.dagId} className="mt-1 rounded border border-subtle p-2">
             {dag.dagId} · {dag.completedAt ? t("chat.loop.manager.completed") : t("chat.loop.manager.active")} ·{" "}
-            {dag.results.length} {t("chat.loop.manager.nodes")} · ${dag.spentCost.toFixed(4)}
+            {dag.results.length} {t("chat.loop.manager.nodes")} · ${dag.spentCost.toFixed(4)} ·{" "}
+            {(dag.elapsedMs / 1000).toFixed(1)}s
             {dag.fanIn && (
               <Badge tone={dag.fanIn.status === "passed" ? "ok" : "danger"}>fan-in: {dag.fanIn.status}</Badge>
             )}

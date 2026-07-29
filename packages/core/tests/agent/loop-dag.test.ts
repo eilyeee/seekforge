@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatResponse } from "@seekforge/shared";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentCoreDeps } from "../../src/agent/loop.js";
 import { listLoopDagStates, loadLoopDagState, runLoopDag } from "../../src/agent/loop-dag.js";
 import { listGitWorktrees } from "../../src/worktree.js";
@@ -54,6 +54,7 @@ describe("runLoopDag", () => {
 
     expect(loadLoopDagState(workspace, "invalid-fan")).toBeNull();
     expect(listLoopDagStates(workspace).map((item) => item.dagId)).toEqual(["utc-new", "offset-old"]);
+    expect(loadLoopDagState(workspace, "utc-new")).toMatchObject({ schemaVersion: 2, elapsedMs: 0 });
   });
 
   it("runs ready dependencies and skips descendants of failures", async () => {
@@ -424,6 +425,62 @@ describe("runLoopDag", () => {
     expect(verifies).toBe(1);
     expect(loadLoopDagState(workspace, "resume-test")?.completedAt).toEqual(expect.any(String));
     expect(listLoopDagStates(workspace).map((state) => state.dagId)).toContain("resume-test");
+  });
+
+  it("persists cumulative active duration without charging offline approval time", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-duration-"));
+    workspaces.push(workspace);
+    let clock = 10_000;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => clock);
+    const nodes = [
+      {
+        id: "before",
+        task: "before",
+        verifyCommand: "before",
+        verifierId: "before-duration-v1",
+        options: {
+          verify: async () => {
+            clock += 40;
+            return { code: 0, output: "ok" };
+          },
+        },
+      },
+      {
+        id: "approval",
+        task: "approval",
+        verifyCommand: "approval",
+        verifierId: "approval-duration-v1",
+        dependsOn: ["before"],
+        requiresApproval: true,
+        options: {
+          verify: async () => {
+            clock += 30;
+            return { code: 0, output: "ok" };
+          },
+        },
+      },
+    ];
+    try {
+      await runLoopDag(deps, { workspace, dagId: "duration-resume", nodes, maxDurationMs: 60 });
+      expect(loadLoopDagState(workspace, "duration-resume")).toMatchObject({
+        schemaVersion: 2,
+        elapsedMs: 40,
+      });
+      expect(loadLoopDagState(workspace, "duration-resume")).not.toHaveProperty("completedAt");
+      clock += 1_000;
+      const resumed = await runLoopDag(deps, {
+        workspace,
+        dagId: "duration-resume",
+        nodes,
+        maxDurationMs: 60,
+        resume: true,
+        approveNode: () => true,
+      });
+      expect(resumed.find((result) => result.id === "approval")?.status).toBe("failed");
+      expect(loadLoopDagState(workspace, "duration-resume")?.elapsedMs).toBe(70);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("rejects a resume when a node resolves to a different physical workspace", async () => {

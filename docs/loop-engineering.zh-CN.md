@@ -275,6 +275,8 @@ seekforge loop-cleanup <worktree-name> [--force]
   集成时则为全部节点）合入保留的集成 worktree，再对组合后的代码树执行最终有界 Loop 门禁。
   托管路径会重新核验物理绑定，且解析后的全部工作区
   身份会进入持久 DAG 指纹，因此节点改换 checkout 后 `--resume` 会拒绝旧结果，而不会错误复用。
+  DAG 级 `maxDurationMs` 会跨恢复累计；检查点只记录活跃执行时间，不计入两次调用之间暂停或停止的时间。
+  旧 schema-v1 DAG 检查点会规范化为 schema v2，并把此前未记录的活跃时间视为零。
   `--predictive-budget` 会根据有界历史资源需求调整调度权重，`--worktree-limit` 限制保留的托管 worktree 数量；
   `loop-dag-resources` 可查看磁盘占用，并显式归档、提升或清理已完成依赖图；清理始终保留有未提交修改的 worktree。
 - `loop-speculate` 与 Core 的 `runSpeculativeLoop` 只允许运行两个或三个修复策略，共享一个必填成本上限并使用隔离工作区，

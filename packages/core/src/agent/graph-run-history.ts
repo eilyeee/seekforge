@@ -11,6 +11,7 @@ export type EngineeringGraphRunSnapshot = {
   status: EngineeringGraphState["status"];
   spentCost: number;
   spentTokens: number;
+  elapsedMs: number;
   createdAt: string;
   completedAt: string;
   results: Array<Pick<GraphNodeResult, "id" | "status" | "costUsd" | "tokensUsed">>;
@@ -46,6 +47,7 @@ export function readEngineeringGraphRunSnapshots(workspace: string, graphId: str
         run.spentCost < 0 ||
         !Number.isSafeInteger(run.spentTokens) ||
         (run.spentTokens as number) < 0 ||
+        (run.elapsedMs !== undefined && (!Number.isSafeInteger(run.elapsedMs) || (run.elapsedMs as number) < 0)) ||
         typeof run.createdAt !== "string" ||
         !Number.isFinite(Date.parse(run.createdAt)) ||
         typeof run.completedAt !== "string" ||
@@ -76,7 +78,10 @@ export function readEngineeringGraphRunSnapshots(workspace: string, graphId: str
       ) {
         return [];
       }
-      return [{ ...(run as EngineeringGraphRunSnapshot), results }];
+      // Legacy snapshots cannot distinguish active work from durable pauses.
+      // Zero is conservative and avoids presenting offline wall time as runtime.
+      const elapsedMs = run.elapsedMs === undefined ? 0 : (run.elapsedMs as number);
+      return [{ ...(run as EngineeringGraphRunSnapshot), elapsedMs, results }];
     });
     if (
       runs.length !== value.runs.length ||
@@ -101,6 +106,7 @@ export function archiveEngineeringGraphRun(workspace: string, state: Engineering
     status: state.status,
     spentCost: state.spentCost,
     spentTokens: state.spentTokens,
+    elapsedMs: state.elapsedMs,
     createdAt: state.createdAt,
     completedAt: state.completedAt,
     results: state.results.map(({ id, status, costUsd, tokensUsed }) => ({ id, status, costUsd, tokensUsed })),

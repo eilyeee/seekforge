@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,6 +8,7 @@ import {
 } from "../../src/agent/graph-evidence.js";
 import { createEngineeringGraphLogWriter, readEngineeringGraphHistory } from "../../src/agent/graph-history.js";
 import { compareEngineeringGraphRuns } from "../../src/agent/graph-observability.js";
+import { readEngineeringGraphRunSnapshots } from "../../src/agent/graph-run-history.js";
 import {
   removeEngineeringGraphState,
   saveEngineeringGraphState,
@@ -27,6 +28,7 @@ describe("Engineering Graph history and evidence", () => {
       status: "failed",
       spentCost: 1,
       spentTokens: 100,
+      elapsedMs: 10_000,
       createdAt: "2026-01-01T00:00:00.000Z",
       completedAt: "2026-01-01T00:00:10.000Z",
       results: [{ id: "work", status: "failed", costUsd: 1, tokensUsed: 100 }],
@@ -36,6 +38,7 @@ describe("Engineering Graph history and evidence", () => {
       status: "passed",
       spentCost: 1.5,
       spentTokens: 140,
+      elapsedMs: 12_000,
       createdAt: "2026-01-01T00:00:00.000Z",
       completedAt: "2026-01-01T00:00:12.000Z",
       results: [{ id: "work", status: "passed", costUsd: 1.5, tokensUsed: 140 }],
@@ -65,6 +68,32 @@ describe("Engineering Graph history and evidence", () => {
     second.append(event(1));
     second.close();
     expect(readEngineeringGraphHistory(workspace, "history").map((entry) => entry.seq)).toEqual([1, 2]);
+  });
+
+  it("does not reinterpret offline wall time as active time in legacy run snapshots", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-graph-runs-"));
+    workspaces.push(workspace);
+    mkdirSync(join(workspace, ".seekforge", "graphs"), { recursive: true });
+    writeFileSync(
+      join(workspace, ".seekforge", "graphs", "legacy.runs.json"),
+      JSON.stringify({
+        version: 1,
+        runs: [
+          {
+            runNumber: 1,
+            graphId: "legacy",
+            fingerprint: "a".repeat(64),
+            status: "passed",
+            spentCost: 0,
+            spentTokens: 0,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            completedAt: "2026-01-02T00:00:00.000Z",
+            results: [],
+          },
+        ],
+      }),
+    );
+    expect(readEngineeringGraphRunSnapshots(workspace, "legacy")[0]?.elapsedMs).toBe(0);
   });
 
   it("repairs a torn current suffix before continuing the log", () => {
@@ -116,6 +145,7 @@ describe("Engineering Graph history and evidence", () => {
       events: [],
       spentCost: 0,
       spentTokens: 0,
+      elapsedMs: 0,
       activeAttempts: [],
       controlSeq: 0,
       controlRunId: "",
@@ -156,6 +186,7 @@ describe("Engineering Graph history and evidence", () => {
       events: [],
       spentCost: 0,
       spentTokens: 0,
+      elapsedMs: 0,
       activeAttempts: [],
       controlSeq: 0,
       controlRunId: "",
@@ -164,6 +195,7 @@ describe("Engineering Graph history and evidence", () => {
       completedAt: now,
     } as EngineeringGraphState;
     const report = buildEngineeringGraphEvidenceReport(state);
+    expect(report.elapsedMs).toBe(0);
     expect(report.nodes[0]).not.toHaveProperty("output");
     expect(verifyEngineeringGraphEvidenceIntegrity(report)).toBe(true);
     expect(verifyEngineeringGraphEvidenceIntegrity({ ...report, status: "failed" })).toBe(false);

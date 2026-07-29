@@ -596,6 +596,7 @@ describe("loop management API", () => {
             events: [],
             spentCost: 0,
             spentTokens: 0,
+            elapsedMs: 0,
             activeAttempts: [],
             controlSeq: 0,
             controlRunId: "",

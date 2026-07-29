@@ -289,6 +289,7 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
         events: state.events.slice(-16),
         spentCost: state.spentCost,
         spentTokens: state.spentTokens,
+        elapsedMs: state.elapsedMs,
         ...(state.activeAttempts.length > 0 ? { activeAttempts: state.activeAttempts } : {}),
         ...(state.pauseReason ? { pauseReason: state.pauseReason } : {}),
         createdAt: state.createdAt,

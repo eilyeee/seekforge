@@ -2923,6 +2923,20 @@ Reconnect registries outlive individual requests. Keeping a completed background
 - **Do:** advance cursors for non-terminal frames and remove the subscription as soon as its terminal frame arrives.
 - **Caught:** Desktop retained completed Graph Run Ledger subscriptions until the owning tab closed.
 
+## 261. Cumulative duration budgets must persist active elapsed time
+
+Using only the current invocation timer lets every durable resume reset a workflow's time allowance. Using creation-to-completion wall time has the opposite defect: it charges approval, signal, and offline pauses against execution.
+
+- **Do:** checkpoint cumulative active elapsed time, add only the current owner's runtime, and use that value for scheduling, nested budgets, summaries, and comparisons.
+- **Caught:** Loop DAG and Engineering Graph duration budgets reset on resume, so repeated pauses could evade the configured limit.
+
+## 262. Durable events need both wakeup discovery and post-checkpoint reconciliation
+
+Correct claim ordering prevents event loss, but it does not by itself make a paused workflow discoverable or close the crash window after the workflow checkpoint and before mailbox acknowledgement.
+
+- **Do:** let recovery scans inspect durable event readiness, and reconcile claims already represented by committed workflow results before continuing or replacing a run.
+- **Caught:** an enqueued Graph signal did not wake idle recovery, while a crash after checkpointing a passed wait could leave its claimed signal permanently retained.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

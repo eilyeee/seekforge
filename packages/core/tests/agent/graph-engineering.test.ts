@@ -18,6 +18,7 @@ import {
 import {
   listEngineeringGraphStates,
   loadEngineeringGraphState,
+  recoverableEngineeringGraphStates,
   removeEngineeringGraphState,
   saveEngineeringGraphState,
 } from "../../src/agent/graph-state.js";
@@ -1317,6 +1318,7 @@ describe("runEngineeringGraph", () => {
     const paused = await runEngineeringGraph(deps, definition, { workspace: root });
     expect(paused).toMatchObject({ status: "paused", pauseReason: "wait" });
     await enqueueEngineeringGraphSignal(root, "signal-wait", "approved", { actor: "reviewer" });
+    expect(recoverableEngineeringGraphStates(root).map((state) => state.graphId)).toContain("signal-wait");
     const resumed = await runEngineeringGraph(deps, definition, { workspace: root, resume: true });
     expect(resumed.status).toBe("passed");
     expect(resumed.results[0]?.output).toMatchObject({ signal: "approved", payload: { actor: "reviewer" } });
@@ -1324,6 +1326,87 @@ describe("runEngineeringGraph", () => {
       version: 1,
       signals: [],
     });
+  });
+
+  it("reconciles a signal claim left after its passed wait checkpoint", async () => {
+    const root = workspace();
+    const definition = {
+      graphId: "signal-reconcile",
+      nodes: [{ id: "external", kind: "wait", waitFor: { signal: "continue" } }],
+    };
+    await runEngineeringGraph(deps, definition, { workspace: root });
+    await enqueueEngineeringGraphSignal(root, "signal-reconcile", "continue");
+    const passed = await runEngineeringGraph(deps, definition, { workspace: root, resume: true });
+    const signalId = (passed.results[0]?.output as { signalId?: string } | undefined)?.signalId;
+    expect(signalId).toEqual(expect.any(String));
+    writeFileSync(
+      join(root, ".seekforge/graphs/signal-reconcile.signals.json"),
+      `${JSON.stringify({
+        version: 1,
+        signals: [
+          {
+            id: signalId as string,
+            name: "continue",
+            createdAt: new Date().toISOString(),
+            claimedBy: "external",
+            claimedAt: new Date().toISOString(),
+          },
+        ],
+      })}\n`,
+    );
+
+    await runEngineeringGraph(deps, definition, { workspace: root, resume: true });
+    expect(JSON.parse(readFileSync(join(root, ".seekforge/graphs/signal-reconcile.signals.json"), "utf8"))).toEqual({
+      version: 1,
+      signals: [],
+    });
+  });
+
+  it("keeps the total duration budget cumulative while excluding offline pause time", async () => {
+    const root = workspace();
+    let clock = 1_000;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => clock);
+    const definition = {
+      graphId: "duration-resume",
+      maxDurationMs: 60,
+      nodes: [
+        { id: "before", kind: "function", handler: "before" },
+        { id: "approval", kind: "gate", dependsOn: ["before"] },
+        { id: "after", kind: "function", handler: "after", dependsOn: ["approval"] },
+      ],
+    };
+    try {
+      const paused = await runEngineeringGraph(deps, definition, {
+        workspace: root,
+        handlers: {
+          before: () => {
+            clock += 40;
+            return {};
+          },
+          after: () => {
+            clock += 30;
+            return {};
+          },
+        },
+      });
+      expect(paused).toMatchObject({ status: "paused", elapsedMs: 40 });
+      clock += 1_000;
+      const resumed = await runEngineeringGraph(deps, definition, {
+        workspace: root,
+        resume: true,
+        approvedNodeIds: ["approval"],
+        handlers: {
+          before: () => ({}),
+          after: () => {
+            clock += 30;
+            return {};
+          },
+        },
+      });
+      expect(resumed).toMatchObject({ status: "failed", elapsedMs: 70 });
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("rejects signals created after a wait deadline", async () => {
