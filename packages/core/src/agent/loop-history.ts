@@ -52,7 +52,7 @@ export function appendLoopLog(workspace: string, loopId: string, event: LoopEven
 export function readLoopHistory(
   workspace: string,
   loopId: string,
-  options: { afterSeq?: number; limit?: number } = {},
+  options: { afterSeq?: number; limit?: number; tail?: boolean } = {},
 ): LoopHistoryEntry[] {
   const target = loopLogFile(workspace, loopId);
   const afterSeq = Number.isSafeInteger(options.afterSeq) && options.afterSeq! >= 0 ? options.afterSeq! : 0;
@@ -75,6 +75,9 @@ export function readLoopHistory(
     "requirements.started",
     "requirements.completed",
     "requirements.reviewed",
+    "code_review.started",
+    "code_review.completed",
+    "loop.memory.updated",
     "loop.warning",
     "loop.done",
   ]);
@@ -108,7 +111,8 @@ export function readLoopHistory(
       if (cursor <= afterSeq) continue;
       const { ts, seq: _seq, ...event } = row;
       result.push({ seq: cursor, ts, event: event as LoopEvent });
-      if (result.length >= limit) return result;
+      if (!options.tail && result.length >= limit) return result;
+      if (options.tail && result.length > limit) result.shift();
     }
   }
   return result;

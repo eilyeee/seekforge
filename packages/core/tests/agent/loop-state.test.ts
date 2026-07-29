@@ -78,6 +78,7 @@ describe("loop state persistence", () => {
     expect(readLoopHistory(workspace, "history", { afterSeq: 3 })).toMatchObject([
       { seq: 4, event: { type: "loop.steered", iteration: 1, count: 1 } },
     ]);
+    expect(readLoopHistory(workspace, "history", { limit: 2, tail: true }).map((entry) => entry.seq)).toEqual([3, 4]);
   });
 
   it("marks orphaned running records as interrupted while preserving durable pauses and live owners", () => {

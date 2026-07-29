@@ -188,7 +188,7 @@ Loop 管理在 Git 仓库之外同样可用。已存在的工作区路径（包�
 ## CLI
 
 ```
-seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick|analyze|confirm] [--max-iters <n>] [--budget <usd>] [--worktree [name]] [-y] [-m <model>]
+seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick|analyze|confirm] [--code-review] [--max-iters <n>] [--budget <usd>] [--worktree [name]] [-y] [-m <model>]
 ```
 
 - `--verify <cmd>`：成功 = 该命令以 0 退出。
@@ -201,6 +201,9 @@ seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick
   `analyze` 先只读分析仓库并做验收；`confirm` 会持久化规格并以
   `requirements_pending` 暂停，等待显式批准。批准只作用于从持久化状态加载的
   规格；当前调用中新生成的规格一定会先返回供检查，不能在同一次调用中预先批准。
+- `--code-review`：验证与验收通过后，用全新只读 reviewer 会话审查最终 diff。
+  可执行发现会持久化并反馈到下一轮编辑；只有后续一次全新 Review 无发现时才可成功，
+  且不会复用实现会话上下文。
 - `--max-iters <n>`：运行迭代上限（默认 8，硬上限 100）。
 - `--worktree [name]`：创建并运行在一个隔离的、保留的 git worktree 中。
   可选的 name 用作分支后缀；不提供时使用一个唯一名称。
@@ -221,6 +224,7 @@ seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick
 seekforge loop-resume <loop-id> [--approve-requirements] [--add-iters <n>] [--add-budget <usd>]
 seekforge loop-list
 seekforge loop-show <loop-id>
+seekforge loop-diagnose <loop-id>
 seekforge loop-pause <loop-id>
 seekforge loop-continue <loop-id>
 seekforge loop-steer <loop-id> "<引导>"
@@ -250,6 +254,8 @@ seekforge loop-cleanup <worktree-name> [--force]
   `autoResumeInterruptedLoops` 自动继续。已有的 `interrupted` 记录仍可恢复，因此瞬时恢复失败
   能在之后重试；但只要 Loop 租约仍存活，该记录就绝不会进入恢复候选。用户显式暂停的持久记录
   会保持暂停，直到收到明确的继续/恢复操作。
+  `loop-diagnose <id>` 会核对检查点与最新保留历史窗口；观测历史缺失只产生警告，
+  不会被当成检查点损坏。
 - 自动恢复通过 `--priority -10..10` / `loop-priority` 排序，每个工作区每次最多处理三个候选；
   单个失败会隔离，并按 30 秒到 1 小时的指数退避重试。每次自动尝试都有独立身份；只有检查点仍匹配
   尝试前或新发布的代次时，才会写入失败退避；成功清理也使用同一身份，因此迟到的完成不会清理更新
@@ -328,10 +334,12 @@ Token/变更路径、失败类别、回滚标记、恢复次数和连续
 超限替换会在触碰最后一份可读状态前失败。Loop 成功后只抽取一次记忆，并对整个 Loop 只记录一次已选技能效果，而不会按内部
 Agent 迭代重复记账。
 
-状态还会记录最近进入的 `requirements`、`precheck`、`editing`、`verification`、`acceptance` 或 `settled` 阶段，用于崩溃诊断与恢复展示。可缓存验证阶段会发布一条有界、七天有效的跨运行提示，并绑定精确命令、权威工作区指纹以及 Node 平台/运行时身份。持久提示可跳过增量工作，但它始终会强制执行、且绝不能授权强制完整流水线。嵌入方可通过 `modelByFailureCategory` 按上一次失败类别路由编辑迭代；该能力必须显式提供 `providerForModel`，且不会改变验证、权限或预算。
+状态还会记录最近进入的 `requirements`、`precheck`、`editing`、`verification`、`acceptance`、`review` 或 `settled` 阶段，用于崩溃诊断与恢复展示。可缓存验证阶段会发布一条有界、七天有效的跨运行提示，并绑定精确命令、权威工作区指纹以及 Node 平台/运行时身份。持久提示可跳过增量工作，但它始终会强制执行、且绝不能授权强制完整流水线。嵌入方可通过 `modelByFailureCategory` 按上一次失败类别路由编辑迭代；该能力必须显式提供 `providerForModel`，且不会改变验证、权限或预算。
 
 编辑迭代复用**一个 worker 会话**；需求分析和验收复用状态中记录的独立 reviewer
 会话。这样评审上下文不会进入编辑对话，同时两条 trace 都可审计。
+独立代码审查每次都使用新的 reviewer 会话。有界工作记忆只保存与指纹绑定的失败类别、
+变更路径、验收缺口和发现 id；恢复时工作区发生变化就会丢弃该记忆。
 
 worktree 被有意保留以供检查。若原始 loop 使用了 `--worktree`，
 请在该 worktree 目录中运行 `loop-resume`。

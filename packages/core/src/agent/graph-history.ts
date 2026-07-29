@@ -60,7 +60,7 @@ function lastGraphLogSequence(workspace: string, target: string): number {
 export function readEngineeringGraphHistory(
   workspace: string,
   graphId: string,
-  options: { afterSeq?: number; limit?: number } = {},
+  options: { afterSeq?: number; limit?: number; tail?: boolean } = {},
 ): GraphHistoryEntry[] {
   const target = graphLogPath(graphId);
   const afterSeq = Number.isSafeInteger(options.afterSeq) && options.afterSeq! >= 0 ? options.afterSeq! : 0;
@@ -87,7 +87,8 @@ export function readEngineeringGraphHistory(
       previous = parsed.seq;
       if (parsed.seq <= afterSeq) continue;
       result.push(parsed);
-      if (result.length >= limit) return result;
+      if (!options.tail && result.length >= limit) return result;
+      if (options.tail && result.length > limit) result.shift();
     }
   }
   return result;

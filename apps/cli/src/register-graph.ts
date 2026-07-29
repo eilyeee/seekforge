@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { InvalidArgumentError } from "commander";
 import {
   graphDeleteCommand,
+  graphDiagnoseCommand,
   graphListCommand,
   graphPriorityCommand,
   graphRunCommand,
@@ -88,6 +89,11 @@ export function registerGraphCommands(
         }),
     );
   graph.command("list").action(graphListCommand);
+  graph
+    .command("diagnose")
+    .argument("<graph-id>")
+    .description("check a Graph checkpoint against its retained event history")
+    .action(graphDiagnoseCommand);
   graph
     .command("priority")
     .argument("<graph-id>")

@@ -4,6 +4,7 @@ import {
   loopControlCommand,
   loopCommand,
   loopDeleteCommand,
+  loopDiagnoseCommand,
   loopDeliverCommand,
   loopEvidenceCommand,
   loopDagCommand,
@@ -69,6 +70,7 @@ export function registerLoopCommands(program: Command, registration: LoopCommand
     .option("--stuck-recoveries <n>", "strategy resets before no_progress (0-5)", parseNonNegativeInt)
     .option("--rollback-regressions", "rollback iterations that increase failures (isolated worktree only)")
     .option("--adaptive-budget", "stop before an iteration predicted to exceed a hard budget")
+    .option("--code-review", "require a fresh independent final-diff review before success")
     .option("--priority <n>", "automatic recovery priority from -10 to 10", parseLoopPriority)
     .option(
       "--deliver <mode>",
@@ -111,6 +113,7 @@ export function registerLoopCommands(program: Command, registration: LoopCommand
           flakyRetries?: number;
           stuckRecoveries?: number;
           rollbackRegressions?: boolean;
+          codeReview?: boolean;
           priority?: number;
           deliver?: "checkpoint" | "merge" | "patch" | "pr";
           waitCi?: boolean;
@@ -139,6 +142,7 @@ export function registerLoopCommands(program: Command, registration: LoopCommand
           flakyRetries: opts.flakyRetries,
           noProgressRecoveries: opts.stuckRecoveries,
           rollbackOnRegression: opts.rollbackRegressions,
+          codeReview: opts.codeReview,
           priority: opts.priority,
           deliver: opts.deliver,
           waitCi: opts.waitCi,
@@ -257,6 +261,11 @@ export function registerLoopCommands(program: Command, registration: LoopCommand
     .description("list persisted loops in the base checkout and retained loop worktrees")
     .action(loopListCommand);
   program.command("loop-show").argument("<loop-id>").description("show a persisted loop").action(loopShowCommand);
+  program
+    .command("loop-diagnose")
+    .argument("<loop-id>")
+    .description("check a Loop checkpoint against its retained event history")
+    .action(loopDiagnoseCommand);
   program
     .command("loop-history")
     .argument("<loop-id>")

@@ -283,6 +283,12 @@ describe("loop management API", () => {
     expect(await jsonOf(history)).toEqual([
       expect.objectContaining({ seq: 1, event: { type: "iteration.start", iteration: 1 } }),
     ]);
+    expect(await jsonOf(await authed("/api/loops/rest-loop/diagnose"))).toMatchObject({
+      kind: "loop",
+      id: "rest-loop",
+      observedEvents: 1,
+      issues: [expect.objectContaining({ code: "history_ahead_of_checkpoint" })],
+    });
     const evidence = await authed("/api/loops/rest-loop/evidence");
     expect(await jsonOf(evidence)).toMatchObject({
       schemaVersion: 1,
@@ -401,6 +407,12 @@ describe("loop management API", () => {
     expect(await jsonOf(await authed("/api/graphs/rest-graph/history"))).toEqual([
       expect.objectContaining({ sequence: 1, type: "graph.completed" }),
     ]);
+    expect(await jsonOf(await authed("/api/graphs/rest-graph/diagnose"))).toMatchObject({
+      kind: "graph",
+      id: "rest-graph",
+      observedEvents: 1,
+      healthy: true,
+    });
     expect(await jsonOf(await authed("/api/graphs/rest-graph/artifacts"))).toMatchObject({
       graphId: "rest-graph",
       artifacts: [

@@ -85,6 +85,16 @@ export {
   type LoopControlState,
 } from "./loop-control.js";
 export {
+  buildLoopCodeReviewPrompt,
+  createLoopWorkingMemory,
+  formatLoopCodeReviewGaps,
+  parseLoopCodeReview,
+  parseLoopWorkingMemory,
+  type LoopCodeReview,
+  type LoopCodeReviewFinding,
+  type LoopWorkingMemory,
+} from "./loop-code-review.js";
+export {
   enqueueLoopControl,
   readLoopControlEntries,
   type DurableLoopControlCommand,
@@ -198,6 +208,14 @@ export {
   compareEngineeringGraphRuns,
   type EngineeringGraphRunComparison,
 } from "./graph-observability.js";
+export {
+  diagnoseEngineeringGraphCheckpoint,
+  diagnoseLoopCheckpoint,
+  replayOrchestrationTransitions,
+  type OrchestrationDiagnosticIssue,
+  type OrchestrationDiagnosticReport,
+  type OrchestrationReplayEntry,
+} from "./orchestration-diagnostics.js";
 export {
   planEngineeringGraphMigration,
   type EngineeringGraphMigrationPlan,

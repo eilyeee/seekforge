@@ -5,6 +5,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "vitest";
+import { Command } from "commander";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -49,8 +50,29 @@ import {
   resolveLoopRepository,
 } from "../loop-worktree.js";
 import { setLocale } from "../i18n.js";
+import { registerLoopCommands } from "../register-loop.js";
 
 setLocale("en"); // deterministic strings
+
+test("registers the independent review gate and Loop diagnostics", () => {
+  const program = new Command();
+  registerLoopCommands(program, {
+    collect: (value, previous) => [...previous, value],
+    parsePositiveInt: Number,
+    parseNonNegativeInt: Number,
+    parsePositiveFloat: Number,
+    rootProfile: () => undefined,
+  });
+  const loop = program.commands.find((command) => command.name() === "loop");
+  assert.equal(
+    loop?.options.some((option) => option.long === "--code-review"),
+    true,
+  );
+  assert.equal(
+    program.commands.some((command) => command.name() === "loop-diagnose"),
+    true,
+  );
+});
 
 // --- outputTail -------------------------------------------------------------
 test("outputTail returns the last N non-trailing-blank lines", () => {

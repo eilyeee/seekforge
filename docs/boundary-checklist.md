@@ -3091,6 +3091,69 @@ Comparing a checkpoint's claimed fingerprint only with the requested definition 
 - **Do:** recompute the canonical or explicitly supported legacy digest from the loaded definition, then require that authenticated definition to match the requested canonical identity.
 - **Caught:** Graph resume accepted a matching fingerprint string without binding it back to the checkpoint's own definition.
 
+## 284. Every completion gate belongs in convergence identity
+
+A verifier can remain green while acceptance or independent review findings change. Comparing only verifier diagnostics and workspace content can declare no progress even though the remaining completion obligation changed.
+
+- **Do:** include every persisted completion gate in the bounded convergence fingerprint, while keeping untrusted prose out of the identity.
+- **Caught:** Loop's independent code-review findings were not part of stuck/cycle detection.
+
+## 285. Recovered working memory must still match the workspace
+
+Task-scoped memory can be valid when written and stale after an external edit or a resume from a changed checkout. Injecting it without revalidation turns old observations into current guidance.
+
+- **Do:** bind working memory to an authoritative workspace fingerprint and discard it before prompt construction when the current fingerprint differs.
+- **Caught:** Loop could inject persisted review/failure memory after the workspace changed between invocations.
+
+## 286. A bounded diagnostic window must be the newest window
+
+Reading the first N records from a rotated history does not establish the latest durable outcome. Treating that prefix as the tail can report a false checkpoint mismatch after later generations.
+
+- **Do:** retain strict parsing across the complete bounded log, but keep the last N valid records when a diagnostic decision depends on recency.
+- **Caught:** Loop and Graph diagnose initially compared checkpoints with the oldest 2,000 retained events.
+
+## 287. Type coercion is not runtime type validation
+
+Converting an unknown field before testing its syntax can make a value of the wrong runtime type look valid, while later casts preserve the original invalid value.
+
+- **Do:** prove the exact runtime type first, then apply syntax and uniqueness checks without coercion.
+- **Caught:** Loop code-review finding ids accepted numbers because validation tested `String(id)` before storing the original value.
+
+## 288. Async completion gates must recheck cancellation and hard budgets
+
+An abort request can race with a provider's final response, and usage accounting can cross a hard limit on that same response. A structurally valid result is not sufficient to authorize success.
+
+- **Do:** after every asynchronous completion gate settles, recheck the authoritative abort signal and cumulative budgets before accepting completion.
+- **Caught:** a Loop review could report success after cancellation or review-cost budget exhaustion won the race.
+
+## 289. Durable advisory verdicts are scoped to workspace identity
+
+A review or summary can be valid when written and stale after external edits. Clearing only a derived summary still leaves the stale source verdict available for prompt construction.
+
+- **Do:** invalidate every advisory verdict and its resumable identity when its bound workspace fingerprint no longer matches.
+- **Caught:** Loop discarded stale working memory but could still feed old code-review findings into the next edit.
+
+## 290. Diagnostics should use the best validated retained history
+
+New append-only history may be absent for legacy checkpoints even though a bounded event trace is embedded in the checkpoint itself. Treating that as no history loses useful evidence.
+
+- **Do:** prefer the dedicated event log, then fall back to a validated embedded trace with the same sequence semantics.
+- **Caught:** Graph diagnose ignored `state.events` whenever its JSONL history had not yet been created.
+
+## 291. Diagnostic code must defend against loosely decoded history
+
+Observability readers may recognize an event discriminator without fully validating every nested payload. A diagnostic must not crash while inspecting the corruption it is meant to report.
+
+- **Do:** validate every nested field before dereferencing it and emit a bounded corruption finding for malformed payloads.
+- **Caught:** a malformed retained `loop.done` row could throw while Loop diagnose read `result.status`.
+
+## 292. Advisory-state producers must satisfy their own parser
+
+Bounding array counts alone is insufficient when individual values, allowed enums, uniqueness, and exact keys are part of the persisted contract. Producing an invalid advisory record can make the entire parent checkpoint unloadable.
+
+- **Do:** normalize advisory data through the same field rules used at deserialization, and test producer output with the parser.
+- **Caught:** Loop working-memory creation could retain unsafe paths or unknown categories that its state loader later rejected.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

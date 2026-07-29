@@ -2,6 +2,7 @@ import {
   buildLoopEvidenceReport,
   compareLoopEvidence,
   discoverLoopVerificationPlan,
+  diagnoseLoopCheckpoint,
   enqueueLoopControl,
   isRecord,
   isLoopLeaseActive,
@@ -147,6 +148,17 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
         else sendJson(res, 200, compareLoopEvidence(buildLoopEvidenceReport(state), buildLoopEvidenceReport(other)));
       } else sendJson(res, 200, buildLoopEvidenceReport(state));
     }
+    return true;
+  }
+  if (method === "GET" && segs[3] === "diagnose" && segs.length === 4) {
+    const state = loadLoopState(workspace, segs[2]!);
+    if (state)
+      sendJson(
+        res,
+        200,
+        diagnoseLoopCheckpoint(state, readLoopHistory(workspace, state.loopId, { limit: 2_000, tail: true })),
+      );
+    else sendApiError(res, 404, "not_found", `unknown Loop: ${segs[2]}`);
     return true;
   }
   if (method === "POST" && segs[3] === "priority" && segs.length === 4) {

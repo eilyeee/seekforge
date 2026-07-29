@@ -9,6 +9,7 @@ import {
   checkpointWorktreePaths,
   createWorktreePatch,
   discoverLoopVerificationPlan,
+  diagnoseLoopCheckpoint,
   enqueueLoopControl,
   exportLoopEvidence,
   hasCompleteLoopDeliveryEvidence,
@@ -91,6 +92,7 @@ export type LoopOptions = {
   noProgressRecoveries?: number;
   rollbackOnRegression?: boolean;
   adaptiveBudget?: boolean;
+  codeReview?: boolean;
   deliver?: LoopDeliveryMode;
   waitCi?: boolean;
   ciRepairs?: number;
@@ -206,6 +208,14 @@ export function formatLoopEvent(event: LoopEvent): string {
         : t("cmd.loop.reqReviewIncomplete", {
             gaps: event.review.gaps.join("; ") || t("cmd.loop.reqGapsMissing"),
           });
+    case "code_review.started":
+      return `Independent code review started at iteration ${event.iteration}`;
+    case "code_review.completed":
+      return event.review.complete
+        ? "Independent code review passed"
+        : `Independent code review found ${event.review.findings.length} actionable issue(s)`;
+    case "loop.memory.updated":
+      return `  working memory updated · iteration ${event.memory.iteration}`;
     case "loop.warning":
       return `Warning: ${event.message}`;
     case "loop.done":
@@ -470,6 +480,21 @@ export async function loopHistoryCommand(loopId: string, opts: { after?: number;
       return;
     }
     console.log(entries.map((entry) => JSON.stringify(entry)).join("\n"));
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+  }
+}
+
+export async function loopDiagnoseCommand(loopId: string): Promise<void> {
+  try {
+    const workspace = await findLoopWorkspace(loopId, false);
+    const state = workspace ? loadLoopState(workspace, loopId) : null;
+    if (!workspace || !state) throw new Error(`Persisted loop not found or invalid: ${loopId}`);
+    const history = readLoopHistory(workspace, loopId, { limit: 2_000, tail: true });
+    const report = diagnoseLoopCheckpoint(state, history);
+    console.log(JSON.stringify(report, null, 2));
+    if (!report.healthy) process.exitCode = 1;
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
     process.exitCode = 1;
@@ -1072,6 +1097,7 @@ async function runPreparedLoop(
               : {}),
             ...(loopOpts.rollbackOnRegression ? { rollbackOnRegression: true } : {}),
             ...(loopOpts.adaptiveBudget ? { adaptiveBudget: true } : {}),
+            ...(loopOpts.codeReview ? { codeReview: true } : {}),
             ...(loopOpts.priority !== undefined ? { priority: loopOpts.priority } : {}),
             maxIterations: loopOpts.maxIters ?? 8,
             ...(loopOpts.budget !== undefined ? { costBudgetUsd: loopOpts.budget } : {}),

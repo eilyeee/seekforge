@@ -199,6 +199,129 @@ describe("runAutoLoop", () => {
     });
   });
 
+  it("requires a fresh independent code review and feeds findings into the next edit", async () => {
+    const provider = scripted("flash", [
+      JSON.stringify({
+        complete: false,
+        summary: "one issue",
+        findings: [{ id: "finding-1", priority: 1, title: "Fix edge case", body: "Handle empty input." }],
+      }),
+      "implemented review finding",
+      JSON.stringify({ complete: true, summary: "clean", findings: [] }),
+    ]);
+    const events: LoopEvent[] = [];
+    const result = await runAutoLoop(
+      { provider, dispatcher: noopDispatcher, confirm: async () => true },
+      { ...baseOpts(workspace, failNTimes(0)), codeReview: true, onEvent: (event) => events.push(event) },
+    );
+    expect(result.status).toBe("passed");
+    expect(result.iterations).toBe(1);
+    expect(result.codeReview).toEqual({ complete: true, summary: "clean", findings: [] });
+    expect(provider.chats).toBe(3);
+    expect(provider.seen[1]!.at(-1)?.content).toContain("finding-1");
+    expect(events.filter((event) => event.type === "code_review.started")).toHaveLength(2);
+    expect(events.some((event) => event.type === "loop.memory.updated")).toBe(true);
+    const state = loadLoopState(workspace, result.loopId!);
+    expect(state?.codeReviewEnabled).toBe(true);
+    expect(state?.codeReview?.complete).toBe(true);
+    expect(state?.workingMemory?.iteration).toBe(1);
+  });
+
+  it("cannot pass an independent review after its hard budget is exhausted", async () => {
+    const provider = scripted("flash", [JSON.stringify({ complete: true, summary: "clean", findings: [] })]);
+    const result = await runAutoLoop(
+      { provider, dispatcher: noopDispatcher, confirm: async () => true },
+      { ...baseOpts(workspace, failNTimes(0)), codeReview: true, costBudgetUsd: 0.0005 },
+    );
+    expect(result).toMatchObject({ status: "budget", budgetReason: "cost", iterations: 0 });
+  });
+
+  it("cannot pass an independent review after cancellation wins the completion race", async () => {
+    const controller = new AbortController();
+    const provider = alwaysDone("flash");
+    provider.chat = async (req: ChatRequest): Promise<ChatResponse> => {
+      provider.chats++;
+      provider.seen.push(req.messages);
+      controller.abort();
+      return text(JSON.stringify({ complete: true, summary: "clean", findings: [] }));
+    };
+    const result = await runAutoLoop(
+      { provider, dispatcher: noopDispatcher, confirm: async () => true },
+      { ...baseOpts(workspace, failNTimes(0)), codeReview: true, signal: controller.signal },
+    );
+    expect(result.status).toBe("cancelled");
+  });
+
+  it("discards persisted working memory when the workspace fingerprint changed", async () => {
+    const state = createLoopState({
+      loopId: "stale-memory",
+      task: "make it green",
+      workspace,
+      verifyCommand: "echo test",
+      maxIterations: 1,
+      codeReviewEnabled: true,
+    });
+    saveLoopState(workspace, {
+      ...state,
+      status: "interrupted",
+      codeReview: {
+        complete: false,
+        summary: "stale",
+        findings: [{ id: "old-review", priority: 1, title: "Old", body: "No longer current" }],
+      },
+      codeReviewSessionId: "old-review-session",
+      workingMemory: {
+        iteration: 0,
+        updatedAt: new Date().toISOString(),
+        workspaceFingerprint: "a".repeat(64),
+        failureCategory: "test",
+        failedTests: 1,
+        changedPaths: ["old.ts"],
+        acceptanceGaps: [],
+        reviewFindings: [],
+      },
+    });
+    const provider = scripted("flash", ["edited", JSON.stringify({ complete: true, summary: "clean", findings: [] })]);
+    const result = await resumeAutoLoop(
+      { provider, dispatcher: noopDispatcher, confirm: async () => true },
+      state.loopId,
+      { workspace, verify: failNTimes(1) },
+    );
+    expect(result.status).toBe("passed");
+    expect(provider.seen[0]!.at(-1)?.content).not.toContain("Current bounded Loop working memory");
+    expect(provider.seen[0]!.at(-1)?.content).not.toContain("old-review");
+    expect(loadLoopState(workspace, state.loopId)?.workingMemory?.workspaceFingerprint).not.toBe("a".repeat(64));
+  });
+
+  it("discards a recovered review verdict that has no workspace binding", async () => {
+    const state = createLoopState({
+      loopId: "unbound-review",
+      task: "make it green",
+      workspace,
+      verifyCommand: "echo test",
+      maxIterations: 1,
+      codeReviewEnabled: true,
+    });
+    saveLoopState(workspace, {
+      ...state,
+      status: "interrupted",
+      codeReview: {
+        complete: false,
+        summary: "unbound",
+        findings: [{ id: "unbound-review", priority: 1, title: "Old", body: "Not fingerprinted" }],
+      },
+      codeReviewSessionId: "unbound-review-session",
+    });
+    const provider = scripted("flash", ["edited", JSON.stringify({ complete: true, summary: "clean", findings: [] })]);
+    const result = await resumeAutoLoop(
+      { provider, dispatcher: noopDispatcher, confirm: async () => true },
+      state.loopId,
+      { workspace, verify: failNTimes(1) },
+    );
+    expect(result.status).toBe("passed");
+    expect(provider.seen[0]!.at(-1)?.content).not.toContain("unbound-review");
+  });
+
   it("routes editing by the previous verification failure category", async () => {
     const base = alwaysDone("base");
     const routed = alwaysDone("test-specialist");

@@ -3,6 +3,7 @@ import {
   buildEngineeringGraphEvidenceReport,
   buildEngineeringGraphArtifactCatalog,
   clearEngineeringGraphRecovery,
+  diagnoseEngineeringGraphCheckpoint,
   engineeringGraphStateExists,
   engineeringGraphHistoryExists,
   engineeringGraphNeedsAgentRuntime,
@@ -405,6 +406,20 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
     const state = loadEngineeringGraphState(workspace, graphId);
     if (state) sendJson(res, 200, buildEngineeringGraphEvidenceReport(state));
     else sendApiError(res, 404, "not_found", `unknown Graph: ${graphId}`);
+    return true;
+  }
+  if (method === "GET" && segs.length === 4 && segs[3] === "diagnose") {
+    const state = loadEngineeringGraphState(workspace, graphId);
+    if (state) {
+      sendJson(
+        res,
+        200,
+        diagnoseEngineeringGraphCheckpoint(
+          state,
+          readEngineeringGraphHistory(workspace, graphId, { limit: 2_000, tail: true }),
+        ),
+      );
+    } else sendApiError(res, 404, "not_found", `unknown Graph: ${graphId}`);
     return true;
   }
   if (method === "GET" && segs.length === 4 && segs[3] === "artifacts") {

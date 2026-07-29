@@ -212,7 +212,7 @@ state.
 ## CLI
 
 ```
-seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick|analyze|confirm] [--max-iters <n>] [--budget <usd>] [--worktree [name]] [-y] [-m <model>]
+seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick|analyze|confirm] [--code-review] [--max-iters <n>] [--budget <usd>] [--worktree [name]] [-y] [-m <model>]
 ```
 
 - `--verify <cmd>`: success = the command exits 0.
@@ -230,6 +230,10 @@ seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick
   until it is explicitly approved. Approval applies only to a specification
   loaded from persisted state; a specification generated in the current call
   is always returned for inspection first.
+- `--code-review`: after verification and acceptance pass, starts a fresh
+  read-only reviewer session against the final diff. Actionable findings are
+  persisted and fed into another edit iteration; success requires a later fresh
+  review with no findings. Reviewer context is never reused from implementation.
 - `--max-iters <n>`: cap on run iterations (default 8, hard maximum 100).
 - `--worktree [name]`: create and run in an isolated retained git worktree.
   An optional name selects the branch suffix; without one a unique name is used.
@@ -256,6 +260,7 @@ seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick
 seekforge loop-resume <loop-id> [--approve-requirements] [--add-iters <n>] [--add-budget <usd>]
 seekforge loop-list
 seekforge loop-show <loop-id>
+seekforge loop-diagnose <loop-id>
 seekforge loop-pause <loop-id>
 seekforge loop-continue <loop-id>
 seekforge loop-steer <loop-id> "<guidance>"
@@ -291,6 +296,9 @@ seekforge loop-cleanup <worktree-name> [--force]
   `interrupted` records remain resumable so a transient recovery failure can be
   retried; a record whose Loop lease is still live is never offered for recovery.
   A durable user-paused record remains paused until an explicit continue/resume.
+  `loop-diagnose <id>` checks the checkpoint against the newest retained history
+  window. Missing observational history is reported as a warning rather than
+  checkpoint corruption.
 - Automatic recovery uses `--priority -10..10`/`loop-priority`, processes at
   most three candidates per workspace tick, and isolates each failure with
   exponential retry backoff (30 seconds to one hour). A foreground run requests
@@ -411,11 +419,14 @@ state is touched. Loop
 success performs memory extraction once and records selected-skill effectiveness
 once for the whole Loop rather than once per internal agent iteration.
 
-The state also checkpoints the last entered `requirements`, `precheck`, `editing`, `verification`, `acceptance`, or `settled` phase for crash diagnosis and resume presentation. Cacheable verification stages publish a bounded seven-day cross-run hint keyed by the exact command, authoritative workspace fingerprint, and Node platform/runtime identity. A persistent hint may skip incremental work, but it always forces and can never authorize the mandatory full pipeline. Embedders may route edit iterations by the previous failure category through `modelByFailureCategory`; routing requires an explicit `providerForModel` and never changes verification, permissions, or budgets.
+The state also checkpoints the last entered `requirements`, `precheck`, `editing`, `verification`, `acceptance`, `review`, or `settled` phase for crash diagnosis and resume presentation. Cacheable verification stages publish a bounded seven-day cross-run hint keyed by the exact command, authoritative workspace fingerprint, and Node platform/runtime identity. A persistent hint may skip incremental work, but it always forces and can never authorize the mandatory full pipeline. Embedders may route edit iterations by the previous failure category through `modelByFailureCategory`; routing requires an explicit `providerForModel` and never changes verification, permissions, or budgets.
 
 Edit iterations reuse **one worker session**. Requirement analysis and acceptance
 review reuse a separate reviewer session recorded in Loop state, keeping evaluator
 context out of the worker conversation while preserving both auditable traces.
+Independent code review uses a new reviewer session on every attempt. A bounded
+working-memory snapshot stores fingerprint-bound failure category, changed paths,
+acceptance gaps, and finding ids; resume discards it after a workspace change.
 
 Worktrees are deliberately retained for inspection. Run `loop-resume` from the
 worktree directory when the original loop used `--worktree`.

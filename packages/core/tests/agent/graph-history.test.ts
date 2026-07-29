@@ -68,6 +68,9 @@ describe("Engineering Graph history and evidence", () => {
     second.append(event(1));
     second.close();
     expect(readEngineeringGraphHistory(workspace, "history").map((entry) => entry.seq)).toEqual([1, 2]);
+    expect(
+      readEngineeringGraphHistory(workspace, "history", { limit: 1, tail: true }).map((entry) => entry.seq),
+    ).toEqual([2]);
   });
 
   it("does not reinterpret offline wall time as active time in legacy run snapshots", () => {

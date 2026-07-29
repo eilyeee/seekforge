@@ -2,12 +2,14 @@ import {
   graphHandlersWithPlugins,
   archiveEngineeringGraphResources,
   clearEngineeringGraphRecovery,
+  diagnoseEngineeringGraphCheckpoint,
   engineeringGraphStateExists,
   engineeringGraphNeedsAgentRuntime,
   inspectEngineeringGraphResources,
   listEngineeringGraphStates,
   loadPluginContributions,
   loadEngineeringGraphState,
+  readEngineeringGraphHistory,
   materializeEngineeringGraph,
   planEngineeringGraph,
   promoteEngineeringGraphResult,
@@ -212,6 +214,23 @@ export function graphShowCommand(graphId: string, historyOnly = false): void {
     return;
   }
   console.log(JSON.stringify(historyOnly ? state.events : state, null, 2));
+}
+
+export function graphDiagnoseCommand(graphId: string): void {
+  try {
+    const workspace = process.cwd();
+    const state = loadEngineeringGraphState(workspace, graphId);
+    if (!state) throw new Error(`Persisted Engineering Graph not found or invalid: ${graphId}`);
+    const report = diagnoseEngineeringGraphCheckpoint(
+      state,
+      readEngineeringGraphHistory(workspace, graphId, { limit: 2_000, tail: true }),
+    );
+    console.log(JSON.stringify(report, null, 2));
+    if (!report.healthy) process.exitCode = 1;
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
 }
 
 export async function graphResourcesCommand(

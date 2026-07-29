@@ -2,7 +2,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { Command } from "commander";
 import { readEngineeringGraphFile } from "../commands/graph.js";
+import { registerGraphCommands } from "../register-graph.js";
 
 describe("Engineering Graph CLI input", () => {
   const workspaces: string[] = [];
@@ -42,5 +44,16 @@ describe("Engineering Graph CLI input", () => {
     expect(() => readEngineeringGraphFile("template.json", workspace, ["retries=2", "retries=3"])).toThrow(
       /duplicated/,
     );
+  });
+
+  it("registers checkpoint diagnostics as a first-class Graph command", () => {
+    const program = new Command();
+    registerGraphCommands(
+      program,
+      (value, previous) => [...previous, value],
+      () => undefined,
+    );
+    const graph = program.commands.find((command) => command.name() === "graph");
+    expect(graph?.commands.some((command) => command.name() === "diagnose")).toBe(true);
   });
 });

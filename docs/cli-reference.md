@@ -231,7 +231,7 @@ runtime control.
 `seekforge loop-deliver <loop-id> [--mode checkpoint|merge|patch|pr] [--wait-ci] [--ci-repairs N]` retries a
 failed post-pass delivery from the retained worktree without rerunning the Loop;
 `loop-show` exposes its durable status, attempt count, error, and artifact.
-`loop-history` replays durable events, `loop-recover` marks orphaned owners as
+`loop-history` replays durable events, `loop-diagnose` checks the checkpoint against the newest retained event window, and `loop-recover` marks orphaned owners as
 `interrupted`, `loop-priority <id> <n>` changes recovery order, and `loop-prune`
 removes only eligible terminal records. `loop-dag <file>` persists a JSON graph
 with completion-driven scheduling, weighted budgets, retries, failure policies, composite conditions,
@@ -243,7 +243,7 @@ to cross a node gate and `--rerun <node-id>` to invalidate that node and its des
 `loop-speculate <file> --budget <usd>` persists two or three isolated strategies;
 `loop-speculation-list` and `loop-speculation-promote` inspect and explicitly merge the winner.
 `loop-evidence <id> --format json|sarif|junit [--compare <id>]` exports attestable evidence or compares runs.
-`graph validate|run|resume|list|show|history|priority|delete` manages heterogeneous Engineering Graphs. `graph priority <id> <-10..10>` changes automatic-recovery order. Definitions can combine Agent, Loop, function, router, gate, and nested-graph nodes; `--approve` crosses a gate, `--rerun` invalidates a node plus descendants, and `--restart` explicitly replaces an existing checkpoint. See [Graph Engineering](graph-engineering.md).
+`graph validate|run|resume|list|show|history|diagnose|priority|delete` manages heterogeneous Engineering Graphs. `graph priority <id> <-10..10>` changes automatic-recovery order. Definitions can combine Agent, Loop, function, router, gate, and nested-graph nodes; `--approve` crosses a gate, `--rerun` invalidates a node plus descendants, and `--restart` explicitly replaces an existing checkpoint. See [Graph Engineering](graph-engineering.md).
 TUI and Desktop/WebSocket Loop surfaces also support safe-boundary
 pause, resume, priority, and steering.
 `seekforge loop-cleanup <name>` removes a retained `seekforge/loop-*` worktree;

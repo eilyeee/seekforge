@@ -859,6 +859,29 @@ export type LoopAcceptanceReview = {
   criteria: Array<{ id: string; status: "met" | "unmet" | "unknown"; evidence: string[] }>;
   gaps: string[];
 };
+export type LoopCodeReviewFinding = {
+  id: string;
+  priority: 0 | 1 | 2 | 3;
+  title: string;
+  body: string;
+  file?: string;
+  line?: number;
+};
+export type LoopCodeReview = {
+  complete: boolean;
+  summary: string;
+  findings: LoopCodeReviewFinding[];
+};
+export type LoopWorkingMemory = {
+  iteration: number;
+  updatedAt: string;
+  workspaceFingerprint: string | null;
+  failureCategory: string;
+  failedTests: number;
+  changedPaths: string[];
+  acceptanceGaps: string[];
+  reviewFindings: string[];
+};
 export type LoopVerificationDecision = {
   stageId: string;
   action: "run" | "skip" | "reuse" | "blocked";
@@ -884,6 +907,8 @@ export type LoopResult = {
   loopId?: string;
   requirements?: LoopRequirementSpec;
   acceptanceReview?: LoopAcceptanceReview;
+  codeReview?: LoopCodeReview;
+  workingMemory?: LoopWorkingMemory;
   budgetReason?: LoopBudgetReason;
   agentError?: AgentError;
   stageResults?: LoopStageResult[];
@@ -917,6 +942,9 @@ export type LoopEvent =
   | { type: "requirements.started"; phase: "analysis" | "review" }
   | { type: "requirements.completed"; spec: LoopRequirementSpec; approvalRequired: boolean }
   | { type: "requirements.reviewed"; review: LoopAcceptanceReview }
+  | { type: "code_review.started"; iteration: number }
+  | { type: "code_review.completed"; iteration: number; review: LoopCodeReview }
+  | { type: "loop.memory.updated"; memory: LoopWorkingMemory }
   | { type: "loop.warning"; warning: "persistence" | "requirements" | "observer"; message: string }
   | { type: "loop.done"; result: LoopResult };
 

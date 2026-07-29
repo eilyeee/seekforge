@@ -119,6 +119,7 @@ seekforge graph list
 seekforge graph priority release 5
 seekforge graph show release
 seekforge graph history release
+seekforge graph diagnose release
 seekforge graph resources release inspect
 seekforge graph resources release archive
 seekforge graph resources release prune --dry-run
@@ -127,6 +128,8 @@ seekforge graph delete release
 ```
 
 服务器提供校验/空跑计划（`POST /api/graphs/validate`）、后台启动（`POST /api/graphs`）、显式恢复/审批/重跑/重启/取消、Graph 级暂停，以及待执行节点的暂停、指导、取消与重排优先级（`POST /api/graphs/:id/control`）、外部信号（`POST /api/graphs/:id/signals`）、自动恢复优先级（`POST /api/graphs/:id/priority`）、运行对比（`GET /api/graphs/:id/compare`）、有界历史、证据导出、列表/详情与删除。空闲恢复只选择失去 owner 的 `running` Graph，以及定时器到期或信号就绪的 wait 暂停 Graph；显式控制暂停与审批暂停保持粘性。候选按 -10 到 10 的可变优先级排序，失败后持久执行 30 秒到 1 小时的指数退避。Loop 与 Graph 通过同一个精确字段、时间戳有序的持久契约解析恢复子记录。恢复记账同时绑定尝试前和新写入检查点的运行身份，因此迟到失败不会修改后续运行。schema-v2 模板可通过 `/api/graphs/templates` 精确版本注册和解析，版本不会静默漂移；可选的 `interface.outputSchema` 与节点使用同一套有界递归 schema 解析器。空跑计划把正常执行波次与补偿顺序分开返回，并包含关键路径、资源容量、最大并行宽度、最大尝试/动态元素数和输入绑定。Graph 运行会进入统一 Run Ledger，并在服务器关闭时排空。由服务器启动且包含 Agent 或 Loop 节点的 Graph 必须声明 `costBudgetUsd`。
+
+`graph diagnose` 与 `GET /api/graphs/:id/diagnose` 会独立比较检查点和最新保留生命周期窗口，且不会修改检查点。
 
 `mapKind: "agent" | "loop"` 允许有界 map 逐项顺序运行 Agent 或自主 Loop；item 会被封装为不可信数据，每个完成项都保留独立的持久用量检查点。这类动态 map 也属于 Agent runtime 使用，因此服务端启动的定义必须像直接 Agent/Loop 节点一样声明 `costBudgetUsd`。直接及 map 子 Loop 会从 Graph attempt 幂等键派生稳定 id，因此 Graph 中断后会恢复同一个子 Loop，而不会复制其编辑历史。Gate 可返回 `approve`、`reject` 或 `request_changes`，并附带有界结构化上下文。Remote 节点可在预检阶段要求执行器协议版本 1 与协作取消能力。`GET /api/graphs/:id/artifacts` 返回确定性的内容寻址血缘目录；`POST /api/graphs/:id/migration-plan` 会校验候选定义并预览新增、删除、变化、保留及传递失效节点，不修改现有运行。其 `graphPolicyChanged` 标志覆盖 Graph 级策略变化；为 true 时，调度、预算、worktree 或 fan-in 行为可能已变化，因此所有保留节点都会失效。Graph 指标增加活跃/暂停、恢复退避、待执行节点、重试等待、用量、尝试与重试统计；运行对比增加逐节点尝试次数和耗时变化。
 

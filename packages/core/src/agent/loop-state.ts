@@ -16,6 +16,12 @@ import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/w
 import { isRecord } from "../util/guards.js";
 import { isDenseArray } from "./orchestration.js";
 import {
+  parseLoopCodeReview,
+  parseLoopWorkingMemory,
+  type LoopCodeReview,
+  type LoopWorkingMemory,
+} from "./loop-code-review.js";
+import {
   automaticRecoveryEligible,
   automaticRecoveryTime,
   compareAutomaticRecoveryCandidates,
@@ -86,7 +92,7 @@ export function hasCompleteLoopDeliveryEvidence(
 }
 export type LoopRecoveryMetadata = AutomaticRecoveryMetadata;
 export type LoopAutomaticRecoveryIdentity = { priorControlRunId: string; recoveryAttemptId: string };
-export type LoopPhase = "requirements" | "precheck" | "editing" | "verification" | "acceptance" | "settled";
+export type LoopPhase = "requirements" | "precheck" | "editing" | "verification" | "acceptance" | "review" | "settled";
 export type LoopPruneOptions = {
   /** Remove eligible terminal records older than this many days. */
   maxAgeDays?: number;
@@ -138,6 +144,10 @@ export type LoopState = {
   elapsedMs?: number;
   sessionId: string;
   reviewerSessionId?: string;
+  codeReviewEnabled?: boolean;
+  codeReviewSessionId?: string;
+  codeReview?: LoopCodeReview | null;
+  workingMemory?: LoopWorkingMemory | null;
   lastVerify: LoopVerifyResult | null;
   lastAgentError?: AgentError | null;
   /** Optional in the type so callers can still represent legacy persisted records. */
@@ -169,6 +179,7 @@ export type CreateLoopStateInput = Pick<LoopState, "task" | "workspace" | "verif
   adaptiveBudget?: boolean;
   controlRunId?: string;
   priority?: number;
+  codeReviewEnabled?: boolean;
 };
 
 const LOOP_DELIVERY_MODES = new Set<LoopDeliveryMode>(["checkpoint", "merge", "patch", "pr"]);
@@ -507,6 +518,14 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
   const verifyRuns = value.verifyRuns === undefined ? 0 : value.verifyRuns;
   const elapsedMs = value.elapsedMs === undefined ? 0 : value.elapsedMs;
   const reviewerSessionId = value.reviewerSessionId === undefined ? "" : value.reviewerSessionId;
+  const codeReviewEnabled = value.codeReviewEnabled === undefined ? false : value.codeReviewEnabled;
+  const codeReviewSessionId = value.codeReviewSessionId === undefined ? "" : value.codeReviewSessionId;
+  const codeReview =
+    value.codeReview === undefined || value.codeReview === null ? null : parseLoopCodeReview(value.codeReview);
+  const workingMemory =
+    value.workingMemory === undefined || value.workingMemory === null
+      ? null
+      : parseLoopWorkingMemory(value.workingMemory);
   const verify = value.lastVerify;
   const agentError = value.lastAgentError === undefined ? null : value.lastAgentError;
   const requirementMode = value.requirementMode === undefined ? "quick" : value.requirementMode;
@@ -575,6 +594,7 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
       phase !== "editing" &&
       phase !== "verification" &&
       phase !== "acceptance" &&
+      phase !== "review" &&
       phase !== "settled") ||
     stageResults === null ||
     snapshots === null ||
@@ -609,6 +629,11 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
     elapsedMs < 0 ||
     typeof value.sessionId !== "string" ||
     typeof reviewerSessionId !== "string" ||
+    typeof codeReviewEnabled !== "boolean" ||
+    typeof codeReviewSessionId !== "string" ||
+    (value.codeReview !== undefined && value.codeReview !== null && codeReview === null) ||
+    (value.workingMemory !== undefined && value.workingMemory !== null && workingMemory === null) ||
+    (!codeReviewEnabled && (codeReview !== null || codeReviewSessionId !== "")) ||
     (verify !== null &&
       (!isRecord(verify) ||
         !Number.isInteger(verify.code) ||
@@ -681,6 +706,10 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
     elapsedMs: elapsedMs as number,
     sessionId: value.sessionId,
     reviewerSessionId,
+    codeReviewEnabled,
+    codeReviewSessionId,
+    codeReview,
+    workingMemory,
     lastVerify: verify === null ? null : { code: verify.code as number, output: verify.output as string },
     lastAgentError:
       agentError === null
@@ -755,6 +784,10 @@ export function createLoopState(input: CreateLoopStateInput): LoopState {
     elapsedMs: 0,
     sessionId: input.sessionId ?? "",
     reviewerSessionId: "",
+    codeReviewEnabled: input.codeReviewEnabled ?? false,
+    codeReviewSessionId: "",
+    codeReview: null,
+    workingMemory: null,
     lastVerify: input.lastVerify ?? null,
     lastAgentError: null,
     requirementMode: input.requirementMode ?? "quick",
