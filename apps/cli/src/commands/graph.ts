@@ -1,10 +1,13 @@
 import {
+  applyEngineeringGraphMigration,
   graphHandlersWithPlugins,
   archiveEngineeringGraphResources,
   clearEngineeringGraphRecovery,
   diagnoseEngineeringGraphCheckpoint,
   engineeringGraphStateExists,
   engineeringGraphNeedsAgentRuntime,
+  engineeringGraphSignalAvailable,
+  explainEngineeringGraphNode,
   inspectEngineeringGraphResources,
   listEngineeringGraphStates,
   loadPluginContributions,
@@ -12,11 +15,13 @@ import {
   readEngineeringGraphHistory,
   materializeEngineeringGraph,
   planEngineeringGraph,
+  planEngineeringGraphMigration,
   promoteEngineeringGraphResult,
   pruneEngineeringGraphResources,
   readFileIfExists,
   removeEngineeringGraphState,
   setEngineeringGraphPriority,
+  simulateEngineeringGraph,
   runEngineeringGraph,
   validateEngineeringGraphRunOptions,
   validateEngineeringGraphWorkspaces,
@@ -227,6 +232,71 @@ export function graphDiagnoseCommand(graphId: string): void {
     );
     console.log(JSON.stringify(report, null, 2));
     if (!report.healthy) process.exitCode = 1;
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+export function graphMigrationPlanCommand(file: string, params: readonly string[] = []): void {
+  try {
+    const workspace = process.cwd();
+    const definition = readEngineeringGraphFile(file, workspace, params);
+    const state = loadEngineeringGraphState(workspace, definition.graphId);
+    if (!state) throw new Error(`Persisted Engineering Graph not found or invalid: ${definition.graphId}`);
+    console.log(JSON.stringify(planEngineeringGraphMigration(state.definition, definition), null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+export function graphMigrateCommand(file: string, params: readonly string[] = []): void {
+  try {
+    const workspace = process.cwd();
+    const definition = readEngineeringGraphFile(file, workspace, params);
+    validateEngineeringGraphRunOptions(definition, {
+      workspace,
+      handlers: graphHandlersWithPlugins(loadPluginContributions(workspace)),
+    });
+    console.log(JSON.stringify(applyEngineeringGraphMigration(workspace, definition), null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+export function graphSimulateCommand(file: string, params: readonly string[] = [], worstCase = false): void {
+  try {
+    const definition = readEngineeringGraphFile(file, process.cwd(), params);
+    console.log(
+      JSON.stringify(
+        simulateEngineeringGraph(definition, { retryMode: worstCase ? "worst_case" : "baseline" }),
+        null,
+        2,
+      ),
+    );
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+export function graphExplainCommand(graphId: string, nodeId: string): void {
+  try {
+    const state = loadEngineeringGraphState(process.cwd(), graphId);
+    if (!state) throw new Error(`Persisted Engineering Graph not found or invalid: ${graphId}`);
+    const node = state.definition.nodes.find((candidate) => candidate.id === nodeId);
+    const signalAvailable = node?.waitFor?.signal
+      ? engineeringGraphSignalAvailable(process.cwd(), graphId, nodeId, node.waitFor.signal, node.waitFor.expiresAt)
+      : undefined;
+    console.log(
+      JSON.stringify(
+        explainEngineeringGraphNode(state.definition, state, nodeId, new Date(), { signalAvailable }),
+        null,
+        2,
+      ),
+    );
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

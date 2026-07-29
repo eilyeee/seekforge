@@ -46,7 +46,7 @@ describe("Engineering Graph CLI input", () => {
     );
   });
 
-  it("registers checkpoint diagnostics as a first-class Graph command", () => {
+  it("registers diagnostics, migration, simulation, and explanation as first-class Graph commands", () => {
     const program = new Command();
     registerGraphCommands(
       program,
@@ -54,6 +54,8 @@ describe("Engineering Graph CLI input", () => {
       () => undefined,
     );
     const graph = program.commands.find((command) => command.name() === "graph");
-    expect(graph?.commands.some((command) => command.name() === "diagnose")).toBe(true);
+    expect(graph?.commands.map((command) => command.name())).toEqual(
+      expect.arrayContaining(["diagnose", "migration-plan", "migrate", "simulate", "explain"]),
+    );
   });
 });

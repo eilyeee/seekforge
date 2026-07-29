@@ -413,6 +413,12 @@ describe("loop management API", () => {
       observedEvents: 1,
       healthy: true,
     });
+    expect(await jsonOf(await authed("/api/graphs/rest-graph/explain/done"))).toMatchObject({
+      graphId: "rest-graph",
+      nodeId: "done",
+      eligible: false,
+      blockers: [{ code: "already_settled" }],
+    });
     expect(await jsonOf(await authed("/api/graphs/rest-graph/artifacts"))).toMatchObject({
       graphId: "rest-graph",
       artifacts: [
@@ -435,6 +441,22 @@ describe("loop management API", () => {
         }),
       ),
     ).toMatchObject({ graphId: "rest-graph", changed: ["done"], invalidated: ["done"], preserved: [] });
+    expect(
+      await jsonOf(
+        await authed("/api/graphs/rest-graph/migration-apply", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            graphId: "rest-graph",
+            nodes: [{ id: "done", kind: "function", handler: "collect" }],
+          }),
+        }),
+      ),
+    ).toMatchObject({
+      plan: { changed: ["done"], invalidated: ["done"], preserved: [] },
+      state: { status: "paused", pauseReason: "control", results: [] },
+    });
+    expect(await jsonOf(await authed("/api/graphs/rest-graph/explain/done"))).toMatchObject({ eligible: true });
     expect(await jsonOf(await authed("/api/graphs/rest-graph", { method: "DELETE" }))).toEqual({
       removed: true,
       graphId: "rest-graph",
@@ -523,6 +545,32 @@ describe("loop management API", () => {
       baselineRunNumber: 1,
       comparison: { graphId: "rest-live-graph" },
     });
+  });
+
+  it("simulates Engineering Graph timing and resource contention without starting a run", async () => {
+    const response = await authed("/api/graphs/simulate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        definition: {
+          graphId: "rest-simulation",
+          maxConcurrency: 2,
+          nodes: [
+            { id: "first", kind: "function", handler: "noop", resources: ["provider"] },
+            { id: "second", kind: "function", handler: "noop", resources: ["provider.deepseek"] },
+          ],
+        },
+        options: {
+          estimates: { first: { durationMs: 10 }, second: { durationMs: 5 } },
+        },
+      }),
+    });
+    expect(await jsonOf(response)).toMatchObject({
+      graphId: "rest-simulation",
+      makespanMs: 15,
+      bottlenecks: ["second"],
+    });
+    expect((await authed("/api/graphs/rest-simulation")).status).toBe(404);
   });
 
   it("requires a server cost budget for dynamic Agent and Loop maps", async () => {

@@ -1,4 +1,5 @@
 import {
+  applyEngineeringGraphMigration,
   archiveEngineeringGraphResources,
   buildEngineeringGraphEvidenceReport,
   buildEngineeringGraphArtifactCatalog,
@@ -7,6 +8,9 @@ import {
   engineeringGraphStateExists,
   engineeringGraphHistoryExists,
   engineeringGraphNeedsAgentRuntime,
+  engineeringGraphSignalAvailable,
+  EngineeringGraphMigrationConflictError,
+  explainEngineeringGraphNode,
   enqueueGraphControl,
   enqueueEngineeringGraphSignal,
   graphExecutorsWithPlugins,
@@ -31,9 +35,12 @@ import {
   compareEngineeringGraphRuns,
   removeEngineeringGraphState,
   setEngineeringGraphPriority,
+  SessionBusyError,
+  simulateEngineeringGraph,
   validateEngineeringGraphRunOptions,
   validateEngineeringGraphWorkspaces,
   type EngineeringGraphDefinition,
+  type EngineeringGraphSimulationOptions,
   type EngineeringGraphState,
   type GraphExecutionAdapter,
   type RunEngineeringGraphOptions,
@@ -233,6 +240,31 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
     return true;
   }
 
+  if (method === "POST" && segs.length === 3 && segs[2] === "simulate") {
+    const body = await readJsonBody(ctx.req, res);
+    if (body === undefined) return true;
+    try {
+      const wrapped = isRecord(body) && "definition" in body;
+      const parameters = wrapped ? (body.parameters ?? {}) : {};
+      const rawOptions = wrapped ? body.options : undefined;
+      if (!isRecord(parameters)) throw new Error("Graph parameters must be an object");
+      if (
+        rawOptions !== undefined &&
+        (!isRecord(rawOptions) ||
+          Object.keys(rawOptions).some(
+            (key) => key !== "defaultDurationMs" && key !== "retryMode" && key !== "estimates",
+          ))
+      ) {
+        throw new Error("Graph simulation options are invalid");
+      }
+      const definition = materializeEngineeringGraph(wrapped ? body.definition : body, parameters);
+      sendJson(res, 200, simulateEngineeringGraph(definition, (rawOptions ?? {}) as EngineeringGraphSimulationOptions));
+    } catch (error) {
+      sendApiError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
+    }
+    return true;
+  }
+
   if (method === "POST" && segs.length === 2) {
     const body = await readJsonBody(ctx.req, res);
     if (body === undefined) return true;
@@ -422,6 +454,27 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
     } else sendApiError(res, 404, "not_found", `unknown Graph: ${graphId}`);
     return true;
   }
+  if (method === "GET" && segs.length === 5 && segs[3] === "explain") {
+    const state = loadEngineeringGraphState(workspace, graphId);
+    if (!state) sendApiError(res, 404, "not_found", `unknown Graph: ${graphId}`);
+    else {
+      try {
+        const nodeId = segs[4]!;
+        const node = state.definition.nodes.find((candidate) => candidate.id === nodeId);
+        const signalAvailable = node?.waitFor?.signal
+          ? engineeringGraphSignalAvailable(workspace, graphId, nodeId, node.waitFor.signal, node.waitFor.expiresAt)
+          : undefined;
+        sendJson(
+          res,
+          200,
+          explainEngineeringGraphNode(state.definition, state, nodeId, new Date(), { signalAvailable }),
+        );
+      } catch (error) {
+        sendApiError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
+      }
+    }
+    return true;
+  }
   if (method === "GET" && segs.length === 4 && segs[3] === "artifacts") {
     const state = loadEngineeringGraphState(workspace, graphId);
     if (state) sendJson(res, 200, { graphId, artifacts: buildEngineeringGraphArtifactCatalog(state) });
@@ -467,6 +520,26 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
       sendJson(res, 200, planEngineeringGraphMigration(state.definition, definition));
     } catch (error) {
       sendApiError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
+    }
+    return true;
+  }
+  if (method === "POST" && segs.length === 4 && segs[3] === "migration-apply") {
+    const state = loadEngineeringGraphState(workspace, graphId);
+    if (!state) {
+      sendApiError(res, 404, "not_found", `unknown Graph: ${graphId}`);
+      return true;
+    }
+    const body = await readJsonBody(ctx.req, res);
+    if (body === undefined) return true;
+    try {
+      const definition = materializeEngineeringGraph(body, {});
+      if (definition.graphId !== graphId) throw new Error("Graph migration id must match the route");
+      validateRun(workspace, definition, {}, graphExecutionRegistry(ctx));
+      sendJson(res, 200, applyEngineeringGraphMigration(workspace, definition));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const conflict = error instanceof SessionBusyError || error instanceof EngineeringGraphMigrationConflictError;
+      sendApiError(res, conflict ? 409 : 400, conflict ? "busy" : "bad_request", message);
     }
     return true;
   }

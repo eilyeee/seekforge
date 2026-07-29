@@ -243,7 +243,7 @@ to cross a node gate and `--rerun <node-id>` to invalidate that node and its des
 `loop-speculate <file> --budget <usd>` persists two or three isolated strategies;
 `loop-speculation-list` and `loop-speculation-promote` inspect and explicitly merge the winner.
 `loop-evidence <id> --format json|sarif|junit [--compare <id>]` exports attestable evidence or compares runs.
-`graph validate|run|resume|list|show|history|diagnose|priority|delete` manages heterogeneous Engineering Graphs. `graph priority <id> <-10..10>` changes automatic-recovery order. Definitions can combine Agent, Loop, function, router, gate, and nested-graph nodes; `--approve` crosses a gate, `--rerun` invalidates a node plus descendants, and `--restart` explicitly replaces an existing checkpoint. See [Graph Engineering](graph-engineering.md).
+`graph validate|run|resume|list|show|history|diagnose|priority|delete` manages heterogeneous Engineering Graphs. `graph migration-plan <file>` previews invalidation, while `graph migrate <file>` applies it to a paused or terminal non-managed Graph. `graph simulate <file> [--worst-case]` forecasts scheduling without creating state, and `graph explain <id> <node-id>` reports current blockers. `graph priority <id> <-10..10>` changes automatic-recovery order. Definitions can combine Agent, Loop, function, router, gate, and nested-graph nodes; `--approve` crosses a gate, `--rerun` invalidates a node plus descendants, and `--restart` explicitly replaces an existing checkpoint. See [Graph Engineering](graph-engineering.md).
 TUI and Desktop/WebSocket Loop surfaces also support safe-boundary
 pause, resume, priority, and steering.
 `seekforge loop-cleanup <name>` removes a retained `seekforge/loop-*` worktree;

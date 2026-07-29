@@ -489,10 +489,11 @@ export function validateEngineeringGraphWorkspaces(definition: EngineeringGraphD
     realpathSync.native(resolve(workspace));
     return;
   }
-  resolveNodeWorkspaces(workspace, definition);
+  resolveEngineeringGraphWorkspaces(workspace, definition);
 }
 
-function resolveNodeWorkspaces(
+/** Resolves the physical workspace identity used by Graph fingerprints. */
+export function resolveEngineeringGraphWorkspaces(
   rootInput: string,
   definition: EngineeringGraphDefinition,
   overrides: ReadonlyMap<string, string> = new Map(),
@@ -1122,7 +1123,7 @@ export async function runEngineeringGraph(
   }
   let staticWorkspaces: Map<string, string> | undefined;
   if (definition.managedWorktrees) realpathSync.native(resolve(options.workspace));
-  else staticWorkspaces = resolveNodeWorkspaces(options.workspace, definition);
+  else staticWorkspaces = resolveEngineeringGraphWorkspaces(options.workspace, definition);
   const effectiveCostBudget =
     options.costBudgetUsd === undefined
       ? definition.costBudgetUsd
@@ -1192,7 +1193,8 @@ export async function runEngineeringGraph(
     const workspaceOverrides = new Map(
       [...(managedWorktrees?.entries() ?? [])].map(([nodeId, managed]) => [nodeId, managed.path]),
     );
-    const workspaces = staticWorkspaces ?? resolveNodeWorkspaces(options.workspace, definition, workspaceOverrides);
+    const workspaces =
+      staticWorkspaces ?? resolveEngineeringGraphWorkspaces(options.workspace, definition, workspaceOverrides);
     const fingerprint = graphDefinitionFingerprint(definition, workspaces);
     const now = new Date().toISOString();
     const controlRunId = `graph-run-${randomUUID()}`;
@@ -1322,14 +1324,18 @@ export async function runEngineeringGraph(
               throw new Error(`Persisted Graph managed worktree is missing: ${childGraphId}/${nestedNode.id}`);
             nestedOverrides.set(nestedNode.id, entry.path);
           }
-          const nestedWorkspaces = resolveNodeWorkspaces(workspaces.get(node.id)!, nestedDefinition, nestedOverrides);
+          const nestedWorkspaces = resolveEngineeringGraphWorkspaces(
+            workspaces.get(node.id)!,
+            nestedDefinition,
+            nestedOverrides,
+          );
           if (
             !graphDefinitionFingerprintMatches(child.fingerprint, child.definition, nestedDefinition, nestedWorkspaces)
           ) {
             throw new Error(`Persisted Graph does not match: ${childGraphId}`);
           }
         } else {
-          const nestedWorkspaces = resolveNodeWorkspaces(workspaces.get(node.id)!, nestedDefinition);
+          const nestedWorkspaces = resolveEngineeringGraphWorkspaces(workspaces.get(node.id)!, nestedDefinition);
           if (
             !graphDefinitionFingerprintMatches(child.fingerprint, child.definition, nestedDefinition, nestedWorkspaces)
           ) {

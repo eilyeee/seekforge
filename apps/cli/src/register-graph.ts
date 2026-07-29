@@ -4,8 +4,12 @@ import {
   graphDeleteCommand,
   graphDiagnoseCommand,
   graphListCommand,
+  graphExplainCommand,
+  graphMigrateCommand,
+  graphMigrationPlanCommand,
   graphPriorityCommand,
   graphRunCommand,
+  graphSimulateCommand,
   graphResourcesCommand,
   graphShowCommand,
   graphValidateCommand,
@@ -94,6 +98,33 @@ export function registerGraphCommands(
     .argument("<graph-id>")
     .description("check a Graph checkpoint against its retained event history")
     .action(graphDiagnoseCommand);
+  graph
+    .command("migration-plan")
+    .argument("<file>")
+    .option("--param <name=value>", "supply a typed template parameter", collect, [])
+    .description("preview checkpoint invalidation for a new Graph definition")
+    .action((file: string, opts: { param?: string[] }) => graphMigrationPlanCommand(file, opts.param));
+  graph
+    .command("migrate")
+    .argument("<file>")
+    .option("--param <name=value>", "supply a typed template parameter", collect, [])
+    .description("apply a safe migration to a paused or terminal Graph")
+    .action((file: string, opts: { param?: string[] }) => graphMigrateCommand(file, opts.param));
+  graph
+    .command("simulate")
+    .argument("<file>")
+    .option("--param <name=value>", "supply a typed template parameter", collect, [])
+    .option("--worst-case", "include every configured retry")
+    .description("forecast duration, resources, budgets, and critical path")
+    .action((file: string, opts: { param?: string[]; worstCase?: boolean }) =>
+      graphSimulateCommand(file, opts.param, opts.worstCase === true),
+    );
+  graph
+    .command("explain")
+    .argument("<graph-id>")
+    .argument("<node-id>")
+    .description("explain why a persisted Graph node can or cannot run")
+    .action(graphExplainCommand);
   graph
     .command("priority")
     .argument("<graph-id>")

@@ -148,6 +148,7 @@ export {
 } from "./graph-contract.js";
 export {
   runEngineeringGraph,
+  resolveEngineeringGraphWorkspaces,
   validateEngineeringGraphRunOptions,
   validateEngineeringGraphWorkspaces,
   type GraphFunctionContext,
@@ -179,6 +180,7 @@ export {
 export {
   acknowledgeEngineeringGraphSignal,
   claimEngineeringGraphSignal,
+  engineeringGraphSignalAvailable,
   enqueueEngineeringGraphSignal,
   type EngineeringGraphSignal,
 } from "./graph-signal-store.js";
@@ -217,9 +219,23 @@ export {
   type OrchestrationReplayEntry,
 } from "./orchestration-diagnostics.js";
 export {
+  applyEngineeringGraphMigration,
+  EngineeringGraphMigrationConflictError,
   planEngineeringGraphMigration,
+  type EngineeringGraphMigrationResult,
   type EngineeringGraphMigrationPlan,
 } from "./graph-migration.js";
+export {
+  explainEngineeringGraphNode,
+  simulateEngineeringGraph,
+  type EngineeringGraphNodeBlocker,
+  type EngineeringGraphNodeEstimate,
+  type EngineeringGraphNodeExplanation,
+  type EngineeringGraphNodeExplanationContext,
+  type EngineeringGraphSimulationNode,
+  type EngineeringGraphSimulationOptions,
+  type EngineeringGraphSimulationReport,
+} from "./graph-simulation.js";
 export {
   archiveEngineeringGraphRun,
   readEngineeringGraphRunSnapshots,

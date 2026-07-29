@@ -3154,6 +3154,55 @@ Bounding array counts alone is insufficient when individual values, allowed enum
 - **Do:** normalize advisory data through the same field rules used at deserialization, and test producer output with the parser.
 - **Caught:** Loop working-memory creation could retain unsafe paths or unknown categories that its state loader later rejected.
 
+## 293. A mutation plan expires before its lease is acquired
+
+Another owner can replace a checkpoint between a read-only preview and the mutation lock. Applying the earlier invalidation set can preserve results that are no longer compatible with the authoritative definition.
+
+- **Do:** validate before effects, then acquire the mutation lease, reload the checkpoint, and recompute the complete plan from that generation.
+- **Caught:** Graph migration apply initially risked treating its preflight migration plan as authorization to rewrite state.
+
+## 294. Partial checkpoint migration must rebuild aggregate invariants
+
+Filtering result rows is insufficient when totals also include unfinished map items and fan-in usage, while pause reason, completion markers, attempts, fingerprints, and resource generations constrain the same record.
+
+- **Do:** construct the migrated checkpoint from the destination contract, recompute every aggregate from retained components, clear incompatible lifecycle fields, and validate it through the normal loader.
+- **Caught:** Graph migration needed to prevent stale usage, terminal markers, fan-in evidence, or active generations from surviving node invalidation.
+
+## 295. Forecasts are observations, not execution authorization
+
+A simulator cannot know future routing, approvals, external signals, failures, or remote latency. Reusing a forecast as a runtime eligibility decision silently bypasses the authoritative scheduler.
+
+- **Do:** keep simulation side-effect free, report uncertainty explicitly, and let execution re-evaluate every dependency, resource, budget, deadline, and external event.
+- **Caught:** Graph scheduling forecasts needed a separate contract from live node eligibility and checkpoint mutation.
+
+## 296. Nested durable generations cannot be migrated independently
+
+A child checkpoint is authenticated by the definition and attempt identity stored in its parent. Rewriting either side alone makes the pair inconsistent, while invalidating a parent subgraph node can accidentally resume an old child generation.
+
+- **Do:** migrate parent and child identities atomically under a coordinated protocol, or reject child and subgraph-invalidating migrations until that protocol exists.
+- **Caught:** Graph migration initially allowed a nested child checkpoint or an existing subgraph definition to change independently.
+
+## 297. Budget forecasts must use the budget's time domain
+
+Workflow makespan may include durable offline waits that the runtime explicitly excludes from cumulative active duration. Comparing those different clocks produces false exhaustion warnings.
+
+- **Do:** report wall-clock and active-runtime estimates separately, and compare a duration budget only with its defined active-time measure.
+- **Caught:** Graph simulation initially charged an offline `notBefore` gap to `maxDurationMs`.
+
+## 298. Alternative readiness conditions use OR semantics
+
+A wait with both a timer and a signal is ready when either input succeeds. Reporting every unavailable input as an independent blocker makes an already-runnable node look blocked.
+
+- **Do:** evaluate the declared readiness expression first, then report blockers only when no alternative is satisfied.
+- **Caught:** Graph node explanation reported a pending signal after the wait timer was ready, and vice versa.
+
+## 299. Durable waits are scheduler barriers, not zero-duration work
+
+An unresolved durable wait drains in-flight work and pauses the workflow before other ready nodes launch. Modeling it as an ordinary zero-duration node allows impossible overlap and understates wall-clock completion.
+
+- **Do:** make forecasts and replay models follow the runtime's pause-and-drain transition before advancing the durable timer.
+- **Caught:** Graph simulation initially launched an independent sibling before a `notBefore` wait had resumed.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

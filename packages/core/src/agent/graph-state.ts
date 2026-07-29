@@ -92,6 +92,7 @@ export type GraphEvent = {
     | "graph.resumed"
     | "graph.paused"
     | "graph.controlled"
+    | "graph.migrated"
     | "graph.completed"
     | "node.started"
     | "node.attempt.started"
@@ -247,6 +248,7 @@ export function parseGraphEvent(value: unknown, previousSequence = 0): GraphEven
     "graph.resumed",
     "graph.paused",
     "graph.controlled",
+    "graph.migrated",
     "graph.completed",
     "node.started",
     "node.attempt.started",
@@ -510,6 +512,14 @@ export function saveEngineeringGraphState(workspace: string, state: EngineeringG
   const serialized = `${JSON.stringify(state, null, 2)}\n`;
   if (Buffer.byteLength(serialized) > MAX_GRAPH_STATE_BYTES) throw new Error("Graph checkpoint exceeds 1 MiB");
   writeWorkspaceStateFileAtomic(workspace, statePath(state.graphId), serialized);
+}
+
+/** Validates a newly constructed checkpoint against the persisted contract before effects. */
+export function validateEngineeringGraphState(state: EngineeringGraphState): EngineeringGraphState {
+  const serialized = JSON.stringify(state);
+  const parsed = parseState(serialized, state.graphId);
+  if (!parsed) throw new Error(`Engineering Graph state is invalid: ${state.graphId}`);
+  return parsed;
 }
 
 export function loadEngineeringGraphState(workspace: string, graphId: string): EngineeringGraphState | null {
