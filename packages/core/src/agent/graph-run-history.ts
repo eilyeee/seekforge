@@ -1,8 +1,8 @@
 import { isRecord } from "../util/guards.js";
 import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 import { isDenseArray } from "./orchestration.js";
-import type { EngineeringGraphState, GraphNodeResult } from "./graph-state.js";
-import { isValidLoopDagId } from "./loop-dag-validation.js";
+import type { EngineeringGraphState, GraphArtifact, GraphNodeResult } from "./graph-state.js";
+import { isSafeLoopDagRelativePath, isValidLoopDagId } from "./loop-dag-validation.js";
 
 export type EngineeringGraphRunSnapshot = {
   runNumber: number;
@@ -16,12 +16,27 @@ export type EngineeringGraphRunSnapshot = {
   completedAt: string;
   results: Array<
     Pick<GraphNodeResult, "id" | "status" | "costUsd" | "tokensUsed"> &
-      Partial<Pick<GraphNodeResult, "attempts" | "startedAt" | "completedAt">>
+      Partial<Pick<GraphNodeResult, "attempts" | "startedAt" | "completedAt" | "artifacts">>
   >;
 };
 
 const MAX_RUN_SNAPSHOTS = 16;
 const MAX_BYTES = 512 * 1024;
+
+function validArchivedArtifact(artifact: unknown, resultId: unknown): artifact is GraphArtifact {
+  return (
+    isRecord(artifact) &&
+    typeof artifact.name === "string" &&
+    /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(artifact.name) &&
+    isSafeLoopDagRelativePath(artifact.path) &&
+    typeof artifact.sha256 === "string" &&
+    /^[a-f0-9]{64}$/.test(artifact.sha256) &&
+    Number.isSafeInteger(artifact.sizeBytes) &&
+    (artifact.sizeBytes as number) >= 0 &&
+    artifact.verified === true &&
+    (artifact.producerNodeId === undefined || artifact.producerNodeId === resultId)
+  );
+}
 
 function path(graphId: string): string {
   if (!isValidLoopDagId(graphId)) throw new Error(`Invalid Graph id: ${graphId}`);
@@ -55,14 +70,18 @@ export function readEngineeringGraphRunSnapshots(workspace: string, graphId: str
         !Number.isFinite(Date.parse(run.createdAt)) ||
         typeof run.completedAt !== "string" ||
         !Number.isFinite(Date.parse(run.completedAt)) ||
+        Date.parse(run.completedAt) < Date.parse(run.createdAt) ||
         !isDenseArray(run.results) ||
         run.results.length > 128
       ) {
         return [];
       }
       const results = run.results.flatMap((result) => {
+        if (!isRecord(result)) return [];
+        const artifacts = isDenseArray(result.artifacts)
+          ? result.artifacts.filter((artifact): artifact is GraphArtifact => validArchivedArtifact(artifact, result.id))
+          : [];
         if (
-          !isRecord(result) ||
           !isValidLoopDagId(result.id) ||
           !["passed", "failed", "skipped", "waiting_approval", "waiting_signal"].includes(String(result.status)) ||
           typeof result.costUsd !== "number" ||
@@ -76,13 +95,20 @@ export function readEngineeringGraphRunSnapshots(workspace: string, graphId: str
             (typeof result.startedAt !== "string" || !Number.isFinite(Date.parse(result.startedAt)))) ||
           (result.completedAt !== undefined &&
             (typeof result.completedAt !== "string" || !Number.isFinite(Date.parse(result.completedAt)))) ||
+          (result.artifacts !== undefined &&
+            (!isDenseArray(result.artifacts) || artifacts.length !== result.artifacts.length)) ||
           (typeof result.startedAt === "string" &&
             typeof result.completedAt === "string" &&
             Date.parse(result.completedAt) < Date.parse(result.startedAt))
         ) {
           return [];
         }
-        return [result as EngineeringGraphRunSnapshot["results"][number]];
+        return [
+          {
+            ...result,
+            ...(artifacts.length > 0 ? { artifacts } : {}),
+          } as EngineeringGraphRunSnapshot["results"][number],
+        ];
       });
       if (
         results.length !== run.results.length ||
@@ -121,15 +147,19 @@ export function archiveEngineeringGraphRun(workspace: string, state: Engineering
     elapsedMs: state.elapsedMs,
     createdAt: state.createdAt,
     completedAt: state.completedAt,
-    results: state.results.map(({ id, status, costUsd, tokensUsed, attempts, startedAt, completedAt }) => ({
-      id,
-      status,
-      costUsd,
-      tokensUsed,
-      attempts,
-      ...(startedAt ? { startedAt } : {}),
-      ...(completedAt ? { completedAt } : {}),
-    })),
+    results: state.results.map(({ id, status, costUsd, tokensUsed, attempts, startedAt, completedAt, artifacts }) => {
+      const archivedArtifacts = artifacts?.filter((artifact) => validArchivedArtifact(artifact, id)) ?? [];
+      return {
+        id,
+        status,
+        costUsd,
+        tokensUsed,
+        attempts,
+        ...(startedAt ? { startedAt } : {}),
+        ...(completedAt ? { completedAt } : {}),
+        ...(archivedArtifacts.length > 0 ? { artifacts: archivedArtifacts } : {}),
+      };
+    }),
   };
   writeWorkspaceStateFileAtomic(
     workspace,

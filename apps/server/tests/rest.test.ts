@@ -15,6 +15,7 @@ import {
   readLoopControlEntries,
   recordGraphSchedulingObservation,
   recordLoopVerificationIntelligence,
+  recordOrchestrationProposals,
 } from "@seekforge/core";
 
 const TOKEN = "test-token-rest";
@@ -442,6 +443,50 @@ describe("loop management API", () => {
       recommendations: [],
       nodes: [expect.objectContaining({ nodeId: "done" })],
     });
+    expect(await jsonOf(await authed("/api/orchestration/report?maxFailureRate=0.5"))).toMatchObject({
+      portfolio: { totals: { graphs: 1 } },
+      policy: { maxFailureRate: 0.5 },
+      graphs: [
+        expect.objectContaining({
+          graphId: "rest-graph",
+          replay: expect.objectContaining({ terminalStatus: "passed" }),
+        }),
+      ],
+    });
+    expect((await authed("/api/orchestration/report?maxFailureRate=2")).status).toBe(400);
+    expect((await authed("/api/orchestration/report?maxCostUsd=0x10")).status).toBe(400);
+    const proposal = recordOrchestrationProposals(workspace, [
+      {
+        id: `opt-${"a".repeat(20)}`,
+        scope: "graph",
+        sourceId: "rest-graph",
+        sourceFingerprint: "b".repeat(64),
+        confidence: "medium",
+        evidenceCount: 4,
+        risk: "low",
+        title: "Review capacity",
+        rationale: "Observed contention",
+        action: { kind: "graph_resource_capacity", resource: "cpu", value: 2 },
+      },
+    ])[0]!;
+    expect(
+      await jsonOf(
+        await authed(`/api/orchestration/proposals/${proposal.id}/approve`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ expectedUpdatedAt: proposal.updatedAt }),
+        }),
+      ),
+    ).toMatchObject({ id: proposal.id, status: "approved" });
+    expect(
+      (
+        await authed(`/api/orchestration/proposals/${proposal.id}/dismiss`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ expectedUpdatedAt: 123 }),
+        })
+      ).status,
+    ).toBe(400);
     expect((await authed("/api/graphs/scheduling-intelligence")).status).toBe(404);
     expect(
       await jsonOf(
@@ -488,7 +533,13 @@ describe("loop management API", () => {
           }),
         }),
       ),
-    ).toMatchObject({ graphId: "rest-graph", changed: ["done"], invalidated: ["done"], preserved: [] });
+    ).toMatchObject({
+      graphId: "rest-graph",
+      changed: ["done"],
+      invalidated: ["done"],
+      preserved: [],
+      tree: { graphId: "rest-graph", mode: "single_checkpoint" },
+    });
     expect(
       await jsonOf(
         await authed("/api/graphs/rest-graph/migration-apply", {

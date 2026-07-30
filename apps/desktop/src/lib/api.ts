@@ -303,6 +303,20 @@ export const api = {
       "GET",
       withWorkspace(`/api/graphs/${encodeURIComponent(id)}/health`, ws),
     ),
+  orchestrationReport: (ws?: string) =>
+    request<import("../types").WorkspaceOrchestrationReport>("GET", withWorkspace("/api/orchestration/report", ws)),
+  orchestrationProposalRefresh: (ws?: string) =>
+    request<{ proposals: import("../types").OrchestrationProposal[] }>(
+      "POST",
+      withWorkspace("/api/orchestration/proposals/refresh", ws),
+      {},
+    ),
+  orchestrationProposalReview: (id: string, status: "approve" | "dismiss", expectedUpdatedAt?: string, ws?: string) =>
+    request<import("../types").OrchestrationProposal>(
+      "POST",
+      withWorkspace(`/api/orchestration/proposals/${encodeURIComponent(id)}/${status}`, ws),
+      expectedUpdatedAt ? { expectedUpdatedAt } : {},
+    ),
   graphPriority: (id: string, priority: number, ws?: string) =>
     request<import("../types").EngineeringGraphSummary>(
       "POST",

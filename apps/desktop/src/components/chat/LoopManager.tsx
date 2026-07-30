@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../../lib/api";
 import { LatestRequest } from "../../views/async-coordination";
+import { useWorkspaceAsyncCoordinator } from "../../views/use-workspace-async";
 import { useT } from "../../lib/i18n";
 import { useStore } from "../../store";
 import type {
@@ -16,6 +17,8 @@ import type {
   LoopHistoryEntry,
   LoopSpeculationSummary,
   LoopStateSummary,
+  OrchestrationProposal,
+  WorkspaceOrchestrationReport,
 } from "../../types";
 import { Button } from "../ui";
 import { LoopDagSection } from "./LoopDagSection";
@@ -23,6 +26,7 @@ import { GraphEngineeringSection } from "./GraphEngineeringSection";
 import { LoopDetailsSection } from "./LoopDetailsSection";
 import { LoopListSection } from "./LoopListSection";
 import { LoopSpeculationSection } from "./LoopSpeculationSection";
+import { OrchestrationIntelligenceSection } from "./OrchestrationIntelligenceSection";
 
 type Props = { running: boolean; onResume: (opts: { loopId: string }) => void };
 
@@ -30,6 +34,8 @@ export function LoopManager({ running, onResume }: Props) {
   const t = useT();
   const graphEventVersion = useStore((state) => state.graphEventVersion);
   const subscribeGraphRun = useStore((state) => state.subscribeGraphRun);
+  const workspaceId = useStore((state) => state.activeWorkspaceId);
+  const orchestrationRequests = useWorkspaceAsyncCoordinator(workspaceId, () => useStore.getState().activeWorkspaceId);
   const [loops, setLoops] = useState<LoopStateSummary[]>([]);
   const [selected, setSelected] = useState<string>();
   const [history, setHistory] = useState<LoopHistoryEntry[]>([]);
@@ -43,12 +49,14 @@ export function LoopManager({ running, onResume }: Props) {
   const [graphHealth, setGraphHealth] = useState<Record<string, EngineeringGraphHealthReport>>({});
   const [dagResources, setDagResources] = useState<Record<string, LoopDagResourceReport>>({});
   const [speculations, setSpeculations] = useState<LoopSpeculationSummary[]>([]);
+  const [orchestration, setOrchestration] = useState<WorkspaceOrchestrationReport>();
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [refreshBusy, setRefreshBusy] = useState(false);
   const [loopBusy, setLoopBusy] = useState(false);
   const [resourceBusy, setResourceBusy] = useState(false);
+  const [orchestrationBusy, setOrchestrationBusy] = useState(false);
   const refreshRequests = useRef(new LatestRequest());
   const historyRequests = useRef(new LatestRequest());
   const dagRequests = useRef(new LatestRequest());
@@ -81,6 +89,10 @@ export function LoopManager({ running, onResume }: Props) {
     }
   }, [query, status]);
   useEffect(() => void refresh(), [refresh]);
+  useEffect(() => {
+    setOrchestration(undefined);
+    setOrchestrationBusy(false);
+  }, [workspaceId]);
   useEffect(() => {
     for (const graph of graphs) if (graph.status === "running" && graph.runId) subscribeGraphRun(graph.runId);
   }, [graphs, subscribeGraphRun]);
@@ -466,6 +478,39 @@ export function LoopManager({ running, onResume }: Props) {
     }
   };
 
+  const refreshOrchestration = async () => {
+    const request = orchestrationRequests.beginLatest(workspaceId);
+    if (!request) return;
+    setOrchestrationBusy(true);
+    try {
+      await api.orchestrationProposalRefresh(workspaceId);
+      const report = await api.orchestrationReport(workspaceId);
+      if (orchestrationRequests.isCurrent(request)) {
+        setOrchestration(report);
+        setError("");
+      }
+    } catch (caught) {
+      if (orchestrationRequests.isCurrent(request)) setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      if (orchestrationRequests.isCurrent(request)) setOrchestrationBusy(false);
+    }
+  };
+
+  const reviewOrchestrationProposal = async (proposal: OrchestrationProposal, decision: "approve" | "dismiss") => {
+    const request = orchestrationRequests.beginLatest(workspaceId);
+    if (!request) return;
+    setOrchestrationBusy(true);
+    try {
+      await api.orchestrationProposalReview(proposal.id, decision, proposal.updatedAt, workspaceId);
+      const report = await api.orchestrationReport(workspaceId);
+      if (orchestrationRequests.isCurrent(request)) setOrchestration(report);
+    } catch (caught) {
+      if (orchestrationRequests.isCurrent(request)) setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      if (orchestrationRequests.isCurrent(request)) setOrchestrationBusy(false);
+    }
+  };
+
   return (
     <details className="mt-2 rounded border border-subtle p-2">
       <summary className="cursor-pointer text-xs font-medium text-secondary">{t("chat.loop.manager.title")}</summary>
@@ -515,6 +560,12 @@ export function LoopManager({ running, onResume }: Props) {
         health={loopHealth}
         history={history}
         onLoadMore={() => void loadMoreHistory()}
+      />
+      <OrchestrationIntelligenceSection
+        report={orchestration}
+        busy={resourceBusy || orchestrationBusy}
+        onRefresh={() => void refreshOrchestration()}
+        onProposalReview={(proposal, decision) => void reviewOrchestrationProposal(proposal, decision)}
       />
       <LoopDagSection
         dags={dags}

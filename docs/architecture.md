@@ -161,6 +161,30 @@ mutating WS Agents, Loops, background runs, webhook runs, security fixes, Git,
 and worktree operations by physical repository identity; read-only ask runs are
 not serialized.
 
+## Orchestration decision layer
+
+`packages/core/src/agent/orchestration-report.ts` is the composition owner for
+workspace-level Loop/Graph intelligence. Pure policy remains split into focused
+owners: health forecasting, deterministic replay, strategy outcomes, SLO
+evaluation, Pareto counterfactuals, placement checks, artifact reuse, and tree
+migration planning. CLI, Server, and Desktop consume the same report instead of
+rejoining state independently.
+
+Generated optimization proposals are durable, bounded records protected by a
+cross-process lease. Review uses an optimistic `updatedAt` version and explicit
+`approved`/`dismissed` transitions. This lifecycle is deliberately separate
+from execution: an approved proposal cannot mutate definitions, increase hard
+budgets, grant permission, or affect scheduler eligibility. Graph artifacts are
+reusable only when the archived run fingerprint exactly matches the current
+definition/workspace generation and the artifact retained verified SHA-256 and
+size evidence. Multi-checkpoint tree migrations remain preview-only and
+fail-closed until one coordinated transaction can hide every partial state.
+Reviewed proposal decisions outrank unreviewed drafts during retention, and any
+proposal mutation fails closed on malformed durable state. Workspace reports
+keep all-checkpoint portfolio totals while bounding detailed Loop/Graph joins;
+Graph-owned Loops and nested Graphs carry parent provenance so rollups count
+their usage exactly once.
+
 ## Security boundaries
 
 - Tool results are data and are never promoted to instructions.

@@ -985,6 +985,7 @@ export type LoopStateSummary = {
   phase?: "requirements" | "precheck" | "editing" | "verification" | "acceptance" | "settled";
   task: string;
   workspace: string;
+  parentGraph?: { graphId: string; nodeId: string };
   iterations: number;
   maxIterations: number;
   costUsd: number;
@@ -1243,6 +1244,155 @@ export type EngineeringGraphHealthReport = {
     message: string;
   }>;
   lineage: Array<{ nodeId: string; sessionId: string }>;
+};
+export type OrchestrationProposalAction =
+  | { kind: "graph_concurrency"; value: number }
+  | { kind: "graph_resource_capacity"; resource: string; value: number }
+  | { kind: "loop_route"; failureCategory: string; model: string }
+  | { kind: "budget_review"; budget: string; forecastIterations: number }
+  | { kind: "executor_placement"; nodeId: string; executor: string };
+export type OrchestrationProposalDraft = {
+  id: string;
+  scope: "loop" | "graph";
+  sourceId: string;
+  sourceFingerprint: string;
+  confidence: "none" | "low" | "medium" | "high";
+  evidenceCount: number;
+  risk: "low" | "medium" | "high";
+  title: string;
+  rationale: string;
+  action: OrchestrationProposalAction;
+};
+export type OrchestrationProposal = OrchestrationProposalDraft & {
+  status: "proposed" | "approved" | "dismissed";
+  createdAt: string;
+  updatedAt: string;
+};
+export type OrchestrationSloEvaluation = {
+  status: "unknown" | "met" | "at_risk" | "breached";
+  objectives: Array<{
+    kind: "p95_duration" | "cost" | "failure_rate" | "forecast_coverage";
+    status: "unknown" | "met" | "at_risk" | "breached";
+    observed?: number;
+    target: number;
+  }>;
+};
+export type OrchestrationReplayReport = {
+  kind: "loop" | "graph";
+  id: string;
+  events: number;
+  lastSequence: number;
+  digest: string;
+  terminalStatus?: string;
+  peakConcurrency: number;
+  attempts: number;
+  retries: number;
+  pauses: number;
+  warnings: number;
+};
+export type OrchestrationPortfolioReport = {
+  generatedAt: string;
+  status: "healthy" | "warning" | "critical";
+  totals: {
+    loops: number;
+    graphs: number;
+    costUsd: number;
+    tokensUsed: number;
+    activeDurationMs: number;
+    configuredCostBudgetUsd: number;
+    configuredTokenBudget: number;
+    configuredDurationBudgetMs: number;
+  };
+  items: Array<{
+    kind: "loop" | "graph";
+    id: string;
+    status: string;
+    costUsd: number;
+    tokensUsed: number;
+    activeDurationMs: number;
+    parent?: { graphId: string; nodeId: string };
+  }>;
+};
+export type WorkspaceOrchestrationReport = {
+  portfolio: OrchestrationPortfolioReport;
+  policy: {
+    maxP95DurationMs?: number;
+    maxCostUsd?: number;
+    maxFailureRate?: number;
+    minForecastCoverage?: number;
+  };
+  loops: Array<{
+    loopId: string;
+    health: LoopHealthReport;
+    strategy: {
+      loopId: string;
+      samples: number;
+      routes: Array<{
+        failureCategory: string;
+        model: string;
+        routeReason: string;
+        attempts: number;
+        improvements: number;
+        regressions: number;
+        improvementRate: number;
+        averageCostUsd: number;
+        averageDurationMs: number;
+        confidence: "none" | "low" | "medium" | "high";
+      }>;
+      recommendedRoutes: Array<{
+        failureCategory: string;
+        model: string;
+        confidence: "none" | "low" | "medium" | "high";
+        evidenceCount: number;
+      }>;
+    };
+    slo: OrchestrationSloEvaluation;
+    replay: OrchestrationReplayReport;
+    proposals: OrchestrationProposalDraft[];
+  }>;
+  graphs: Array<{
+    graphId: string;
+    health: EngineeringGraphHealthReport;
+    optimization: {
+      graphId: string;
+      confidence: "none" | "low" | "medium" | "high";
+      evidenceCount: number;
+      scenarios: Array<{
+        id: string;
+        changes: Array<
+          | { kind: "max_concurrency"; from: number; to: number }
+          | { kind: "resource_capacity"; resource: string; from: number; to: number }
+        >;
+        predictedMakespanMs: number;
+        predictedActiveDurationMs: number;
+        predictedSavingsMs: number;
+        risks: string[];
+        paretoOptimal: boolean;
+      }>;
+      placements: Array<{
+        nodeId: string;
+        executor: string;
+        status: "eligible" | "missing" | "untrusted" | "protocol_mismatch" | "cancellation_unsupported";
+        reasons: string[];
+      }>;
+      proposals: OrchestrationProposalDraft[];
+    };
+    slo: OrchestrationSloEvaluation;
+    replay: OrchestrationReplayReport;
+    artifactReuse: Array<{
+      name: string;
+      path: string;
+      sha256: string;
+      sizeBytes: number;
+      producerNodeId?: string;
+      verified: true;
+      key: string;
+      nodeId: string;
+      sourceRunNumber: number;
+      sourceCompletedAt: string;
+    }>;
+  }>;
+  reviewedProposals: OrchestrationProposal[];
 };
 export type EngineeringGraphEvidenceReport = {
   schemaVersion: 1;

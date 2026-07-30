@@ -5,6 +5,7 @@ import {
   graphDiagnoseCommand,
   graphListCommand,
   graphExplainCommand,
+  graphExpansionPlanCommand,
   graphHealthCommand,
   graphIntelligenceCommand,
   graphMigrateCommand,
@@ -116,6 +117,12 @@ export function registerGraphCommands(
     .option("--param <name=value>", "supply a typed template parameter", collect, [])
     .description("preview checkpoint invalidation for a new Graph definition")
     .action((file: string, opts: { param?: string[] }) => graphMigrationPlanCommand(file, opts.param));
+  graph
+    .command("expansion-plan")
+    .argument("<file>")
+    .option("--param <name=value>", "supply a typed template parameter", collect, [])
+    .description("verify an append-only runtime Graph expansion")
+    .action((file: string, opts: { param?: string[] }) => graphExpansionPlanCommand(file, opts.param));
   graph
     .command("migrate")
     .argument("<file>")

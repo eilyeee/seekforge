@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { hasOnlyKeys, isRecord } from "../util/guards.js";
 import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
@@ -21,7 +22,7 @@ import {
   type EngineeringGraphState,
   type GraphEvent,
 } from "./graph-state.js";
-import { orchestrationDescendantClosure } from "./orchestration.js";
+import { isDenseArray, orchestrationDescendantClosure } from "./orchestration.js";
 import { acquireSessionLease } from "./session-lease.js";
 import { managedOrchestrationWorktreePath } from "./orchestration-worktrees.js";
 
@@ -39,10 +40,58 @@ export type EngineeringGraphMigrationResult = {
   plan: EngineeringGraphMigrationPlan;
   state: EngineeringGraphState;
 };
+export type EngineeringGraphTreeMigrationEntry = {
+  path: string;
+  runtimeGraphId: string;
+  stateStatus: "available" | "missing";
+  plan: EngineeringGraphMigrationPlan;
+};
+export type EngineeringGraphTreeMigrationPlan = {
+  graphId: string;
+  mode: "no_op" | "single_checkpoint" | "coordinated_tree";
+  entries: EngineeringGraphTreeMigrationEntry[];
+  blockers: string[];
+};
 export type EngineeringGraphMigrationOptions = {
   /** Test/eval-only crash boundary hook; production callers should omit it. */
   faultInjector?: (point: "after_journal_prepared" | "after_checkpoint_committed" | "after_journal_committed") => void;
 };
+
+/** Loads root and nested checkpoints from their resolved physical workspaces. */
+export function listEngineeringGraphTreeStates(
+  workspace: string,
+  definitionInputs: readonly unknown[],
+): EngineeringGraphState[] {
+  if (!isDenseArray(definitionInputs) || definitionInputs.length === 0 || definitionInputs.length > 2) {
+    throw new Error("Graph tree state discovery requires one or two dense definitions");
+  }
+  const states = new Map<string, EngineeringGraphState>();
+  const owners = new Map<string, string>();
+  const visit = (baseWorkspace: string, definition: EngineeringGraphDefinition, runtimeGraphId: string): void => {
+    const physicalWorkspace = realpathSync.native(baseWorkspace);
+    const state = loadEngineeringGraphState(physicalWorkspace, runtimeGraphId);
+    if (state) {
+      const existing = states.get(runtimeGraphId);
+      if (existing && (owners.get(runtimeGraphId) !== physicalWorkspace || !isDeepStrictEqual(existing, state))) {
+        throw new Error(`Graph tree contains conflicting checkpoint identities: ${runtimeGraphId}`);
+      }
+      states.set(runtimeGraphId, state);
+      owners.set(runtimeGraphId, physicalWorkspace);
+    }
+    const runtimeDefinition = { ...definition, graphId: runtimeGraphId };
+    const workspaces = resolveEngineeringGraphWorkspaces(physicalWorkspace, runtimeDefinition);
+    for (const node of definition.nodes) {
+      if (node.kind !== "subgraph" || node.graph === undefined) continue;
+      const childId = engineeringSubgraphStateId(runtimeGraphId, node.id, node.graph.graphId);
+      visit(workspaces.get(node.id)!, node.graph, childId);
+    }
+  };
+  for (const input of definitionInputs) {
+    const definition = parseEngineeringGraphDefinition(input);
+    visit(workspace, definition, definition.graphId);
+  }
+  return [...states.values()].sort((left, right) => left.graphId.localeCompare(right.graphId));
+}
 
 export type EngineeringGraphMigrationJournal = {
   version: 1;
@@ -81,6 +130,140 @@ export function planEngineeringGraphMigration(
   const invalidatedSet = new Set(invalidated);
   const preserved = [...newNodes.keys()].filter((id) => oldNodes.has(id) && !invalidatedSet.has(id)).sort();
   return { graphId: after.graphId, graphPolicyChanged, added, removed, changed, preserved, invalidated };
+}
+
+/** Requires an append-only change so a paused checkpoint can evolve without invalidating completed work. */
+export function planEngineeringGraphExpansion(
+  beforeInput: unknown,
+  afterInput: unknown,
+): EngineeringGraphMigrationPlan {
+  const before = parseEngineeringGraphDefinition(beforeInput);
+  const after = parseEngineeringGraphDefinition(afterInput);
+  const plan = planEngineeringGraphMigration(before, after);
+  const assertAppendOnly = (prior: EngineeringGraphDefinition, target: EngineeringGraphDefinition): void => {
+    if (prior.graphId !== target.graphId) throw new Error("Dynamic Graph expansion cannot change a nested graph id");
+    const { nodes: _priorNodes, ...priorPolicy } = prior;
+    const { nodes: _targetNodes, ...targetPolicy } = target;
+    if (!isDeepStrictEqual(priorPolicy, targetPolicy)) {
+      throw new Error("Dynamic Graph expansion cannot change Graph policy");
+    }
+    const targetNodes = new Map(target.nodes.map((node) => [node.id, node]));
+    for (const oldNode of prior.nodes) {
+      const newNode = targetNodes.get(oldNode.id);
+      if (!newNode) throw new Error(`Dynamic Graph expansion cannot remove node ${oldNode.id}`);
+      const { graph: oldGraph, ...oldNodeContract } = oldNode;
+      const { graph: newGraph, ...newNodeContract } = newNode;
+      if (!isDeepStrictEqual(oldNodeContract, newNodeContract)) {
+        throw new Error(`Dynamic Graph expansion cannot change existing node ${oldNode.id}`);
+      }
+      if ((oldGraph === undefined) !== (newGraph === undefined)) {
+        throw new Error(`Dynamic Graph expansion cannot change existing node ${oldNode.id}`);
+      }
+      if (oldGraph && newGraph) assertAppendOnly(oldGraph, newGraph);
+    }
+  };
+  assertAppendOnly(before, after);
+  return plan;
+}
+
+/** Resolves every retained child identity before any checkpoint is mutated. */
+export function planEngineeringGraphTreeMigration(
+  beforeInput: unknown,
+  afterInput: unknown,
+  states: readonly EngineeringGraphState[] = [],
+): EngineeringGraphTreeMigrationPlan {
+  const before = parseEngineeringGraphDefinition(beforeInput);
+  const after = parseEngineeringGraphDefinition(afterInput);
+  if (before.graphId !== after.graphId) throw new Error("Graph tree migration requires the same root graph id");
+  const byId = new Map(states.map((state) => [state.graphId, state]));
+  if (byId.size !== states.length) throw new Error("Graph tree migration states contain duplicate graph ids");
+  const entries: EngineeringGraphTreeMigrationEntry[] = [];
+  const blockers: string[] = [];
+  let detachedCheckpoint = false;
+  const visit = (
+    prior: EngineeringGraphDefinition,
+    target: EngineeringGraphDefinition,
+    runtimeGraphId: string,
+    path: string,
+    expectedParent?: { graphId: string; nodeId: string },
+  ): void => {
+    const plan = planEngineeringGraphMigration(
+      { ...prior, graphId: runtimeGraphId },
+      { ...target, graphId: runtimeGraphId },
+    );
+    const state = byId.get(runtimeGraphId);
+    entries.push({ path, runtimeGraphId, stateStatus: state ? "available" : "missing", plan });
+    if (state && (state.status === "running" || state.activeAttempts.length > 0)) {
+      blockers.push(`Graph ${path} is running`);
+    }
+    if (
+      state &&
+      (!isDeepStrictEqual(state.definition, { ...prior, graphId: runtimeGraphId }) ||
+        !isDeepStrictEqual(state.parentGraph, expectedParent))
+    ) {
+      blockers.push(`Graph ${path} checkpoint does not match its source definition or parent provenance`);
+    }
+    const targetNodes = new Map(target.nodes.map((node) => [node.id, node]));
+    const priorNodes = new Map(prior.nodes.map((node) => [node.id, node]));
+    for (const oldNode of prior.nodes) {
+      const newNode = targetNodes.get(oldNode.id);
+      if (oldNode.kind === "subgraph" && oldNode.graph !== undefined) {
+        const oldChildId = engineeringSubgraphStateId(runtimeGraphId, oldNode.id, oldNode.graph.graphId);
+        if (
+          (newNode?.kind !== "subgraph" ||
+            newNode.graph === undefined ||
+            oldNode.graph.graphId !== newNode.graph.graphId) &&
+          byId.has(oldChildId)
+        ) {
+          detachedCheckpoint = true;
+          blockers.push(`Graph ${path}/${oldNode.id} retains a child checkpoint that the target removes or replaces`);
+        }
+      }
+      if (
+        oldNode.kind !== "subgraph" ||
+        newNode?.kind !== "subgraph" ||
+        oldNode.graph === undefined ||
+        newNode.graph === undefined ||
+        oldNode.graph.graphId !== newNode.graph.graphId
+      ) {
+        continue;
+      }
+      const childId = engineeringSubgraphStateId(runtimeGraphId, oldNode.id, oldNode.graph.graphId);
+      visit(oldNode.graph, newNode.graph, childId, `${path}/${oldNode.id}`, {
+        graphId: runtimeGraphId,
+        nodeId: oldNode.id,
+      });
+    }
+    for (const newNode of target.nodes) {
+      const oldNode = priorNodes.get(newNode.id);
+      if (newNode.kind !== "subgraph" || newNode.graph === undefined) continue;
+      if (oldNode?.kind === "subgraph" && oldNode.graph?.graphId === newNode.graph.graphId) continue;
+      const newChildId = engineeringSubgraphStateId(runtimeGraphId, newNode.id, newNode.graph.graphId);
+      if (byId.has(newChildId)) {
+        detachedCheckpoint = true;
+        blockers.push(`Graph ${path}/${newNode.id} would bind an unrelated existing child checkpoint`);
+      }
+    }
+  };
+  visit(before, after, before.graphId, before.graphId);
+  const changedEntries = entries.filter(
+    (entry) =>
+      entry.plan.graphPolicyChanged ||
+      entry.plan.added.length > 0 ||
+      entry.plan.removed.length > 0 ||
+      entry.plan.changed.length > 0,
+  );
+  const requiresTreeTransaction =
+    detachedCheckpoint || changedEntries.length > 1 || changedEntries.some((entry) => entry.path !== before.graphId);
+  if (requiresTreeTransaction) {
+    blockers.push("Nested or multiple checkpoints require a coordinated tree transaction; apply remains fail-closed");
+  }
+  return {
+    graphId: before.graphId,
+    mode: changedEntries.length === 0 ? "no_op" : requiresTreeTransaction ? "coordinated_tree" : "single_checkpoint",
+    entries,
+    blockers,
+  };
 }
 
 function assertMigrationEligible(before: EngineeringGraphState, after: EngineeringGraphDefinition): void {

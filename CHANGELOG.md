@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### round 76: orchestration decision intelligence
+- Added workspace Loop/Graph portfolio budgets, caller-defined SLO evaluation, deterministic replay, Loop route outcome learning, remote executor placement checks, and bounded Pareto counterfactuals.
+- Added durable advisory proposal review with optimistic concurrency, exact-generation verified artifact reuse planning, append-only Graph expansion checks, and nested migration-tree preflight.
+- Added CLI, REST, and Desktop decision surfaces plus shared transport contracts, bilingual architecture/SDK guidance, and model/chaos regression coverage.
+- Bound strategy learning to pre-edit failures, made SLO aggregation evidence-correct, excluded Graph-owned child Loops from parent-inclusive portfolio totals, hardened proposal retention/corruption handling, and bound migration previews plus Desktop results to their source generations.
+
 ### round 75: recoverable dynamic Graphs and verification DAGs
 - Added Graph v2 state migration, attempt/idempotency journals, durable pause/steer controls, idle recovery/retention, and complete Desktop lifecycle actions.
 - Added typed input/output and artifact contracts, bounded map/quorum-join nodes, priority/critical-path planning, nested managed worktrees, run comparison, and safe plugin handler aliases.

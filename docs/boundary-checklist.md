@@ -3394,6 +3394,188 @@ the advice impossible to apply safely.
 - **Caught:** Graph health could recommend concurrent execution for effectful nodes
   sharing one workspace, or add a 65th resource-capacity key.
 
+## 315. Optimistic versions must advance monotonically
+
+Two state transitions can occur within the same clock millisecond. Reusing a raw
+wall-clock timestamp as the optimistic version can therefore leave `updatedAt`
+unchanged and let a stale reviewer overwrite a newer decision.
+
+- **Do:** allocate `max(now, previous + 1ms)` or use a separate monotonic
+  generation; compare the exact retained version under the mutation lease.
+- **Caught:** orchestration proposal approval initially assigned `new Date()`
+  directly, so an immediate second review could reuse the original version.
+
+## 316. Archived evidence needs the same validators as live evidence
+
+Moving artifact metadata into a run archive does not make its path or digest
+safe. A permissive historical parser can turn previously rejected metadata into
+a future reuse candidate.
+
+- **Do:** reuse the authoritative relative-path, digest, size, producer, and
+  verification validators when writing and reading archives; omit incomplete
+  evidence before serialization and require an exact contract-generation match
+  before reuse planning.
+- **Caught:** Graph run snapshots initially needed the live safe-relative-path
+  invariant and could serialize incomplete “verified” evidence that made the
+  strict archive reader reject the entire run.
+
+## 317. New history consumers must preserve the authoritative fallback
+
+A durable JSONL file can be absent while a valid checkpoint still retains its
+bounded event tail. A new report that reads only JSONL then describes an existing
+terminal run as an empty replay, disagreeing with history and diagnostics APIs.
+
+- **Do:** centralize or reproduce the documented fallback from durable history
+  to checkpoint events, with the same sequence semantics, before replay.
+- **Caught:** the workspace orchestration report initially omitted the Graph
+  checkpoint-event fallback already used by the REST history and diagnostic paths.
+
+## 318. Attribute an action to the state that selected it
+
+An outcome often stores the state observed after an action, while a router chose
+that action from the preceding state. Grouping by the outcome state teaches the
+opposite relationship whenever the action changes the category.
+
+- **Do:** retain or locate the exact pre-action generation and attribute model,
+  retry, or policy outcomes to that generation; keep rolled-back attempts in the
+  evidence with their selected strategy.
+- **Caught:** Loop strategy learning initially grouped an edit model by its
+  post-edit failure category and dropped model metadata on rollback snapshots.
+
+## 319. Aggregate rates by evidence, not by entity
+
+A mean of per-node rates gives a one-sample node the same weight as a node with
+hundreds of observations. Likewise, one measured stage does not mean a multi-stage
+pipeline has complete forecast coverage.
+
+- **Do:** weight rates by their sample counts, report measured/eligible coverage,
+  and calculate percentile SLOs from measured samples rather than forecasts.
+- **Caught:** orchestration SLOs initially averaged Graph node failure rates
+  uniformly and treated any Loop verification intelligence as 100% coverage.
+
+## 320. Child accounting requires durable provenance
+
+Stable generated ids can prevent duplicate execution but do not prove ownership
+to later reporting code. Counting both a parent total and its separately stored
+child then inflates workspace usage and budgets.
+
+- **Do:** persist validated parent identity on child checkpoints, verify it on
+  resume, preserve it in summaries, and exclude child usage only where its parent
+  already includes that usage.
+- **Caught:** portfolio rollups excluded child Graphs but initially double-counted
+  durable Graph-owned Loops.
+
+## 321. Decision stores must fail closed without evicting decisions
+
+A tolerant read view may hide corrupt optional state, but mutation must not turn
+that absence into authorization to overwrite the file. Capacity eviction must
+also distinguish reviewed decisions from regenerable drafts.
+
+- **Do:** use a strict parser under the mutation lease, preserve reviewed records
+  ahead of unreviewed records, and return only records actually retained.
+- **Caught:** orchestration proposal refresh could overwrite malformed state or
+  evict an older approval in favor of newly generated drafts.
+
+## 322. Numeric transport syntax must be explicit
+
+JavaScript `Number` accepts whitespace, hexadecimal, and exponent forms that may
+not belong to a public decimal configuration contract.
+
+- **Do:** validate the complete transport string against the intended grammar
+  before numeric conversion, then enforce finite range constraints.
+- **Caught:** orchestration CLI and REST SLO parsers initially accepted values
+  such as `0x10`.
+
+## 323. Preview state must be bound to its source generation
+
+Finding a checkpoint by a deterministic id does not prove it represents the
+definition or parent edge being previewed. Advice derived from an unrelated
+checkpoint can incorrectly imply a safe coordinated migration.
+
+- **Do:** compare the full normalized source definition and exact parent
+  provenance before using checkpoint state in a migration tree preview.
+- **Caught:** Graph tree migration planning initially marked any same-id state as
+  available without checking its definition or parent.
+
+## 324. Optimistic versions cover content refreshes too
+
+A record can keep the same identity and review status while its evidence,
+rationale, or other reviewed content changes. Leaving its version unchanged lets
+a reviewer approve content different from what they fetched.
+
+- **Do:** compare the complete reviewed payload during refresh and advance its
+  optimistic version monotonically whenever any field changes.
+- **Caught:** orchestration proposal refresh initially preserved `updatedAt` when
+  the same proposal id gained new evidence.
+
+## 325. Nested state discovery follows physical workspaces
+
+Child checkpoint identity and child checkpoint location are separate concerns.
+Listing only the root workspace misses nested nodes with workspace overrides and
+can report a migration preview that disagrees with apply.
+
+- **Do:** resolve each definition generation's physical workspace tree, load
+  checkpoints at every level, and key discovered ownership by both runtime id and
+  canonical workspace; inspect both source and target trees for orphan collisions.
+- **Caught:** Graph migration-tree REST/CLI previews initially supplied only states
+  found in the root workspace.
+
+## 326. Transport variants must preserve proven fields
+
+Using one permissive DTO for generated drafts, durable decisions, and verified
+evidence makes required lifecycle versions or cryptographic proof appear optional
+at consumers that rely on them.
+
+- **Do:** model draft and persisted variants separately, and narrow verified
+  outputs so fields proven by validation are required in the public contract.
+- **Caught:** the orchestration transport initially made durable proposal versions
+  and verified artifact digests optional because drafts shared the same DTO.
+
+## 327. Relative warning bands need a zero-target rule
+
+A percentage band such as “within 10% of the limit” collapses when the limit is
+zero. Applying the generic multiplication formula can classify the exact desired
+zero observation as warning rather than success.
+
+- **Do:** define zero-target equality explicitly before applying proportional
+  warning bands.
+- **Caught:** an orchestration SLO with `maxFailureRate: 0` initially reported an
+  observed zero failure rate as `at_risk`.
+
+## 328. Child ownership changes recovery and accounting
+
+Persisting a parent id is insufficient if generic recovery can still run the child
+independently, or if reports exclude it after the parent checkpoint disappears.
+
+- **Do:** require the parent orchestration path for child resume, exclude children
+  from generic recovery and direct deletion, and deduplicate usage only when the
+  owning parent is present in the same accounting scope. Guarded terminal
+  retention may still remove expired child records.
+- **Caught:** Graph-owned Loops could initially be resumed directly, while an
+  orphaned child remained excluded from portfolio totals.
+
+## 329. Validate before ranking or truncation
+
+Retention selection is not an input-validation boundary. If invalid low-ranked
+items are truncated first, a malformed generated batch can appear valid and hide
+an upstream invariant violation.
+
+- **Do:** validate the complete dense batch before deduplication, ranking, lease
+  acquisition, or persistence; only then apply retention policy.
+- **Caught:** orchestration proposal recording initially validated only the top
+  128 selected drafts.
+
+## 330. Busy state must use the same operation owner end to end
+
+Adjacent async features often have similarly named loading flags. Setting one
+owner's flag and clearing another's leaves the UI permanently busy and can disable
+unrelated controls.
+
+- **Do:** pair each operation's set/clear paths with the same coordinator and
+  state owner, including stale-result cleanup and workspace changes.
+- **Caught:** the Desktop orchestration refresh and DAG inspection paths briefly
+  crossed their `resourceBusy` and `orchestrationBusy` setters.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

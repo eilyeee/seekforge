@@ -404,6 +404,27 @@ Rules:
 - Socket close or parent completion cancels remaining child dispatches and clears
   their steering queues/listeners.
 
+## Orchestration intelligence
+
+- `GET /api/orchestration/report` returns the workspace portfolio, per-Loop
+  health/strategy/SLO/replay/proposal drafts, and per-Graph
+  health/optimization/SLO/replay/artifact-reuse plans. Optional finite query
+  targets are `maxP95DurationMs`, `maxCostUsd`, `maxFailureRate`, and
+  `minForecastCoverage`; inputs use plain decimal syntax and rate values are in
+  `[0,1]`. Detail is capped at 100 Loops and 100 Graphs; portfolio totals cover
+  every retained checkpoint while its item list remains bounded.
+- `GET /api/orchestration/proposals` lists durable reviewed proposals.
+- `POST /api/orchestration/proposals/refresh` accepts `{}` and merges the
+  current report drafts under a lease while preserving prior decisions. Reviewed
+  decisions have retention priority, and mutation fails closed on corrupt state.
+- `POST /api/orchestration/proposals/:id/approve|dismiss` accepts optional
+  `{expectedUpdatedAt}` for optimistic concurrency. Approval records intent
+  only and never applies configuration or changes runtime eligibility.
+- `POST /api/graphs/:id/migration-plan` preserves the existing flat migration
+  fields and adds `tree`. The tree section resolves child identities and reports
+  coordinated-transaction blockers; the apply endpoint remains
+  single-checkpoint and fail-closed.
+
 ## Implementation notes (binding)
 
 - Implementation lives in `apps/server` (package `@seekforge/server`),

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { GraphHistoryEntry } from "./graph-history.js";
 import type { EngineeringGraphState, GraphNodeResult } from "./graph-state.js";
 import type { LoopHistoryEntry } from "./loop-history.js";
@@ -24,6 +25,20 @@ export type OrchestrationDiagnosticReport = {
 
 export type OrchestrationReplayEntry<T> = { seq: number; event: T };
 
+export type OrchestrationReplayReport = {
+  kind: "loop" | "graph";
+  id: string;
+  events: number;
+  lastSequence: number;
+  digest: string;
+  terminalStatus?: string;
+  peakConcurrency: number;
+  attempts: number;
+  retries: number;
+  pauses: number;
+  warnings: number;
+};
+
 /** Replays a validated event window through a pure reducer. */
 export function replayOrchestrationTransitions<State, Event>(
   initial: State,
@@ -40,6 +55,96 @@ export function replayOrchestrationTransitions<State, Event>(
     state = reduce(state, entry.event, entry.seq);
   }
   return state;
+}
+
+function replayDigest(entries: readonly { seq: number; event: unknown }[]): string {
+  const hash = createHash("sha256");
+  for (const entry of entries) hash.update(`${entry.seq}\0${JSON.stringify(entry.event)}\n`);
+  return hash.digest("hex");
+}
+
+/** Reconstructs deterministic Loop lifecycle metrics from the retained event window. */
+export function replayLoopHistory(loopId: string, history: readonly LoopHistoryEntry[]): OrchestrationReplayReport {
+  const replay = replayOrchestrationTransitions(
+    { attempts: 0, retries: 0, pauses: 0, warnings: 0, terminalStatus: undefined as string | undefined },
+    history,
+    (state, event) => {
+      const next = { ...state };
+      if (event.type === "iteration.start") next.attempts += 1;
+      if (event.type === "loop.recovery") next.retries += 1;
+      if (event.type === "loop.paused") next.pauses += 1;
+      if (event.type === "loop.warning") next.warnings += 1;
+      if (event.type === "loop.done") next.terminalStatus = event.result.status;
+      return next;
+    },
+  );
+  return {
+    kind: "loop",
+    id: loopId,
+    events: history.length,
+    lastSequence: history.at(-1)?.seq ?? 0,
+    digest: replayDigest(history),
+    ...(replay.terminalStatus ? { terminalStatus: replay.terminalStatus } : {}),
+    peakConcurrency: replay.attempts > 0 ? 1 : 0,
+    attempts: replay.attempts,
+    retries: replay.retries,
+    pauses: replay.pauses,
+    warnings: replay.warnings,
+  };
+}
+
+/** Reconstructs deterministic Graph concurrency and lifecycle metrics from retained events. */
+export function replayEngineeringGraphHistory(
+  graphId: string,
+  history: readonly GraphHistoryEntry[],
+): OrchestrationReplayReport {
+  const replay = replayOrchestrationTransitions(
+    {
+      active: new Set<string>(),
+      seenAttempts: new Map<string, number>(),
+      peakConcurrency: 0,
+      attempts: 0,
+      retries: 0,
+      pauses: 0,
+      warnings: 0,
+      terminalStatus: undefined as string | undefined,
+    },
+    history,
+    (state, event) => {
+      const next = { ...state, active: new Set(state.active), seenAttempts: new Map(state.seenAttempts) };
+      if (event.nodeId && event.type === "node.attempt.started") {
+        next.active.add(event.nodeId);
+        const count = (next.seenAttempts.get(event.nodeId) ?? 0) + 1;
+        next.seenAttempts.set(event.nodeId, count);
+        next.attempts += 1;
+        if (count > 1) next.retries += 1;
+        next.peakConcurrency = Math.max(next.peakConcurrency, next.active.size);
+      }
+      if (
+        event.nodeId &&
+        (event.type === "node.attempt.settled" || event.type === "node.completed" || event.type === "node.skipped")
+      ) {
+        next.active.delete(event.nodeId);
+      }
+      if (event.type === "graph.paused") next.pauses += 1;
+      if (event.type === "graph.warning") next.warnings += 1;
+      if (event.type === "graph.completed") next.terminalStatus = event.status;
+      return next;
+    },
+  );
+  return {
+    kind: "graph",
+    id: graphId,
+    events: history.length,
+    lastSequence: history.at(-1)?.seq ?? 0,
+    digest: replayDigest(history),
+    ...(replay.terminalStatus ? { terminalStatus: replay.terminalStatus } : {}),
+    peakConcurrency: replay.peakConcurrency,
+    attempts: replay.attempts,
+    retries: replay.retries,
+    pauses: replay.pauses,
+    warnings: replay.warnings,
+  };
 }
 
 function sequenceIssues(entries: readonly { seq: number }[]): OrchestrationDiagnosticIssue[] {

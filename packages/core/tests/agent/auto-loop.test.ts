@@ -901,7 +901,12 @@ describe("runAutoLoop", () => {
     expect(result.status).toBe("passed");
     expect(events.some((event) => event.type === "loop.rollback" && event.iteration === 1)).toBe(true);
     const snapshots = loadLoopState(isolated, result.loopId!)?.snapshots ?? [];
-    expect(snapshots.find((snapshot) => snapshot.iteration === 1)?.failedTests).toBe(1);
+    expect(snapshots.find((snapshot) => snapshot.iteration === 1)).toMatchObject({
+      failedTests: 1,
+      rolledBack: true,
+      editModel: "flash",
+      modelRouteReason: "default",
+    });
     expect(events.filter((event) => event.type === "verify" && event.iteration === 1)).toHaveLength(2);
   });
 

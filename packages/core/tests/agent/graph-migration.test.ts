@@ -6,7 +6,10 @@ import { engineeringSubgraphStateId } from "../../src/agent/graph-contract.js";
 import { runEngineeringGraph } from "../../src/agent/graph-engineering.js";
 import {
   applyEngineeringGraphMigration,
+  listEngineeringGraphTreeStates,
+  planEngineeringGraphExpansion,
   planEngineeringGraphMigration,
+  planEngineeringGraphTreeMigration,
   readEngineeringGraphMigrationJournal,
 } from "../../src/agent/graph-migration.js";
 import { readEngineeringGraphRunSnapshots } from "../../src/agent/graph-run-history.js";
@@ -26,6 +29,71 @@ describe("Engineering Graph migration", () => {
 
   afterEach(() => {
     for (const path of workspaces.splice(0)) rmSync(path, { recursive: true, force: true });
+  });
+
+  it("plans append-only expansion and resolves nested checkpoint identities", () => {
+    const before = {
+      graphId: "tree",
+      nodes: [
+        {
+          id: "child",
+          kind: "subgraph" as const,
+          graph: { graphId: "logical-child", nodes: [{ id: "one", kind: "function" as const, handler: "one" }] },
+        },
+      ],
+    };
+    const after = {
+      graphId: "tree",
+      nodes: [
+        {
+          id: "child",
+          kind: "subgraph" as const,
+          graph: {
+            graphId: "logical-child",
+            nodes: [
+              { id: "one", kind: "function" as const, handler: "one" },
+              { id: "two", kind: "function" as const, handler: "two", dependsOn: ["one"] },
+            ],
+          },
+        },
+        { id: "tail", kind: "function" as const, handler: "tail", dependsOn: ["child"] },
+      ],
+    };
+    expect(planEngineeringGraphExpansion(before, after)).toMatchObject({ added: ["tail"], changed: ["child"] });
+    const tree = planEngineeringGraphTreeMigration(before, after);
+    expect(tree.mode).toBe("coordinated_tree");
+    expect(tree.entries).toEqual([
+      expect.objectContaining({
+        path: "tree",
+        runtimeGraphId: "tree",
+        plan: expect.objectContaining({ added: ["tail"] }),
+      }),
+      expect.objectContaining({
+        path: "tree/child",
+        runtimeGraphId: engineeringSubgraphStateId("tree", "child", "logical-child"),
+        plan: expect.objectContaining({ added: ["two"] }),
+      }),
+    ]);
+    expect(tree.blockers.some((blocker) => blocker.includes("coordinated tree transaction"))).toBe(true);
+    expect(() => planEngineeringGraphExpansion(before, { ...before, failurePolicy: "continue" as const })).toThrow(
+      /cannot change Graph policy/,
+    );
+  });
+
+  it("blocks a tree plan when checkpoint provenance is not bound to its source", async () => {
+    const root = workspace();
+    const before = { graphId: "bound-tree", nodes: [{ id: "one", kind: "function" as const, handler: "one" }] };
+    const state = await runEngineeringGraph(deps, before, {
+      workspace: root,
+      handlers: { one: () => ({}) },
+    });
+    const after = { graphId: "bound-tree", nodes: [{ id: "one", kind: "function" as const, handler: "two" }] };
+    const plan = planEngineeringGraphTreeMigration(before, after, [
+      { ...state, parentGraph: { graphId: "wrong-parent", nodeId: "wrong-node" } },
+    ]);
+    expect(plan.blockers).toContain(
+      "Graph bound-tree checkpoint does not match its source definition or parent provenance",
+    );
   });
 
   it("preserves unaffected results, invalidates descendants, and archives a terminal run", async () => {
@@ -241,7 +309,7 @@ describe("Engineering Graph migration", () => {
 
   it("rejects invalidation of an existing durable subgraph", async () => {
     const root = workspace();
-    await runEngineeringGraph(
+    const parent = await runEngineeringGraph(
       deps,
       {
         graphId: "parent-migration",
@@ -258,21 +326,29 @@ describe("Engineering Graph migration", () => {
       },
       { workspace: root, handlers: { one: () => ({}), two: () => ({}) } },
     );
-    expect(() =>
-      applyEngineeringGraphMigration(root, {
-        graphId: "parent-migration",
-        nodes: [
-          {
-            id: "child",
-            kind: "subgraph",
-            graph: {
-              graphId: "child-definition",
-              nodes: [{ id: "work", kind: "function", handler: "two" }],
-            },
+    const target = {
+      graphId: "parent-migration",
+      nodes: [
+        {
+          id: "child",
+          kind: "subgraph",
+          graph: {
+            graphId: "child-definition",
+            nodes: [{ id: "work", kind: "function", handler: "two" }],
           },
-        ],
-      }),
-    ).toThrow(/subgraph checkpoint/);
+        },
+      ],
+    };
+    const tree = planEngineeringGraphTreeMigration(
+      parent.definition,
+      target,
+      listEngineeringGraphTreeStates(root, [parent.definition, target]),
+    );
+    expect(tree.mode).toBe("coordinated_tree");
+    expect(tree.blockers).toContain(
+      "Nested or multiple checkpoints require a coordinated tree transaction; apply remains fail-closed",
+    );
+    expect(() => applyEngineeringGraphMigration(root, target)).toThrow(/subgraph checkpoint/);
   });
 
   it("rejects an added subgraph that would bind to an orphan child checkpoint", async () => {
@@ -290,23 +366,29 @@ describe("Engineering Graph migration", () => {
       { graphId: childId, nodes: [{ id: "work", kind: "function", handler: "one" }] },
       { workspace: childWorkspace, handlers: { one: () => ({}) } },
     );
-    expect(() =>
-      applyEngineeringGraphMigration(root, {
-        graphId: "add-parent",
-        nodes: [
-          { id: "base", kind: "function", handler: "one" },
-          {
-            id: "child",
-            kind: "subgraph",
-            workspace: "child-workspace",
-            graph: {
-              graphId: "child-definition",
-              nodes: [{ id: "work", kind: "function", handler: "one" }],
-            },
+    const target = {
+      graphId: "add-parent",
+      nodes: [
+        { id: "base", kind: "function", handler: "one" },
+        {
+          id: "child",
+          kind: "subgraph",
+          workspace: "child-workspace",
+          graph: {
+            graphId: "child-definition",
+            nodes: [{ id: "work", kind: "function", handler: "one" }],
           },
-        ],
-      }),
-    ).toThrow(/existing child checkpoint/);
+        },
+      ],
+    };
+    const source = loadEngineeringGraphState(root, "add-parent")!;
+    const tree = planEngineeringGraphTreeMigration(
+      source.definition,
+      target,
+      listEngineeringGraphTreeStates(root, [source.definition, target]),
+    );
+    expect(tree.blockers).toContain("Graph add-parent/child would bind an unrelated existing child checkpoint");
+    expect(() => applyEngineeringGraphMigration(root, target)).toThrow(/existing child checkpoint/);
   });
 
   it("rejects malformed definitions before creating workspace state", () => {

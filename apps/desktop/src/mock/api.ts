@@ -30,6 +30,7 @@ import type {
   SessionMeta,
   Skill,
   Todo,
+  WorkspaceOrchestrationReport,
 } from "../types";
 
 // Mutable copies so approve/reject and config saves stick for the page lifetime.
@@ -228,6 +229,37 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   if (method === "GET" && path === "/api/worktrees") return mockWorktrees.map((w) => ({ ...w }));
   if (method === "GET" && path === "/api/loops") return mockLoops.map((loop) => ({ ...loop }));
   if (method === "GET" && path === "/api/graphs") return [];
+  if (method === "POST" && path === "/api/orchestration/proposals/refresh") return { proposals: [] };
+  if (method === "GET" && path === "/api/orchestration/report") {
+    return {
+      portfolio: {
+        generatedAt: new Date().toISOString(),
+        status: "healthy",
+        totals: {
+          loops: mockLoops.length,
+          graphs: 0,
+          costUsd: mockLoops.reduce((sum, loop) => sum + loop.costUsd, 0),
+          tokensUsed: 0,
+          activeDurationMs: 0,
+          configuredCostBudgetUsd: 0,
+          configuredTokenBudget: 0,
+          configuredDurationBudgetMs: 0,
+        },
+        items: mockLoops.map((loop) => ({
+          kind: "loop",
+          id: loop.loopId,
+          status: loop.status,
+          costUsd: loop.costUsd,
+          tokensUsed: 0,
+          activeDurationMs: 0,
+        })),
+      },
+      policy: {},
+      loops: [],
+      graphs: [],
+      reviewedProposals: [],
+    } satisfies WorkspaceOrchestrationReport;
+  }
   if (method === "GET" && path === "/api/loops/verification-plan") {
     return { stages: [{ id: "test", command: "pnpm test" }], sources: ["package.json"] };
   }

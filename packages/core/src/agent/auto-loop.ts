@@ -71,6 +71,7 @@ import {
 import { currentLoopBudgetReason, forecastLoopBudgetReason } from "./loop-budget-policy.js";
 import { isVerificationPathPrefix, selectLoopVerificationStage } from "./loop-verification-selection.js";
 import { isDenseArray } from "./orchestration.js";
+import { isValidLoopDagId } from "./loop-dag-validation.js";
 import { selectOrchestrationReadyNodes } from "./orchestration-scheduler.js";
 import { readLoopVerificationCache, recordLoopVerificationCache } from "./loop-verification-cache.js";
 import {
@@ -235,6 +236,8 @@ export type LoopOptions = {
   abortStatus?: "cancelled" | "interrupted";
   /** Internal: workspace idle guard held by a lifecycle owner. */
   workspaceGuard?: SessionLease;
+  /** Internal: durable Graph node that owns this child Loop. */
+  parentGraph?: { graphId: string; nodeId: string };
   /** Internal identity used only to bind automatic-recovery bookkeeping. */
   recoveryAttemptId?: string;
   /** Per-iteration progress callback. */
@@ -559,6 +562,23 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
   }
   if (opts.codeReview !== undefined && typeof opts.codeReview !== "boolean") {
     throw new Error("Loop codeReview must be boolean");
+  }
+  if (
+    opts.parentGraph !== undefined &&
+    (!isValidLoopDagId(opts.parentGraph.graphId) || !isValidLoopDagId(opts.parentGraph.nodeId))
+  ) {
+    throw new Error("Loop parentGraph provenance is invalid");
+  }
+  if (
+    opts.parentGraph !== undefined &&
+    opts.resumeState?.parentGraph !== undefined &&
+    (opts.parentGraph.graphId !== opts.resumeState.parentGraph.graphId ||
+      opts.parentGraph.nodeId !== opts.resumeState.parentGraph.nodeId)
+  ) {
+    throw new Error("Loop parentGraph provenance does not match the persisted Loop");
+  }
+  if (opts.resumeState?.parentGraph !== undefined && opts.parentGraph === undefined) {
+    throw new Error("A Graph-owned Loop must be resumed through its parent Graph");
   }
   if (
     opts.recoveryAttemptId !== undefined &&
@@ -950,12 +970,19 @@ async function runAutoLoopWithLease(
         priority,
         controlRunId,
         codeReviewEnabled,
+        ...(opts.parentGraph ? { parentGraph: opts.parentGraph } : {}),
       });
     } catch (error) {
       persistenceWarning(error);
     }
   } else if (state !== undefined) {
-    state = { ...state, status: "running", controlRunId, updatedAt: new Date().toISOString() };
+    state = {
+      ...state,
+      status: "running",
+      controlRunId,
+      updatedAt: new Date().toISOString(),
+      ...(opts.parentGraph ? { parentGraph: opts.parentGraph } : {}),
+    };
     if (opts.recoveryAttemptId) {
       state.recoveryAttemptId = opts.recoveryAttemptId;
     } else {
@@ -2120,6 +2147,9 @@ async function runAutoLoopWithLease(
         tokensUsed: tokensUsed - iterationStartingTokens,
         changedPaths: observedChangedPaths,
         failureCategory: lastVerify.code === 0 ? "none" : verificationFailureCategory(diagnostics, lastVerify.output),
+        editModel: selectedEditModel,
+        modelRouteReason: modelRoute.reason,
+        failureStreak: modelRoute.consecutiveFailures,
         rolledBack: true,
       };
       snapshots.push(restoredSnapshot);

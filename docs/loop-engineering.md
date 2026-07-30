@@ -244,6 +244,17 @@ seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick
 - `--adaptive-budget`: uses the largest recent iteration sample to stop before
   starting work that is predicted not to fit inside a configured cost, token,
   or duration hard cap. It never raises a cap.
+- `seekforge orchestration report` aggregates Loop and Graph usage without
+  double-counting Graph-owned child Loops or child Graph checkpoints. For Loop
+  it attributes each edit-model outcome to the preceding failure category,
+  reports evidence-weighted confidence, evaluates optional SLOs from measured
+  P95 duration and partial verification coverage, and deterministically replays
+  retained lifecycle events. `orchestration proposals refresh|list|approve|dismiss` provides an
+  auditable review lifecycle; approval records intent and never raises a hard
+  budget or changes model routing automatically.
+  Graph-owned child Loops resume only through their parent Graph. Their usage is
+  excluded from totals only while that parent checkpoint is present; an orphaned
+  child remains visible and countable until normal retention removes it.
 - The loop is inherently autonomous — every run uses `approvalMode: "acceptEdits"`
   (file edits auto-approved; dangerous commands still refused by the denylist).
   `-y` just silences the "auto-approves edits" note.

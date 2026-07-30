@@ -211,6 +211,13 @@ seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick
   更新后检查，可阻止后续工作，但已在途的请求可能使最终账单略微超出配置值。
 - `--adaptive-budget`：用最近迭代中的最大用量样本预测下一轮；若预计无法装入已配置的成本、
   Token 或时长硬上限，则在开始前停止。它绝不会提高任何上限。
+- `seekforge orchestration report` 汇总 Loop 与 Graph 用量，且不会重复计算由 Graph 持有的子 Loop
+  或子 Graph 检查点。对 Loop，它把每次编辑模型的结果归因到编辑前的失败分类，报告按证据数加权
+  的置信度，并用实测 P95 耗时和部分验证覆盖率评估可选 SLO，
+  并确定性重放保留的生命周期事件。`orchestration proposals refresh|list|approve|dismiss`
+  提供可审计的复核生命周期；批准只记录意图，绝不会自动提高硬预算或改变模型路由。
+  由 Graph 持有的子 Loop 只能通过父 Graph 恢复；只有父检查点仍存在时，其用量才从总计中排除。
+  孤儿子 Loop 在正常保留清理之前仍保持可见并计入总量。
 - Loop 本质上是自主运行的 —— 每次运行都使用 `approvalMode: "acceptEdits"`
   （文件编辑自动批准；危险命令仍会被 denylist 拒绝）。
   `-y` 只是不再显示「自动批准编辑」的提示。

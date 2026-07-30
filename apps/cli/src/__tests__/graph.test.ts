@@ -62,6 +62,7 @@ describe("Engineering Graph CLI input", () => {
         "health",
         "intelligence",
         "migration-plan",
+        "expansion-plan",
         "migrate",
         "simulate",
         "explain",

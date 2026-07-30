@@ -199,7 +199,9 @@ export {
 } from "./graph-evidence.js";
 export {
   buildEngineeringGraphArtifactCatalog,
+  planEngineeringGraphArtifactReuse,
   type EngineeringGraphArtifactCatalogEntry,
+  type EngineeringGraphArtifactReuseCandidate,
 } from "./graph-artifact-catalog.js";
 export { BUILTIN_GRAPH_HANDLERS, graphExecutorsWithPlugins, graphHandlersWithPlugins } from "./graph-handlers.js";
 export {
@@ -220,21 +222,60 @@ export {
 export {
   diagnoseEngineeringGraphCheckpoint,
   diagnoseLoopCheckpoint,
+  replayEngineeringGraphHistory,
+  replayLoopHistory,
   replayOrchestrationTransitions,
   type OrchestrationDiagnosticIssue,
   type OrchestrationDiagnosticReport,
   type OrchestrationReplayEntry,
+  type OrchestrationReplayReport,
 } from "./orchestration-diagnostics.js";
 export {
   applyEngineeringGraphMigration,
   EngineeringGraphMigrationConflictError,
   planEngineeringGraphMigration,
+  planEngineeringGraphExpansion,
+  planEngineeringGraphTreeMigration,
+  listEngineeringGraphTreeStates,
   readEngineeringGraphMigrationJournal,
   type EngineeringGraphMigrationResult,
   type EngineeringGraphMigrationPlan,
   type EngineeringGraphMigrationJournal,
   type EngineeringGraphMigrationOptions,
+  type EngineeringGraphTreeMigrationEntry,
+  type EngineeringGraphTreeMigrationPlan,
 } from "./graph-migration.js";
+export {
+  analyzeLoopStrategyIntelligence,
+  buildEngineeringGraphOptimizationReport,
+  buildLoopOptimizationProposals,
+  buildOrchestrationPortfolioReport,
+  evaluateOrchestrationSlo,
+  loopSloObservations,
+  type EngineeringGraphOptimizationReport,
+  type EngineeringGraphOptimizationScenario,
+  type EngineeringGraphPlacement,
+  type LoopStrategyIntelligenceReport,
+  type LoopStrategyOutcome,
+  type OrchestrationConfidence,
+  type OrchestrationPortfolioReport,
+  type OrchestrationProposalAction,
+  type OrchestrationProposalDraft,
+  type OrchestrationSloEvaluation,
+  type OrchestrationSloPolicy,
+} from "./orchestration-intelligence.js";
+export {
+  listOrchestrationProposals,
+  recordOrchestrationProposals,
+  setOrchestrationProposalStatus,
+  type OrchestrationProposal,
+  type OrchestrationProposalStatus,
+} from "./orchestration-proposals.js";
+export {
+  buildWorkspaceOrchestrationReport,
+  type WorkspaceOrchestrationReport,
+  type WorkspaceOrchestrationReportOptions,
+} from "./orchestration-report.js";
 export {
   explainEngineeringGraphNode,
   simulateEngineeringGraph,

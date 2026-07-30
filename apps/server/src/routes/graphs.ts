@@ -28,6 +28,8 @@ import {
   materializeEngineeringGraph,
   planEngineeringGraph,
   planEngineeringGraphMigration,
+  planEngineeringGraphTreeMigration,
+  listEngineeringGraphTreeStates,
   promoteEngineeringGraphResult,
   pruneEngineeringGraphResources,
   readGraphSchedulingObservations,
@@ -556,7 +558,14 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
       const definition = materializeEngineeringGraph(body, {});
       if (definition.graphId !== graphId) throw new Error("Graph migration id must match the route");
       validateRun(workspace, definition, {}, graphExecutionRegistry(ctx));
-      sendJson(res, 200, planEngineeringGraphMigration(state.definition, definition));
+      sendJson(res, 200, {
+        ...planEngineeringGraphMigration(state.definition, definition),
+        tree: planEngineeringGraphTreeMigration(
+          state.definition,
+          definition,
+          listEngineeringGraphTreeStates(workspace, [state.definition, definition]),
+        ),
+      });
     } catch (error) {
       sendApiError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
     }

@@ -41,7 +41,8 @@ import {
   setEngineeringGraphPriority,
 } from "../../src/agent/graph-state.js";
 import type { AgentCoreDeps } from "../../src/agent/loop.js";
-import { listLoopStates } from "../../src/agent/loop-state.js";
+import { listLoopStates, removeLoopState } from "../../src/agent/loop-state.js";
+import { resumeAutoLoop } from "../../src/agent/auto-loop.js";
 import { acquireWorkspaceSessionGuard } from "../../src/agent/session-lease.js";
 import { listGitWorktrees } from "../../src/worktree.js";
 
@@ -302,7 +303,20 @@ describe("runEngineeringGraph", () => {
     });
     const resumed = await runEngineeringGraph(deps, definition, { workspace: root, resume: true });
     expect((resumed.results[0]?.output as { loopId?: string } | undefined)?.loopId).toBe(firstLoopId);
-    expect(listLoopStates(root).filter((loop) => loop.loopId.startsWith("graph-loop-"))).toHaveLength(1);
+    const childLoops = listLoopStates(root).filter((loop) => loop.loopId.startsWith("graph-loop-"));
+    expect(childLoops).toEqual([
+      expect.objectContaining({ parentGraph: { graphId: definition.graphId, nodeId: "repair" } }),
+    ]);
+    await expect(
+      resumeAutoLoop(deps, childLoops[0]!.loopId, {
+        workspace: root,
+        parentGraph: { graphId: "other-graph", nodeId: "repair" },
+      }),
+    ).rejects.toThrow(/parentGraph provenance does not match/);
+    await expect(resumeAutoLoop(deps, childLoops[0]!.loopId, { workspace: root })).rejects.toThrow(
+      /through its parent Graph/,
+    );
+    expect(() => removeLoopState(root, childLoops[0]!.loopId)).toThrow(/guarded retention/);
   });
 
   it("runs bounded dynamic map items through sequential Agents", async () => {

@@ -2,10 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   diagnoseEngineeringGraphCheckpoint,
   diagnoseLoopCheckpoint,
+  replayEngineeringGraphHistory,
+  replayLoopHistory,
   replayOrchestrationTransitions,
 } from "../../src/agent/orchestration-diagnostics.js";
 import type { EngineeringGraphState } from "../../src/agent/graph-state.js";
 import type { LoopState } from "../../src/agent/loop-state.js";
+
+const NOW = "2026-01-01T00:00:00.000Z";
 
 const loopState = (): LoopState => ({
   schemaVersion: 2,
@@ -46,6 +50,23 @@ const graphState = (): EngineeringGraphState => ({
 });
 
 describe("orchestration diagnostics", () => {
+  it("replays lifecycle metrics and stable digests deterministically", () => {
+    const graphHistory = [
+      { seq: 1, event: { sequence: 1, type: "node.attempt.started" as const, timestamp: NOW, nodeId: "one" } },
+      { seq: 2, event: { sequence: 2, type: "node.attempt.settled" as const, timestamp: NOW, nodeId: "one" } },
+      { seq: 3, event: { sequence: 3, type: "node.attempt.started" as const, timestamp: NOW, nodeId: "one" } },
+      { seq: 4, event: { sequence: 4, type: "graph.completed" as const, timestamp: NOW, status: "passed" as const } },
+    ];
+    const first = replayEngineeringGraphHistory("graph", graphHistory);
+    expect(first).toMatchObject({ attempts: 2, retries: 1, peakConcurrency: 1, terminalStatus: "passed" });
+    expect(replayEngineeringGraphHistory("graph", graphHistory).digest).toBe(first.digest);
+    expect(
+      replayLoopHistory("loop", [
+        { seq: 1, ts: NOW, event: { type: "iteration.start", iteration: 1 } },
+        { seq: 2, ts: NOW, event: { type: "loop.paused", iteration: 1 } },
+      ]),
+    ).toMatchObject({ attempts: 1, pauses: 1, peakConcurrency: 1 });
+  });
   it("replays a strictly ordered event window", () => {
     expect(
       replayOrchestrationTransitions(

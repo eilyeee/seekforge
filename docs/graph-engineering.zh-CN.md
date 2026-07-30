@@ -142,6 +142,12 @@ seekforge graph delete release
 
 Graph 健康报告还会给出 P50/P95 总耗时、测量覆盖率、仿真风险，以及有界的单步 `maxConcurrency` 或资源容量建议。超出配置上限，或无法从保留定义证明工作区隔离的候选会被抑制。建议按预测节省排序，只用于参考，绝不会修改容量或授权执行。
 
+`seekforge orchestration report` 与 `GET /api/orchestration/report` 在这些原语之上增加 workspace 级决策层。报告包含确定性历史重放、置信度与证据数、使用样本加权 Graph 失败率的调用方 SLO 评估、按帕累托前沿排序的并发/资源多维反事实、远端执行器的信任/协议/取消能力放置检查、根/子 Loop 与 Graph 预算汇总，以及来自旧运行快照且与精确指纹一致的已验证产物复用候选。详细部分最多返回 100 个 Loop 和 100 个 Graph，但组合总计覆盖全部保留检查点。复用仍然只是计划：没有独立验证路径时，运行时不会物化或信任产物。
+
+`graph expansion-plan <file>` 只接受追加式演化：既有节点与 Graph 策略必须保持结构不变。`graph migration-plan` 现在也会沿源与目标物理工作区树解析确定性的子检查点身份，把每个已提供检查点绑定到精确源定义与父级来源，并报告变更属于无操作、单检查点迁移，还是需要协调树事务。既有 apply API 会继续拒绝多检查点和会使 subgraph 失效的变化，直到它们能被原子提交；预览结果不会授权暴露部分迁移的树。
+
+优化草案可通过 `seekforge orchestration proposals refresh` 或 `POST /api/orchestration/proposals/refresh` 持久化，再显式批准或忽略。有界存储满时，已复核决策优先于未复核草案保留；持久文件损坏时，修改会故障关闭。批准只是可审计的决策记录，不会重写 Graph、提高预算、选择执行器、绕过权限或改变运行资格。
+
 `seekforge serve --graph-auto-resume` 会在工作区空闲时顺序恢复失去 owner 的运行中 Graph，或定时器/信号已就绪的 wait 暂停 Graph；单个恢复失败会被隔离，后续 Graph 与保留清理仍会继续。`--graph-auto-prune` 在同一空闲窗口执行终态年龄/数量保留策略，安全归档并清理托管资源，保留脏 worktree，并在父 Graph 仍可恢复时保留子检查点。持久化控制可作用于任何存活的 Graph owner，包括其他进程或空闲恢复运行。Desktop 通过 WebSocket 订阅 Graph Run Ledger，同时保留低频轮询兜底，显示运行差异、健康预测和异常热区，并提供 Graph/节点控制、信号、审批、重跑、重启及完整资源生命周期操作。
 
 Server 与 CLI 共享确定性的 `noop`、`collect` 注册表。已启用插件可以通过命名空间化 `graphHandlers` 声明这些内建处理器的安全别名，也可以为宿主已经注册为可信的 `graphExecutor` 建立别名；插件清单不能提供可执行代码、提升不可信适配器，也不能把处理器名转换成 shell 命令。

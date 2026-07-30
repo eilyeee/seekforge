@@ -197,6 +197,8 @@ checkout 后会拒绝旧检查点，而不会复用另一个工作区产生的�
 记录；显式暂停的记录必须在前台明确恢复。可选的 `onRecoveryError` observer 会把退避记账失败与本次
 运行的 `onError` 分开报告，且记账失败会被隔离。最终成功时只抽取一次记忆，并对整个 Loop 只结算一次已选技能效果。
 当 `providerForModel` 可用时，`LoopOptions.modelByFailureCategory` 可按上一次结构化失败类别选择精确编辑模型；`modelRoutesByFailureCategory` 可配置调用方授权的升级链，`readLoopVerificationIntelligence`、`summarizeLoopVerificationReliability`、`analyzeLoopVerificationIntelligence` 与 `buildLoopHealthReport` 则暴露不含输出的可靠性历史、带置信度的重试建议、异常发现和保守预算容量。Graph 嵌入方可使用 `readGraphSchedulingObservations`、`summarizeGraphSchedulingIntelligence`、`buildEngineeringGraphHealthReport`、`analyzeGraphSchedulingIntelligence`、`decideGate`、重试策略、动态 Agent/Loop map、执行器能力要求、`buildEngineeringGraphArtifactCatalog`、`planEngineeringGraphMigration`、`applyEngineeringGraphMigration`、`simulateEngineeringGraph` 与 `explainEngineeringGraphNode`。Graph 健康报告包含 P50/P95 总耗时、预测覆盖率、风险与有界容量建议。调度观测有界、不含输出，并绑定到精确的 Graph 定义/工作区指纹。可信 `GraphExecutionAdapter` 可以围绕稳定幂等键提供恢复、心跳、取消和结果验证钩子。规划、汇总、分析与仿真是纯函数；迁移落地会重新获取 Graph 租约、重新读取并计算失效范围、记录替换 journal，并且仅在托管资源策略和拓扑不变时接受迁移。
+
+跨工作流嵌入方可调用 `buildWorkspaceOrchestrationReport`、`evaluateOrchestrationSlo`、`analyzeLoopStrategyIntelligence`、`buildEngineeringGraphOptimizationReport`、`replayLoopHistory`、`replayEngineeringGraphHistory`、`planEngineeringGraphArtifactReuse`、`planEngineeringGraphExpansion` 与 `planEngineeringGraphTreeMigration`。持久提案复核由 `recordOrchestrationProposals`、`listOrchestrationProposals` 和 `setOrchestrationProposalStatus` 暴露。提案批准刻意不执行配置变更；调用方的后续变更仍必须经过普通校验器、权限、lease 与预算门禁。
 通过后的交付入口会持久化严格的 `LoopState.delivery` 记录，包括 `mode`、`status`、
 `attempts`、`updatedAt`，并在交付终态中只保存 `artifact` 或 `error` 之一。
 

@@ -32,6 +32,7 @@ import * as filesRoutes from "./routes/files.js";
 import * as gitRoutes from "./routes/git.js";
 import * as memoryRoutes from "./routes/memory.js";
 import * as loopRoutes from "./routes/loops.js";
+import * as orchestrationRoutes from "./routes/orchestration.js";
 import { listLoopStates } from "@seekforge/core";
 import * as runRoutes from "./routes/runs.js";
 import * as sessionRoutes from "./routes/sessions.js";
@@ -65,6 +66,7 @@ const ROUTE_GROUPS: ReadonlyArray<(ctx: RouteCtx) => Promise<boolean>> = [
   skillsAgentsRoutes.handle,
   memoryRoutes.handle,
   loopRoutes.handle,
+  orchestrationRoutes.handle,
   securityRoutes.handle,
   settingsRoutes.handle,
 ];

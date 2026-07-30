@@ -15,6 +15,7 @@ import { FileTooLargeError } from "../util/fs.js";
 import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 import { isRecord } from "../util/guards.js";
 import { isDenseArray } from "./orchestration.js";
+import { isValidLoopDagId } from "./loop-dag-validation.js";
 import {
   parseLoopCodeReview,
   parseLoopWorkingMemory,
@@ -109,6 +110,8 @@ export type LoopState = {
   loopId: string;
   task: string;
   workspace: string;
+  /** Provenance for a Loop owned by a durable Graph node. */
+  parentGraph?: { graphId: string; nodeId: string };
   verifyCommand: string;
   verificationPlan?: LoopVerificationStage[];
   stablePasses?: number;
@@ -180,6 +183,7 @@ export type CreateLoopStateInput = Pick<LoopState, "task" | "workspace" | "verif
   controlRunId?: string;
   priority?: number;
   codeReviewEnabled?: boolean;
+  parentGraph?: { graphId: string; nodeId: string };
 };
 
 const LOOP_DELIVERY_MODES = new Set<LoopDeliveryMode>(["checkpoint", "merge", "patch", "pr"]);
@@ -567,6 +571,7 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
   const snapshots = value.snapshots === undefined ? [] : parseSnapshots(value.snapshots);
   const rollbackOnRegression = value.rollbackOnRegression === undefined ? false : value.rollbackOnRegression;
   const adaptiveBudget = value.adaptiveBudget === undefined ? false : value.adaptiveBudget;
+  const parentGraph = value.parentGraph;
   if (
     (value.schemaVersion !== undefined && value.schemaVersion !== 2) ||
     typeof value.loopId !== "string" ||
@@ -574,6 +579,8 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
     typeof value.task !== "string" ||
     typeof value.workspace !== "string" ||
     !isAbsolute(value.workspace) ||
+    (parentGraph !== undefined &&
+      (!isRecord(parentGraph) || !isValidLoopDagId(parentGraph.graphId) || !isValidLoopDagId(parentGraph.nodeId))) ||
     typeof value.verifyCommand !== "string" ||
     (value.verificationPlan !== undefined && verificationPlan === null) ||
     !isSafeInteger(stablePasses) ||
@@ -687,6 +694,9 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
     loopId: value.loopId,
     task: value.task,
     workspace,
+    ...(isRecord(parentGraph)
+      ? { parentGraph: { graphId: parentGraph.graphId as string, nodeId: parentGraph.nodeId as string } }
+      : {}),
     verifyCommand: value.verifyCommand,
     ...(verificationPlan ? { verificationPlan } : {}),
     stablePasses: stablePasses as number,
@@ -753,6 +763,12 @@ export function createLoopState(input: CreateLoopStateInput): LoopState {
     throw new Error(`Invalid loop control run id: ${input.controlRunId}`);
   }
   if (
+    input.parentGraph !== undefined &&
+    (!isValidLoopDagId(input.parentGraph.graphId) || !isValidLoopDagId(input.parentGraph.nodeId))
+  ) {
+    throw new Error("Loop parentGraph provenance is invalid");
+  }
+  if (
     input.priority !== undefined &&
     (!Number.isSafeInteger(input.priority) || input.priority < -10 || input.priority > 10)
   ) {
@@ -768,6 +784,7 @@ export function createLoopState(input: CreateLoopStateInput): LoopState {
     loopId: id,
     task: input.task,
     workspace: requireWorkspace(input.workspace),
+    ...(input.parentGraph ? { parentGraph: input.parentGraph } : {}),
     verifyCommand: input.verifyCommand,
     ...(input.verificationPlan ? { verificationPlan: input.verificationPlan } : {}),
     stablePasses: input.stablePasses ?? 1,
@@ -871,6 +888,7 @@ export function recoverInterruptedLoops(workspace: string, options: { now?: Date
   if (!Number.isSafeInteger(limit) || limit <= 0) throw new RangeError("Loop recovery limit must be positive");
   const recovered: LoopState[] = [];
   for (const state of listLoopStates(workspace)) {
+    if (state.parentGraph !== undefined) continue;
     const owned = isLoopLifecycleActive(workspace, state.loopId) || isLoopLeaseActive(workspace, state.loopId);
     const retryEligible = automaticRecoveryEligible(state.recovery, nowMs);
     if (state.status === "interrupted" && !owned && retryEligible) {
@@ -1023,6 +1041,10 @@ export function removeLoopState(workspace: string, loopId: string, workspaceGuar
       throw error;
     }
     try {
+      const current = loadLoopState(workspace, loopId);
+      if (current?.parentGraph && workspaceGuard === undefined) {
+        throw new Error(`Graph-owned Loop must be removed by guarded retention: ${loopId}`);
+      }
       try {
         rmSync(loopFile(workspace, loopId));
       } catch (error) {

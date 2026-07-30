@@ -18,7 +18,10 @@ import {
   readEngineeringGraphHistory,
   materializeEngineeringGraph,
   planEngineeringGraph,
+  planEngineeringGraphExpansion,
   planEngineeringGraphMigration,
+  planEngineeringGraphTreeMigration,
+  listEngineeringGraphTreeStates,
   promoteEngineeringGraphResult,
   pruneEngineeringGraphResources,
   readGraphSchedulingObservations,
@@ -277,7 +280,33 @@ export function graphMigrationPlanCommand(file: string, params: readonly string[
     const definition = readEngineeringGraphFile(file, workspace, params);
     const state = loadEngineeringGraphState(workspace, definition.graphId);
     if (!state) throw new Error(`Persisted Engineering Graph not found or invalid: ${definition.graphId}`);
-    console.log(JSON.stringify(planEngineeringGraphMigration(state.definition, definition), null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          ...planEngineeringGraphMigration(state.definition, definition),
+          tree: planEngineeringGraphTreeMigration(
+            state.definition,
+            definition,
+            listEngineeringGraphTreeStates(workspace, [state.definition, definition]),
+          ),
+        },
+        null,
+        2,
+      ),
+    );
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+export function graphExpansionPlanCommand(file: string, params: readonly string[] = []): void {
+  try {
+    const workspace = process.cwd();
+    const definition = readEngineeringGraphFile(file, workspace, params);
+    const state = loadEngineeringGraphState(workspace, definition.graphId);
+    if (!state) throw new Error(`Persisted Engineering Graph not found or invalid: ${definition.graphId}`);
+    console.log(JSON.stringify(planEngineeringGraphExpansion(state.definition, definition), null, 2));
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

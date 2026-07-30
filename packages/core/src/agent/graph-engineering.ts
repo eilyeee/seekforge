@@ -647,6 +647,7 @@ async function runGraphLoop(
     workspace: input.workspace,
     approvalMode: input.approvalMode,
     signal: input.signal,
+    parentGraph: { graphId: input.graphId, nodeId: input.nodeId },
     ...(input.workspaceGuard ? { workspaceGuard: input.workspaceGuard } : {}),
   };
   if (loadLoopState(input.workspace, loopId)) return resumeAutoLoop(deps, loopId, common);
