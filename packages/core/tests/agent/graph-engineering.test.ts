@@ -22,6 +22,7 @@ import { enqueueGraphControl } from "../../src/agent/graph-control-store.js";
 import { runEngineeringGraph, type GraphFunctionHandler } from "../../src/agent/graph-engineering.js";
 import { readEngineeringGraphHistory } from "../../src/agent/graph-history.js";
 import { readEngineeringGraphRunSnapshots } from "../../src/agent/graph-run-history.js";
+import { readGraphSchedulingObservations } from "../../src/agent/graph-scheduling-history.js";
 import { enqueueEngineeringGraphSignal } from "../../src/agent/graph-signal-store.js";
 import {
   archiveEngineeringGraphResources,
@@ -118,6 +119,59 @@ describe("runEngineeringGraph", () => {
     expect(state.spentCost).toBe(0.2);
     expect(loadEngineeringGraphState(root, "routed")?.status).toBe("passed");
     expect(listEngineeringGraphStates(root).map((item) => item.graphId)).toEqual(["routed"]);
+  });
+
+  it("keeps adaptive scheduling observational for non-persisted runs and durable waits", async () => {
+    const transientRoot = workspace();
+    await runEngineeringGraph(
+      deps,
+      {
+        graphId: "transient-adaptive",
+        adaptiveScheduling: true,
+        nodes: [{ id: "work", kind: "function", handler: "work" }],
+      },
+      { workspace: transientRoot, persist: false, handlers: { work: () => ({ output: "done" }) } },
+    );
+    expect(readGraphSchedulingObservations(transientRoot)).toEqual([]);
+    expect(existsSync(join(transientRoot, ".seekforge", "graph-scheduling-history.json"))).toBe(false);
+
+    const waitingRoot = workspace();
+    const waiting = await runEngineeringGraph(
+      deps,
+      { graphId: "waiting-adaptive", adaptiveScheduling: true, nodes: [{ id: "approval", kind: "gate" }] },
+      { workspace: waitingRoot },
+    );
+    expect(waiting.status).toBe("paused");
+    expect(readGraphSchedulingObservations(waitingRoot)).toEqual([]);
+    const approved = await runEngineeringGraph(
+      deps,
+      { graphId: "waiting-adaptive", adaptiveScheduling: true, nodes: [{ id: "approval", kind: "gate" }] },
+      { workspace: waitingRoot, resume: true, approvedNodeIds: ["approval"] },
+    );
+    expect(approved.status).toBe("passed");
+    expect(readGraphSchedulingObservations(waitingRoot)).toEqual([]);
+
+    const guardedRoot = workspace();
+    const guard = acquireWorkspaceSessionGuard(guardedRoot);
+    try {
+      const guarded = await runEngineeringGraph(
+        deps,
+        {
+          graphId: "guarded-adaptive",
+          adaptiveScheduling: true,
+          nodes: [{ id: "work", kind: "function", handler: "work" }],
+        },
+        {
+          workspace: guardedRoot,
+          workspaceGuard: guard,
+          handlers: { work: () => ({ output: "done" }) },
+        },
+      );
+      expect(guarded.status).toBe("passed");
+      expect(readGraphSchedulingObservations(guardedRoot)).toHaveLength(1);
+    } finally {
+      guard.release();
+    }
   });
 
   it("allows dependency-ordered effectful nodes to reuse a workspace", async () => {

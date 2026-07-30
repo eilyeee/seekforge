@@ -43,6 +43,7 @@ describe("workspaceFingerprint", () => {
     mkdirSync(join(root, ".seekforge"));
     writeFileSync(join(root, ".seekforge", "skills-usage.jsonl"), '{"type":"outcome"}\n');
     writeFileSync(join(root, ".seekforge", "loop-verification-cache.json"), '{"version":1,"entries":[]}\n');
+    writeFileSync(join(root, ".seekforge", "graph-scheduling-history.json"), '{"version":2,"observations":[]}\n');
     const after = await workspaceFingerprint(root);
     expect(after).toBe(before);
   });

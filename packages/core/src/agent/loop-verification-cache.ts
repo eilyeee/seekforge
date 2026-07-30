@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { isRecord } from "../util/guards.js";
+import { hasOnlyKeys, isRecord } from "../util/guards.js";
 import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 import type { LoopStageResult } from "./auto-loop.js";
 import { isDenseArray } from "./orchestration.js";
@@ -22,11 +22,6 @@ type Entry = {
   result: LoopStageResult;
   updatedAt: string;
 };
-
-function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const allowed = new Set(keys);
-  return Object.keys(value).every((key) => allowed.has(key));
-}
 
 function validEntry(value: unknown, now: number): value is Entry {
   if (

@@ -46,7 +46,11 @@ import { createEngineeringGraphLogWriter, type GraphLogWriter } from "./graph-hi
 import { readGraphControlEntries } from "./graph-control-store.js";
 import { acknowledgeEngineeringGraphSignal, claimEngineeringGraphSignal } from "./graph-signal-store.js";
 import { archiveEngineeringGraphRun } from "./graph-run-history.js";
-import { graphSchedulingScore, recordGraphSchedulingObservation } from "./graph-scheduling-history.js";
+import {
+  graphSchedulingScore,
+  readGraphSchedulingObservations,
+  recordGraphSchedulingObservation,
+} from "./graph-scheduling-history.js";
 import { engineeringGraphCriticality } from "./graph-plan.js";
 import { DEFAULT_GRAPH_RETRY_POLICY, graphRetryDelayMs } from "./graph-retry-policy.js";
 import {
@@ -1136,6 +1140,7 @@ export async function runEngineeringGraph(
   const lease = persistenceEnabled
     ? await acquireSessionLeaseWithPreemption(options.workspace, `engineering-graph-${definition.graphId}`, {
         ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.workspaceGuard ? { workspaceGuard: options.workspaceGuard } : {}),
       })
     : undefined;
   const runController = new AbortController();
@@ -1288,13 +1293,21 @@ export async function runEngineeringGraph(
     );
     for (const id of compensationPending) pending.delete(id);
     const criticality = engineeringGraphCriticality(definition);
+    // Parse the bounded advisory history once; large graphs must not repeat
+    // synchronous workspace I/O for every node in the initial ready queue.
+    const schedulingHistory =
+      persistenceEnabled && definition.adaptiveScheduling
+        ? readGraphSchedulingObservations(options.workspace)
+        : undefined;
     const schedulingScores = new Map(
       definition.nodes.map((node) => [
         node.id,
         // The static remaining-path rank is correctness-neutral and dominates
         // advisory history, which only orders peers on the same critical tier.
         (criticality.get(node.id) ?? 0) * 1_000_000_000_000 +
-          (definition.adaptiveScheduling ? graphSchedulingScore(options.workspace, definition.graphId, node.id) : 0),
+          (persistenceEnabled && definition.adaptiveScheduling
+            ? graphSchedulingScore(options.workspace, definition.graphId, fingerprint, node.id, schedulingHistory)
+            : 0),
       ]),
     );
     const inFlight = new Map<string, Promise<{ id: string; result: GraphNodeResult }>>();
@@ -1858,14 +1871,25 @@ export async function runEngineeringGraph(
       try {
         const started = result.startedAt ? Date.parse(result.startedAt) : Number.NaN;
         const completedAt = result.completedAt ? Date.parse(result.completedAt) : Number.NaN;
-        if (Number.isFinite(started) && Number.isFinite(completedAt)) {
-          recordGraphSchedulingObservation(options.workspace, {
-            graphId: definition.graphId,
-            nodeId: result.id,
-            durationMs: Math.max(0, completedAt - started),
-            passed: result.status === "passed",
-            recordedAt: result.completedAt!,
-          });
+        if (
+          persistenceEnabled &&
+          graphNodeIsEffectful(byId.get(result.id)!) &&
+          (result.status === "passed" || result.status === "failed") &&
+          Number.isFinite(started) &&
+          Number.isFinite(completedAt)
+        ) {
+          recordGraphSchedulingObservation(
+            options.workspace,
+            {
+              graphId: definition.graphId,
+              nodeId: result.id,
+              fingerprint,
+              durationMs: Math.max(0, completedAt - started),
+              passed: result.status === "passed",
+              recordedAt: result.completedAt!,
+            },
+            options.workspaceGuard,
+          );
         }
       } catch {
         // Scheduling history is advisory and never owns Graph correctness.

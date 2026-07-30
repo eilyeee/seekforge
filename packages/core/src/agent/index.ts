@@ -242,8 +242,13 @@ export {
   type EngineeringGraphRunSnapshot,
 } from "./graph-run-history.js";
 export {
+  analyzeGraphSchedulingIntelligence,
   graphSchedulingScore,
+  readGraphSchedulingObservations,
   recordGraphSchedulingObservation,
+  summarizeGraphSchedulingIntelligence,
+  type GraphSchedulingIntelligence,
+  type GraphSchedulingIntelligenceFinding,
   type GraphSchedulingObservation,
 } from "./graph-scheduling-history.js";
 export {

@@ -30,6 +30,8 @@ written as "recent → keep" silently takes the *else* branch on unparseable inp
 - **Also caught:** Loop DAG and speculation summaries sorted valid offset
   timestamps lexicographically, so recency order could be wrong. Compare parsed
   epochs and retain deterministic tie behavior.
+- **Also caught:** Graph scheduling intelligence treated append order as event
+  order, so a delayed valid observation could replace the true latest outcome.
 
 ## 2. Prefix matching needs a separator boundary
 
@@ -2096,6 +2098,8 @@ rejects.
   exceeding the 1 MiB state-reader limit.
 - **Also caught:** Loop verification intelligence bounded entry count and each
   command but did not evict by total UTF-8 bytes before its 512 KiB write.
+- **Also caught:** Graph scheduling history bounded observation count but could
+  write more than its own 128 KiB reader accepted.
 
 ## 167. Evidence existence is not evidence relevance
 
@@ -2199,6 +2203,8 @@ background operation's own Agent and nested-Agent session leases.
 - **Also caught:** Loop and Graph recovery bookkeeping acquired child lifecycle
   leases without forwarding the held guard capability, so the guard rejected
   its own backoff write or successful cleanup.
+- **Also caught:** the Graph runner forwarded an idle guard to child work but not
+  to its own primary lifecycle lease, so real idle recovery rejected itself.
 
 ## 176. Resumable status does not prove ownership is gone
 
@@ -3218,6 +3224,8 @@ cache even though product files did not change.
   count limits independent.
 - **Caught:** Loop verification intelligence initially wrote inside the workspace
   without an explicit workspace-fingerprint exclusion.
+- **Also caught:** Graph scheduling intelligence was another exact observability
+  file missing from the same content-identity exclusion.
 
 ## 301. Read-modify-write state must be read after ownership is acquired
 
@@ -3229,6 +3237,8 @@ writes alone does not prevent the lost update.
   replace the state while ownership is held.
 - **Caught:** Loop verification intelligence initially loaded its aggregate before
   acquiring the cross-process lease.
+- **Also caught:** Graph scheduling observations used an unleased read-modify-write
+  path that could overwrite a newer concurrent outcome with a stale snapshot.
 
 ## 302. A new historical consumer needs every producer generation
 
@@ -3273,6 +3283,18 @@ the first category-specific repair and diversifies too early.
   executed the action, not merely on snapshots that share its input category.
 - **Caught:** adaptive Loop routing added a category to the iteration-zero snapshot,
   causing the first SARIF recovery to skip `repair_review` and select `replan`.
+
+## 306. Historical advice must bind to the contract generation it measured
+
+A stable Graph and node id can outlive changes to handlers, workspaces, dependencies,
+or scheduling policy. Reusing outcomes by id alone makes a new definition inherit
+timing and failure evidence from work it never executed.
+
+- **Do:** include the authoritative definition-and-physical-workspace fingerprint in
+  every observation key and require an exact match before the history can influence
+  scheduling.
+- **Caught:** adaptive Graph scheduling originally keyed observations only by Graph
+  and node id, so a changed definition consumed stale scheduling evidence.
 
 ---
 

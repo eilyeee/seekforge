@@ -1,5 +1,6 @@
 import {
   applyEngineeringGraphMigration,
+  analyzeGraphSchedulingIntelligence,
   graphHandlersWithPlugins,
   archiveEngineeringGraphResources,
   clearEngineeringGraphRecovery,
@@ -9,6 +10,7 @@ import {
   engineeringGraphSignalAvailable,
   explainEngineeringGraphNode,
   inspectEngineeringGraphResources,
+  isValidLoopDagId,
   listEngineeringGraphStates,
   loadPluginContributions,
   loadEngineeringGraphState,
@@ -18,10 +20,12 @@ import {
   planEngineeringGraphMigration,
   promoteEngineeringGraphResult,
   pruneEngineeringGraphResources,
+  readGraphSchedulingObservations,
   readFileIfExists,
   removeEngineeringGraphState,
   setEngineeringGraphPriority,
   simulateEngineeringGraph,
+  summarizeGraphSchedulingIntelligence,
   runEngineeringGraph,
   validateEngineeringGraphRunOptions,
   validateEngineeringGraphWorkspaces,
@@ -199,6 +203,20 @@ export function graphListCommand(): void {
       )
       .join("\n"),
   );
+}
+
+export function graphIntelligenceCommand(graphId?: string): void {
+  try {
+    if (graphId !== undefined && !isValidLoopDagId(graphId)) throw new Error(`Invalid Graph id: ${graphId}`);
+    const observations = readGraphSchedulingObservations(process.cwd()).filter(
+      (observation) => graphId === undefined || observation.graphId === graphId,
+    );
+    const entries = summarizeGraphSchedulingIntelligence(observations);
+    console.log(JSON.stringify({ entries, findings: analyzeGraphSchedulingIntelligence(entries) }, null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
 }
 
 export function graphPriorityCommand(graphId: string, priority: number): void {

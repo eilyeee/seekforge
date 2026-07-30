@@ -1,14 +1,16 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Command } from "commander";
-import { readEngineeringGraphFile } from "../commands/graph.js";
+import { recordGraphSchedulingObservation } from "@seekforge/core";
+import { graphIntelligenceCommand, readEngineeringGraphFile } from "../commands/graph.js";
 import { registerGraphCommands } from "../register-graph.js";
 
 describe("Engineering Graph CLI input", () => {
   const workspaces: string[] = [];
   afterEach(() => {
+    vi.restoreAllMocks();
     for (const workspace of workspaces.splice(0)) rmSync(workspace, { recursive: true, force: true });
   });
 
@@ -46,7 +48,7 @@ describe("Engineering Graph CLI input", () => {
     );
   });
 
-  it("registers diagnostics, migration, simulation, and explanation as first-class Graph commands", () => {
+  it("registers diagnostics, intelligence, migration, simulation, and explanation as first-class Graph commands", () => {
     const program = new Command();
     registerGraphCommands(
       program,
@@ -55,7 +57,27 @@ describe("Engineering Graph CLI input", () => {
     );
     const graph = program.commands.find((command) => command.name() === "graph");
     expect(graph?.commands.map((command) => command.name())).toEqual(
-      expect.arrayContaining(["diagnose", "migration-plan", "migrate", "simulate", "explain"]),
+      expect.arrayContaining(["diagnose", "intelligence", "migration-plan", "migrate", "simulate", "explain"]),
     );
+  });
+
+  it("reports scheduling intelligence without node output", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-graph-cli-intelligence-"));
+    workspaces.push(workspace);
+    recordGraphSchedulingObservation(workspace, {
+      graphId: "release",
+      nodeId: "verify",
+      fingerprint: "a".repeat(64),
+      durationMs: 20,
+      passed: false,
+      recordedAt: new Date().toISOString(),
+    });
+    vi.spyOn(process, "cwd").mockReturnValue(workspace);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    graphIntelligenceCommand("release");
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      entries: [expect.objectContaining({ graphId: "release", nodeId: "verify", failures: 1 })],
+      findings: [],
+    });
   });
 });

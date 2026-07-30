@@ -13,6 +13,7 @@ import {
   createLoopState,
   readGraphControlEntries,
   readLoopControlEntries,
+  recordGraphSchedulingObservation,
   recordLoopVerificationIntelligence,
 } from "@seekforge/core";
 
@@ -372,6 +373,14 @@ describe("loop management API", () => {
 
   it("lists, inspects, reads history, and deletes Engineering Graph checkpoints", async () => {
     const now = "2026-01-01T00:00:00.000Z";
+    recordGraphSchedulingObservation(workspace, {
+      graphId: "rest-graph",
+      nodeId: "done",
+      fingerprint: "c".repeat(64),
+      durationMs: 25,
+      passed: false,
+      recordedAt: new Date().toISOString(),
+    });
     writeFileIn(
       workspace,
       ".seekforge/graphs/rest-graph.json",
@@ -414,6 +423,12 @@ describe("loop management API", () => {
     expect(first).not.toHaveProperty("definition");
     expect((first.results as Array<Record<string, unknown>>)[0]).not.toHaveProperty("output");
     expect(await jsonOf(await authed("/api/graphs/rest-graph"))).toMatchObject({ graphId: "rest-graph" });
+    expect(await jsonOf(await authed("/api/graph-scheduling-intelligence?graphId=rest-graph"))).toMatchObject({
+      entries: [expect.objectContaining({ graphId: "rest-graph", nodeId: "done", failures: 1 })],
+      findings: [],
+    });
+    expect((await authed("/api/graph-scheduling-intelligence?graphId=../bad")).status).toBe(400);
+    expect((await authed("/api/graphs/scheduling-intelligence")).status).toBe(404);
     expect(
       await jsonOf(
         await authed("/api/graphs/rest-graph/priority", {
@@ -476,6 +491,17 @@ describe("loop management API", () => {
       state: { status: "paused", pauseReason: "control", results: [] },
     });
     expect(await jsonOf(await authed("/api/graphs/rest-graph/explain/done"))).toMatchObject({ eligible: true });
+    for (let index = 0; index < 4; index++) {
+      recordGraphSchedulingObservation(workspace, {
+        graphId: "rest-graph",
+        nodeId: "done",
+        fingerprint: "b".repeat(64),
+        durationMs: 25,
+        passed: false,
+        recordedAt: new Date(Date.now() - 4 + index).toISOString(),
+      });
+    }
+    expect(await (await authed("/api/metrics")).text()).toMatch(/seekforge_graph_scheduling_anomalies 0(?:\n|$)/);
     expect(await jsonOf(await authed("/api/graphs/rest-graph", { method: "DELETE" }))).toEqual({
       removed: true,
       graphId: "rest-graph",
@@ -853,6 +879,8 @@ describe("loop management API", () => {
     expect(text).toMatch(/seekforge_loops_total \d+/);
     expect(text).toMatch(/seekforge_graphs_total \d+/);
     expect(text).toMatch(/seekforge_graph_node_retries_total \d+/);
+    expect(text).toMatch(/seekforge_graph_scheduling_anomalies \d+/);
+    expect(text).toMatch(/seekforge_graph_scheduling_critical_anomalies \d+/);
   });
 
   it("updates priority and safely deletes one loop", async () => {

@@ -1,5 +1,6 @@
 import {
   applyEngineeringGraphMigration,
+  analyzeGraphSchedulingIntelligence,
   archiveEngineeringGraphResources,
   buildEngineeringGraphEvidenceReport,
   buildEngineeringGraphArtifactCatalog,
@@ -28,6 +29,7 @@ import {
   planEngineeringGraphMigration,
   promoteEngineeringGraphResult,
   pruneEngineeringGraphResources,
+  readGraphSchedulingObservations,
   readEngineeringGraphHistory,
   readEngineeringGraphRunSnapshots,
   registerEngineeringGraphTemplate,
@@ -37,6 +39,7 @@ import {
   setEngineeringGraphPriority,
   SessionBusyError,
   simulateEngineeringGraph,
+  summarizeGraphSchedulingIntelligence,
   validateEngineeringGraphRunOptions,
   validateEngineeringGraphWorkspaces,
   type EngineeringGraphDefinition,
@@ -222,6 +225,20 @@ function selectorBody(value: unknown, key: "approve" | "rerun"): string[] | unde
 
 export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
   const { method, segs, res, workspace, url, rest } = ctx;
+  if (segs[1] === "graph-scheduling-intelligence") {
+    if (method !== "GET" || segs.length !== 2) return false;
+    const graphId = url.searchParams.get("graphId");
+    if (graphId !== null && !isValidLoopDagId(graphId)) {
+      sendApiError(res, 400, "bad_request", "invalid Graph id");
+      return true;
+    }
+    const observations = readGraphSchedulingObservations(workspace).filter(
+      (observation) => graphId === null || observation.graphId === graphId,
+    );
+    const entries = summarizeGraphSchedulingIntelligence(observations);
+    sendJson(res, 200, { entries, findings: analyzeGraphSchedulingIntelligence(entries) });
+    return true;
+  }
   if (segs[1] !== "graphs") return false;
 
   if (method === "POST" && segs.length === 3 && segs[2] === "validate") {

@@ -13,6 +13,7 @@ const INTERNAL_FILES = new Set([
   ".seekforge/skills-usage.jsonl",
   ".seekforge/loop-verification-cache.json",
   ".seekforge/loop-verification-intelligence.json",
+  ".seekforge/graph-scheduling-history.json",
 ]);
 const FALLBACK_IGNORES = new Set([".git", "node_modules", "dist", "build", "coverage", "target"]);
 

@@ -92,22 +92,28 @@ describe("Loop verification intelligence", () => {
   it("evicts oldest entries before the writer exceeds its own byte limit", () => {
     const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-intelligence-"));
     workspaces.push(workspace);
-    for (let index = 0; index < 70; index++) {
-      recordLoopVerificationIntelligence(
-        workspace,
-        {
-          ...result(0),
-          id: `tests-${index}`,
-          command: `pnpm test ${index} ${"x".repeat(8_000)}`,
-        },
-        "none",
-      );
-    }
+    recordLoopVerificationIntelligence(workspace, result(0), "none");
     const path = join(workspace, ".seekforge", "loop-verification-intelligence.json");
+    const base = JSON.parse(readFileSync(path, "utf8")).entries[0];
+    const entries: Array<Record<string, unknown>> = [];
+    for (let index = 0; index < 70; index++) {
+      const candidate = [
+        ...entries,
+        { ...base, stageId: `tests-${index}`, command: `pnpm test ${index} ${"x".repeat(8_000)}` },
+      ];
+      if (Buffer.byteLength(JSON.stringify({ version: 1, entries: candidate })) > 524_200) break;
+      entries.push(candidate.at(-1));
+    }
+    writeFileSync(path, `${JSON.stringify({ version: 1, entries })}\n`);
+    recordLoopVerificationIntelligence(
+      workspace,
+      { ...result(0), id: "tests-newest", command: `pnpm test newest ${"x".repeat(8_000)}` },
+      "none",
+    );
     const raw = readFileSync(path);
     expect(raw.byteLength).toBeLessThanOrEqual(512 * 1024);
-    const entries = readLoopVerificationIntelligence(workspace);
-    expect(entries.length).toBeLessThan(70);
-    expect(entries.at(-1)?.stageId).toBe("tests-69");
+    const retained = readLoopVerificationIntelligence(workspace);
+    expect(retained.length).toBeLessThan(entries.length + 1);
+    expect(retained.at(-1)?.stageId).toBe("tests-newest");
   });
 });

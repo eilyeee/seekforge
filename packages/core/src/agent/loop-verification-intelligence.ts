@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { isRecord } from "../util/guards.js";
+import { hasOnlyKeys, isRecord } from "../util/guards.js";
+import { serializeNewestJsonArray } from "../util/bounded-json.js";
 import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 import type { LoopFailureCategory, LoopStageResult } from "./auto-loop.js";
 import { isLoopFailureCategory } from "./loop-model-routing.js";
@@ -37,26 +38,17 @@ export type LoopVerificationIntelligenceFinding = {
   message: string;
 };
 
-function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const allowed = new Set(keys);
-  return Object.keys(value).every((key) => allowed.has(key));
-}
-
 function isSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value);
 }
 
 function serializeEntries(entries: readonly LoopVerificationIntelligence[]): string {
-  const retained = entries.slice(-MAX_ENTRIES);
-  let serialized = `${JSON.stringify({ version: 1, entries: retained })}\n`;
-  while (retained.length > 1 && Buffer.byteLength(serialized, "utf8") > MAX_FILE_BYTES) {
-    retained.shift();
-    serialized = `${JSON.stringify({ version: 1, entries: retained })}\n`;
-  }
-  if (Buffer.byteLength(serialized, "utf8") > MAX_FILE_BYTES) {
-    throw new Error("Loop verification intelligence entry exceeds the durable byte limit");
-  }
-  return serialized;
+  return serializeNewestJsonArray(entries, {
+    maxItems: MAX_ENTRIES,
+    maxBytes: MAX_FILE_BYTES,
+    envelope: (retained) => ({ version: 1, entries: retained }),
+    overflowMessage: "Loop verification intelligence entry exceeds the durable byte limit",
+  }).serialized;
 }
 
 function validEntry(value: unknown, now: number): value is LoopVerificationIntelligence {

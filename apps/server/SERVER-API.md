@@ -122,6 +122,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/loop-dags/:id/resources | retained managed-worktree count and bounded disk use |
 | POST /api/loop-dags/:id/resources | body `{operation:"archive"|"prune"|"promote",dryRun?,force?,target?}`; explicit resource lifecycle operation |
 | GET /api/graphs | bounded Engineering Graph summaries with cumulative active `elapsedMs` (definitions/node outputs omitted, latest events only) |
+| GET /api/graph-scheduling-intelligence?graphId=:id | bounded output-free, definition-fingerprinted node scheduling history and anomaly findings |
 | POST /api/graphs/validate | validate a definition/template with optional `parameters` and return its normalized recursive dry-run plan |
 | GET /api/graphs/templates | list exact-version schema-v2 Graph templates registered in this workspace |
 | POST /api/graphs/templates | register or replace one exact `templateId@version` schema-v2 template |

@@ -5,6 +5,7 @@ import {
   graphDiagnoseCommand,
   graphListCommand,
   graphExplainCommand,
+  graphIntelligenceCommand,
   graphMigrateCommand,
   graphMigrationPlanCommand,
   graphPriorityCommand,
@@ -93,6 +94,11 @@ export function registerGraphCommands(
         }),
     );
   graph.command("list").action(graphListCommand);
+  graph
+    .command("intelligence")
+    .argument("[graph-id]")
+    .description("report bounded adaptive-scheduling outcomes and anomalies")
+    .action(graphIntelligenceCommand);
   graph
     .command("diagnose")
     .argument("<graph-id>")

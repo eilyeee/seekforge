@@ -13,12 +13,15 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  analyzeGraphSchedulingIntelligence,
   DEFAULT_MODEL,
   DEPRECATED_MODELS,
   listEngineeringGraphStates,
   MODEL_PRICING,
   resolveProviderPreset,
   readLoopVerificationIntelligence,
+  readGraphSchedulingObservations,
+  summarizeGraphSchedulingIntelligence,
   analyzeLoopVerificationIntelligence,
 } from "@seekforge/core";
 import { ConfigValueError, loadConfig } from "./config.js";
@@ -99,11 +102,25 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
     if (method === "GET" && path === "/api/metrics") {
       const metrics = ctx.runManager.metrics();
       const loops = ctx.registry.summary.flatMap((workspace) => listLoopStates(workspace.path));
-      const graphs = ctx.registry.summary.flatMap((workspace) => listEngineeringGraphStates(workspace.path));
+      const graphWorkspaces = ctx.registry.summary.map((workspace) => ({
+        workspace,
+        states: listEngineeringGraphStates(workspace.path),
+      }));
+      const graphs = graphWorkspaces.flatMap(({ states }) => states);
       const loopIntelligence = ctx.registry.summary.flatMap((workspace) =>
         readLoopVerificationIntelligence(workspace.path),
       );
       const loopIntelligenceFindings = analyzeLoopVerificationIntelligence(loopIntelligence);
+      const graphIntelligenceFindings = analyzeGraphSchedulingIntelligence(
+        summarizeGraphSchedulingIntelligence(
+          graphWorkspaces.flatMap(({ workspace, states }) => {
+            const currentFingerprints = new Map(states.map((graph) => [graph.graphId, graph.fingerprint]));
+            return readGraphSchedulingObservations(workspace.path).filter(
+              (observation) => currentFingerprints.get(observation.graphId) === observation.fingerprint,
+            );
+          }),
+        ),
+      );
       const loopMetrics: Record<string, number> = {
         seekforge_loops_total: loops.length,
         seekforge_loops_active: loops.filter((loop) => loop.status === "running" || loop.status === "paused").length,
@@ -146,6 +163,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
             graph.activeAttempts.reduce((nodeSum, attempt) => nodeSum + Math.max(0, attempt.attempt - 1), 0),
           0,
         ),
+        seekforge_graph_scheduling_anomalies: graphIntelligenceFindings.length,
+        seekforge_graph_scheduling_critical_anomalies: graphIntelligenceFindings.filter(
+          (finding) => finding.severity === "critical",
+        ).length,
       };
       res.writeHead(200, { "content-type": "text/plain; version=0.0.4; charset=utf-8" });
       res.end(
