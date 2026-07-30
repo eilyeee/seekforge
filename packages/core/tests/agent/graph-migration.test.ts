@@ -6,16 +6,20 @@ import { engineeringSubgraphStateId } from "../../src/agent/graph-contract.js";
 import { runEngineeringGraph } from "../../src/agent/graph-engineering.js";
 import {
   applyEngineeringGraphMigration,
+  applyEngineeringGraphTreeMigration,
   listEngineeringGraphTreeStates,
   planEngineeringGraphExpansion,
   planEngineeringGraphMigration,
   planEngineeringGraphTreeMigration,
   readEngineeringGraphMigrationJournal,
+  readEngineeringGraphTreeMigrationJournal,
+  recoverEngineeringGraphTreeMigration,
 } from "../../src/agent/graph-migration.js";
 import { readEngineeringGraphRunSnapshots } from "../../src/agent/graph-run-history.js";
 import { readEngineeringGraphHistory } from "../../src/agent/graph-history.js";
 import { loadEngineeringGraphState, saveEngineeringGraphState } from "../../src/agent/graph-state.js";
 import type { AgentCoreDeps } from "../../src/agent/loop.js";
+import { acquireSessionLease, isSessionRunActive } from "../../src/agent/session-lease.js";
 
 const deps = {} as AgentCoreDeps;
 
@@ -74,7 +78,7 @@ describe("Engineering Graph migration", () => {
         plan: expect.objectContaining({ added: ["two"] }),
       }),
     ]);
-    expect(tree.blockers.some((blocker) => blocker.includes("coordinated tree transaction"))).toBe(true);
+    expect(tree.blockers).toEqual([]);
     expect(() => planEngineeringGraphExpansion(before, { ...before, failurePolicy: "continue" as const })).toThrow(
       /cannot change Graph policy/,
     );
@@ -307,7 +311,7 @@ describe("Engineering Graph migration", () => {
     expect(() => applyEngineeringGraphMigration(root, terminal.definition)).toThrow(/through their parent/);
   });
 
-  it("rejects invalidation of an existing durable subgraph", async () => {
+  it("coordinates invalidation of an existing durable subgraph", async () => {
     const root = workspace();
     const parent = await runEngineeringGraph(
       deps,
@@ -345,10 +349,200 @@ describe("Engineering Graph migration", () => {
       listEngineeringGraphTreeStates(root, [parent.definition, target]),
     );
     expect(tree.mode).toBe("coordinated_tree");
-    expect(tree.blockers).toContain(
-      "Nested or multiple checkpoints require a coordinated tree transaction; apply remains fail-closed",
-    );
+    expect(tree.blockers).toEqual([]);
     expect(() => applyEngineeringGraphMigration(root, target)).toThrow(/subgraph checkpoint/);
+    const migrated = applyEngineeringGraphTreeMigration(root, target);
+    expect(migrated.state.status).toBe("paused");
+    expect(migrated.state.definition).toMatchObject(target);
+    const childId = engineeringSubgraphStateId("parent-migration", "child", "child-definition");
+    expect(loadEngineeringGraphState(root, childId)).toMatchObject({
+      status: "paused",
+      definition: { nodes: [expect.objectContaining({ handler: "two" })] },
+    });
+    expect(applyEngineeringGraphTreeMigration(root, target).plan).toMatchObject({
+      mode: "no_op",
+      entries: [{ stateStatus: "available" }, { stateStatus: "available" }],
+    });
+  });
+
+  it("recovers a tree transaction after a child commits but before the root", async () => {
+    const root = workspace();
+    const before = {
+      graphId: "recover-tree",
+      nodes: [
+        {
+          id: "child",
+          kind: "subgraph" as const,
+          graph: {
+            graphId: "child-definition",
+            nodes: [{ id: "work", kind: "function" as const, handler: "one" }],
+          },
+        },
+      ],
+    };
+    const parent = await runEngineeringGraph(deps, before, {
+      workspace: root,
+      handlers: { one: () => ({}) },
+    });
+    const target = {
+      ...before,
+      nodes: [
+        {
+          ...before.nodes[0]!,
+          graph: {
+            graphId: "child-definition",
+            nodes: [{ id: "work", kind: "function" as const, handler: "two" }],
+          },
+        },
+      ],
+    };
+    expect(() =>
+      applyEngineeringGraphTreeMigration(root, target, {
+        faultInjector: (point) => {
+          if (point === "after_child_committed") throw new Error("simulated crash");
+        },
+      }),
+    ).toThrow(/simulated crash/);
+    expect(loadEngineeringGraphState(root, parent.graphId)?.fingerprint).toBe(parent.fingerprint);
+    const recovered = recoverEngineeringGraphTreeMigration(root, parent.graphId);
+    expect(recovered?.definition).toMatchObject(target);
+    const childId = engineeringSubgraphStateId(parent.graphId, "child", "child-definition");
+    expect(
+      readEngineeringGraphHistory(root, childId).filter(({ event }) => event.type === "graph.migrated"),
+    ).toHaveLength(1);
+    expect(recoverEngineeringGraphTreeMigration(root, parent.graphId)).toMatchObject({ graphId: parent.graphId });
+    expect(
+      readEngineeringGraphHistory(root, childId).filter(({ event }) => event.type === "graph.migrated"),
+    ).toHaveLength(1);
+  });
+
+  it("cleans an interrupted tree preparation before retrying", async () => {
+    const root = workspace();
+    const before = {
+      graphId: "recover-tree-preparing",
+      nodes: [
+        {
+          id: "child",
+          kind: "subgraph" as const,
+          graph: {
+            graphId: "child-definition",
+            nodes: [{ id: "work", kind: "function" as const, handler: "one" }],
+          },
+        },
+      ],
+    };
+    const parent = await runEngineeringGraph(deps, before, {
+      workspace: root,
+      handlers: { one: () => ({}) },
+    });
+    const target = {
+      ...before,
+      nodes: [
+        {
+          ...before.nodes[0]!,
+          graph: {
+            graphId: "child-definition",
+            nodes: [{ id: "work", kind: "function" as const, handler: "two" }],
+          },
+        },
+      ],
+    };
+    expect(() =>
+      applyEngineeringGraphTreeMigration(root, target, {
+        faultInjector: (point) => {
+          if (point === "after_tree_preparing") throw new Error("simulated preparing crash");
+        },
+      }),
+    ).toThrow(/simulated preparing crash/);
+    expect(readEngineeringGraphTreeMigrationJournal(root, parent.graphId)?.phase).toBe("preparing");
+    expect(recoverEngineeringGraphTreeMigration(root, parent.graphId)?.fingerprint).toBe(parent.fingerprint);
+    expect(readEngineeringGraphTreeMigrationJournal(root, parent.graphId)).toBeUndefined();
+    expect(applyEngineeringGraphTreeMigration(root, target).state.definition).toMatchObject(target);
+  });
+
+  it("refuses to overwrite progress that advanced after a tree transaction was prepared", async () => {
+    const root = workspace();
+    const before = {
+      graphId: "recover-tree-generation",
+      nodes: [
+        {
+          id: "child",
+          kind: "subgraph" as const,
+          graph: {
+            graphId: "child-definition",
+            nodes: [{ id: "work", kind: "function" as const, handler: "one" }],
+          },
+        },
+      ],
+    };
+    const parent = await runEngineeringGraph(deps, before, {
+      workspace: root,
+      handlers: { one: () => ({}) },
+    });
+    const target = {
+      ...before,
+      nodes: [
+        {
+          ...before.nodes[0]!,
+          graph: {
+            graphId: "child-definition",
+            nodes: [{ id: "work", kind: "function" as const, handler: "two" }],
+          },
+        },
+      ],
+    };
+    expect(() =>
+      applyEngineeringGraphTreeMigration(root, target, {
+        faultInjector: (point) => {
+          if (point === "after_tree_prepared") throw new Error("simulated prepared crash");
+        },
+      }),
+    ).toThrow(/simulated prepared crash/);
+    saveEngineeringGraphState(root, {
+      ...parent,
+      controlSeq: parent.controlSeq + 1,
+      resourceGeneration: "00000000-0000-4000-8000-000000000000",
+    });
+    expect(() => recoverEngineeringGraphTreeMigration(root, parent.graphId)).toThrow(/checkpoint changed/);
+  });
+
+  it("releases earlier tree leases when a later participant is busy", async () => {
+    const root = workspace();
+    const before = {
+      graphId: "lease-tree",
+      nodes: [
+        {
+          id: "child",
+          kind: "subgraph" as const,
+          graph: {
+            graphId: "child-definition",
+            nodes: [{ id: "work", kind: "function" as const, handler: "one" }],
+          },
+        },
+      ],
+    };
+    await runEngineeringGraph(deps, before, { workspace: root, handlers: { one: () => ({}) } });
+    const childId = engineeringSubgraphStateId(before.graphId, "child", "child-definition");
+    const childLease = acquireSessionLease(root, `engineering-graph-${childId}`);
+    try {
+      expect(() =>
+        applyEngineeringGraphTreeMigration(root, {
+          ...before,
+          nodes: [
+            {
+              ...before.nodes[0]!,
+              graph: {
+                graphId: "child-definition",
+                nodes: [{ id: "work", kind: "function" as const, handler: "two" }],
+              },
+            },
+          ],
+        }),
+      ).toThrow(/already running|being modified/i);
+      expect(isSessionRunActive(root, `engineering-graph-${before.graphId}`)).toBe(false);
+    } finally {
+      childLease.release();
+    }
   });
 
   it("rejects an added subgraph that would bind to an orphan child checkpoint", async () => {

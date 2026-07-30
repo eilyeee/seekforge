@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildEngineeringGraphHealthReport } from "../../src/agent/graph-health.js";
 import { runEngineeringGraph } from "../../src/agent/graph-engineering.js";
+import type { EngineeringGraphState } from "../../src/agent/graph-state.js";
 import type { AgentCoreDeps } from "../../src/agent/loop.js";
 import type { LoopState } from "../../src/agent/loop-state.js";
 import {
@@ -11,6 +12,8 @@ import {
   buildEngineeringGraphOptimizationReport,
   buildOrchestrationPortfolioReport,
   evaluateOrchestrationSlo,
+  graphOrchestrationFingerprint,
+  loopOrchestrationFingerprint,
   loopSloObservations,
 } from "../../src/agent/orchestration-intelligence.js";
 
@@ -84,9 +87,83 @@ describe("orchestration decision intelligence", () => {
     expect(report.routes).toEqual([
       expect.objectContaining({ model: "model-a", attempts: 2, improvements: 2, improvementRate: 1 }),
     ]);
+    expect(report.routes[0]!.lowerConfidenceBound).toBeGreaterThan(0);
+    expect(report.routes[0]!.lowerConfidenceBound).toBeLessThan(1);
     expect(report.recommendedRoutes).toEqual([
       { failureCategory: "test", model: "model-a", confidence: "low", evidenceCount: 2 },
     ]);
+  });
+
+  it("fingerprints the full durable Loop generation even when timestamps collide", () => {
+    const state = loopState();
+    expect(loopOrchestrationFingerprint({ ...state, costUsd: state.costUsd + 1 })).not.toBe(
+      loopOrchestrationFingerprint(state),
+    );
+    const withEvidence = {
+      ...state,
+      snapshots: [
+        ...state.snapshots!.slice(0, -1),
+        {
+          ...state.snapshots!.at(-1)!,
+          stageResults: [
+            {
+              id: "test",
+              command: "pnpm test",
+              code: 1,
+              output: "one failure",
+              attempts: 1,
+              flaky: false,
+              durationMs: 10,
+            },
+          ],
+        },
+      ],
+    };
+    const changedEvidence = {
+      ...withEvidence,
+      snapshots: [
+        ...withEvidence.snapshots.slice(0, -1),
+        {
+          ...withEvidence.snapshots.at(-1)!,
+          stageResults: [
+            {
+              id: "test",
+              command: "pnpm test",
+              code: 1,
+              output: "two failures",
+              attempts: 1,
+              flaky: false,
+              durationMs: 10,
+            },
+          ],
+        },
+      ],
+    };
+    expect(loopOrchestrationFingerprint(changedEvidence)).not.toBe(loopOrchestrationFingerprint(withEvidence));
+  });
+
+  it("fingerprints Graph checkpoint progress independently of its definition generation", () => {
+    const state = {
+      schemaVersion: 2,
+      graphId: "fingerprint-graph",
+      fingerprint: "a".repeat(64),
+      status: "running",
+      definition: { graphId: "fingerprint-graph", nodes: [] },
+      results: [],
+      events: [],
+      spentCost: 0,
+      spentTokens: 0,
+      elapsedMs: 0,
+      activeAttempts: [],
+      controlSeq: 0,
+      controlRunId: "run",
+      priority: 0,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    } satisfies EngineeringGraphState;
+    expect(graphOrchestrationFingerprint({ ...state, controlSeq: state.controlSeq + 1 })).not.toBe(
+      graphOrchestrationFingerprint(state),
+    );
   });
 
   it("attributes an edit to the preceding failure category and reports measured SLO coverage", () => {
@@ -210,15 +287,41 @@ describe("orchestration decision intelligence", () => {
         locality: "remote",
         protocolVersion: 1,
         supportsCancellation: true,
+        capacity: 1,
+        active: 1,
+        execute: () => ({}),
+      },
+      alternate: {
+        trusted: true,
+        locality: "remote",
+        protocolVersion: 1,
+        supportsCancellation: true,
+        capacity: 4,
+        active: 1,
+        execute: () => ({}),
+      },
+      malformed: {
+        trusted: true,
+        locality: "remote",
+        queueDepth: -1,
         execute: () => ({}),
       },
     });
     expect(report.scenarios.length).toBeLessThanOrEqual(16);
     expect(report.scenarios.some((scenario) => scenario.paretoOptimal)).toBe(true);
-    expect(report.placements).toEqual([{ nodeId: "ship", executor: "trusted", status: "eligible", reasons: [] }]);
+    expect(report.placements).toEqual([
+      expect.objectContaining({
+        nodeId: "ship",
+        executor: "trusted",
+        status: "capacity_exhausted",
+        recommendedExecutor: "alternate",
+      }),
+    ]);
     expect(report.proposals).toContainEqual(
-      expect.objectContaining({ action: { kind: "executor_placement", nodeId: "ship", executor: "trusted" } }),
+      expect.objectContaining({ action: { kind: "executor_placement", nodeId: "ship", executor: "alternate" } }),
     );
+    expect(report.uncertainty.samples).toBe(128);
+    expect(report.placements[0]!.alternatives.some((candidate) => candidate.executor === "malformed")).toBe(false);
   });
 
   it("does not double-count child Graph usage in randomized portfolio rollups", () => {

@@ -43,6 +43,7 @@ import { isSafeLoopDagRelativePath } from "./loop-dag-validation.js";
 import { acquireManagedOrchestrationWorktreeLease } from "./loop-managed-worktree.js";
 import { loadLoopState, loopStateExists } from "./loop-state.js";
 import { createEngineeringGraphLogWriter, type GraphLogWriter } from "./graph-history.js";
+import { MAX_GRAPH_ARTIFACT_BYTES, storeEngineeringGraphArtifact } from "./graph-artifact-store.js";
 import { readGraphControlEntries } from "./graph-control-store.js";
 import { acknowledgeEngineeringGraphSignal, claimEngineeringGraphSignal } from "./graph-signal-store.js";
 import { archiveEngineeringGraphRun } from "./graph-run-history.js";
@@ -80,6 +81,7 @@ export type GraphFunctionContext = {
   costBudgetUsd?: number;
   tokenBudget?: number;
   signal: AbortSignal;
+  executorLease?: { fencingToken: string; expiresAt?: string };
 };
 
 export type GraphFunctionResult = {
@@ -98,6 +100,19 @@ export type GraphExecutionAdapter = {
   locality: "remote";
   protocolVersion?: 1;
   supportsCancellation?: boolean;
+  /** Scheduler-facing health and bounded load snapshot supplied by the trusted host. */
+  healthy?: boolean;
+  capacity?: number;
+  active?: number;
+  queueDepth?: number;
+  region?: string;
+  dataLocality?: string[];
+  /** Reserves remote capacity and returns a fencing token for this exact attempt. */
+  reserve?: (
+    context: GraphFunctionContext,
+  ) =>
+    | { fencingToken: string; expiresAt?: string; release: () => void | Promise<void> }
+    | Promise<{ fencingToken: string; expiresAt?: string; release: () => void | Promise<void> }>;
   /** Recovers a previously committed result for this stable idempotency key. */
   recover?: (
     context: GraphFunctionContext,
@@ -111,6 +126,70 @@ export type GraphExecutionAdapter = {
   verifyResult?: (result: GraphFunctionResult, context: GraphFunctionContext) => boolean | Promise<boolean>;
   execute: GraphFunctionHandler;
 };
+
+export type GraphExecutionAdapterEligibility = {
+  status:
+    | "eligible"
+    | "missing"
+    | "untrusted"
+    | "protocol_mismatch"
+    | "cancellation_unsupported"
+    | "unhealthy"
+    | "capacity_exhausted"
+    | "invalid";
+  reasons: string[];
+};
+
+/** Owns runtime and advisory executor eligibility so both surfaces fail closed identically. */
+export function graphExecutionAdapterEligibility(
+  node: GraphNode,
+  adapter: GraphExecutionAdapter | undefined,
+): GraphExecutionAdapterEligibility {
+  if (!adapter) return { status: "missing", reasons: ["Executor is not registered"] };
+  if (adapter.trusted !== true) return { status: "untrusted", reasons: ["Executor is not trusted"] };
+  if (
+    adapter.locality !== "remote" ||
+    typeof adapter.execute !== "function" ||
+    (adapter.healthy !== undefined && typeof adapter.healthy !== "boolean") ||
+    (adapter.capacity !== undefined &&
+      (!Number.isSafeInteger(adapter.capacity) || adapter.capacity < 1 || adapter.capacity > 1_024)) ||
+    (adapter.active !== undefined &&
+      (!Number.isSafeInteger(adapter.active) || adapter.active < 0 || adapter.active > (adapter.capacity ?? 1_024))) ||
+    (adapter.queueDepth !== undefined &&
+      (!Number.isSafeInteger(adapter.queueDepth) || adapter.queueDepth < 0 || adapter.queueDepth > 1_000_000)) ||
+    (adapter.region !== undefined &&
+      (typeof adapter.region !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(adapter.region))) ||
+    (adapter.dataLocality !== undefined &&
+      (!isDenseArray(adapter.dataLocality) ||
+        adapter.dataLocality.length > 32 ||
+        new Set(adapter.dataLocality).size !== adapter.dataLocality.length ||
+        adapter.dataLocality.some(
+          (item) => typeof item !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(item),
+        ))) ||
+    (adapter.reserve !== undefined && typeof adapter.reserve !== "function") ||
+    (adapter.recover !== undefined && typeof adapter.recover !== "function") ||
+    (adapter.heartbeat !== undefined && typeof adapter.heartbeat !== "function") ||
+    (adapter.cancel !== undefined && typeof adapter.cancel !== "function") ||
+    (adapter.verifyResult !== undefined && typeof adapter.verifyResult !== "function") ||
+    (adapter.heartbeatIntervalMs !== undefined &&
+      (!Number.isSafeInteger(adapter.heartbeatIntervalMs) ||
+        adapter.heartbeatIntervalMs < 1_000 ||
+        adapter.heartbeatIntervalMs > 60_000))
+  ) {
+    return { status: "invalid", reasons: ["Executor contract is invalid"] };
+  }
+  if ((node.executorProtocolVersion ?? 1) !== (adapter.protocolVersion ?? 1)) {
+    return { status: "protocol_mismatch", reasons: ["Protocol version does not match"] };
+  }
+  if (node.requiresCancellation && !adapter.supportsCancellation) {
+    return { status: "cancellation_unsupported", reasons: ["Cancellation is required"] };
+  }
+  if (adapter.healthy === false) return { status: "unhealthy", reasons: ["Executor reports unhealthy"] };
+  if (adapter.capacity !== undefined && (adapter.active ?? 0) >= adapter.capacity) {
+    return { status: "capacity_exhausted", reasons: ["Executor capacity is exhausted"] };
+  }
+  return { status: "eligible", reasons: [] };
+}
 
 export type RunEngineeringGraphOptions = {
   workspace: string;
@@ -327,6 +406,7 @@ async function graphArtifacts(
   nodeId: string,
   workspace: string,
   verify: boolean,
+  artifactStoreWorkspace: string,
 ): Promise<GraphArtifact[] | undefined> {
   if (value === undefined) return undefined;
   if (
@@ -366,6 +446,7 @@ async function graphArtifacts(
         const current = lstatSync(target);
         if (
           !opened.isFile() ||
+          opened.size > MAX_GRAPH_ARTIFACT_BYTES ||
           opened.dev !== stat.dev ||
           opened.ino !== stat.ino ||
           current.dev !== opened.dev ||
@@ -401,6 +482,7 @@ async function graphArtifacts(
       if (artifact.sha256 && artifact.sha256 !== sha256) {
         throw new GraphNodeNonRetryableError(`Graph artifact hash mismatch: ${artifact.path}`);
       }
+      storeEngineeringGraphArtifact(artifactStoreWorkspace, target, sha256, verifiedSize);
       return { ...base, sha256, sizeBytes: verifiedSize, verified: true };
     }),
   );
@@ -484,22 +566,9 @@ export function validateEngineeringGraphRunOptions(
       }
       if (node.kind === "remote") {
         const adapter = graphExecutor(options, node.executor!);
-        if (
-          adapter?.trusted !== true ||
-          adapter.locality !== "remote" ||
-          typeof adapter.execute !== "function" ||
-          (adapter.recover !== undefined && typeof adapter.recover !== "function") ||
-          (adapter.heartbeat !== undefined && typeof adapter.heartbeat !== "function") ||
-          (adapter.cancel !== undefined && typeof adapter.cancel !== "function") ||
-          (adapter.verifyResult !== undefined && typeof adapter.verifyResult !== "function") ||
-          (adapter.heartbeatIntervalMs !== undefined &&
-            (!Number.isSafeInteger(adapter.heartbeatIntervalMs) ||
-              adapter.heartbeatIntervalMs < 1_000 ||
-              adapter.heartbeatIntervalMs > 60_000)) ||
-          (node.executorProtocolVersion !== undefined && adapter.protocolVersion !== node.executorProtocolVersion) ||
-          (node.requiresCancellation === true && adapter.supportsCancellation !== true)
-        ) {
-          throw new Error(`Graph remote executor is not registered as trusted: ${node.executor}`);
+        const eligibility = graphExecutionAdapterEligibility(node, adapter);
+        if (eligibility.status !== "eligible") {
+          throw new Error(`Graph remote executor ${node.executor} is ineligible: ${eligibility.reasons.join("; ")}`);
         }
       }
       if (node.graph) validateHandlers(node.graph);
@@ -788,7 +857,13 @@ async function executeNode(
     if (result.tokensUsed !== undefined && (!Number.isSafeInteger(result.tokensUsed) || result.tokensUsed < 0)) {
       throw new GraphNodeNonRetryableError(`Graph function ${node.id} returned invalid tokensUsed`);
     }
-    const artifacts = await graphArtifacts(result.artifacts, node.id, workspace, node.verifyArtifacts === true);
+    const artifacts = await graphArtifacts(
+      result.artifacts,
+      node.id,
+      workspace,
+      node.verifyArtifacts === true,
+      options.workspace,
+    );
     return {
       output: boundedOutput(result.output),
       costUsd: result.costUsd ?? 0,
@@ -914,7 +989,13 @@ async function executeNode(
           }
           try {
             const itemArtifacts =
-              (await graphArtifacts(result.artifacts, node.id, workspace, node.verifyArtifacts === true)) ?? [];
+              (await graphArtifacts(
+                result.artifacts,
+                node.id,
+                workspace,
+                node.verifyArtifacts === true,
+                options.workspace,
+              )) ?? [];
             return { batchIndex, result, itemArtifacts };
           } catch (error) {
             throw new GraphNodeNonRetryableError(retryableError(error), {
@@ -981,7 +1062,7 @@ async function executeNode(
   if (node.kind === "remote") {
     const adapter = graphExecutor(options, node.executor!);
     if (!adapter) throw new Error(`Graph remote executor is not registered: ${node.executor}`);
-    const context: GraphFunctionContext = {
+    let context: GraphFunctionContext = {
       node,
       workspace,
       dependencies: completed,
@@ -991,65 +1072,105 @@ async function executeNode(
       tokenBudget,
       signal,
     };
-    const recovered = adapter.recover ? await adapter.recover(context) : undefined;
-    let result: GraphFunctionResult;
-    if (recovered !== undefined) {
-      result = recovered;
-    } else {
-      const cancel = adapter.cancel
-        ? () =>
-            void Promise.resolve()
-              .then(() => adapter.cancel!(context))
-              .catch(() => undefined)
-        : undefined;
-      const offAbort = cancel ? onAbortOnce(signal, cancel) : () => {};
-      const intervalMs = adapter.heartbeatIntervalMs;
-      let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
-      let heartbeatRunning = false;
-      const invokeHeartbeat = (): Promise<void> => Promise.resolve().then(() => adapter.heartbeat!(context));
-      const heartbeat = (): void => {
-        if (!adapter.heartbeat || heartbeatRunning) return;
-        heartbeatRunning = true;
-        void invokeHeartbeat()
-          .catch(() => undefined)
-          .finally(() => {
-            heartbeatRunning = false;
-          });
-      };
-      try {
-        if (adapter.heartbeat) await invokeHeartbeat().catch(() => undefined);
-        if (
-          adapter.heartbeat &&
-          Number.isSafeInteger(intervalMs) &&
-          intervalMs !== undefined &&
-          intervalMs >= 1_000 &&
-          intervalMs <= 60_000
-        ) {
-          heartbeatTimer = setInterval(heartbeat, intervalMs);
-          heartbeatTimer.unref?.();
-        }
-        result = await adapter.execute(context);
-      } finally {
-        offAbort();
-        if (heartbeatTimer) clearInterval(heartbeatTimer);
+    const finalizeRemoteResult = async (result: GraphFunctionResult): Promise<ExecutionResult> => {
+      if (adapter.verifyResult && !(await adapter.verifyResult(result, context))) {
+        throw new GraphNodeNonRetryableError(`Graph remote ${node.id} returned an unverifiable result`);
       }
-    }
-    if (adapter.verifyResult && !(await adapter.verifyResult(result, context))) {
-      throw new GraphNodeNonRetryableError(`Graph remote ${node.id} returned an unverifiable result`);
-    }
-    if (result.costUsd !== undefined && (!Number.isFinite(result.costUsd) || result.costUsd < 0)) {
-      throw new GraphNodeNonRetryableError(`Graph remote ${node.id} returned invalid costUsd`);
-    }
-    if (result.tokensUsed !== undefined && (!Number.isSafeInteger(result.tokensUsed) || result.tokensUsed < 0)) {
-      throw new GraphNodeNonRetryableError(`Graph remote ${node.id} returned invalid tokensUsed`);
-    }
-    const artifacts = await graphArtifacts(result.artifacts, node.id, workspace, node.verifyArtifacts === true);
-    return {
-      output: boundedOutput(result.output),
-      costUsd: result.costUsd ?? 0,
-      tokensUsed: result.tokensUsed ?? 0,
-      ...(artifacts ? { artifacts } : {}),
+      if (result.costUsd !== undefined && (!Number.isFinite(result.costUsd) || result.costUsd < 0)) {
+        throw new GraphNodeNonRetryableError(`Graph remote ${node.id} returned invalid costUsd`);
+      }
+      if (result.tokensUsed !== undefined && (!Number.isSafeInteger(result.tokensUsed) || result.tokensUsed < 0)) {
+        throw new GraphNodeNonRetryableError(`Graph remote ${node.id} returned invalid tokensUsed`);
+      }
+      const artifacts = await graphArtifacts(
+        result.artifacts,
+        node.id,
+        workspace,
+        node.verifyArtifacts === true,
+        options.workspace,
+      );
+      return {
+        output: boundedOutput(result.output),
+        costUsd: result.costUsd ?? 0,
+        tokensUsed: result.tokensUsed ?? 0,
+        ...(artifacts ? { artifacts } : {}),
+      };
     };
+    const recovered = adapter.recover ? await adapter.recover(context) : undefined;
+    if (recovered !== undefined) {
+      return finalizeRemoteResult(recovered);
+    }
+    const reservation = adapter.reserve ? await adapter.reserve(context) : undefined;
+    if (
+      reservation !== undefined &&
+      (reservation === null ||
+        typeof reservation !== "object" ||
+        typeof reservation.fencingToken !== "string" ||
+        reservation.fencingToken.length === 0 ||
+        reservation.fencingToken.length > 256 ||
+        (reservation.expiresAt !== undefined &&
+          (typeof reservation.expiresAt !== "string" ||
+            !Number.isFinite(Date.parse(reservation.expiresAt)) ||
+            Date.parse(reservation.expiresAt) <= Date.now())) ||
+        typeof reservation.release !== "function")
+    ) {
+      if (
+        reservation !== null &&
+        typeof reservation === "object" &&
+        "release" in reservation &&
+        typeof reservation.release === "function"
+      ) {
+        await Promise.resolve(reservation.release()).catch(() => undefined);
+      }
+      throw new GraphNodeNonRetryableError(`Graph remote ${node.id} returned an invalid capacity reservation`);
+    }
+    if (reservation) {
+      context = {
+        ...context,
+        executorLease: {
+          fencingToken: reservation.fencingToken,
+          ...(reservation.expiresAt ? { expiresAt: reservation.expiresAt } : {}),
+        },
+      };
+    }
+    const cancel = adapter.cancel
+      ? () =>
+          void Promise.resolve()
+            .then(() => adapter.cancel!(context))
+            .catch(() => undefined)
+      : undefined;
+    const offAbort = cancel ? onAbortOnce(signal, cancel) : () => {};
+    const intervalMs = adapter.heartbeatIntervalMs;
+    let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+    let heartbeatRunning = false;
+    const invokeHeartbeat = (): Promise<void> => Promise.resolve().then(() => adapter.heartbeat!(context));
+    const heartbeat = (): void => {
+      if (!adapter.heartbeat || heartbeatRunning) return;
+      heartbeatRunning = true;
+      void invokeHeartbeat()
+        .catch(() => undefined)
+        .finally(() => {
+          heartbeatRunning = false;
+        });
+    };
+    try {
+      if (adapter.heartbeat) await invokeHeartbeat().catch(() => undefined);
+      if (
+        adapter.heartbeat &&
+        Number.isSafeInteger(intervalMs) &&
+        intervalMs !== undefined &&
+        intervalMs >= 1_000 &&
+        intervalMs <= 60_000
+      ) {
+        heartbeatTimer = setInterval(heartbeat, intervalMs);
+        heartbeatTimer.unref?.();
+      }
+      return await finalizeRemoteResult(await adapter.execute(context));
+    } finally {
+      offAbort();
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      if (reservation) await Promise.resolve(reservation.release()).catch(() => undefined);
+    }
   }
   if (node.kind === "join") {
     const passed = [...completed.values()].filter((result) => result.status === "passed").map((result) => result.id);

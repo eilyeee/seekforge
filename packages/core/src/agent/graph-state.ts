@@ -533,7 +533,10 @@ export function engineeringGraphStateExists(workspace: string, graphId: string):
   return readWorkspaceStateFile(workspace, statePath(graphId), MAX_GRAPH_STATE_BYTES) !== undefined;
 }
 
-export function listEngineeringGraphStates(workspace: string): EngineeringGraphState[] {
+export function listEngineeringGraphStates(
+  workspace: string,
+  options: { requireComplete?: boolean } = {},
+): EngineeringGraphState[] {
   const root = realpathSync.native(workspace);
   const directory = join(root, ".seekforge", "graphs");
   try {
@@ -541,8 +544,19 @@ export function listEngineeringGraphStates(workspace: string): EngineeringGraphS
     if (!stat.isDirectory() || stat.isSymbolicLink() || !realpathSync.native(directory).startsWith(`${root}${sep}`)) {
       return [];
     }
-    return readdirSync(directory, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && !entry.isSymbolicLink() && entry.name.endsWith(".json"))
+    const candidates = readdirSync(directory, { withFileTypes: true })
+      .filter(
+        (entry) =>
+          entry.isFile() &&
+          !entry.isSymbolicLink() &&
+          entry.name.endsWith(".json") &&
+          isValidLoopDagId(entry.name.slice(0, -5)),
+      )
+      .sort((left, right) => left.name.localeCompare(right.name));
+    if (options.requireComplete && candidates.length > 256) {
+      throw new Error("Workspace has too many Graph checkpoints for a complete bounded scan");
+    }
+    return candidates
       .slice(0, 256)
       .flatMap((entry) => {
         try {
@@ -703,19 +717,38 @@ export function removeEngineeringGraphState(workspace: string, graphId: string):
   try {
     const root = realpathSync.native(workspace);
     const directory = join(root, ".seekforge", "graphs");
+    let preparedTargets: string[] = [];
+    try {
+      preparedTargets = readdirSync(directory, { withFileTypes: true })
+        .filter(
+          (entry) =>
+            entry.isFile() &&
+            !entry.isSymbolicLink() &&
+            entry.name.startsWith(`${graphId}.tree-`) &&
+            entry.name.endsWith(".prepared.json"),
+        )
+        .map((entry) => join(directory, entry.name));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (preparedTargets.length > 128) {
+      throw new Error(`Graph has too many prepared tree migration files: ${graphId}`);
+    }
     const targets = [
       join(directory, `${graphId}.json`),
       join(directory, `${graphId}.control.json`),
       join(directory, `${graphId}.signals.json`),
       join(directory, `${graphId}.runs.json`),
       join(directory, `${graphId}.migration.json`),
+      join(directory, `${graphId}.tree-migration.json`),
+      ...preparedTargets,
       ...Array.from({ length: MAX_GRAPH_HISTORY_SEGMENTS }, (_, index) =>
         join(directory, `${graphId}.jsonl${index === 0 ? "" : `.${index}`}`),
       ),
       join(root, ".seekforge", "graph-archives", `${graphId}.json`),
     ];
     const artifacts = targets.map((target) => ({ target, stat: lstatSync(target, { throwIfNoEntry: false }) }));
-    if (artifacts[0]!.stat === undefined) return false;
+    if (!artifacts.some((artifact) => artifact.stat !== undefined)) return false;
     for (const artifact of artifacts) {
       if (artifact.stat === undefined) continue;
       if (

@@ -230,6 +230,10 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   if (method === "GET" && path === "/api/loops") return mockLoops.map((loop) => ({ ...loop }));
   if (method === "GET" && path === "/api/graphs") return [];
   if (method === "POST" && path === "/api/orchestration/proposals/refresh") return { proposals: [] };
+  if (method === "POST" && /^\/api\/orchestration\/proposals\/[^/]+\/(?:approve|dismiss|apply|rollback)$/.test(path)) {
+    return {};
+  }
+  if (method === "POST" && path === "/api/orchestration/deployments/observe") return { deployments: [] };
   if (method === "GET" && path === "/api/orchestration/report") {
     return {
       portfolio: {
@@ -255,9 +259,26 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
         })),
       },
       policy: {},
+      sloSummary: {
+        scope: "page",
+        evaluations: 0,
+        breached: 0,
+        breachRate: 0,
+        maxBreachRate: 0.05,
+        status: "unknown",
+        errorBudgetRemaining: 0,
+      },
+      pagination: {
+        loopOffset: 0,
+        graphOffset: 0,
+        limit: 100,
+        totalLoops: mockLoops.length,
+        totalGraphs: 0,
+      },
       loops: [],
       graphs: [],
       reviewedProposals: [],
+      deployments: [],
     } satisfies WorkspaceOrchestrationReport;
   }
   if (method === "GET" && path === "/api/loops/verification-plan") {

@@ -1268,6 +1268,41 @@ export type OrchestrationProposal = OrchestrationProposalDraft & {
   createdAt: string;
   updatedAt: string;
 };
+export type OrchestrationDeploymentMetric = {
+  costPerUnit: number;
+  durationPerUnitMs: number;
+  failures: number;
+  terminal: boolean;
+};
+export type OrchestrationDeployment = {
+  proposalId: string;
+  proposalUpdatedAt: string;
+  scope: "loop" | "graph";
+  sourceId: string;
+  sourceFingerprint: string;
+  action: OrchestrationProposalAction;
+  status: "applying" | "applied" | "failed" | "rolled_back" | "superseded";
+  attempt: number;
+  startedAt: string;
+  updatedAt: string;
+  appliedAt?: string;
+  rolledBackAt?: string;
+  targetFingerprint?: string;
+  targetStateHash?: string;
+  rollbackFingerprint?: string;
+  rollbackDefinitionHash?: string;
+  rollbackLoopRoute?: {
+    loopId: string;
+    failureCategory: string;
+    model: string;
+    proposalId: string;
+    appliedAt: string;
+  };
+  error?: string;
+  baseline: OrchestrationDeploymentMetric;
+  observed?: OrchestrationDeploymentMetric;
+  verdict: "pending" | "improved" | "stable" | "regressed";
+};
 export type OrchestrationSloEvaluation = {
   status: "unknown" | "met" | "at_risk" | "breached";
   objectives: Array<{
@@ -1321,6 +1356,31 @@ export type WorkspaceOrchestrationReport = {
     maxFailureRate?: number;
     minForecastCoverage?: number;
   };
+  policyState?: {
+    version: 1;
+    policy: WorkspaceOrchestrationReport["policy"];
+    evaluationWindow: number;
+    maxBreachRate: number;
+    updatedAt: string;
+  };
+  sloSummary: {
+    scope: "page";
+    evaluations: number;
+    breached: number;
+    breachRate: number;
+    maxBreachRate: number;
+    status: "unknown" | "met" | "at_risk" | "breached";
+    errorBudgetRemaining: number;
+  };
+  pagination: {
+    loopOffset: number;
+    graphOffset: number;
+    limit: number;
+    totalLoops: number;
+    totalGraphs: number;
+    nextLoopOffset?: number;
+    nextGraphOffset?: number;
+  };
   loops: Array<{
     loopId: string;
     health: LoopHealthReport;
@@ -1335,6 +1395,10 @@ export type WorkspaceOrchestrationReport = {
         improvements: number;
         regressions: number;
         improvementRate: number;
+        regressionRate: number;
+        qualityScore: number;
+        utilityScore: number;
+        lowerConfidenceBound: number;
         averageCostUsd: number;
         averageDurationMs: number;
         confidence: "none" | "low" | "medium" | "high";
@@ -1372,9 +1436,29 @@ export type WorkspaceOrchestrationReport = {
       placements: Array<{
         nodeId: string;
         executor: string;
-        status: "eligible" | "missing" | "untrusted" | "protocol_mismatch" | "cancellation_unsupported";
+        status:
+          | "eligible"
+          | "missing"
+          | "untrusted"
+          | "protocol_mismatch"
+          | "cancellation_unsupported"
+          | "unhealthy"
+          | "capacity_exhausted"
+          | "invalid";
         reasons: string[];
+        recommendedExecutor?: string;
+        alternatives: Array<{ executor: string; score: number; utilization: number; queueDepth: number }>;
       }>;
+      uncertainty: {
+        graphId: string;
+        samples: number;
+        makespanMs: { p50: number; p95: number; p99: number };
+        activeDurationMs: { p50: number; p95: number; p99: number };
+        durationBreachProbability: number;
+        deadlineBreachProbability: number;
+        budgetBreachProbability: number;
+        sensitivity: Array<{ nodeId: string; uncertaintyMs: number }>;
+      };
       proposals: OrchestrationProposalDraft[];
     };
     slo: OrchestrationSloEvaluation;
@@ -1390,9 +1474,11 @@ export type WorkspaceOrchestrationReport = {
       nodeId: string;
       sourceRunNumber: number;
       sourceCompletedAt: string;
+      casAvailable: boolean;
     }>;
   }>;
   reviewedProposals: OrchestrationProposal[];
+  deployments: OrchestrationDeployment[];
 };
 export type EngineeringGraphEvidenceReport = {
   schemaVersion: 1;

@@ -214,8 +214,12 @@ seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick
 - `seekforge orchestration report` 汇总 Loop 与 Graph 用量，且不会重复计算由 Graph 持有的子 Loop
   或子 Graph 检查点。对 Loop，它把每次编辑模型的结果归因到编辑前的失败分类，报告按证据数加权
   的置信度，并用实测 P95 耗时和部分验证覆盖率评估可选 SLO，
-  并确定性重放保留的生命周期事件。`orchestration proposals refresh|list|approve|dismiss`
-  提供可审计的复核生命周期；批准只记录意图，绝不会自动提高硬预算或改变模型路由。
+  并确定性重放保留的生命周期事件。策略学习使用按新近程度加权的通过、退化、flake、成本与耗时证据，
+  再按 Wilson 有界置信下限效用分数排序路由，避免把极小的全成功样本当作确定结论。`orchestration proposals
+  refresh|list|approve|dismiss|apply|rollback|observe` 把复核与可崩溃恢复的部署生命周期分开。
+  重新生成的草案有任何变化都会回到 `proposed`；应用精确 generation 的已批准 Loop 路由会按目标串行化，
+  并按失败类别持久化；观测可显式自动回滚退化。
+  硬预算变更仍需人工处理。
   由 Graph 持有的子 Loop 只能通过父 Graph 恢复；只有父检查点仍存在时，其用量才从总计中排除。
   孤儿子 Loop 在正常保留清理之前仍保持可见并计入总量。
 - Loop 本质上是自主运行的 —— 每次运行都使用 `approvalMode: "acceptEdits"`
@@ -359,6 +363,9 @@ Agent 迭代重复记账。
 处理多少次连续同类失败。精确路由优先于升级链，所有候选项都会在预检阶段通过
 `providerForModel` 解析，每次选择会写入 `loop.model.routed` 与迭代快照。路由不会改变验证、
 权限或预算。
+已应用的编排路由会在该精确 Loop 的 provider 预检前加载。调用方显式传入的
+`modelByFailureCategory` 或升级链优先级更高，因此持久建议不能覆盖本次调用的显式路由契约。
+若此前存在持久路由，回滚会恢复它。
 
 编辑迭代复用**一个 worker 会话**；需求分析和验收复用状态中记录的独立 reviewer
 会话。这样评审上下文不会进入编辑对话，同时两条 trace 都可审计。

@@ -4,7 +4,7 @@ import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/w
 import { MAX_GRAPH_CONCURRENCY, MAX_GRAPH_RESOURCE_CAPACITY } from "./graph-contract.js";
 import { isValidLoopDagId } from "./loop-dag-validation.js";
 import { isLoopFailureCategory } from "./loop-model-routing.js";
-import { isDenseArray } from "./orchestration.js";
+import { isDenseArray, nextOrchestrationVersion } from "./orchestration.js";
 import type { OrchestrationProposalAction, OrchestrationProposalDraft } from "./orchestration-intelligence.js";
 import { isValidOrchestrationResourceId } from "./orchestration-scheduler.js";
 import { acquireSessionLease, type SessionLease } from "./session-lease.js";
@@ -23,7 +23,7 @@ const MAX_PROPOSALS = 128;
 const FINGERPRINT_RE = /^[a-f0-9]{64}$/;
 const ID_RE = /^opt-[a-f0-9]{20}$/;
 
-function validAction(value: unknown): value is OrchestrationProposalAction {
+export function isOrchestrationProposalAction(value: unknown): value is OrchestrationProposalAction {
   if (!isRecord(value) || typeof value.kind !== "string") return false;
   if (value.kind === "graph_concurrency") {
     return (
@@ -47,7 +47,7 @@ function validAction(value: unknown): value is OrchestrationProposalAction {
       hasOnlyKeys(value, ["kind", "failureCategory", "model"]) &&
       isLoopFailureCategory(value.failureCategory) &&
       typeof value.model === "string" &&
-      value.model.length > 0 &&
+      value.model.trim().length > 0 &&
       value.model.length <= 256
     );
   }
@@ -68,6 +68,20 @@ function validAction(value: unknown): value is OrchestrationProposalAction {
     );
   }
   return false;
+}
+
+export function isOrchestrationProposalActionForScope(
+  scope: unknown,
+  action: unknown,
+): action is OrchestrationProposalAction {
+  if (!isOrchestrationProposalAction(action)) return false;
+  return scope === "loop"
+    ? action.kind === "loop_route" || action.kind === "budget_review"
+    : scope === "graph"
+      ? action.kind === "graph_concurrency" ||
+        action.kind === "graph_resource_capacity" ||
+        action.kind === "executor_placement"
+      : false;
 }
 
 function validProposal(value: unknown): value is OrchestrationProposal {
@@ -110,7 +124,7 @@ function validProposal(value: unknown): value is OrchestrationProposal {
     typeof value.rationale === "string" &&
     value.rationale.length > 0 &&
     value.rationale.length <= 2_048 &&
-    validAction(value.action) &&
+    isOrchestrationProposalActionForScope(value.scope, value.action) &&
     ["proposed", "approved", "dismissed"].includes(String(value.status)) &&
     Number.isFinite(createdAt) &&
     Number.isFinite(updatedAt) &&
@@ -136,10 +150,6 @@ function parseDocument(raw: string): OrchestrationProposal[] | null {
   } catch {
     return null;
   }
-}
-
-function nextVersion(previous: string, now: string): string {
-  return new Date(Math.max(Date.parse(now), Date.parse(previous) + 1)).toISOString();
 }
 
 function draftMatches(proposal: OrchestrationProposal, draft: OrchestrationProposalDraft): boolean {
@@ -191,7 +201,7 @@ export function listOrchestrationProposals(workspace: string): OrchestrationProp
   );
 }
 
-/** Merges generated proposals under ownership and preserves explicit review decisions. */
+/** Merges generated proposals and preserves review decisions only for byte-equivalent drafts. */
 export function recordOrchestrationProposals(
   workspace: string,
   drafts: readonly OrchestrationProposalDraft[],
@@ -227,14 +237,15 @@ export function recordOrchestrationProposals(
     const byId = new Map(current.map((proposal) => [proposal.id, proposal]));
     for (const draft of selected) {
       const previous = byId.get(draft.id);
+      const unchanged = previous !== undefined && draftMatches(previous, draft);
       const candidate: OrchestrationProposal = {
         ...draft,
-        status: previous?.status ?? "proposed",
+        status: unchanged ? previous.status : "proposed",
         createdAt: previous?.createdAt ?? now,
         updatedAt:
-          previous === undefined || draftMatches(previous, draft)
+          previous === undefined || unchanged
             ? (previous?.updatedAt ?? now)
-            : nextVersion(previous.updatedAt, now),
+            : nextOrchestrationVersion(previous.updatedAt, now),
       };
       if (!validProposal(candidate)) throw new Error(`Generated orchestration proposal is invalid: ${draft.id}`);
       byId.set(draft.id, candidate);
@@ -270,7 +281,7 @@ export function setOrchestrationProposalStatus(
     if (expectedUpdatedAt !== undefined && current.updatedAt !== expectedUpdatedAt) {
       throw new Error("Orchestration proposal changed since it was reviewed");
     }
-    const updatedAt = nextVersion(current.updatedAt, new Date().toISOString());
+    const updatedAt = nextOrchestrationVersion(current.updatedAt);
     const updated = { ...current, status, updatedAt } satisfies OrchestrationProposal;
     proposals[index] = updated;
     writeUnlocked(workspace, proposals);

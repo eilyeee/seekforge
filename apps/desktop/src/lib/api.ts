@@ -317,6 +317,24 @@ export const api = {
       withWorkspace(`/api/orchestration/proposals/${encodeURIComponent(id)}/${status}`, ws),
       expectedUpdatedAt ? { expectedUpdatedAt } : {},
     ),
+  orchestrationProposalApply: (id: string, expectedUpdatedAt?: string, ws?: string) =>
+    request<import("@seekforge/shared").OrchestrationDeployment>(
+      "POST",
+      withWorkspace(`/api/orchestration/proposals/${encodeURIComponent(id)}/apply`, ws),
+      expectedUpdatedAt ? { expectedUpdatedAt } : {},
+    ),
+  orchestrationProposalRollback: (id: string, ws?: string) =>
+    request<import("@seekforge/shared").OrchestrationDeployment>(
+      "POST",
+      withWorkspace(`/api/orchestration/proposals/${encodeURIComponent(id)}/rollback`, ws),
+      {},
+    ),
+  orchestrationDeploymentObserve: (autoRollback = false, ws?: string) =>
+    request<{ deployments: import("@seekforge/shared").OrchestrationDeployment[] }>(
+      "POST",
+      withWorkspace("/api/orchestration/deployments/observe", ws),
+      { autoRollback },
+    ),
   graphPriority: (id: string, priority: number, ws?: string) =>
     request<import("../types").EngineeringGraphSummary>(
       "POST",

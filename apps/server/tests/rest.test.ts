@@ -11,6 +11,8 @@ import {
   acquireSessionLease,
   appendLoopLog,
   createLoopState,
+  graphOrchestrationFingerprint,
+  loadEngineeringGraphState,
   readGraphControlEntries,
   readLoopControlEntries,
   recordGraphSchedulingObservation,
@@ -455,12 +457,39 @@ describe("loop management API", () => {
     });
     expect((await authed("/api/orchestration/report?maxFailureRate=2")).status).toBe(400);
     expect((await authed("/api/orchestration/report?maxCostUsd=0x10")).status).toBe(400);
+    expect(await jsonOf(await authed("/api/orchestration/policy"))).toBeNull();
+    expect(
+      (
+        await authed("/api/orchestration/policy", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ evaluationWindow: 0 }),
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      await jsonOf(
+        await authed("/api/orchestration/policy", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ maxFailureRate: 0.25, evaluationWindow: 50, maxBreachRate: 0.1 }),
+        }),
+      ),
+    ).toMatchObject({
+      policy: { maxFailureRate: 0.25 },
+      evaluationWindow: 50,
+      maxBreachRate: 0.1,
+    });
+    expect(await jsonOf(await authed("/api/orchestration/index/refresh", { method: "POST" }))).toMatchObject({
+      version: 1,
+      totals: { graphs: 1 },
+    });
     const proposal = recordOrchestrationProposals(workspace, [
       {
         id: `opt-${"a".repeat(20)}`,
         scope: "graph",
         sourceId: "rest-graph",
-        sourceFingerprint: "b".repeat(64),
+        sourceFingerprint: graphOrchestrationFingerprint(loadEngineeringGraphState(workspace, "rest-graph")!),
         confidence: "medium",
         evidenceCount: 4,
         risk: "low",
@@ -469,15 +498,14 @@ describe("loop management API", () => {
         action: { kind: "graph_resource_capacity", resource: "cpu", value: 2 },
       },
     ])[0]!;
-    expect(
-      await jsonOf(
-        await authed(`/api/orchestration/proposals/${proposal.id}/approve`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ expectedUpdatedAt: proposal.updatedAt }),
-        }),
-      ),
-    ).toMatchObject({ id: proposal.id, status: "approved" });
+    const approvedProposal = (await jsonOf(
+      await authed(`/api/orchestration/proposals/${proposal.id}/approve`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ expectedUpdatedAt: proposal.updatedAt }),
+      }),
+    )) as { id: string; status: string; updatedAt: string };
+    expect(approvedProposal).toMatchObject({ id: proposal.id, status: "approved" });
     expect(
       (
         await authed(`/api/orchestration/proposals/${proposal.id}/dismiss`, {
@@ -487,6 +515,33 @@ describe("loop management API", () => {
         })
       ).status,
     ).toBe(400);
+    expect(
+      await jsonOf(
+        await authed(`/api/orchestration/proposals/${proposal.id}/apply`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ expectedUpdatedAt: approvedProposal.updatedAt }),
+        }),
+      ),
+    ).toMatchObject({ proposalId: proposal.id, status: "applied" });
+    expect(
+      await jsonOf(
+        await authed("/api/orchestration/deployments/observe", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ autoRollback: false }),
+        }),
+      ),
+    ).toMatchObject({ deployments: [expect.objectContaining({ proposalId: proposal.id })] });
+    expect(
+      await jsonOf(
+        await authed(`/api/orchestration/proposals/${proposal.id}/rollback`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        }),
+      ),
+    ).toMatchObject({ proposalId: proposal.id, status: "rolled_back" });
     expect((await authed("/api/graphs/scheduling-intelligence")).status).toBe(404);
     expect(
       await jsonOf(
@@ -497,31 +552,44 @@ describe("loop management API", () => {
         }),
       ),
     ).toMatchObject({ graphId: "rest-graph", priority: 7 });
-    expect(await jsonOf(await authed("/api/graphs/rest-graph/history"))).toEqual([
-      expect.objectContaining({ sequence: 1, type: "graph.completed" }),
-    ]);
+    expect(await jsonOf(await authed("/api/graphs/rest-graph/history"))).toEqual(
+      expect.arrayContaining([expect.objectContaining({ sequence: 1, type: "graph.completed" })]),
+    );
     expect(await jsonOf(await authed("/api/graphs/rest-graph/diagnose"))).toMatchObject({
       kind: "graph",
       id: "rest-graph",
-      observedEvents: 1,
+      observedEvents: 3,
       healthy: true,
     });
     expect(await jsonOf(await authed("/api/graphs/rest-graph/explain/done"))).toMatchObject({
       graphId: "rest-graph",
       nodeId: "done",
-      eligible: false,
-      blockers: [{ code: "already_settled" }],
+      eligible: true,
+      blockers: [],
     });
     expect(await jsonOf(await authed("/api/graphs/rest-graph/artifacts"))).toMatchObject({
       graphId: "rest-graph",
-      artifacts: [
-        expect.objectContaining({
-          key: `sha256:${"d".repeat(64)}`,
-          producerNodeId: "done",
-          consumers: [],
-        }),
-      ],
+      artifacts: [],
     });
+    expect(await jsonOf(await authed("/api/graphs/artifact-store"))).toEqual({ artifacts: [] });
+    expect(
+      await jsonOf(
+        await authed("/api/graphs/artifact-store/prune", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ dryRun: true }),
+        }),
+      ),
+    ).toMatchObject({ beforeBytes: 0, afterBytes: 0, removed: [] });
+    expect(
+      (
+        await authed("/api/graphs/rest-graph/artifacts/materialize", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ sha256: "d".repeat(64), sizeBytes: 0, target: "restored/report.json" }),
+        })
+      ).status,
+    ).toBe(409);
     expect(
       await jsonOf(
         await authed("/api/graphs/rest-graph/migration-plan", {
@@ -552,7 +620,10 @@ describe("loop management API", () => {
         }),
       ),
     ).toMatchObject({
-      plan: { changed: ["done"], invalidated: ["done"], preserved: [] },
+      plan: {
+        mode: "single_checkpoint",
+        entries: [{ plan: { changed: ["done"], invalidated: ["done"], preserved: [] } }],
+      },
       state: { status: "paused", pauseReason: "control", results: [] },
     });
     expect(await jsonOf(await authed("/api/graphs/rest-graph/explain/done"))).toMatchObject({ eligible: true });

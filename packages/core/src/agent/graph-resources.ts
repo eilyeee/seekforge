@@ -220,7 +220,7 @@ export async function pruneEngineeringGraphStates(
   if (!Number.isSafeInteger(maxTerminalCount) || maxTerminalCount < 0 || maxTerminalCount > 10_000) {
     throw new RangeError("Graph maxTerminalCount must be 0 to 10000");
   }
-  const states = listEngineeringGraphStates(workspace);
+  const states = listEngineeringGraphStates(workspace, { requireComplete: true });
   const terminal = states
     .filter(
       (state) =>

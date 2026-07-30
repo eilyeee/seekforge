@@ -1,10 +1,19 @@
 import { createHash } from "node:crypto";
 import type { LoopIterationSnapshot } from "./auto-loop.js";
 import type { EngineeringGraphDefinition } from "./graph-contract.js";
-import { MAX_GRAPH_CONCURRENCY, MAX_GRAPH_RESOURCE_CAPACITIES, MAX_GRAPH_RESOURCE_CAPACITY } from "./graph-contract.js";
-import type { GraphExecutionAdapter } from "./graph-engineering.js";
+import {
+  graphNodeIsEffectful,
+  MAX_GRAPH_CONCURRENCY,
+  MAX_GRAPH_RESOURCE_CAPACITIES,
+  MAX_GRAPH_RESOURCE_CAPACITY,
+} from "./graph-contract.js";
+import { graphExecutionAdapterEligibility, type GraphExecutionAdapter } from "./graph-engineering.js";
 import type { EngineeringGraphHealthReport } from "./graph-health.js";
-import { simulateEngineeringGraph } from "./graph-simulation.js";
+import {
+  simulateEngineeringGraph,
+  simulateEngineeringGraphDistribution,
+  type EngineeringGraphDistributionReport,
+} from "./graph-simulation.js";
 import type { EngineeringGraphState } from "./graph-state.js";
 import type { LoopHealthReport } from "./loop-health.js";
 import type { LoopState } from "./loop-state.js";
@@ -56,6 +65,10 @@ export type LoopStrategyOutcome = {
   improvements: number;
   regressions: number;
   improvementRate: number;
+  regressionRate: number;
+  qualityScore: number;
+  utilityScore: number;
+  lowerConfidenceBound: number;
   averageCostUsd: number;
   averageDurationMs: number;
   confidence: OrchestrationConfidence;
@@ -89,8 +102,18 @@ export type EngineeringGraphOptimizationScenario = {
 export type EngineeringGraphPlacement = {
   nodeId: string;
   executor: string;
-  status: "eligible" | "missing" | "untrusted" | "protocol_mismatch" | "cancellation_unsupported";
+  status:
+    | "eligible"
+    | "missing"
+    | "untrusted"
+    | "protocol_mismatch"
+    | "cancellation_unsupported"
+    | "unhealthy"
+    | "capacity_exhausted"
+    | "invalid";
   reasons: string[];
+  recommendedExecutor?: string;
+  alternatives: Array<{ executor: string; score: number; utilization: number; queueDepth: number }>;
 };
 
 export type EngineeringGraphOptimizationReport = {
@@ -99,6 +122,7 @@ export type EngineeringGraphOptimizationReport = {
   evidenceCount: number;
   scenarios: EngineeringGraphOptimizationScenario[];
   placements: EngineeringGraphPlacement[];
+  uncertainty: EngineeringGraphDistributionReport;
   proposals: OrchestrationProposalDraft[];
 };
 
@@ -224,11 +248,30 @@ export function evaluateOrchestrationSlo(
 
 type MutableRoute = Omit<
   LoopStrategyOutcome,
-  "improvementRate" | "averageCostUsd" | "averageDurationMs" | "confidence"
+  | "improvementRate"
+  | "regressionRate"
+  | "qualityScore"
+  | "utilityScore"
+  | "lowerConfidenceBound"
+  | "averageCostUsd"
+  | "averageDurationMs"
+  | "confidence"
 > & {
   costUsd: number;
   durationMs: number;
+  weightedQuality: number;
+  recencyWeight: number;
 };
+
+function wilsonLowerBound(successes: number, total: number): number {
+  if (total <= 0) return 0;
+  const z = 1.96;
+  const proportion = successes / total;
+  const denominator = 1 + (z * z) / total;
+  const center = proportion + (z * z) / (2 * total);
+  const margin = z * Math.sqrt((proportion * (1 - proportion) + (z * z) / (4 * total)) / total);
+  return Math.max(0, (center - margin) / denominator);
+}
 
 /** Learns only from post-edit snapshots; the iteration-zero observation is not an executed strategy. */
 export function analyzeLoopStrategyIntelligence(state: LoopState): LoopStrategyIntelligenceReport {
@@ -255,12 +298,30 @@ export function analyzeLoopStrategyIntelligence(state: LoopState): LoopStrategyI
       regressions: 0,
       costUsd: 0,
       durationMs: 0,
+      weightedQuality: 0,
+      recencyWeight: 0,
     };
     route.attempts += 1;
     route.costUsd += snapshot.costUsd ?? 0;
     route.durationMs += snapshot.durationMs ?? 0;
-    if (snapshot.rolledBack || (previous && snapshot.failedTests > previous.failedTests)) route.regressions += 1;
-    else if (previous && snapshot.failedTests < previous.failedTests) route.improvements += 1;
+    const failureDelta = previous ? previous.failedTests - snapshot.failedTests : 0;
+    if (snapshot.rolledBack || failureDelta < 0) route.regressions += 1;
+    else if (failureDelta > 0) route.improvements += 1;
+    const passRatio =
+      snapshot.stageResults.length === 0
+        ? snapshot.failureCategory === "none"
+          ? 1
+          : 0
+        : snapshot.stageResults.filter((stage) => stage.code === 0).length / snapshot.stageResults.length;
+    const flakePenalty = snapshot.stageResults.some((stage) => stage.flaky) ? 0.2 : 0;
+    const progress = previous ? failureDelta / Math.max(1, previous.failedTests) : 0;
+    const quality = Math.max(
+      -1,
+      Math.min(1, progress * 0.6 + passRatio * 0.4 - flakePenalty - (snapshot.rolledBack ? 1 : 0)),
+    );
+    const weight = index + 1;
+    route.weightedQuality += quality * weight;
+    route.recencyWeight += weight;
     routes.set(key, route);
   }
   const outcomes = [...routes.values()]
@@ -273,6 +334,17 @@ export function analyzeLoopStrategyIntelligence(state: LoopState): LoopStrategyI
         improvements: route.improvements,
         regressions: route.regressions,
         improvementRate: route.attempts === 0 ? 0 : route.improvements / route.attempts,
+        regressionRate: route.attempts === 0 ? 0 : route.regressions / route.attempts,
+        qualityScore: route.recencyWeight === 0 ? 0 : route.weightedQuality / route.recencyWeight,
+        utilityScore:
+          route.recencyWeight === 0
+            ? 0
+            : route.weightedQuality /
+              route.recencyWeight /
+              (1 +
+                (route.costUsd / Math.max(1, route.attempts)) * 10 +
+                route.durationMs / Math.max(1, route.attempts) / 60_000),
+        lowerConfidenceBound: wilsonLowerBound(route.improvements, route.attempts),
         averageCostUsd: route.attempts === 0 ? 0 : route.costUsd / route.attempts,
         averageDurationMs: route.attempts === 0 ? 0 : route.durationMs / route.attempts,
         confidence: confidenceForSamples(route.attempts),
@@ -281,6 +353,8 @@ export function analyzeLoopStrategyIntelligence(state: LoopState): LoopStrategyI
     .sort(
       (left, right) =>
         left.failureCategory.localeCompare(right.failureCategory) ||
+        right.lowerConfidenceBound - left.lowerConfidenceBound ||
+        right.utilityScore - left.utilityScore ||
         right.improvementRate - left.improvementRate ||
         right.attempts - left.attempts ||
         left.model.localeCompare(right.model),
@@ -337,34 +411,46 @@ function placementReport(
   state: EngineeringGraphState,
   executors: Readonly<Record<string, GraphExecutionAdapter>>,
 ): EngineeringGraphPlacement[] {
+  const descriptors = Object.getOwnPropertyDescriptors(executors);
+  const candidates = Object.entries(descriptors).flatMap(([id, descriptor]) => {
+    if (
+      !("value" in descriptor) ||
+      !descriptor.enumerable ||
+      !descriptor.value ||
+      typeof descriptor.value !== "object"
+    ) {
+      return [];
+    }
+    return [{ id, adapter: descriptor.value as GraphExecutionAdapter }];
+  });
   return state.definition.nodes.flatMap((node): EngineeringGraphPlacement[] => {
     if (node.kind !== "remote" || !node.executor) return [];
-    const adapter = executors[node.executor];
-    if (!adapter)
-      return [{ nodeId: node.id, executor: node.executor, status: "missing", reasons: ["Executor is not registered"] }];
-    if (!adapter.trusted)
-      return [{ nodeId: node.id, executor: node.executor, status: "untrusted", reasons: ["Executor is not trusted"] }];
-    if ((node.executorProtocolVersion ?? 1) !== (adapter.protocolVersion ?? 1)) {
-      return [
-        {
-          nodeId: node.id,
-          executor: node.executor,
-          status: "protocol_mismatch",
-          reasons: ["Protocol version does not match"],
-        },
-      ];
-    }
-    if (node.requiresCancellation && !adapter.supportsCancellation) {
-      return [
-        {
-          nodeId: node.id,
-          executor: node.executor,
-          status: "cancellation_unsupported",
-          reasons: ["Cancellation is required"],
-        },
-      ];
-    }
-    return [{ nodeId: node.id, executor: node.executor, status: "eligible", reasons: [] }];
+    const alternatives = candidates
+      .filter(({ adapter }) => graphExecutionAdapterEligibility(node, adapter).status === "eligible")
+      .map(({ id, adapter }) => {
+        const capacity = adapter.capacity ?? 1;
+        const utilization = Math.min(1, Math.max(0, (adapter.active ?? 0) / capacity));
+        const queueDepth = adapter.queueDepth ?? 0;
+        return { executor: id, utilization, queueDepth, score: utilization * 1_000 + queueDepth };
+      })
+      .sort((left, right) => left.score - right.score || left.executor.localeCompare(right.executor))
+      .slice(0, 8);
+    const currentDescriptor = descriptors[node.executor];
+    const adapter =
+      currentDescriptor && "value" in currentDescriptor
+        ? (currentDescriptor.value as GraphExecutionAdapter)
+        : undefined;
+    const classification = graphExecutionAdapterEligibility(node, adapter);
+    const recommendedExecutor = alternatives[0]?.executor;
+    return [
+      {
+        nodeId: node.id,
+        executor: node.executor,
+        ...classification,
+        alternatives,
+        ...(recommendedExecutor ? { recommendedExecutor } : {}),
+      },
+    ];
   });
 }
 
@@ -383,6 +469,26 @@ export function buildEngineeringGraphOptimizationReport(
     ),
   );
   const baseline = simulateEngineeringGraph(state.definition, { estimates });
+  const uncertainty = simulateEngineeringGraphDistribution(
+    state.definition,
+    Object.fromEntries(
+      health.nodes.flatMap((node) =>
+        node.p50DurationMs === undefined || node.p95DurationMs === undefined
+          ? []
+          : [
+              [
+                node.nodeId,
+                {
+                  p50DurationMs: node.p50DurationMs,
+                  p95DurationMs: node.p95DurationMs,
+                  ...(node.failureRate !== undefined ? { failureRate: node.failureRate } : {}),
+                },
+              ],
+            ],
+      ),
+    ),
+    { samples: 128, seed: state.fingerprint },
+  );
   const currentConcurrency = state.definition.maxConcurrency ?? 1;
   const concurrencyValues = [currentConcurrency];
   if (currentConcurrency > 1 || state.definition.managedWorktrees !== undefined) {
@@ -450,20 +556,28 @@ export function buildEngineeringGraphOptimizationReport(
   const evidenceCount = health.nodes.reduce((sum, node) => sum + node.samples, 0);
   const confidence = confidenceForSamples(evidenceCount);
   const placements = placementReport(state, executors);
-  const proposalInputs = candidates
-    .filter((scenario) => scenario.paretoOptimal && scenario.predictedSavingsMs > 0 && scenario.changes.length === 1)
-    .slice(0, 4)
-    .flatMap((scenario) => scenario.changes.map((change) => ({ scenario, change })));
+  const deploymentSafe =
+    state.parentGraph === undefined &&
+    !(state.definition.managedWorktrees && state.definition.nodes.some(graphNodeIsEffectful));
+  const proposalInputs = deploymentSafe
+    ? candidates
+        .filter(
+          (scenario) => scenario.paretoOptimal && scenario.predictedSavingsMs > 0 && scenario.changes.length === 1,
+        )
+        .slice(0, 4)
+        .flatMap((scenario) => scenario.changes.map((change) => ({ scenario, change })))
+    : [];
+  const sourceFingerprint = graphOrchestrationFingerprint(state);
   const proposals: OrchestrationProposalDraft[] = proposalInputs.map(({ scenario, change }) => {
     const action: OrchestrationProposalAction =
       change.kind === "max_concurrency"
         ? { kind: "graph_concurrency", value: change.to }
         : { kind: "graph_resource_capacity", resource: change.resource, value: change.to };
     return {
-      id: proposalId("graph", state.graphId, state.fingerprint, action),
+      id: proposalId("graph", state.graphId, sourceFingerprint, action),
       scope: "graph",
       sourceId: state.graphId,
-      sourceFingerprint: state.fingerprint,
+      sourceFingerprint,
       confidence,
       evidenceCount,
       risk: change.kind === "max_concurrency" ? "medium" : "low",
@@ -471,26 +585,28 @@ export function buildEngineeringGraphOptimizationReport(
         change.kind === "max_concurrency"
           ? `Raise Graph concurrency to ${change.to}`
           : `Raise ${change.resource} capacity to ${change.to}`,
-      rationale: `Pure simulation predicts ${scenario.predictedSavingsMs}ms lower makespan; approval records intent but does not apply it`,
+      rationale: `Pure simulation predicts ${scenario.predictedSavingsMs}ms lower makespan; an approved deployment still revalidates the exact generation`,
       action,
     };
   });
-  for (const placement of placements.filter((item) => item.status === "eligible")) {
+  for (const placement of placements.filter(
+    (item) => deploymentSafe && item.recommendedExecutor !== undefined && item.recommendedExecutor !== item.executor,
+  )) {
     const action: OrchestrationProposalAction = {
       kind: "executor_placement",
       nodeId: placement.nodeId,
-      executor: placement.executor,
+      executor: placement.recommendedExecutor!,
     };
     proposals.push({
-      id: proposalId("graph", state.graphId, state.fingerprint, action),
+      id: proposalId("graph", state.graphId, sourceFingerprint, action),
       scope: "graph",
       sourceId: state.graphId,
-      sourceFingerprint: state.fingerprint,
+      sourceFingerprint,
       confidence: "high",
       evidenceCount: 1,
       risk: "medium",
-      title: `Place ${placement.nodeId} on ${placement.executor}`,
-      rationale: "The registered executor satisfies trust, protocol, and cancellation requirements",
+      title: `Place ${placement.nodeId} on ${placement.recommendedExecutor}`,
+      rationale: "The trusted executor satisfies the node contract and has the lowest bounded load score",
       action,
     });
   }
@@ -500,6 +616,7 @@ export function buildEngineeringGraphOptimizationReport(
     evidenceCount,
     scenarios: candidates.slice(0, 16),
     placements,
+    uncertainty,
     proposals,
   };
 }
@@ -510,9 +627,7 @@ export function buildLoopOptimizationProposals(
   strategy = analyzeLoopStrategyIntelligence(state),
 ): OrchestrationProposalDraft[] {
   if (state.loopId !== health.loopId) throw new Error("Loop optimization health does not match the checkpoint");
-  const sourceFingerprint = createHash("sha256")
-    .update(`${state.loopId}\0${state.controlRunId ?? "legacy"}\0${state.updatedAt}`)
-    .digest("hex");
+  const sourceFingerprint = loopOrchestrationFingerprint(state);
   const proposals: OrchestrationProposalDraft[] = strategy.recommendedRoutes.map((route) => {
     const action: OrchestrationProposalAction = {
       kind: "loop_route",
@@ -552,6 +667,33 @@ export function buildLoopOptimizationProposals(
     });
   }
   return proposals;
+}
+
+function canonicalOrchestrationValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalOrchestrationValue);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, item]) => item !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, canonicalOrchestrationValue(item)]),
+    );
+  }
+  return value;
+}
+
+/** Binds an orchestration decision to one exact durable Graph checkpoint generation. */
+export function graphOrchestrationFingerprint(state: EngineeringGraphState): string {
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalOrchestrationValue(state)))
+    .digest("hex");
+}
+
+/** Binds an orchestration decision to one exact durable Loop generation. */
+export function loopOrchestrationFingerprint(state: LoopState): string {
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalOrchestrationValue(state)))
+    .digest("hex");
 }
 
 /** Rolls child and top-level usage up without double-counting a child in its parent's totals. */

@@ -1,5 +1,7 @@
 import {
-  applyEngineeringGraphMigration,
+  applyEngineeringGraphExpansion,
+  applyEngineeringGraphTreeMigration,
+  acquireSessionLease,
   analyzeGraphSchedulingIntelligence,
   archiveEngineeringGraphResources,
   buildEngineeringGraphEvidenceReport,
@@ -18,6 +20,7 @@ import {
   graphExecutorsWithPlugins,
   graphHandlersWithPlugins,
   inspectEngineeringGraphResources,
+  inspectEngineeringGraphArtifactStore,
   isRecord,
   isSessionRunActive,
   isValidLoopDagId,
@@ -26,12 +29,15 @@ import {
   loadPluginContributions,
   loadEngineeringGraphState,
   materializeEngineeringGraph,
+  materializeEngineeringGraphArtifact,
   planEngineeringGraph,
   planEngineeringGraphMigration,
+  planEngineeringGraphArtifactReuse,
   planEngineeringGraphTreeMigration,
   listEngineeringGraphTreeStates,
   promoteEngineeringGraphResult,
   pruneEngineeringGraphResources,
+  pruneEngineeringGraphArtifactStore,
   readGraphSchedulingObservations,
   readEngineeringGraphHistory,
   readEngineeringGraphRunSnapshots,
@@ -424,6 +430,45 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
     return true;
   }
 
+  if (segs[2] === "artifact-store") {
+    if (method === "GET" && segs.length === 3) {
+      sendJson(res, 200, { artifacts: inspectEngineeringGraphArtifactStore(workspace) });
+      return true;
+    }
+    if (method === "POST" && segs.length === 4 && segs[3] === "prune") {
+      const body = await readJsonBody(ctx.req, res, { emptyOk: true });
+      if (body === undefined) return true;
+      if (
+        !isRecord(body) ||
+        Object.keys(body).some((key) => !["maxBytes", "maxAgeDays", "dryRun"].includes(key)) ||
+        (body.maxBytes !== undefined && (!Number.isSafeInteger(body.maxBytes) || (body.maxBytes as number) < 0)) ||
+        (body.maxAgeDays !== undefined &&
+          (!Number.isSafeInteger(body.maxAgeDays) ||
+            (body.maxAgeDays as number) < 0 ||
+            (body.maxAgeDays as number) > 3_650)) ||
+        (body.dryRun !== undefined && typeof body.dryRun !== "boolean")
+      ) {
+        sendApiError(res, 400, "bad_request", "Graph artifact prune body is invalid");
+        return true;
+      }
+      try {
+        sendJson(
+          res,
+          200,
+          pruneEngineeringGraphArtifactStore(workspace, {
+            ...(body.maxBytes === undefined ? {} : { maxBytes: body.maxBytes as number }),
+            ...(body.maxAgeDays === undefined ? {} : { maxAgeDays: body.maxAgeDays as number }),
+            ...(body.dryRun === undefined ? {} : { dryRun: body.dryRun as boolean }),
+          }),
+        );
+      } catch (error) {
+        sendApiError(res, 409, "busy", error instanceof Error ? error.message : String(error));
+      }
+      return true;
+    }
+    return false;
+  }
+
   const graphId = segs[2];
   if (!graphId || !isValidLoopDagId(graphId)) {
     sendApiError(res, 400, "bad_request", "invalid Graph id");
@@ -583,11 +628,87 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
       const definition = materializeEngineeringGraph(body, {});
       if (definition.graphId !== graphId) throw new Error("Graph migration id must match the route");
       validateRun(workspace, definition, {}, graphExecutionRegistry(ctx));
-      sendJson(res, 200, applyEngineeringGraphMigration(workspace, definition));
+      sendJson(res, 200, applyEngineeringGraphTreeMigration(workspace, definition));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const conflict = error instanceof SessionBusyError || error instanceof EngineeringGraphMigrationConflictError;
       sendApiError(res, conflict ? 409 : 400, conflict ? "busy" : "bad_request", message);
+    }
+    return true;
+  }
+  if (method === "POST" && segs.length === 4 && segs[3] === "expansion-apply") {
+    const state = loadEngineeringGraphState(workspace, graphId);
+    if (!state) {
+      sendApiError(res, 404, "not_found", `unknown Graph: ${graphId}`);
+      return true;
+    }
+    const body = await readJsonBody(ctx.req, res);
+    if (body === undefined) return true;
+    try {
+      const definition = materializeEngineeringGraph(body, {});
+      if (definition.graphId !== graphId) throw new Error("Graph expansion id must match the route");
+      validateRun(workspace, definition, {}, graphExecutionRegistry(ctx));
+      sendJson(res, 200, applyEngineeringGraphExpansion(workspace, definition));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const conflict = error instanceof SessionBusyError || error instanceof EngineeringGraphMigrationConflictError;
+      sendApiError(res, conflict ? 409 : 400, conflict ? "busy" : "bad_request", message);
+    }
+    return true;
+  }
+  if (method === "POST" && segs.length === 5 && segs[3] === "artifacts" && segs[4] === "materialize") {
+    if (!loadEngineeringGraphState(workspace, graphId)) {
+      sendApiError(res, 404, "not_found", `unknown Graph: ${graphId}`);
+      return true;
+    }
+    const body = await readJsonBody(ctx.req, res);
+    if (body === undefined) return true;
+    if (
+      !isRecord(body) ||
+      Object.keys(body).some((key) => !["sha256", "sizeBytes", "target", "overwrite"].includes(key)) ||
+      typeof body.sha256 !== "string" ||
+      !/^[a-f0-9]{64}$/.test(body.sha256) ||
+      !Number.isSafeInteger(body.sizeBytes) ||
+      (body.sizeBytes as number) < 0 ||
+      (body.sizeBytes as number) > 256 * 1024 * 1024 ||
+      typeof body.target !== "string" ||
+      (body.overwrite !== undefined && typeof body.overwrite !== "boolean")
+    ) {
+      sendApiError(res, 400, "bad_request", "Graph artifact materialization body is invalid");
+      return true;
+    }
+    let graphLease: ReturnType<typeof acquireSessionLease> | undefined;
+    try {
+      graphLease = acquireSessionLease(workspace, `engineering-graph-${graphId}`);
+      const current = loadEngineeringGraphState(workspace, graphId);
+      const candidate = current
+        ? planEngineeringGraphArtifactReuse(
+            current,
+            readEngineeringGraphRunSnapshots(workspace, graphId),
+            workspace,
+          ).find((item) => item.sha256 === body.sha256 && item.sizeBytes === body.sizeBytes && item.casAvailable)
+        : undefined;
+      if (!candidate) {
+        sendApiError(res, 409, "conflict", "Graph artifact is not an available reuse candidate for this generation");
+        return true;
+      }
+      sendJson(
+        res,
+        200,
+        materializeEngineeringGraphArtifact(workspace, body.sha256, body.sizeBytes as number, body.target, {
+          overwrite: body.overwrite === true,
+        }),
+      );
+    } catch (error) {
+      const busy = error instanceof SessionBusyError;
+      sendApiError(
+        res,
+        busy ? 409 : 400,
+        busy ? "busy" : "bad_request",
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      graphLease?.release();
     }
     return true;
   }

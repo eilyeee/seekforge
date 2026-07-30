@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -121,6 +122,24 @@ describe("runEngineeringGraph", () => {
     expect(loadEngineeringGraphState(root, "routed")?.status).toBe("passed");
     expect(listEngineeringGraphStates(root).map((item) => item.graphId)).toEqual(["routed"]);
   });
+
+  it("filters auxiliary Graph files before applying the state discovery cap", async () => {
+    const root = workspace();
+    await runEngineeringGraph(
+      deps,
+      { graphId: "discoverable", nodes: [{ id: "work", kind: "function", handler: "work" }] },
+      { workspace: root, handlers: { work: () => ({}) } },
+    );
+    for (let index = 0; index < 260; index++) {
+      writeFileSync(join(root, ".seekforge", "graphs", `noise-${index}.tree-migration.json`), "{}\n");
+    }
+    expect(listEngineeringGraphStates(root).map((item) => item.graphId)).toEqual(["discoverable"]);
+    const statePath = join(root, ".seekforge", "graphs", "discoverable.json");
+    for (let index = 0; index < 256; index++) {
+      linkSync(statePath, join(root, ".seekforge", "graphs", `overflow-${index}.json`));
+    }
+    expect(() => listEngineeringGraphStates(root, { requireComplete: true })).toThrow(/complete bounded scan/);
+  }, 30_000);
 
   it("keeps adaptive scheduling observational for non-persisted runs and durable waits", async () => {
     const transientRoot = workspace();
@@ -1393,7 +1412,21 @@ describe("runEngineeringGraph", () => {
     expect((await runEngineeringGraph(deps, parent, { workspace: root, handlers: { effect: handler } })).status).toBe(
       "passed",
     );
+    const treeJournal = join(root, ".seekforge", "graphs", "orphan-parent.tree-migration.json");
+    const prepared = join(
+      root,
+      ".seekforge",
+      "graphs",
+      "orphan-parent.tree-00000000-0000-4000-8000-000000000000.prepared.json",
+    );
+    writeFileSync(treeJournal, "{}\n");
+    writeFileSync(prepared, "{}\n");
     expect(removeEngineeringGraphState(root, "orphan-parent")).toBe(true);
+    expect(existsSync(treeJournal)).toBe(false);
+    expect(existsSync(prepared)).toBe(false);
+    writeFileSync(treeJournal, "{}\n");
+    expect(removeEngineeringGraphState(root, "orphan-parent")).toBe(true);
+    expect(existsSync(treeJournal)).toBe(false);
     const collision = await runEngineeringGraph(deps, parent, { workspace: root, handlers: { effect: handler } });
     expect(collision.status).toBe("failed");
     expect(collision.results[0]?.attempts).toBe(1);
@@ -2208,7 +2241,7 @@ describe("runEngineeringGraph", () => {
           executors: { worker: { trusted: true, locality: "remote", execute: () => ({ output: null }) } },
         },
       ),
-    ).rejects.toThrow(/trusted/);
+    ).rejects.toThrow(/Cancellation is required/);
 
     let executed = 0;
     let heartbeats = 0;
@@ -2241,6 +2274,8 @@ describe("runEngineeringGraph", () => {
     expect(recovered.results[0]?.output).toEqual({ recovered: true });
     expect({ executed, heartbeats, verified }).toEqual({ executed: 0, heartbeats: 0, verified: 1 });
 
+    let released = 0;
+    let observedFence = "";
     const heartbeatAdvisory = await runEngineeringGraph(
       deps,
       { graphId: "remote-heartbeat", nodes: [{ id: "remote", kind: "remote", executor: "worker" }] },
@@ -2253,12 +2288,117 @@ describe("runEngineeringGraph", () => {
             heartbeat: () => {
               throw new Error("probe unavailable");
             },
-            execute: () => ({ output: "completed" }),
+            reserve: () => ({
+              fencingToken: "lease-1",
+              release: () => {
+                released++;
+              },
+            }),
+            execute: (context) => {
+              observedFence = context.executorLease?.fencingToken ?? "";
+              return { output: "completed" };
+            },
           },
         },
       },
     );
     expect(heartbeatAdvisory.results[0]).toMatchObject({ status: "passed", output: "completed" });
+    expect({ released, observedFence }).toEqual({ released: 1, observedFence: "lease-1" });
+  });
+
+  it("releases malformed remote capacity reservations before rejecting them", async () => {
+    const root = workspace();
+    let released = 0;
+    const result = await runEngineeringGraph(
+      deps,
+      { graphId: "invalid-reservation-release", nodes: [{ id: "remote", kind: "remote", executor: "worker" }] },
+      {
+        workspace: root,
+        executors: {
+          worker: {
+            trusted: true,
+            locality: "remote",
+            reserve: () => ({
+              fencingToken: "",
+              release: () => {
+                released++;
+              },
+            }),
+            execute: () => ({ output: "must-not-run" }),
+          },
+        },
+      },
+    );
+    expect(result.status).toBe("failed");
+    expect(result.results[0]?.error).toMatch(/invalid capacity reservation/);
+    expect(released).toBe(1);
+
+    const expired = await runEngineeringGraph(
+      deps,
+      { graphId: "expired-reservation-release", nodes: [{ id: "remote", kind: "remote", executor: "worker" }] },
+      {
+        workspace: root,
+        executors: {
+          worker: {
+            trusted: true,
+            locality: "remote",
+            reserve: () => ({
+              fencingToken: "expired",
+              expiresAt: "2020-01-01T00:00:00.000Z",
+              release: () => {
+                released++;
+              },
+            }),
+            execute: () => ({ output: "must-not-run" }),
+          },
+        },
+      },
+    );
+    expect(expired.status).toBe("failed");
+    expect(expired.results[0]?.error).toMatch(/invalid capacity reservation/);
+    expect(released).toBe(2);
+
+    const missing = await runEngineeringGraph(
+      deps,
+      { graphId: "null-reservation", nodes: [{ id: "remote", kind: "remote", executor: "worker" }] },
+      {
+        workspace: root,
+        executors: {
+          worker: {
+            trusted: true,
+            locality: "remote",
+            reserve: () => null as never,
+            execute: () => ({ output: "must-not-run" }),
+          },
+        },
+      },
+    );
+    expect(missing.status).toBe("failed");
+    expect(missing.results[0]?.error).toMatch(/invalid capacity reservation/);
+  });
+
+  it("rejects unhealthy and exhausted remote executors during preflight", async () => {
+    const root = workspace();
+    const definition = {
+      graphId: "ineligible-executor",
+      nodes: [{ id: "remote", kind: "remote" as const, executor: "worker" }],
+    };
+    await expect(
+      runEngineeringGraph(deps, definition, {
+        workspace: root,
+        executors: {
+          worker: { trusted: true, locality: "remote", healthy: false, execute: () => ({}) },
+        },
+      }),
+    ).rejects.toThrow(/unhealthy/);
+    await expect(
+      runEngineeringGraph(deps, definition, {
+        workspace: root,
+        executors: {
+          worker: { trusted: true, locality: "remote", capacity: 1, active: 1, execute: () => ({}) },
+        },
+      }),
+    ).rejects.toThrow(/capacity is exhausted/);
   });
 
   it("records real ready-queue delay without treating dependency time as resource wait", async () => {
@@ -2277,7 +2417,7 @@ describe("runEngineeringGraph", () => {
       {
         workspace: root,
         handlers: {
-          slow: () => new Promise((resolve) => setTimeout(() => resolve({}), 20)),
+          slow: () => new Promise((resolve) => setTimeout(() => resolve({}), 250)),
           fast: () => ({}),
         },
       },

@@ -511,6 +511,38 @@ export function LoopManager({ running, onResume }: Props) {
     }
   };
 
+  const deployOrchestrationProposal = async (proposal: OrchestrationProposal, operation: "apply" | "rollback") => {
+    const request = orchestrationRequests.beginLatest(workspaceId);
+    if (!request) return;
+    setOrchestrationBusy(true);
+    try {
+      if (operation === "apply") {
+        await api.orchestrationProposalApply(proposal.id, proposal.updatedAt, workspaceId);
+      } else await api.orchestrationProposalRollback(proposal.id, workspaceId);
+      const report = await api.orchestrationReport(workspaceId);
+      if (orchestrationRequests.isCurrent(request)) setOrchestration(report);
+    } catch (caught) {
+      if (orchestrationRequests.isCurrent(request)) setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      if (orchestrationRequests.isCurrent(request)) setOrchestrationBusy(false);
+    }
+  };
+
+  const observeOrchestration = async () => {
+    const request = orchestrationRequests.beginLatest(workspaceId);
+    if (!request) return;
+    setOrchestrationBusy(true);
+    try {
+      await api.orchestrationDeploymentObserve(false, workspaceId);
+      const report = await api.orchestrationReport(workspaceId);
+      if (orchestrationRequests.isCurrent(request)) setOrchestration(report);
+    } catch (caught) {
+      if (orchestrationRequests.isCurrent(request)) setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      if (orchestrationRequests.isCurrent(request)) setOrchestrationBusy(false);
+    }
+  };
+
   return (
     <details className="mt-2 rounded border border-subtle p-2">
       <summary className="cursor-pointer text-xs font-medium text-secondary">{t("chat.loop.manager.title")}</summary>
@@ -566,6 +598,9 @@ export function LoopManager({ running, onResume }: Props) {
         busy={resourceBusy || orchestrationBusy}
         onRefresh={() => void refreshOrchestration()}
         onProposalReview={(proposal, decision) => void reviewOrchestrationProposal(proposal, decision)}
+        onProposalApply={(proposal) => void deployOrchestrationProposal(proposal, "apply")}
+        onProposalRollback={(proposal) => void deployOrchestrationProposal(proposal, "rollback")}
+        onObserve={() => void observeOrchestration()}
       />
       <LoopDagSection
         dags={dags}

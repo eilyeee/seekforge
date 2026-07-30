@@ -44,6 +44,7 @@ describe("orchestration proposal lifecycle", () => {
     );
     expect(recordOrchestrationProposals(root, [draft()])[0]!.status).toBe("approved");
     const refreshed = recordOrchestrationProposals(root, [{ ...draft(), evidenceCount: 5 }])[0]!;
+    expect(refreshed.status).toBe("proposed");
     expect(refreshed.updatedAt).not.toBe(approved.updatedAt);
     expect(() => setOrchestrationProposalStatus(root, proposed.id, "dismissed", approved.updatedAt)).toThrow(
       /changed since/,
@@ -63,6 +64,11 @@ describe("orchestration proposal lifecycle", () => {
     const clean = workspace();
     expect(() =>
       recordOrchestrationProposals(clean, [{ ...draft(), action: { kind: "graph_concurrency", value: 99 } }]),
+    ).toThrow(/invalid/);
+    expect(() =>
+      recordOrchestrationProposals(clean, [
+        { ...draft(), scope: "loop", action: { kind: "graph_concurrency", value: 2 } },
+      ]),
     ).toThrow(/invalid/);
 
     const duplicate = workspace();

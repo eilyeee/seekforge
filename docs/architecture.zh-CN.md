@@ -92,16 +92,18 @@ flowchart TD
 
 `packages/core/src/agent/orchestration-report.ts` 是 workspace 级 Loop/Graph 决策智能的组合所有者。
 纯策略仍由各自聚焦模块负责：健康预测、确定性重放、策略成效、SLO 评估、帕累托反事实、放置检查、
-产物复用与树迁移规划。CLI、Server 与 Desktop 消费同一份报告，不再各自重新拼接状态。
+产物复用以及树迁移/部署事务。CLI、Server 与 Desktop 消费同一份报告，不再各自重新拼接状态。
 
 生成的优化提案是有界的持久记录，并受跨进程 lease 保护。复核使用乐观 `updatedAt` 版本以及显式的
-`approved`/`dismissed` 转换。该生命周期刻意与执行分离：已批准提案不能修改定义、提高硬预算、
-授予权限或影响调度资格。Graph 产物只有在归档运行指纹与当前定义/工作区代次精确一致，且产物保留
-已验证 SHA-256 与大小证据时，才会成为复用候选。多检查点树迁移在能用一次协调事务隐藏所有部分
-状态前只提供预览，并继续 fail-closed。
+`approved`/`dismissed` 转换。批准仍与执行分离；后续部署会重新校验提案版本与精确 source generation，
+先记录意图再执行效应，按目标串行化并保留回滚证据。硬预算变更仍需明确人工处理。嵌套 Graph 的定义
+归根树事务所有，因此其建议不能独立部署。Graph 产物只有在归档运行指纹与当前定义/workspace generation
+精确一致，且物理 owner 的 CAS 保留已验证 SHA-256 与大小证据时，才会成为复用候选。多检查点树迁移
+使用规范 participant lease、精确 prepared 状态哈希、先子后根激活以及确定性的前滚恢复。
 保留时，已复核提案决策优先于未复核草案；持久状态损坏时，任何提案修改都会故障关闭。workspace
 报告保留覆盖所有检查点的组合总计，同时限制 Loop/Graph 详细关联数量；由 Graph 持有的 Loop 与嵌套
-Graph 都携带父级来源，使其用量在汇总中只计算一次。
+Graph 都携带父级来源，使其用量在汇总中只计算一次。持久 SLO 策略、部署记录与物化编排索引分别由
+独立的有界 owner 管理。
 
 ## 安全边界
 

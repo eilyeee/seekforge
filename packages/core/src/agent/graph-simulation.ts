@@ -1,4 +1,5 @@
 import { isRecord } from "../util/guards.js";
+import { createHash } from "node:crypto";
 import {
   graphConditionMatches,
   parseEngineeringGraphDefinition,
@@ -48,6 +49,25 @@ export type EngineeringGraphSimulationReport = {
   nodes: EngineeringGraphSimulationNode[];
 };
 
+export type EngineeringGraphDistributionEstimate = {
+  p50DurationMs: number;
+  p95DurationMs: number;
+  failureRate?: number;
+  costUsd?: number;
+  tokens?: number;
+};
+
+export type EngineeringGraphDistributionReport = {
+  graphId: string;
+  samples: number;
+  makespanMs: { p50: number; p95: number; p99: number };
+  activeDurationMs: { p50: number; p95: number; p99: number };
+  durationBreachProbability: number;
+  deadlineBreachProbability: number;
+  budgetBreachProbability: number;
+  sensitivity: Array<{ nodeId: string; uncertaintyMs: number }>;
+};
+
 export type EngineeringGraphNodeBlocker = {
   code:
     | "already_settled"
@@ -84,6 +104,142 @@ export type EngineeringGraphNodeExplanation = {
 export type EngineeringGraphNodeExplanationContext = {
   signalAvailable?: boolean;
 };
+
+function distributionQuantile(values: readonly number[], quantile: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * quantile) - 1))]!;
+}
+
+function deterministicRandom(seed: string): () => number {
+  let state = createHash("sha256").update(seed).digest().readUInt32LE(0) || 0x9e3779b9;
+  return () => {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    return (state >>> 0) / 0x1_0000_0000;
+  };
+}
+
+function sampledDuration(estimate: EngineeringGraphDistributionEstimate, random: () => number): number {
+  const p50 = Math.max(1, Math.round(estimate.p50DurationMs));
+  const p95 = Math.max(p50, Math.round(estimate.p95DurationMs));
+  const draw = random();
+  if (draw <= 0.5) return Math.max(1, Math.round(p50 * (0.5 + draw)));
+  if (draw <= 0.95) return Math.round(p50 + ((draw - 0.5) / 0.45) * (p95 - p50));
+  return Math.min(604_800_000, Math.round(p95 * (1 + (draw - 0.95) * 10)));
+}
+
+/** Runs a bounded deterministic Monte Carlo forecast from measured node distributions. */
+export function simulateEngineeringGraphDistribution(
+  input: unknown,
+  estimatesInput: Readonly<Record<string, EngineeringGraphDistributionEstimate>>,
+  options: { samples?: number; seed?: string; startedAt?: Date } = {},
+): EngineeringGraphDistributionReport {
+  const definition = parseEngineeringGraphDefinition(input);
+  const samples = options.samples ?? 128;
+  if (!Number.isSafeInteger(samples) || samples < 16 || samples > 512) {
+    throw new RangeError("Graph distribution samples must be an integer from 16 to 512");
+  }
+  if (!isRecord(estimatesInput) || Object.keys(estimatesInput).length > definition.nodes.length) {
+    throw new Error("Graph distribution estimates are invalid");
+  }
+  const known = new Set(definition.nodes.map((node) => node.id));
+  const estimates = new Map<string, EngineeringGraphDistributionEstimate>();
+  for (const [nodeId, estimate] of Object.entries(estimatesInput)) {
+    if (
+      !known.has(nodeId) ||
+      !isRecord(estimate) ||
+      Object.keys(estimate).some(
+        (key) => !["p50DurationMs", "p95DurationMs", "failureRate", "costUsd", "tokens"].includes(key),
+      ) ||
+      !Number.isSafeInteger(estimate.p50DurationMs) ||
+      (estimate.p50DurationMs as number) < 0 ||
+      !Number.isSafeInteger(estimate.p95DurationMs) ||
+      (estimate.p95DurationMs as number) < (estimate.p50DurationMs as number) ||
+      (estimate.failureRate !== undefined &&
+        (typeof estimate.failureRate !== "number" ||
+          !Number.isFinite(estimate.failureRate) ||
+          estimate.failureRate < 0 ||
+          estimate.failureRate > 1)) ||
+      (estimate.costUsd !== undefined &&
+        (typeof estimate.costUsd !== "number" || !Number.isFinite(estimate.costUsd) || estimate.costUsd < 0)) ||
+      (estimate.tokens !== undefined && (!Number.isSafeInteger(estimate.tokens) || (estimate.tokens as number) < 0))
+    ) {
+      throw new Error(`Graph distribution estimate is invalid: ${nodeId}`);
+    }
+    estimates.set(nodeId, estimate as EngineeringGraphDistributionEstimate);
+  }
+  const random = deterministicRandom(`${definition.graphId}\0${options.seed ?? "default"}\0${samples}`);
+  const makespans: number[] = [];
+  const activeDurations: number[] = [];
+  const startedAtMs = (options.startedAt ?? new Date()).getTime();
+  if (!Number.isFinite(startedAtMs)) throw new Error("Graph distribution start time is invalid");
+  let durationBreaches = 0;
+  let deadlineBreaches = 0;
+  let budgetBreaches = 0;
+  for (let sample = 0; sample < samples; sample++) {
+    const sampled: Record<string, EngineeringGraphNodeEstimate> = {};
+    for (const node of definition.nodes) {
+      const estimate = estimates.get(node.id);
+      if (!estimate) continue;
+      const failed = estimate.failureRate !== undefined && random() < estimate.failureRate;
+      const attempts = failed ? Math.max(1, (node.maxRetries ?? 0) + 1) : 1;
+      sampled[node.id] = {
+        durationMs: Math.min(604_800_000, sampledDuration(estimate, random) * attempts),
+        ...(estimate.costUsd !== undefined ? { costUsd: estimate.costUsd * attempts } : {}),
+        ...(estimate.tokens !== undefined ? { tokens: estimate.tokens * attempts } : {}),
+      };
+    }
+    const report = simulateEngineeringGraph(definition, {
+      estimates: sampled,
+      ...(options.startedAt ? { startedAt: options.startedAt } : {}),
+    });
+    makespans.push(report.makespanMs);
+    activeDurations.push(report.estimatedActiveDurationMs);
+    if (definition.maxDurationMs !== undefined && report.estimatedActiveDurationMs > definition.maxDurationMs) {
+      durationBreaches++;
+    }
+    if (
+      report.nodes.some((result) => {
+        const node = definition.nodes.find((candidate) => candidate.id === result.id);
+        const deadlines = [node?.deadlineAt, node?.kind === "wait" ? node.waitFor?.expiresAt : undefined];
+        return deadlines.some(
+          (deadline) => deadline !== undefined && startedAtMs + result.startMs >= Date.parse(deadline),
+        );
+      })
+    ) {
+      deadlineBreaches++;
+    }
+    if (
+      (definition.costBudgetUsd !== undefined && report.estimatedCostUsd > definition.costBudgetUsd) ||
+      (definition.tokenBudget !== undefined && report.estimatedTokens > definition.tokenBudget)
+    ) {
+      budgetBreaches++;
+    }
+  }
+  return {
+    graphId: definition.graphId,
+    samples,
+    makespanMs: {
+      p50: distributionQuantile(makespans, 0.5),
+      p95: distributionQuantile(makespans, 0.95),
+      p99: distributionQuantile(makespans, 0.99),
+    },
+    activeDurationMs: {
+      p50: distributionQuantile(activeDurations, 0.5),
+      p95: distributionQuantile(activeDurations, 0.95),
+      p99: distributionQuantile(activeDurations, 0.99),
+    },
+    durationBreachProbability: durationBreaches / samples,
+    deadlineBreachProbability: deadlineBreaches / samples,
+    budgetBreachProbability: budgetBreaches / samples,
+    sensitivity: [...estimates]
+      .map(([nodeId, estimate]) => ({ nodeId, uncertaintyMs: estimate.p95DurationMs - estimate.p50DurationMs }))
+      .sort((left, right) => right.uncertaintyMs - left.uncertaintyMs || left.nodeId.localeCompare(right.nodeId))
+      .slice(0, 8),
+  };
+}
 
 function positiveSafeInteger(value: unknown, label: string, max: number): number {
   if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > max) {

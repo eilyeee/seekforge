@@ -3576,6 +3576,467 @@ unrelated controls.
 - **Caught:** the Desktop orchestration refresh and DAG inspection paths briefly
   crossed their `resourceBusy` and `orchestrationBusy` setters.
 
+## 331. Multi-checkpoint activation needs one visible commit point
+
+Writing related child and root checkpoints independently can expose a mixed
+generation after a crash even when every individual file write is atomic.
+
+- **Do:** lease participants in canonical order, persist prepared state plus a
+  recovery journal, commit inaccessible children first, and activate the root
+  last; recovery must deterministically roll forward.
+- **Caught:** coordinated Engineering Graph tree migration initially had only a
+  preview and could not safely apply subgraph-invalidating changes.
+
+## 332. Approval version and deployment version are separate boundaries
+
+Treating approval as execution allows stale evidence to mutate a newer runtime
+generation and provides no recoverable state between effect and record commit.
+
+- **Do:** bind deployment to the exact proposal version and source fingerprint,
+  persist `applying` before the effect, detect an already-committed target during
+  retry, and retain exact rollback evidence.
+- **Caught:** orchestration recommendations originally stopped at approval and
+  lacked a safe apply/observe/rollback lifecycle.
+
+## 333. Content-address metadata is not blob authority
+
+A recorded digest can refer to a replaced file, a symlink, or bytes that were
+never placed in immutable storage.
+
+- **Do:** reopen physical files with no-follow semantics, stream and verify size
+  plus digest, copy into lease-coordinated CAS, re-hash before atomic
+  materialization, and scope public restore to an authoritative reuse candidate.
+- **Caught:** Graph artifact reuse initially returned metadata-only plans.
+
+## 334. Capacity reservations must release on invalid returns too
+
+Validation performed after a remote reservation is already an effect. Rejecting
+malformed metadata without cleanup leaks executor capacity.
+
+- **Do:** if a callable release hook is present, invoke it best-effort on every
+  path, including validation rejection, cancellation, handler failure, and
+  success; pass a bounded fencing token to the exact attempt.
+- **Caught:** Graph remote reservation validation initially threw before release.
+
+## 335. A page is not a global evaluation window
+
+Aggregating only visible page details while labeling the result workspace-wide
+can report a healthy SLO even when omitted records breach it.
+
+- **Do:** label page-derived summaries explicitly, keep full portfolio totals
+  separate, and use a materialized all-checkpoint index for bounded global
+  summaries.
+- **Caught:** the orchestration report's new error-budget summary initially had
+  no scope marker.
+
+## 336. Bounded indexes must fingerprint omitted records
+
+Hashing only retained summary items means a change beyond the display cap does
+not advance the cache generation.
+
+- **Do:** validate and fingerprint the full authoritative source set, compute
+  totals before truncation, then retain only the bounded display projection.
+- **Caught:** the orchestration materialized index initially derived its
+  generation from only the newest 512 items.
+
+## 337. Reference-aware GC still needs a publication barrier
+
+A producer can commit a CAS blob shortly before publishing the checkpoint that
+references it. GC between those effects sees a valid but apparently orphaned
+blob and can delete it.
+
+- **Do:** coordinate CAS writers and collectors, refresh the publication age
+  when a verified blob is reused, and never collect unreferenced blobs inside a
+  bounded publication grace interval, even to satisfy quota.
+- **Caught:** Graph artifact GC initially trusted only the current checkpoint
+  reference scan, leaving a store-to-state publication race.
+
+## 338. Partial multi-lease acquisition must unwind
+
+Canonical acquisition order prevents deadlock but does not prevent a later
+participant from being busy after earlier leases were acquired.
+
+- **Do:** acquire iteratively, release every earlier lease in reverse order when
+  any acquisition fails, and cover the partial-acquisition path with a busy
+  participant test.
+- **Caught:** Graph tree migration originally built the lease array with `map`,
+  leaking earlier participant leases when a later acquisition threw.
+
+## 339. State-directory caps must follow ownership filtering
+
+Applying a list cap before classifying filenames lets journals, controls, or
+attacker-created auxiliary files crowd authoritative records out of discovery.
+
+- **Do:** validate the exact owner filename grammar before truncation, and make
+  explicit deletion remove that owner's bounded journals and prepared files too.
+- **Caught:** Graph state enumeration counted every `.json` file toward its cap,
+  and Graph deletion left tree-transaction artifacts behind.
+
+## 340. Replacement safety requires validation before rename
+
+Validating a newly materialized file only after atomically replacing the target
+can destroy a valid older target when the new bytes are corrupt.
+
+- **Do:** fsync and hash the exact sibling temporary file first, then rename its
+  already-validated inode over the target and fsync the parent directory.
+- **Caught:** CAS materialization originally removed the replaced target when its
+  post-rename verification failed.
+
+## 341. Approval belongs to exact proposal content
+
+An identifier can remain stable while its rationale, evidence, risk, or action
+changes. Carrying approval across that refresh authorizes content nobody reviewed.
+
+- **Do:** preserve an approval only when the complete generated draft is equal;
+  any changed field advances the version and resets the decision to `proposed`.
+- **Caught:** proposal refresh originally copied the previous status regardless
+  of whether the draft changed.
+
+## 342. Deployment serialization needs the mutation target
+
+Leasing only by proposal id allows two distinct proposals to mutate the same
+Loop route or Graph concurrently, and an older rollback can erase newer work.
+
+- **Do:** serialize apply and rollback by a bounded hash of scope plus source,
+  reject conflicting active target deployments, and verify the currently applied
+  route or Graph fingerprint before rollback.
+- **Caught:** orchestration deployment originally coordinated retries for one
+  proposal but not competing proposals for the same source.
+
+## 343. Runtime and advisory eligibility need one owner
+
+If preflight and optimization classify executors separately, malformed load
+metadata can produce non-finite rankings while runtime accepts an unhealthy or
+fully occupied executor.
+
+- **Do:** share one fail-closed eligibility classifier covering contract shape,
+  trust, protocol, cancellation, health, capacity, queue, and locality metadata.
+- **Caught:** Graph preflight and placement reporting implemented overlapping but
+  different executor checks.
+
+## 344. Duration limits and deadlines are different events
+
+`maxDurationMs` limits cumulative active runtime; a node deadline limits when
+that node may start. Reporting both as deadline breaches makes forecasts lie
+about the violated contract.
+
+- **Do:** calculate and expose separate duration-budget and node/wait-deadline
+  probabilities from the same simulated schedule.
+- **Caught:** Monte Carlo Graph forecasts originally incremented
+  `deadlineBreachProbability` when active duration exceeded `maxDurationMs`.
+
+## 345. A journal read before locking is only a hint
+
+Another owner can finish or replace a transaction between journal discovery and
+participant lease acquisition. Acting on that stale object can overwrite a newer
+prepared transaction.
+
+- **Do:** after acquiring every participant lease, reread and compare the exact
+  journal generation; before preparing a new transaction, reject any unresolved
+  journal that appeared during planning.
+- **Caught:** Graph tree recovery originally committed the journal object read
+  before lease acquisition without revalidating its transaction id and content.
+
+## 346. Authorization candidates must survive until the effect
+
+An exact-generation artifact candidate checked before locking can become stale
+when the Graph advances before materialization starts.
+
+- **Do:** acquire the authoritative Graph lease, reload its checkpoint and run
+  snapshots, recompute candidate membership, and only then acquire the CAS lease
+  through the materialization owner.
+- **Caught:** the Graph artifact REST route originally checked candidate scope
+  before entering any coordination boundary.
+
+## 347. Effect completion and lifecycle recording can fail separately
+
+An atomic target mutation can succeed while the following deployment-record
+write fails. Treating the retry as a fresh mutation either duplicates the effect
+or rejects the now-changed source.
+
+- **Do:** persist intent first, recognize both applied and restored target
+  fingerprints/routes on retry, and make multi-step route restoration one atomic
+  owner write.
+- **Caught:** Graph apply and Graph/Loop rollback originally had no recovery path
+  when their target committed but the deployment status did not.
+
+## 348. Durable lifecycle parsers must enforce cross-field states
+
+Validating each deployment field independently still accepts impossible records,
+such as `applied` without a target fingerprint or `failed` without an error.
+
+- **Do:** validate status-specific required and forbidden fields, timestamp
+  ordering, scope/action compatibility, and rollback evidence provenance as one
+  invariant.
+- **Caught:** the first deployment parser checked field shapes but not lifecycle
+  combinations.
+
+## 349. Shared command options still need operation scoping
+
+A command with an operation argument and shared option parser can accept flags
+that are syntactically valid but meaningless for the selected operation.
+
+- **Do:** validate the final operation/id/option combination before dispatch and
+  reject ignored mutation, concurrency, or pruning flags.
+- **Caught:** orchestration `show`/`list` and artifact-store `inspect` initially
+  accepted options that only their sibling mutation operations used.
+
+## 350. A bounded discovery list is not an exhaustive safety scan
+
+State listing may intentionally cap display or recovery work, but reuse GC,
+retention, and workspace totals cannot silently omit valid owner files beyond
+that cap.
+
+- **Do:** filter exact owner names before a deterministic display cap, and offer
+  a fail-closed complete-scan mode for deletion, GC, retention, and global
+  aggregation owners.
+- **Caught:** Graph artifact GC originally reused the 256-item UI listing and
+  could classify blobs referenced only by an omitted checkpoint as unreferenced.
+
+## 351. Workspace state topology can cross directory boundaries
+
+Listing only the root `.seekforge/graphs` directory misses reachable child Graph
+checkpoints whose nodes resolve to another physical workspace, so portfolio and
+index totals become incomplete.
+
+- **Do:** start from complete direct roots, traverse each validated definition
+  through the shared physical workspace resolver, merge exact runtime identities,
+  and reject conflicts or an excessive total tree.
+- **Caught:** the materialized orchestration index initially used only direct
+  root-directory Graph state discovery.
+
+## 352. Read-compute-write observation needs the same lifecycle lease as mutation
+
+An observer that reads an active record, computes metrics, and later writes the
+record can overwrite a rollback or recovery completed in between.
+
+- **Do:** hold the deployment identity lease across observation, re-read after
+  acquiring the target lease, and invoke rollback through the already-locked
+  internal owner.
+- **Caught:** orchestration deployment observation initially protected only its
+  final file write, not the lifecycle transition it was based on.
+
+## 353. A definition fingerprint is not a checkpoint generation
+
+Execution progress can advance while a Graph definition fingerprint remains
+unchanged. A prepared tree transaction that compares only definition identity
+can therefore overwrite newer results during crash recovery.
+
+- **Do:** bind both source and prepared participants to a complete validated
+  checkpoint hash, require canonical physical workspace identities, and reject
+  recovery when either exact generation changed.
+- **Caught:** Graph tree migration journals initially recorded participant
+  definition fingerprints but not their full checkpoint generations.
+
+## 354. Cross-workspace discovery must retain the owner identity
+
+Returning only a child checkpoint after resolving it from another physical
+workspace loses the location needed for its history, scheduling evidence, run
+snapshots, and content-addressed artifacts.
+
+- **Do:** carry the canonical physical workspace together with every discovered
+  state until all owner-specific reads finish; do not emit standalone mutation
+  proposals for nested checkpoints that require a root tree transaction.
+- **Caught:** the workspace orchestration report found external child Graphs but
+  initially read their auxiliary data from the root workspace.
+
+## 355. Intent recovery must precede proposal supersession
+
+A proposal's evidence can refresh after a deployment effect commits but before
+its `applying` record advances. Superseding by the new proposal version first
+loses the only durable recovery and rollback lineage for the live target.
+
+- **Do:** reconcile an `applying` record from its own persisted action and exact
+  target before comparing proposal versions; if recovered, require rollback
+  before a newer version can apply.
+- **Caught:** orchestration observation initially classified version-lagged
+  `applying` records as superseded without checking their committed target.
+
+## 356. A rollback target fingerprint does not authenticate rollback material
+
+A source generation fingerprint proves which Graph was changed, but it does not
+prove that a separately persisted rollback definition still contains the exact
+source content.
+
+- **Do:** hash the validated rollback definition, persist that hash in the
+  deployment intent before applying effects, and verify it during both crash
+  reconciliation and rollback.
+- **Caught:** Graph deployment rollback initially trusted any valid definition
+  found at the expected rollback path.
+
+## 357. Durable capacity checks belong before transaction preparation
+
+A participant count or byte cap enforced only while reading recovery state can
+allow the writer to create a prepared checkpoint or journal that its recovery
+path will always reject.
+
+- **Do:** build and validate every prepared payload and journal in memory,
+  enforce the same participant and byte bounds, persist a `preparing` intent
+  before any participant file, and let recovery clean an incomplete preparation.
+- **Caught:** Graph tree migration initially bounded journal recovery but not the
+  corresponding preparation writes.
+
+## 358. A definition generation is not an evidence generation
+
+A Graph can advance status, results, usage, and control state without changing
+its definition fingerprint. A proposal bound only to that fingerprint can apply
+evidence from an earlier checkpoint to later execution state.
+
+- **Do:** bind decision identity and apply-time revalidation to a canonical hash
+  of the complete validated checkpoint; retain the definition fingerprint as
+  separate rollback metadata.
+- **Caught:** Graph optimization proposals initially used the definition and
+  workspace fingerprint as their claimed exact source generation.
+
+## 359. Rollback safety needs the exact post-effect checkpoint
+
+Checking only the deployed definition cannot tell whether the Graph later
+resumed, accumulated results, or changed control state under that same
+definition.
+
+- **Do:** record a canonical hash of the complete post-migration checkpoint,
+  recover only the quiescent checkpoint proven by the migration journal, and
+  require that hash before rollback.
+- **Caught:** Graph deployment rollback initially compared only its target
+  definition fingerprint.
+
+## 360. Creating derived history must preserve checkpoint fallback events
+
+A read path may fall back to checkpoint events only while its append-only log is
+empty. Writing the first migration event without backfilling earlier checkpoint
+events makes valid lifecycle history disappear from the public view.
+
+- **Do:** under the Graph lease, append every retained checkpoint event newer
+  than the log tail in sequence order, both during normal commit and recovery.
+- **Caught:** the first deployment-driven Graph migration made the earlier
+  `graph.completed` event disappear from REST history.
+
+## 361. Applying reconciliation has three states, not two
+
+After a crash, a target can equal the exact source, equal the exact committed
+effect, or be a third generation changed by another lifecycle. Treating every
+non-target state as “not applied” can overwrite or supersede live work.
+
+- **Do:** classify exact source as retryable, exact target as recoverable, and
+  every other generation as diverged; preserve diverged intent and require
+  manual recovery.
+- **Caught:** orchestration apply retry initially treated an advanced
+  same-definition Graph as if its deployment effect had never committed.
+
+## 362. Persisted policy lookup belongs after pure option validation
+
+A durable policy read can influence provider selection, but performing it before
+validating the caller's explicit options makes malformed requests inspect
+workspace state and can change which error wins.
+
+- **Do:** validate explicit request shape first, then load the exact scoped
+  policy, merge it with documented precedence, and only then initialize the
+  providers selected by the combined configuration.
+- **Caught:** Auto-Loop initially loaded an applied route before validating its
+  task, verification, recovery, and routing options.
+
+## 363. Atomic rename is not atomic no-clobber
+
+Checking that a target is absent and then renaming a temporary file leaves a
+window where an unrelated writer can create the target and be silently
+overwritten on POSIX.
+
+- **Do:** when overwrite is disabled, publish with an atomic same-filesystem
+  hard-link operation that fails with `EEXIST`; reserve rename replacement for
+  explicit overwrite requests.
+- **Caught:** CAS materialization initially used an existence check followed by
+  `rename`, despite exposing no-overwrite as its default contract.
+
+## 364. Observation and verdict form one persisted state
+
+Validating an observation and a verdict independently permits impossible
+records such as a terminal observation with `pending`, or an unobserved
+deployment marked `improved`.
+
+- **Do:** validate the pair by lifecycle state: unobserved or non-terminal
+  applied records are pending, terminal observations have a terminal verdict,
+  and rolled-back records retain only stable/regressed outcomes.
+- **Caught:** orchestration deployment decoding initially accepted every valid
+  metric and verdict combination independently.
+
+## 365. A no-op transaction still owes a complete result
+
+Skipping mutation because the root definition is unchanged does not justify
+returning a plan built from only the root when the public result describes the
+whole reachable tree.
+
+- **Do:** take the same complete ownership-aware snapshot used by changing
+  transactions before constructing a no-op result; skip only leases and writes.
+- **Caught:** an idempotent Graph tree migration initially reported existing
+  child checkpoints as missing.
+
+## 366. “Exact generation” hashes cannot redact durable evidence
+
+Replacing evidence fields with placeholders before hashing makes two distinct
+persisted checkpoints share a decision generation, even if timestamps normally
+advance with writes.
+
+- **Do:** hash the complete validated durable value with canonical key ordering;
+  a digest does not need to retain or expose the underlying evidence text.
+- **Caught:** the Loop orchestration fingerprint initially blanked verifier
+  commands and output tails before claiming to identify the exact generation.
+
+## 367. A materialized refresh lease must cover its source scan
+
+If two refreshers compute outside the publication lease, the older snapshot can
+wait behind the newer writer and then overwrite it after the lease is released.
+
+- **Do:** serialize source enumeration, aggregation, and publication under one
+  refresh owner; include every loaded generation in the materialized digest.
+- **Caught:** orchestration index refresh initially acquired its lease only for
+  the final file write.
+
+## 368. Policy keys must use the consumer's closed taxonomy
+
+A generic safe identifier can be structurally harmless while still being an
+impossible routing category. Persisting it and merging after explicit option
+validation bypasses the runtime's closed union.
+
+- **Do:** validate durable policy keys with the same domain predicate used by
+  proposals and runtime routing, not a broader path/id regex.
+- **Caught:** applied Loop routes initially accepted any safe identifier as a
+  failure category.
+
+## 369. A CAS digest does not authorize an external source path
+
+Matching caller-supplied bytes to a digest proves content integrity, not that
+the caller was allowed to read the file into a workspace-scoped artifact store.
+
+- **Do:** resolve the source to a non-symlink physical path beneath the exact
+  workspace before opening and hashing it; keep digest/size verification as a
+  separate invariant.
+- **Caught:** the public Graph CAS store primitive initially accepted any
+  readable host file as a source.
+
+## 370. Exact Loop generation checks need the Loop lifecycle owner
+
+A separate deployment-target lease serializes deployments with each other, but
+it does not stop the running Loop from checkpointing between source validation
+and policy activation.
+
+- **Do:** acquire the Loop's authoritative lifecycle lease around baseline
+  capture, exact-generation revalidation, apply, and rollback; retain the target
+  lease to serialize distinct proposals.
+- **Caught:** Loop route deployment initially used only its orchestration target
+  lease, unlike Graph deployment which also entered the Graph migration owner.
+
+## 371. Idempotent checkpoint recovery must also repair derived history
+
+A transaction participant may already match its committed target because the
+process crashed after publishing the checkpoint but before appending its history.
+Treating that participant as a complete no-op leaves the authoritative checkpoint
+and its derived audit trail inconsistent.
+
+- **Do:** when recovery recognizes the exact target generation, idempotently repair
+  every derived history/index effect before advancing the transaction.
+- **Caught:** Graph tree recovery skipped history repair for a child checkpoint
+  already committed at the injected crash boundary.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

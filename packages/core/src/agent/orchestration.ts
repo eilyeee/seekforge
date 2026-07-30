@@ -2,6 +2,11 @@ import { isAbsolute, relative, sep } from "node:path";
 
 export type OrchestrationNodeRef = { id: string; dependsOn?: readonly string[] };
 
+/** Returns an ISO timestamp strictly newer than a previously persisted version. */
+export function nextOrchestrationVersion(previous: string, now = new Date().toISOString()): string {
+  return new Date(Math.max(Date.parse(now), Date.parse(previous) + 1)).toISOString();
+}
+
 /** Array inputs crossing a runtime boundary must own every indexed entry. */
 export function isDenseArray(value: unknown): value is unknown[] {
   if (!Array.isArray(value)) return false;

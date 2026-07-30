@@ -203,6 +203,16 @@ export {
   type EngineeringGraphArtifactCatalogEntry,
   type EngineeringGraphArtifactReuseCandidate,
 } from "./graph-artifact-catalog.js";
+export {
+  engineeringGraphArtifactAvailable,
+  inspectEngineeringGraphArtifactStore,
+  materializeEngineeringGraphArtifact,
+  pruneEngineeringGraphArtifactStore,
+  storeEngineeringGraphArtifact,
+  MAX_GRAPH_ARTIFACT_BYTES,
+  type EngineeringGraphArtifactPruneResult,
+  type EngineeringGraphArtifactStoreEntry,
+} from "./graph-artifact-store.js";
 export { BUILTIN_GRAPH_HANDLERS, graphExecutorsWithPlugins, graphHandlersWithPlugins } from "./graph-handlers.js";
 export {
   engineeringGraphCriticality,
@@ -232,18 +242,30 @@ export {
 } from "./orchestration-diagnostics.js";
 export {
   applyEngineeringGraphMigration,
+  applyEngineeringGraphExpansion,
+  applyEngineeringGraphTreeMigration,
   EngineeringGraphMigrationConflictError,
   planEngineeringGraphMigration,
   planEngineeringGraphExpansion,
   planEngineeringGraphTreeMigration,
+  listEngineeringGraphTreeCheckpoints,
   listEngineeringGraphTreeStates,
+  listWorkspaceEngineeringGraphTreeCheckpoints,
+  listWorkspaceEngineeringGraphTreeStates,
   readEngineeringGraphMigrationJournal,
+  readEngineeringGraphTreeMigrationJournal,
+  recoverEngineeringGraphTreeMigration,
   type EngineeringGraphMigrationResult,
   type EngineeringGraphMigrationPlan,
   type EngineeringGraphMigrationJournal,
   type EngineeringGraphMigrationOptions,
   type EngineeringGraphTreeMigrationEntry,
+  type EngineeringGraphTreeCheckpoint,
   type EngineeringGraphTreeMigrationPlan,
+  type EngineeringGraphTreeMigrationJournal,
+  type EngineeringGraphTreeMigrationJournalParticipant,
+  type EngineeringGraphTreeMigrationOptions,
+  type EngineeringGraphTreeMigrationResult,
 } from "./graph-migration.js";
 export {
   analyzeLoopStrategyIntelligence,
@@ -251,6 +273,8 @@ export {
   buildLoopOptimizationProposals,
   buildOrchestrationPortfolioReport,
   evaluateOrchestrationSlo,
+  graphOrchestrationFingerprint,
+  loopOrchestrationFingerprint,
   loopSloObservations,
   type EngineeringGraphOptimizationReport,
   type EngineeringGraphOptimizationScenario,
@@ -265,6 +289,7 @@ export {
   type OrchestrationSloPolicy,
 } from "./orchestration-intelligence.js";
 export {
+  isOrchestrationProposalAction,
   listOrchestrationProposals,
   recordOrchestrationProposals,
   setOrchestrationProposalStatus,
@@ -272,13 +297,43 @@ export {
   type OrchestrationProposalStatus,
 } from "./orchestration-proposals.js";
 export {
+  applyOrchestrationProposal,
+  listOrchestrationDeployments,
+  observeOrchestrationDeployments,
+  rollbackOrchestrationDeployment,
+  type ApplyOrchestrationProposalOptions,
+  type OrchestrationDeployment,
+  type OrchestrationDeploymentMetric,
+  type OrchestrationDeploymentStatus,
+  type OrchestrationDeploymentVerdict,
+} from "./orchestration-deployments.js";
+export {
+  applyLoopRoutePolicy,
+  isLoopRoutePolicyApplied,
+  readAppliedLoopRoutes,
+  readWorkspaceOrchestrationSloPolicy,
+  removeLoopRoutePolicy,
+  setWorkspaceOrchestrationSloPolicy,
+  type AppliedLoopRoute,
+  type WorkspaceOrchestrationSloPolicy,
+} from "./orchestration-policy.js";
+export {
   buildWorkspaceOrchestrationReport,
   type WorkspaceOrchestrationReport,
   type WorkspaceOrchestrationReportOptions,
 } from "./orchestration-report.js";
 export {
+  readWorkspaceOrchestrationIndex,
+  refreshWorkspaceOrchestrationIndex,
+  type WorkspaceOrchestrationIndex,
+  type WorkspaceOrchestrationIndexItem,
+} from "./orchestration-index.js";
+export {
   explainEngineeringGraphNode,
   simulateEngineeringGraph,
+  simulateEngineeringGraphDistribution,
+  type EngineeringGraphDistributionEstimate,
+  type EngineeringGraphDistributionReport,
   type EngineeringGraphNodeBlocker,
   type EngineeringGraphNodeEstimate,
   type EngineeringGraphNodeExplanation,

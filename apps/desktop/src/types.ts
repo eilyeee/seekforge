@@ -81,6 +81,8 @@ export type {
   OrchestrationProposal,
   OrchestrationProposalDraft,
   OrchestrationProposalAction,
+  OrchestrationDeployment,
+  OrchestrationDeploymentMetric,
   OrchestrationReplayReport,
   OrchestrationSloEvaluation,
   WorkspaceOrchestrationReport,

@@ -1,5 +1,6 @@
 import type { EngineeringGraphState, GraphArtifact } from "./graph-state.js";
 import type { EngineeringGraphRunSnapshot } from "./graph-run-history.js";
+import { engineeringGraphArtifactAvailable } from "./graph-artifact-store.js";
 
 export type EngineeringGraphArtifactCatalogEntry = GraphArtifact & {
   key: string;
@@ -14,6 +15,7 @@ export type EngineeringGraphArtifactReuseCandidate = Omit<GraphArtifact, "sha256
   nodeId: string;
   sourceRunNumber: number;
   sourceCompletedAt: string;
+  casAvailable: boolean;
 };
 
 /** Builds a deterministic, bounded lineage view without reading artifact contents again. */
@@ -44,6 +46,7 @@ export function buildEngineeringGraphArtifactCatalog(
 export function planEngineeringGraphArtifactReuse(
   state: EngineeringGraphState,
   runs: readonly EngineeringGraphRunSnapshot[],
+  workspace?: string,
 ): EngineeringGraphArtifactReuseCandidate[] {
   const settled = new Set(state.results.filter((result) => result.status === "passed").map((result) => result.id));
   const candidates = new Map<string, EngineeringGraphArtifactReuseCandidate>();
@@ -72,6 +75,9 @@ export function planEngineeringGraphArtifactReuse(
             nodeId: result.id,
             sourceRunNumber: run.runNumber,
             sourceCompletedAt: run.completedAt,
+            casAvailable:
+              workspace !== undefined &&
+              engineeringGraphArtifactAvailable(workspace, artifact.sha256, artifact.sizeBytes!),
           });
         }
       }

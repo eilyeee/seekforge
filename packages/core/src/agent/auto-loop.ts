@@ -80,6 +80,7 @@ import {
   validateLoopModelRoutes,
   type LoopModelRouteReason,
 } from "./loop-model-routing.js";
+import { readAppliedLoopRoutes } from "./orchestration-policy.js";
 import {
   loopVerificationIntelligenceScore,
   readLoopVerificationIntelligence,
@@ -772,6 +773,21 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
   }
   if (opts.model !== undefined && (!opts.model.trim() || opts.model.length > 256)) {
     throw new Error("Loop model must be a non-empty bounded string");
+  }
+  const policyLoopId = opts.resumeState?.loopId ?? opts.loopId;
+  if (opts.persist !== false && policyLoopId) {
+    const applied = readAppliedLoopRoutes(opts.workspace, policyLoopId);
+    const explicitStatic = opts.modelByFailureCategory ?? {};
+    const explicitChains = opts.modelRoutesByFailureCategory ?? {};
+    const inherited = Object.fromEntries(
+      Object.entries(applied).filter(
+        ([category]) => !Object.hasOwn(explicitStatic, category) && !Object.hasOwn(explicitChains, category),
+      ),
+    );
+    if (Object.keys(inherited).length > 0) {
+      for (const model of Object.values(inherited)) routedModels.add(model);
+      opts = { ...opts, modelByFailureCategory: { ...inherited, ...explicitStatic } };
+    }
   }
   if (
     (opts.modelByFailureCategory !== undefined || opts.modelRoutesByFailureCategory !== undefined) &&

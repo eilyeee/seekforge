@@ -1,8 +1,46 @@
 import { describe, expect, it } from "vitest";
-import { explainEngineeringGraphNode, simulateEngineeringGraph } from "../../src/agent/graph-simulation.js";
+import {
+  explainEngineeringGraphNode,
+  simulateEngineeringGraph,
+  simulateEngineeringGraphDistribution,
+} from "../../src/agent/graph-simulation.js";
 import type { EngineeringGraphState } from "../../src/agent/graph-state.js";
 
 describe("Engineering Graph simulation", () => {
+  it("produces deterministic bounded distribution forecasts and sensitivity", () => {
+    const definition = {
+      graphId: "distribution",
+      maxDurationMs: 25,
+      nodes: [
+        {
+          id: "one",
+          kind: "function" as const,
+          handler: "noop",
+          deadlineAt: "2026-01-01T00:00:00.020Z",
+        },
+        {
+          id: "two",
+          kind: "function" as const,
+          handler: "noop",
+          dependsOn: ["one"],
+          deadlineAt: "2026-01-01T00:00:00.012Z",
+        },
+      ],
+    };
+    const estimates = {
+      one: { p50DurationMs: 10, p95DurationMs: 30, failureRate: 0.1 },
+      two: { p50DurationMs: 5, p95DurationMs: 8 },
+    };
+    const options = { samples: 64, seed: "stable", startedAt: new Date("2026-01-01T00:00:00.000Z") };
+    const first = simulateEngineeringGraphDistribution(definition, estimates, options);
+    const second = simulateEngineeringGraphDistribution(definition, estimates, options);
+    expect(first).toEqual(second);
+    expect(first.makespanMs.p99).toBeGreaterThanOrEqual(first.makespanMs.p95);
+    expect(first.durationBreachProbability).toBeGreaterThan(0);
+    expect(first.deadlineBreachProbability).toBeGreaterThan(0);
+    expect(first.sensitivity[0]).toEqual({ nodeId: "one", uncertaintyMs: 20 });
+  });
+
   it("models concurrency, hierarchical resources, and the duration critical path", () => {
     const report = simulateEngineeringGraph(
       {

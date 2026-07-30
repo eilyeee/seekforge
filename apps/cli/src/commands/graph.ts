@@ -1,7 +1,9 @@
 import {
-  applyEngineeringGraphMigration,
+  applyEngineeringGraphExpansion,
+  applyEngineeringGraphTreeMigration,
   analyzeGraphSchedulingIntelligence,
   buildEngineeringGraphHealthReport,
+  graphExecutorsWithPlugins,
   graphHandlersWithPlugins,
   archiveEngineeringGraphResources,
   clearEngineeringGraphRecovery,
@@ -11,12 +13,14 @@ import {
   engineeringGraphSignalAvailable,
   explainEngineeringGraphNode,
   inspectEngineeringGraphResources,
+  inspectEngineeringGraphArtifactStore,
   isValidLoopDagId,
   listEngineeringGraphStates,
   loadPluginContributions,
   loadEngineeringGraphState,
   readEngineeringGraphHistory,
   materializeEngineeringGraph,
+  materializeEngineeringGraphArtifact,
   planEngineeringGraph,
   planEngineeringGraphExpansion,
   planEngineeringGraphMigration,
@@ -24,6 +28,7 @@ import {
   listEngineeringGraphTreeStates,
   promoteEngineeringGraphResult,
   pruneEngineeringGraphResources,
+  pruneEngineeringGraphArtifactStore,
   readGraphSchedulingObservations,
   readFileIfExists,
   removeEngineeringGraphState,
@@ -317,11 +322,66 @@ export function graphMigrateCommand(file: string, params: readonly string[] = []
   try {
     const workspace = process.cwd();
     const definition = readEngineeringGraphFile(file, workspace, params);
+    const plugins = loadPluginContributions(workspace);
     validateEngineeringGraphRunOptions(definition, {
       workspace,
-      handlers: graphHandlersWithPlugins(loadPluginContributions(workspace)),
+      handlers: graphHandlersWithPlugins(plugins),
+      executors: graphExecutorsWithPlugins(plugins, {}),
     });
-    console.log(JSON.stringify(applyEngineeringGraphMigration(workspace, definition), null, 2));
+    console.log(JSON.stringify(applyEngineeringGraphTreeMigration(workspace, definition), null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+export function graphExpandCommand(file: string, params: readonly string[] = []): void {
+  try {
+    const workspace = process.cwd();
+    const definition = readEngineeringGraphFile(file, workspace, params);
+    const plugins = loadPluginContributions(workspace);
+    validateEngineeringGraphRunOptions(definition, {
+      workspace,
+      handlers: graphHandlersWithPlugins(plugins),
+      executors: graphExecutorsWithPlugins(plugins, {}),
+    });
+    console.log(JSON.stringify(applyEngineeringGraphExpansion(workspace, definition), null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+export function graphArtifactMaterializeCommand(
+  sha256: string,
+  sizeBytes: number,
+  target: string,
+  overwrite = false,
+): void {
+  try {
+    console.log(
+      JSON.stringify(
+        materializeEngineeringGraphArtifact(process.cwd(), sha256, sizeBytes, target, { overwrite }),
+        null,
+        2,
+      ),
+    );
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+export function graphArtifactStoreCommand(
+  operation: "inspect" | "prune",
+  options: { maxBytes?: number; maxAgeDays?: number; dryRun?: boolean } = {},
+): void {
+  try {
+    const result =
+      operation === "inspect"
+        ? { artifacts: inspectEngineeringGraphArtifactStore(process.cwd()) }
+        : pruneEngineeringGraphArtifactStore(process.cwd(), options);
+    console.log(JSON.stringify(result, null, 2));
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

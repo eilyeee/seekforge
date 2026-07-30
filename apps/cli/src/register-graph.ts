@@ -2,10 +2,13 @@ import type { Command } from "commander";
 import { InvalidArgumentError } from "commander";
 import {
   graphDeleteCommand,
+  graphArtifactMaterializeCommand,
+  graphArtifactStoreCommand,
   graphDiagnoseCommand,
   graphListCommand,
   graphExplainCommand,
   graphExpansionPlanCommand,
+  graphExpandCommand,
   graphHealthCommand,
   graphIntelligenceCommand,
   graphMigrateCommand,
@@ -25,6 +28,22 @@ function graphPriority(value: string): number {
     throw new InvalidArgumentError("priority must be an integer from -10 to 10");
   }
   return priority;
+}
+
+function artifactSize(value: string): number {
+  if (!/^(?:0|[1-9][0-9]*)$/.test(value)) throw new InvalidArgumentError("size must be a non-negative integer");
+  const size = Number(value);
+  if (!Number.isSafeInteger(size) || size > 256 * 1024 * 1024) {
+    throw new InvalidArgumentError("size must be at most 268435456 bytes");
+  }
+  return size;
+}
+
+function nonNegativeInteger(value: string): number {
+  if (!/^(?:0|[1-9][0-9]*)$/.test(value)) throw new InvalidArgumentError("value must be a non-negative integer");
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) throw new InvalidArgumentError("value must be a safe integer");
+  return parsed;
 }
 
 export function registerGraphCommands(
@@ -124,11 +143,46 @@ export function registerGraphCommands(
     .description("verify an append-only runtime Graph expansion")
     .action((file: string, opts: { param?: string[] }) => graphExpansionPlanCommand(file, opts.param));
   graph
+    .command("expand")
+    .argument("<file>")
+    .option("--param <name=value>", "supply a typed template parameter", collect, [])
+    .description("apply an append-only expansion through the coordinated tree transaction")
+    .action((file: string, opts: { param?: string[] }) => graphExpandCommand(file, opts.param));
+  graph
     .command("migrate")
     .argument("<file>")
     .option("--param <name=value>", "supply a typed template parameter", collect, [])
     .description("apply a safe migration to a paused or terminal Graph")
     .action((file: string, opts: { param?: string[] }) => graphMigrateCommand(file, opts.param));
+  graph
+    .command("artifact-materialize")
+    .argument("<sha256>")
+    .argument("<size>", "verified artifact size in bytes", artifactSize)
+    .argument("<target>", "repository-relative materialization path")
+    .option("--overwrite", "atomically replace an existing physical file")
+    .description("materialize a verified content-addressed Graph artifact")
+    .action((sha256: string, size: number, target: string, opts: { overwrite?: boolean }) =>
+      graphArtifactMaterializeCommand(sha256, size, target, opts.overwrite === true),
+    );
+  graph
+    .command("artifact-store")
+    .argument("<operation>", "inspect or prune")
+    .option("--max-bytes <n>", "maximum CAS bytes retained", nonNegativeInteger)
+    .option("--max-age-days <n>", "maximum age for unreferenced blobs", nonNegativeInteger)
+    .option("--dry-run", "preview CAS pruning")
+    .description("inspect or prune the content-addressed Graph artifact store")
+    .action((operation: string, opts: { maxBytes?: number; maxAgeDays?: number; dryRun?: boolean }) => {
+      if (operation !== "inspect" && operation !== "prune") {
+        throw new InvalidArgumentError("operation must be inspect or prune");
+      }
+      if (
+        operation === "inspect" &&
+        (opts.maxBytes !== undefined || opts.maxAgeDays !== undefined || opts.dryRun !== undefined)
+      ) {
+        throw new InvalidArgumentError("artifact-store inspect does not accept prune options");
+      }
+      graphArtifactStoreCommand(operation, opts);
+    });
   graph
     .command("simulate")
     .argument("<file>")

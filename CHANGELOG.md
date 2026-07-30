@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### round 77: recoverable orchestration deployment and Graph transactions
+- Added crash-recoverable Graph tree migration and append-only expansion apply, remote executor capacity fencing and placement alternatives, Monte Carlo scheduling distributions, and verified SHA-256 artifact CAS materialization plus reference-aware collection.
+- Added persistent SLO policy, bounded full-generation orchestration indexing and pagination, multi-objective Loop routing, and a proposal deployment/observation/rollback lifecycle across Core, CLI, REST, and Desktop.
+- Bound mutations to exact source generations and monotonic decision versions, restored prior Loop routes on rollback, coordinated CAS writers and GC, and documented the new boundary classes and public operations in English and Chinese.
+
 ### round 76: orchestration decision intelligence
 - Added workspace Loop/Graph portfolio budgets, caller-defined SLO evaluation, deterministic replay, Loop route outcome learning, remote executor placement checks, and bounded Pareto counterfactuals.
 - Added durable advisory proposal review with optimistic concurrency, exact-generation verified artifact reuse planning, append-only Graph expansion checks, and nested migration-tree preflight.

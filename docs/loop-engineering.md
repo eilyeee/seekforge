@@ -249,9 +249,15 @@ seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick
   it attributes each edit-model outcome to the preceding failure category,
   reports evidence-weighted confidence, evaluates optional SLOs from measured
   P95 duration and partial verification coverage, and deterministically replays
-  retained lifecycle events. `orchestration proposals refresh|list|approve|dismiss` provides an
-  auditable review lifecycle; approval records intent and never raises a hard
-  budget or changes model routing automatically.
+  retained lifecycle events. Strategy learning uses recency-weighted pass,
+  regression, flake, cost, and duration evidence and ranks routes by a bounded
+  lower-confidence utility score. `orchestration proposals
+  refresh|list|approve|dismiss|apply|rollback|observe` separates review from a
+  crash-recoverable deployment lifecycle. Wilson lower bounds avoid treating a
+  tiny perfect sample as certain. Any changed regenerated draft returns to
+  `proposed`; applying an approved exact-generation Loop route serializes by
+  target and persists it by failure category. Observation can explicitly
+  auto-roll back a regression. Hard-budget changes remain manual.
   Graph-owned child Loops resume only through their parent Graph. Their usage is
   excluded from totals only while that parent checkpoint is present; an orphaned
   child remains visible and countable until normal retention removes it.
@@ -456,6 +462,11 @@ consecutive same-category failures each model receives. The exact route wins ove
 a chain, every candidate is resolved during preflight through `providerForModel`,
 and each decision is retained in `loop.model.routed` plus the iteration snapshot.
 Routing never changes verification, permissions, or budgets.
+An applied orchestration route is loaded before provider preflight for that exact
+Loop. A caller-supplied `modelByFailureCategory` or explicit escalation chain has
+higher precedence, so a durable recommendation cannot override an invocation's
+explicit routing contract. Rollback restores the previously persisted route when
+one existed.
 
 Edit iterations reuse **one worker session**. Requirement analysis and acceptance
 review reuse a separate reviewer session recorded in Loop state, keeping evaluator

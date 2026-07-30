@@ -411,19 +411,39 @@ Rules:
   health/optimization/SLO/replay/artifact-reuse plans. Optional finite query
   targets are `maxP95DurationMs`, `maxCostUsd`, `maxFailureRate`, and
   `minForecastCoverage`; inputs use plain decimal syntax and rate values are in
-  `[0,1]`. Detail is capped at 100 Loops and 100 Graphs; portfolio totals cover
-  every retained checkpoint while its item list remains bounded.
-- `GET /api/orchestration/proposals` lists durable reviewed proposals.
+  `[0,1]`. `loopOffset`, `graphOffset`, and `limit` paginate the two detail
+  collections independently. SLO error-budget summary is page-scoped; portfolio
+  totals cover every retained checkpoint.
+- `GET|PUT /api/orchestration/policy` reads or merges the durable SLO policy.
+  PUT accepts objective fields, `evaluationWindow`, `maxBreachRate`, and optional
+  `expectedUpdatedAt`; values are strictly typed and stale versions are rejected.
+- `GET /api/orchestration/index` reads the bounded materialized summary;
+  `POST /api/orchestration/index/refresh` rebuilds exact-generation totals and
+  recent items from authoritative checkpoints.
+- `GET /api/orchestration/proposals` lists durable reviewed proposals and their
+  separate deployment records.
 - `POST /api/orchestration/proposals/refresh` accepts `{}` and merges the
-  current report drafts under a lease while preserving prior decisions. Reviewed
+  current report drafts under a lease while preserving prior decisions only for
+  complete unchanged drafts. Changed drafts return to `proposed`. Reviewed
   decisions have retention priority, and mutation fails closed on corrupt state.
 - `POST /api/orchestration/proposals/:id/approve|dismiss` accepts optional
   `{expectedUpdatedAt}` for optimistic concurrency. Approval records intent
-  only and never applies configuration or changes runtime eligibility.
+  only. `POST .../:id/apply` revalidates the approved proposal and exact source
+  generation before a target-serialized journaled deployment; `POST
+  .../:id/rollback` reverses an applied deployment only when its route or Graph
+  generation is still current. `POST /api/orchestration/deployments/observe` accepts
+  optional `{autoRollback}` and compares normalized outcome metrics. Budget
+  authorization changes cannot be auto-applied.
 - `POST /api/graphs/:id/migration-plan` preserves the existing flat migration
   fields and adds `tree`. The tree section resolves child identities and reports
-  coordinated-transaction blockers; the apply endpoint remains
-  single-checkpoint and fail-closed.
+  coordinated participants; `migration-apply` commits a journaled child-first,
+  root-last tree transaction. `expansion-apply` applies validated append-only
+  evolution.
+- `POST /api/graphs/:id/artifacts/materialize` restores only a CAS blob proven to
+  be an exact-generation reuse candidate for that Graph. `GET
+  /api/graphs/artifact-store` inspects verified blobs and `POST
+  /api/graphs/artifact-store/prune` performs lease-coordinated, reference-aware
+  dry-run or removal.
 
 ## Implementation notes (binding)
 

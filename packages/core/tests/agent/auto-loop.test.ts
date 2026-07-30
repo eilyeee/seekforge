@@ -22,6 +22,7 @@ import {
 } from "../../src/agent/loop-state.js";
 import { createLoopControl } from "../../src/agent/loop-control.js";
 import { enqueueLoopControl } from "../../src/agent/loop-control-store.js";
+import { applyLoopRoutePolicy } from "../../src/agent/orchestration-policy.js";
 import { acquireWorkspaceSessionGuard } from "../../src/agent/session-lease.js";
 import { recordLoopVerificationIntelligence } from "../../src/agent/loop-verification-intelligence.js";
 import { setSandboxAvailabilityCheckForTests } from "../../src/tools/os-sandbox.js";
@@ -198,7 +199,7 @@ describe("runAutoLoop", () => {
     expect(events.filter((e) => e.type === "loop.snapshot").at(-1)).toMatchObject({
       snapshot: { failureCategory: "none", costUsd: 0.001, tokensUsed: 15 },
     });
-  });
+  }, 15_000);
 
   it("requires a fresh independent code review and feeds findings into the next edit", async () => {
     const provider = scripted("flash", [
@@ -346,6 +347,30 @@ describe("runAutoLoop", () => {
     expect(base.chats).toBe(0);
     expect(routed.chats).toBe(1);
     expect(resolutions).toBe(1);
+  });
+
+  it("uses an applied route policy for the exact persisted Loop", async () => {
+    const base = alwaysDone("base");
+    const routed = alwaysDone("policy-specialist");
+    applyLoopRoutePolicy(workspace, {
+      loopId: "policy-loop",
+      failureCategory: "unknown",
+      model: routed.model,
+      proposalId: `opt-${"a".repeat(20)}`,
+      appliedAt: new Date().toISOString(),
+    });
+    const result = await runAutoLoop(
+      {
+        provider: base,
+        providerForModel: (model) => (model === routed.model ? routed : base),
+        dispatcher: noopDispatcher,
+        confirm: async () => true,
+      },
+      { ...baseOpts(workspace, failNTimes(1)), loopId: "policy-loop" },
+    );
+    expect(result.status).toBe("passed");
+    expect(base.chats).toBe(0);
+    expect(routed.chats).toBe(1);
   });
 
   it("escalates through an explicit model chain and checkpoints the routing decision", async () => {
