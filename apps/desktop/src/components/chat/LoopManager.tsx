@@ -8,6 +8,7 @@ import type {
   EngineeringGraphRunComparison,
   EngineeringGraphResourceReport,
   EngineeringGraphSummary,
+  EngineeringGraphHealthReport,
   LoopDagResourceReport,
   LoopDagSummary,
   LoopEvidenceReport,
@@ -37,6 +38,7 @@ export function LoopManager({ running, onResume }: Props) {
   const [graphDetails, setGraphDetails] = useState<Record<string, EngineeringGraphDetail>>({});
   const [graphResources, setGraphResources] = useState<Record<string, EngineeringGraphResourceReport>>({});
   const [graphComparisons, setGraphComparisons] = useState<Record<string, EngineeringGraphRunComparison>>({});
+  const [graphHealth, setGraphHealth] = useState<Record<string, EngineeringGraphHealthReport>>({});
   const [dagResources, setDagResources] = useState<Record<string, LoopDagResourceReport>>({});
   const [speculations, setSpeculations] = useState<LoopSpeculationSummary[]>([]);
   const [query, setQuery] = useState("");
@@ -294,17 +296,23 @@ export function LoopManager({ running, onResume }: Props) {
     const request = graphRequests.current.begin();
     setResourceBusy(true);
     try {
-      const [detail, resources, comparison] = await Promise.all([
+      const [detail, resources, comparison, health] = await Promise.all([
         api.graph(graphId),
         api.graphResources(graphId),
         api.graphComparison(graphId).catch((error) => {
           if (error instanceof ApiError && error.status === 404) return undefined;
           throw error;
         }),
+        api.graphHealth(graphId).catch(() => undefined),
       ]);
       if (graphRequests.current.isCurrent(request)) {
         setGraphDetails((current) => ({ ...current, [graphId]: detail }));
         setGraphResources((current) => ({ ...current, [graphId]: resources }));
+        setGraphHealth((current) => {
+          if (health) return { ...current, [graphId]: health };
+          const { [graphId]: _stale, ...retained } = current;
+          return retained;
+        });
         setGraphComparisons((current) => {
           if (comparison) return { ...current, [graphId]: comparison.comparison };
           const { [graphId]: _stale, ...retained } = current;
@@ -513,6 +521,7 @@ export function LoopManager({ running, onResume }: Props) {
         details={graphDetails}
         resources={graphResources}
         comparisons={graphComparisons}
+        health={graphHealth}
         busy={resourceBusy}
         onInspect={(graphId) => void inspectGraph(graphId)}
         onAction={(graphId, operation, target) => void graphAction(graphId, operation, target)}

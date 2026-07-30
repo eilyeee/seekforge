@@ -38,6 +38,42 @@ export type LoopVerificationIntelligenceFinding = {
   message: string;
 };
 
+export type LoopVerificationReliability = {
+  stageId: string;
+  confidence: "low" | "medium" | "high";
+  failureRate: number;
+  flakyRate: number;
+  ageWeight: number;
+  /** Advisory retry count. Required verification stages are never skipped. */
+  recommendedAttempts: 1 | 2 | 3;
+  quarantineCandidate: boolean;
+};
+
+/** Derives confidence-aware advice without weakening authoritative verification. */
+export function summarizeLoopVerificationReliability(
+  entry: LoopVerificationIntelligence,
+  now = Date.now(),
+): LoopVerificationReliability {
+  const updatedAt = Date.parse(entry.updatedAt);
+  const ageMs = Number.isFinite(updatedAt) ? Math.max(0, now - updatedAt) : MAX_AGE_MS;
+  const ageWeight = Math.max(0, 1 - ageMs / MAX_AGE_MS);
+  const confidence =
+    entry.samples >= 12 && ageWeight >= 0.75 ? "high" : entry.samples >= 4 && ageWeight >= 0.25 ? "medium" : "low";
+  const failureRate = entry.failures / entry.samples;
+  const flakyRate = entry.flakyRuns / entry.samples;
+  const advisoryFlakyRate = flakyRate * ageWeight;
+  return {
+    stageId: entry.stageId,
+    confidence,
+    failureRate,
+    flakyRate,
+    ageWeight,
+    recommendedAttempts: confidence === "low" ? 1 : advisoryFlakyRate >= 0.5 ? 3 : advisoryFlakyRate >= 0.2 ? 2 : 1,
+    quarantineCandidate:
+      confidence !== "low" && entry.samples >= 8 && ageWeight >= 0.5 && flakyRate >= 0.5 && failureRate < 0.5,
+  };
+}
+
 function isSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value);
 }
@@ -199,11 +235,15 @@ export function recordLoopVerificationIntelligence(
 /** Higher scores run earlier within a safe ready wave; this never changes dependencies or resources. */
 export function loopVerificationIntelligenceScore(entry: LoopVerificationIntelligence | undefined): number {
   if (!entry) return 0;
-  const failureRate = entry.failures / entry.samples;
-  const flakyRate = entry.flakyRuns / entry.samples;
+  const reliability = summarizeLoopVerificationReliability(entry);
+  const failureRate = reliability.failureRate * reliability.ageWeight;
+  const flakyRate = reliability.flakyRate * reliability.ageWeight;
   return Math.min(
     Number.MAX_SAFE_INTEGER,
-    entry.consecutiveFailures * 10_000_000 + failureRate * 1_000_000 + flakyRate * 100_000 + entry.averageDurationMs,
+    entry.consecutiveFailures * reliability.ageWeight * 10_000_000 +
+      failureRate * 1_000_000 +
+      flakyRate * 100_000 +
+      entry.averageDurationMs,
   );
 }
 

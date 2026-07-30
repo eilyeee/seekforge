@@ -75,6 +75,7 @@ export type {
   EngineeringGraphResourceReport,
   EngineeringGraphComparisonResponse,
   EngineeringGraphRunComparison,
+  EngineeringGraphHealthReport,
   GraphEventSummary,
   GraphNodeKind,
   GraphNodeStatus,

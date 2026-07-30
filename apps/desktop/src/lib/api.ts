@@ -293,6 +293,11 @@ export const api = {
       "GET",
       withWorkspace(`/api/graphs/${encodeURIComponent(id)}/compare`, ws),
     ),
+  graphHealth: (id: string, ws?: string) =>
+    request<import("../types").EngineeringGraphHealthReport>(
+      "GET",
+      withWorkspace(`/api/graphs/${encodeURIComponent(id)}/health`, ws),
+    ),
   graphPriority: (id: string, priority: number, ws?: string) =>
     request<import("../types").EngineeringGraphSummary>(
       "POST",

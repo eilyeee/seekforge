@@ -6,6 +6,7 @@ import {
   analyzeGraphSchedulingIntelligence,
   graphSchedulingScore,
   readGraphSchedulingObservations,
+  predictGraphNodeScheduling,
   recordGraphSchedulingObservation,
   summarizeGraphSchedulingIntelligence,
   type GraphSchedulingObservation,
@@ -73,6 +74,9 @@ describe("Graph scheduling intelligence", () => {
         failures: 3,
         consecutiveFailures: 3,
         averageDurationMs: 250,
+        p50DurationMs: 200,
+        p95DurationMs: 400,
+        confidence: "medium",
         lastPassed: false,
       }),
     ]);
@@ -80,6 +84,23 @@ describe("Graph scheduling intelligence", () => {
       "failure_streak",
       "failure_rate",
     ]);
+  });
+
+  it("calibrates forecasts and resource waits without changing eligibility", () => {
+    const observations = [
+      observation({ durationMs: 100, predictedDurationMs: 80, resourceWaitMs: 20 }),
+      observation({ durationMs: 300, predictedDurationMs: 200, resourceWaitMs: 40, passed: false }),
+    ];
+    expect(predictGraphNodeScheduling(observations, "delivery", fingerprint, "tests")).toMatchObject({
+      p50DurationMs: 100,
+      p95DurationMs: 300,
+      confidence: "low",
+    });
+    expect(summarizeGraphSchedulingIntelligence(observations)[0]).toMatchObject({
+      averagePredictionErrorMs: 60,
+      averageResourceWaitMs: 30,
+    });
+    expect(summarizeGraphSchedulingIntelligence([observation()])[0]).not.toHaveProperty("averageResourceWaitMs");
   });
 
   it("rejects malformed observations before creating workspace state", () => {

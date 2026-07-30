@@ -128,11 +128,14 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | POST /api/graphs/templates | register or replace one exact `templateId@version` schema-v2 template |
 | GET /api/graphs/templates/:id/:version | resolve one exact registered template |
 | POST /api/graphs/templates/:id/:version/materialize | materialize one exact template with optional typed `parameters` |
+| POST /api/graphs/templates/:id/:version/compare | classify a candidate version as identical, compatible, or breaking |
+| POST /api/graphs/templates/:id/:version/deprecate | mark an exact template version deprecated without changing existing references |
 | POST /api/graphs | materialize a definition/template with optional `parameters` and start a durable Graph (`{definition,parameters?,restart?}`) |
 | GET /api/graphs/:id | one normalized graph, node results, usage, cumulative active `elapsedMs`, and recent events |
 | GET /api/graphs/:id/history | bounded rotating lifecycle history; `format=entries` adds log sequence/cursor metadata |
 | GET /api/graphs/:id/evidence | node/usage/active-duration evidence summary with SHA-256 integrity digest and no node outputs |
 | GET /api/graphs/:id/compare | compare the latest archived terminal run (or `runNumber`) with current state |
+| GET /api/graphs/:id/health | exact-fingerprint scheduling forecast, P50/P95 drift, anomalies, critical path, and child-session lineage |
 | POST /api/graphs/:id/priority | body `{priority:-10..10}`; update automatic recovery order under the Graph lease |
 | POST /api/graphs/:id/signals | enqueue a declared external wait signal and resume a wait-paused Graph |
 | GET /api/graphs/:id/resources | retained managed-worktree paths, disk usage, archival, and active status |

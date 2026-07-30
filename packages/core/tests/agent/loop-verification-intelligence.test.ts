@@ -7,6 +7,7 @@ import {
   loopVerificationIntelligenceScore,
   readLoopVerificationIntelligence,
   recordLoopVerificationIntelligence,
+  summarizeLoopVerificationReliability,
 } from "../../src/agent/loop-verification-intelligence.js";
 
 describe("Loop verification intelligence", () => {
@@ -87,6 +88,26 @@ describe("Loop verification intelligence", () => {
     const entry = recordLoopVerificationIntelligence(workspace, result(1, false, 1), "test");
     expect(Number.isSafeInteger(entry.averageDurationMs)).toBe(true);
     expect(Number.isSafeInteger(loopVerificationIntelligenceScore(entry))).toBe(true);
+  });
+
+  it("derives confidence-aware retry and quarantine advice", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-intelligence-"));
+    workspaces.push(workspace);
+    for (let index = 0; index < 8; index++) {
+      recordLoopVerificationIntelligence(workspace, result(0, true), "none");
+    }
+    const reliability = summarizeLoopVerificationReliability(readLoopVerificationIntelligence(workspace)[0]!);
+    expect(reliability).toMatchObject({
+      confidence: "medium",
+      recommendedAttempts: 3,
+      quarantineCandidate: true,
+    });
+    expect(
+      summarizeLoopVerificationReliability(
+        { ...readLoopVerificationIntelligence(workspace)[0]!, updatedAt: "2020-01-01T00:00:00.000Z" },
+        Date.parse("2026-01-01T00:00:00.000Z"),
+      ),
+    ).toMatchObject({ confidence: "low", recommendedAttempts: 1, quarantineCandidate: false, ageWeight: 0 });
   });
 
   it("evicts oldest entries before the writer exceeds its own byte limit", () => {

@@ -3,6 +3,8 @@ import { planEngineeringGraph } from "../../src/agent/graph-plan.js";
 import { materializeEngineeringGraph, parseEngineeringGraphTemplate } from "../../src/agent/graph-template.js";
 import {
   listEngineeringGraphTemplates,
+  compareEngineeringGraphTemplates,
+  deprecateEngineeringGraphTemplate,
   registerEngineeringGraphTemplate,
   resolveEngineeringGraphTemplate,
 } from "../../src/agent/graph-template-registry.js";
@@ -46,6 +48,44 @@ describe("Engineering Graph templates and plans", () => {
     expect(plan.waves).toEqual([["build"], ["ship"]]);
     expect(plan.nodes[0]?.managedBranch).toMatch(/^seekforge\//);
     expect(plan.fanInBranch).toMatch(/^seekforge\//);
+  });
+
+  it("classifies template compatibility and persists explicit deprecation", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-graph-template-"));
+    try {
+      const before = { ...template, schemaVersion: 2, version: "1.0.0" };
+      const compatible = {
+        ...before,
+        version: "1.1.0",
+        parameters: { ...before.parameters, optional: { type: "string", default: "ok" } },
+      };
+      const breaking = {
+        ...before,
+        version: "2.0.0",
+        parameters: { retries: before.parameters.retries, enabled: before.parameters.enabled },
+      };
+      expect(compareEngineeringGraphTemplates(before, compatible).classification).toBe("compatible");
+      expect(compareEngineeringGraphTemplates(before, breaking)).toMatchObject({
+        classification: "breaking",
+        reasons: ["removed parameter: package"],
+      });
+      expect(compareEngineeringGraphTemplates(before, { ...compatible, version: "1.0.0" })).toMatchObject({
+        classification: "breaking",
+        reasons: ["version does not advance"],
+      });
+      expect(
+        compareEngineeringGraphTemplates({ ...before, version: "1.0.0" }, { ...compatible, version: "1.0.0-beta.1" }),
+      ).toMatchObject({ classification: "breaking", reasons: ["version does not advance"] });
+      registerEngineeringGraphTemplate(workspace, before);
+      const deprecated = deprecateEngineeringGraphTemplate(workspace, "release-template", "1.0.0");
+      expect(deprecated.deprecatedAt).toBeDefined();
+      expect(deprecateEngineeringGraphTemplate(workspace, "release-template", "1.0.0")).toEqual(deprecated);
+      registerEngineeringGraphTemplate(workspace, before);
+      expect(listEngineeringGraphTemplates(workspace)[0]?.deprecatedAt).toBe(deprecated.deprecatedAt);
+      expect(listEngineeringGraphTemplates(workspace)[0]?.deprecatedAt).toBeDefined();
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
   });
 
   it("rejects unknown, missing, mistyped, unresolved, sparse, and future-version input", () => {

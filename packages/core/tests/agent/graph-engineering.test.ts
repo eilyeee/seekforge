@@ -2195,5 +2195,81 @@ describe("runEngineeringGraph", () => {
         },
       ),
     ).rejects.toThrow(/trusted/);
+
+    let executed = 0;
+    let heartbeats = 0;
+    let verified = 0;
+    const recovered = await runEngineeringGraph(
+      deps,
+      { graphId: "remote-recovery", nodes: [{ id: "remote", kind: "remote", executor: "worker" }] },
+      {
+        workspace: root,
+        executors: {
+          worker: {
+            trusted: true,
+            locality: "remote",
+            recover: () => ({ output: { recovered: true } }),
+            heartbeat: () => {
+              heartbeats++;
+            },
+            verifyResult: () => {
+              verified++;
+              return true;
+            },
+            execute: () => {
+              executed++;
+              return {};
+            },
+          },
+        },
+      },
+    );
+    expect(recovered.results[0]?.output).toEqual({ recovered: true });
+    expect({ executed, heartbeats, verified }).toEqual({ executed: 0, heartbeats: 0, verified: 1 });
+
+    const heartbeatAdvisory = await runEngineeringGraph(
+      deps,
+      { graphId: "remote-heartbeat", nodes: [{ id: "remote", kind: "remote", executor: "worker" }] },
+      {
+        workspace: root,
+        executors: {
+          worker: {
+            trusted: true,
+            locality: "remote",
+            heartbeat: () => {
+              throw new Error("probe unavailable");
+            },
+            execute: () => ({ output: "completed" }),
+          },
+        },
+      },
+    );
+    expect(heartbeatAdvisory.results[0]).toMatchObject({ status: "passed", output: "completed" });
+  });
+
+  it("records real ready-queue delay without treating dependency time as resource wait", async () => {
+    const root = workspace();
+    await runEngineeringGraph(
+      deps,
+      {
+        graphId: "resource-wait",
+        maxConcurrency: 1,
+        nodes: [
+          { id: "a-slow", kind: "function", handler: "slow" },
+          { id: "b-queued", kind: "function", handler: "fast" },
+          { id: "c-dependent", kind: "function", handler: "fast", dependsOn: ["a-slow"] },
+        ],
+      },
+      {
+        workspace: root,
+        handlers: {
+          slow: () => new Promise((resolve) => setTimeout(() => resolve({}), 20)),
+          fast: () => ({}),
+        },
+      },
+    );
+    const waits = new Map(readGraphSchedulingObservations(root).map((item) => [item.nodeId, item.resourceWaitMs]));
+    expect(waits.get("b-queued")!).toBeGreaterThan(waits.get("a-slow")!);
+    expect(waits.get("c-dependent")!).toBeLessThan(waits.get("b-queued")!);
   });
 });

@@ -1158,6 +1158,37 @@ export type EngineeringGraphComparisonResponse = {
   baselineRunNumber: number;
   comparison: EngineeringGraphRunComparison;
 };
+export type EngineeringGraphHealthReport = {
+  graphId: string;
+  fingerprint: string;
+  generatedAt: string;
+  status: "unknown" | "healthy" | "warning" | "critical";
+  predictedMakespanMs: number;
+  criticalPath: string[];
+  bottlenecks: string[];
+  nodes: Array<{
+    nodeId: string;
+    status: "pending" | GraphNodeStatus;
+    samples: number;
+    confidence: "none" | "low" | "medium" | "high";
+    p50DurationMs?: number;
+    p95DurationMs?: number;
+    actualDurationMs?: number;
+    forecastDriftMs?: number;
+    failureRate?: number;
+    averageResourceWaitMs?: number;
+    sessionId?: string;
+  }>;
+  findings: Array<{
+    graphId: string;
+    nodeId: string;
+    fingerprint: string;
+    kind: "failure_streak" | "failure_rate";
+    severity: "warning" | "critical";
+    message: string;
+  }>;
+  lineage: Array<{ nodeId: string; sessionId: string }>;
+};
 export type EngineeringGraphEvidenceReport = {
   schemaVersion: 1;
   graphId: string;

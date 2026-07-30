@@ -5,6 +5,7 @@ import type {
   EngineeringGraphResourceReport,
   EngineeringGraphRunComparison,
   EngineeringGraphSummary,
+  EngineeringGraphHealthReport,
 } from "../../types";
 import { Badge, Button } from "../ui";
 import type { BadgeTone } from "../ui/Badge";
@@ -21,6 +22,7 @@ export function GraphEngineeringSection(props: {
   details: Record<string, EngineeringGraphDetail>;
   resources: Record<string, EngineeringGraphResourceReport>;
   comparisons: Record<string, EngineeringGraphRunComparison>;
+  health: Record<string, EngineeringGraphHealthReport>;
   busy: boolean;
   onInspect: (graphId: string) => void;
   onAction: (graphId: string, operation: "archive" | "prune" | "promote", target?: string) => void;
@@ -47,6 +49,7 @@ export function GraphEngineeringSection(props: {
       {props.graphs.map((graph) => {
         const resources = props.resources[graph.graphId];
         const comparison = props.comparisons[graph.graphId];
+        const health = props.health[graph.graphId];
         const definition = props.details[graph.graphId]?.definition;
         const nodes =
           definition && typeof definition === "object" && Array.isArray((definition as { nodes?: unknown }).nodes)
@@ -220,6 +223,41 @@ export function GraphEngineeringSection(props: {
                       .join("; ")}
                   </p>
                 )}
+              </div>
+            )}
+            {health && (
+              <div className="mt-1 rounded border border-subtle p-2 text-tertiary">
+                <p>
+                  health:{" "}
+                  <Badge
+                    tone={tone(
+                      health.status === "healthy"
+                        ? "passed"
+                        : health.status === "critical"
+                          ? "failed"
+                          : health.status === "warning"
+                            ? "paused"
+                            : "unknown",
+                    )}
+                  >
+                    {health.status}
+                  </Badge>
+                  {` · forecast ${(health.predictedMakespanMs / 1000).toFixed(1)}s`}
+                  {health.criticalPath.length > 0 ? ` · critical ${health.criticalPath.join(" → ")}` : ""}
+                </p>
+                {health.nodes.some((node) => node.p50DurationMs !== undefined) && (
+                  <p>
+                    {health.nodes
+                      .filter((node) => node.p50DurationMs !== undefined)
+                      .slice(0, 8)
+                      .map(
+                        (node) =>
+                          `${node.nodeId}: P50 ${((node.p50DurationMs ?? 0) / 1000).toFixed(1)}s / P95 ${((node.p95DurationMs ?? 0) / 1000).toFixed(1)}s${node.forecastDriftMs !== undefined ? ` / Δ ${(node.forecastDriftMs / 1000).toFixed(1)}s` : ""}`,
+                      )
+                      .join("; ")}
+                  </p>
+                )}
+                {health.findings.length > 0 && <p>{health.findings.map((finding) => finding.message).join("; ")}</p>}
               </div>
             )}
             <div className="mt-1 flex flex-wrap gap-1">

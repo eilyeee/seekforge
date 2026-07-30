@@ -48,6 +48,7 @@ import { acknowledgeEngineeringGraphSignal, claimEngineeringGraphSignal } from "
 import { archiveEngineeringGraphRun } from "./graph-run-history.js";
 import {
   graphSchedulingScore,
+  predictGraphNodeScheduling,
   readGraphSchedulingObservations,
   recordGraphSchedulingObservation,
 } from "./graph-scheduling-history.js";
@@ -97,6 +98,17 @@ export type GraphExecutionAdapter = {
   locality: "remote";
   protocolVersion?: 1;
   supportsCancellation?: boolean;
+  /** Recovers a previously committed result for this stable idempotency key. */
+  recover?: (
+    context: GraphFunctionContext,
+  ) => GraphFunctionResult | undefined | Promise<GraphFunctionResult | undefined>;
+  /** Optional liveness probe. Failures during execution are advisory. */
+  heartbeat?: (context: GraphFunctionContext) => void | Promise<void>;
+  heartbeatIntervalMs?: number;
+  /** Cooperative cancellation notification for an already-dispatched attempt. */
+  cancel?: (context: GraphFunctionContext) => void | Promise<void>;
+  /** Verifies executor-owned provenance before the result becomes authoritative. */
+  verifyResult?: (result: GraphFunctionResult, context: GraphFunctionContext) => boolean | Promise<boolean>;
   execute: GraphFunctionHandler;
 };
 
@@ -476,6 +488,14 @@ export function validateEngineeringGraphRunOptions(
           adapter?.trusted !== true ||
           adapter.locality !== "remote" ||
           typeof adapter.execute !== "function" ||
+          (adapter.recover !== undefined && typeof adapter.recover !== "function") ||
+          (adapter.heartbeat !== undefined && typeof adapter.heartbeat !== "function") ||
+          (adapter.cancel !== undefined && typeof adapter.cancel !== "function") ||
+          (adapter.verifyResult !== undefined && typeof adapter.verifyResult !== "function") ||
+          (adapter.heartbeatIntervalMs !== undefined &&
+            (!Number.isSafeInteger(adapter.heartbeatIntervalMs) ||
+              adapter.heartbeatIntervalMs < 1_000 ||
+              adapter.heartbeatIntervalMs > 60_000)) ||
           (node.executorProtocolVersion !== undefined && adapter.protocolVersion !== node.executorProtocolVersion) ||
           (node.requiresCancellation === true && adapter.supportsCancellation !== true)
         ) {
@@ -960,7 +980,7 @@ async function executeNode(
   if (node.kind === "remote") {
     const adapter = graphExecutor(options, node.executor!);
     if (!adapter) throw new Error(`Graph remote executor is not registered: ${node.executor}`);
-    const result = await adapter.execute({
+    const context: GraphFunctionContext = {
       node,
       workspace,
       dependencies: completed,
@@ -969,7 +989,53 @@ async function executeNode(
       costBudgetUsd,
       tokenBudget,
       signal,
-    });
+    };
+    const recovered = adapter.recover ? await adapter.recover(context) : undefined;
+    let result: GraphFunctionResult;
+    if (recovered !== undefined) {
+      result = recovered;
+    } else {
+      const cancel = adapter.cancel
+        ? () =>
+            void Promise.resolve()
+              .then(() => adapter.cancel!(context))
+              .catch(() => undefined)
+        : undefined;
+      const offAbort = cancel ? onAbortOnce(signal, cancel) : () => {};
+      const intervalMs = adapter.heartbeatIntervalMs;
+      let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+      let heartbeatRunning = false;
+      const invokeHeartbeat = (): Promise<void> => Promise.resolve().then(() => adapter.heartbeat!(context));
+      const heartbeat = (): void => {
+        if (!adapter.heartbeat || heartbeatRunning) return;
+        heartbeatRunning = true;
+        void invokeHeartbeat()
+          .catch(() => undefined)
+          .finally(() => {
+            heartbeatRunning = false;
+          });
+      };
+      try {
+        if (adapter.heartbeat) await invokeHeartbeat().catch(() => undefined);
+        if (
+          adapter.heartbeat &&
+          Number.isSafeInteger(intervalMs) &&
+          intervalMs !== undefined &&
+          intervalMs >= 1_000 &&
+          intervalMs <= 60_000
+        ) {
+          heartbeatTimer = setInterval(heartbeat, intervalMs);
+          heartbeatTimer.unref?.();
+        }
+        result = await adapter.execute(context);
+      } finally {
+        offAbort();
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
+      }
+    }
+    if (adapter.verifyResult && !(await adapter.verifyResult(result, context))) {
+      throw new GraphNodeNonRetryableError(`Graph remote ${node.id} returned an unverifiable result`);
+    }
     if (result.costUsd !== undefined && (!Number.isFinite(result.costUsd) || result.costUsd < 0)) {
       throw new GraphNodeNonRetryableError(`Graph remote ${node.id} returned invalid costUsd`);
     }
@@ -1311,6 +1377,8 @@ export async function runEngineeringGraph(
       ]),
     );
     const inFlight = new Map<string, Promise<{ id: string; result: GraphNodeResult }>>();
+    const readySince = new Map<string, number>();
+    const resourceWaitByNode = new Map<string, number>();
     const costReservations = new Map<string, number>();
     const tokenReservations = new Map<string, number>();
     const resumedChildUsage = new Map<string, { costUsd: number; tokensUsed: number }>();
@@ -1515,6 +1583,7 @@ export async function runEngineeringGraph(
         ...(status === "skipped" ? { error: message } : {}),
       };
       clearRecoveredAttempt(node.id);
+      readySince.delete(node.id);
       results.set(node.id, result);
       pending.delete(node.id);
       emit({
@@ -1540,6 +1609,7 @@ export async function runEngineeringGraph(
         error: `Graph node start deadline expired: ${node.deadlineAt}`,
       });
       clearRecoveredAttempt(node.id);
+      readySince.delete(node.id);
       pending.delete(node.id);
       emit({ type: "node.completed", nodeId: node.id, status: "failed", message: "Node start deadline expired" });
       return true;
@@ -1563,6 +1633,9 @@ export async function runEngineeringGraph(
 
     const startNode = (node: GraphNode, costShare?: number, tokenShare?: number): void => {
       pending.delete(node.id);
+      const readyAt = readySince.get(node.id);
+      readySince.delete(node.id);
+      if (readyAt !== undefined) resourceWaitByNode.set(node.id, Math.max(0, Date.now() - readyAt));
       const recoveredAttempt = recoveredAttempts.get(node.id);
       recoveredAttempts.delete(node.id);
       const startedAt = new Date().toISOString();
@@ -1861,6 +1934,8 @@ export async function runEngineeringGraph(
       inFlight.delete(completed.id);
       costReservations.delete(completed.id);
       tokenReservations.delete(completed.id);
+      const resourceWaitMs = resourceWaitByNode.get(completed.id);
+      resourceWaitByNode.delete(completed.id);
       const result =
         completed.result.output === undefined
           ? completed.result
@@ -1885,6 +1960,17 @@ export async function runEngineeringGraph(
               nodeId: result.id,
               fingerprint,
               durationMs: Math.max(0, completedAt - started),
+              ...(schedulingHistory
+                ? {
+                    predictedDurationMs: predictGraphNodeScheduling(
+                      schedulingHistory,
+                      definition.graphId,
+                      fingerprint,
+                      result.id,
+                    )?.p50DurationMs,
+                  }
+                : {}),
+              ...(resourceWaitMs !== undefined ? { resourceWaitMs } : {}),
               passed: result.status === "passed",
               recordedAt: result.completedAt!,
             },
@@ -2259,6 +2345,9 @@ export async function runEngineeringGraph(
         .filter(
           (node) => !pausedNodes.has(node.id) && (node.dependsOn ?? []).every((dependency) => results.has(dependency)),
         );
+      const readyIds = new Set(readyNodes.map((node) => node.id));
+      for (const id of readySince.keys()) if (!readyIds.has(id)) readySince.delete(id);
+      for (const node of readyNodes) if (!readySince.has(node.id)) readySince.set(node.id, schedulerNow);
       const reservedCost =
         [...costReservations.values()].reduce((sum, value) => sum + value, 0) +
         [...resumedChildUsage.values()].reduce((sum, usage) => sum + usage.costUsd, 0);

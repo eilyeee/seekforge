@@ -161,9 +161,11 @@ describe("Engineering Graph history and evidence", () => {
     const writer = createEngineeringGraphLogWriter(workspace, "remove");
     writer.append({ sequence: 1, type: "graph.completed", timestamp: now, status: "passed" });
     writer.close();
+    writeFileSync(join(workspace, ".seekforge", "graphs", "remove.migration.json"), "{}\n");
     expect(removeEngineeringGraphState(workspace, "remove")).toBe(true);
     expect(existsSync(join(workspace, ".seekforge", "graphs", "remove.json"))).toBe(false);
     expect(existsSync(join(workspace, ".seekforge", "graphs", "remove.jsonl"))).toBe(false);
+    expect(existsSync(join(workspace, ".seekforge", "graphs", "remove.migration.json"))).toBe(false);
   });
 
   it("builds tamper-evident evidence without node outputs", () => {

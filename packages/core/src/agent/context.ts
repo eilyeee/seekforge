@@ -1,4 +1,5 @@
 import type { ChatMessage, ProviderToolCall, TokenUsage, ToolDefinitionForModel } from "@seekforge/shared";
+import { createHash } from "node:crypto";
 import { abortablePromise } from "../util/abort.js";
 import { loadSessionMessages, rewriteSessionMessages } from "./trace.js";
 import { acquireSessionLease } from "./session-lease.js";
@@ -298,6 +299,8 @@ export type CompactionResult = {
   summaryTokens: number;
   /** Provider usage consumed to produce the summary; absent for mechanical compaction. */
   usage?: TokenUsage;
+  /** Stable digest of the exact dropped segment for audit/replay correlation. */
+  provenance?: { algorithm: "sha256"; digest: string; droppedTurns: number };
 };
 
 const KEEP_HEAD = 2; // system prompt + original task
@@ -345,11 +348,26 @@ function assembleCompaction(
   tailStart: number,
   summaryMessage: ChatMessage,
   droppedTurns: number,
+  dropped?: readonly ChatMessage[],
 ): CompactionResult {
+  const provenance = dropped
+    ? {
+        algorithm: "sha256" as const,
+        digest: createHash("sha256").update(JSON.stringify(dropped)).digest("hex"),
+        droppedTurns,
+      }
+    : undefined;
+  const durableSummary = provenance
+    ? {
+        ...summaryMessage,
+        content: `${summaryMessage.content}\n[Compaction provenance: sha256:${provenance.digest}; droppedTurns=${provenance.droppedTurns}]`,
+      }
+    : summaryMessage;
   return {
-    messages: [...messages.slice(0, KEEP_HEAD), summaryMessage, ...messages.slice(tailStart)],
+    messages: [...messages.slice(0, KEEP_HEAD), durableSummary, ...messages.slice(tailStart)],
     droppedTurns,
-    summaryTokens: estimateTokens(summaryMessage.content),
+    summaryTokens: estimateTokens(durableSummary.content),
+    ...(provenance ? { provenance } : {}),
   };
 }
 
@@ -375,7 +393,7 @@ export function compactMessages(messages: ChatMessage[], budgetTokens: number): 
     digest = `${digest.slice(0, SUMMARY_MAX_CHARS)}\n- …(further entries omitted)`;
   }
 
-  return assembleCompaction(messages, tailStart, compactionSummaryMessage("Digest", digest), dropped.length);
+  return assembleCompaction(messages, tailStart, compactionSummaryMessage("Digest", digest), dropped.length, dropped);
 }
 
 /** A tool result at or below this length isn't worth shrinking further. */
@@ -517,6 +535,7 @@ export async function llmCompactMessages(
     split.tailStart,
     compactionSummaryMessage("Summary", summary),
     split.dropped.length,
+    split.dropped,
   );
   return usage ? { ...compacted, usage } : compacted;
 }

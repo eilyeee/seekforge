@@ -399,6 +399,8 @@ seekforge loop-cleanup <worktree-name> [--force]
 - Verification discovery preserves authoritative root gates while adding safe
   path-scoped pnpm workspace, nested Cargo, Go, and Python stages. Recovery ranking
   applies recency, framework/stage context, diagnostic improvement, cost, and duration.
+  Verification reliability adds age-decayed confidence, bounded retry advice, and
+  flaky quarantine candidates, but never skips an authoritative stage.
   Eval fault injection supports event occurrence boundaries and reports Loop lifecycle,
   verify, recovery, resume, and p95 duration metrics.
 - WebSocket clients can send `loop.pause`, `loop.control.resume`, and

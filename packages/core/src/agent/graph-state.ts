@@ -708,6 +708,7 @@ export function removeEngineeringGraphState(workspace: string, graphId: string):
       join(directory, `${graphId}.control.json`),
       join(directory, `${graphId}.signals.json`),
       join(directory, `${graphId}.runs.json`),
+      join(directory, `${graphId}.migration.json`),
       ...Array.from({ length: MAX_GRAPH_HISTORY_SEGMENTS }, (_, index) =>
         join(directory, `${graphId}.jsonl${index === 0 ? "" : `.${index}`}`),
       ),

@@ -3296,6 +3296,79 @@ timing and failure evidence from work it never executed.
 - **Caught:** adaptive Graph scheduling originally keyed observations only by Graph
   and node id, so a changed definition consumed stale scheduling evidence.
 
+## 307. A replacement transaction must preserve the state it is about to hide
+
+Writing a new authoritative checkpoint before archiving the old terminal state can
+make the source unrecoverable when the process exits between those writes. A journal
+that records only fingerprints proves what happened but cannot reconstruct the lost
+snapshot.
+
+- **Do:** persist a prepared journal, perform an idempotent source archive, atomically
+  replace the checkpoint, and then mark the journal committed. Recovery may safely
+  repeat the archive because its identity is stable.
+- **Caught:** Graph migration initially committed the replacement checkpoint before
+  archiving its source run, leaving a crash window that lost comparison history.
+
+## 308. Advisory predictions must not become eligibility
+
+Historical duration and failure estimates can be stale, sparse, or biased even when
+they are keyed correctly. Letting a forecast skip a required verifier or bypass a
+dependency turns an observability error into a correctness error.
+
+- **Do:** use learned values only for bounded ordering, retry advice, and pure
+  simulation; dependency, resource, budget, permission, and required verification
+  gates remain authoritative.
+- **Caught:** Graph health and Loop verification reliability needed an explicit
+  separation between forecast reports and runtime eligibility.
+
+## 309. Recovery identity must include the resource generation
+
+A definition fingerprint can recur after a resource has been recreated. Treating
+that fingerprint alone as proof that a prepared replacement committed can attach an
+old journal to a new physical resource generation and authorize the wrong cleanup.
+
+- **Do:** bind replacement recovery to both the logical target fingerprint and an
+  unforgeable resource generation; finish a matching transaction before starting the
+  next one, and reject a prepared journal that matches neither source nor exact target.
+- **Caught:** Graph migration recovery initially compared only its target fingerprint,
+  even though its journal already carried a resource generation.
+
+## 310. Version ordering includes prerelease precedence
+
+Comparing only the numeric core of a semantic version treats `1.0.0-beta` as an
+advance from `1.0.0`, and cannot order prerelease identifiers. That lets changed
+content move backward while an upgrade guard reports compatibility.
+
+- **Do:** compare major, minor, and patch numerically, then apply release-versus-
+  prerelease and dot-separated identifier precedence. Keep content identity separate
+  from version progression.
+- **Caught:** Graph template compatibility initially checked only the three numeric
+  components when deciding whether a changed candidate advanced its version.
+
+## 311. Replacement must preserve independent lifecycle metadata
+
+Replacing the content at an existing logical key is not permission to reset metadata
+owned by another lifecycle. A generic upsert that reconstructs the whole record can
+silently reactivate something that was explicitly deprecated or archived.
+
+- **Do:** identify metadata owned outside the replacement operation and carry it
+  forward under the same read-modify-write lease; require a separate explicit action
+  to reverse that lifecycle state.
+- **Caught:** replacing an exact Graph template version initially discarded its
+  `deprecatedAt` marker.
+
+## 312. Forecast error must use a forecast captured before the outcome
+
+Recomputing a baseline after adding the result being evaluated leaks the answer into
+the forecast. With one sample, an updated percentile equals the outcome and reports
+zero drift regardless of the original prediction.
+
+- **Do:** persist the forecast at dispatch time and join it to the exact completed
+  observation. If no pre-outcome forecast exists, omit drift instead of substituting
+  a hindsight estimate.
+- **Caught:** Graph health initially compared node duration with a P50 that already
+  included that same completed node.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

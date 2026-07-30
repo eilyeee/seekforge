@@ -4,8 +4,13 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { engineeringSubgraphStateId } from "../../src/agent/graph-contract.js";
 import { runEngineeringGraph } from "../../src/agent/graph-engineering.js";
-import { applyEngineeringGraphMigration, planEngineeringGraphMigration } from "../../src/agent/graph-migration.js";
+import {
+  applyEngineeringGraphMigration,
+  planEngineeringGraphMigration,
+  readEngineeringGraphMigrationJournal,
+} from "../../src/agent/graph-migration.js";
 import { readEngineeringGraphRunSnapshots } from "../../src/agent/graph-run-history.js";
+import { readEngineeringGraphHistory } from "../../src/agent/graph-history.js";
 import { loadEngineeringGraphState, saveEngineeringGraphState } from "../../src/agent/graph-state.js";
 import type { AgentCoreDeps } from "../../src/agent/loop.js";
 
@@ -25,7 +30,7 @@ describe("Engineering Graph migration", () => {
 
   it("preserves unaffected results, invalidates descendants, and archives a terminal run", async () => {
     const root = workspace();
-    await runEngineeringGraph(
+    const before = await runEngineeringGraph(
       deps,
       {
         graphId: "migrate",
@@ -70,6 +75,13 @@ describe("Engineering Graph migration", () => {
     expect(result.state.events.at(-1)?.type).toBe("graph.migrated");
     expect(loadEngineeringGraphState(root, "migrate")).toEqual(result.state);
     expect(readEngineeringGraphRunSnapshots(root, "migrate")).toHaveLength(1);
+    expect(readEngineeringGraphMigrationJournal(root, "migrate")).toMatchObject({
+      phase: "committed",
+      sourceFingerprint: before.fingerprint,
+      targetFingerprint: result.state.fingerprint,
+    });
+    expect(applyEngineeringGraphMigration(root, after).state).toEqual(result.state);
+    expect(readEngineeringGraphRunSnapshots(root, "migrate")).toHaveLength(1);
   });
 
   it("recomputes the authoritative plan instead of trusting an earlier plan", async () => {
@@ -82,6 +94,125 @@ describe("Engineering Graph migration", () => {
     const after = { graphId: "authoritative", nodes: [{ id: "one", kind: "function" as const, handler: "two" }] };
     expect(planEngineeringGraphMigration(initial.definition, after).changed).toEqual(["one"]);
     expect(applyEngineeringGraphMigration(root, after).plan.changed).toEqual(["one"]);
+  });
+
+  it("recovers deterministically from a crash after preparing the migration journal", async () => {
+    const root = workspace();
+    const before = await runEngineeringGraph(
+      deps,
+      { graphId: "recover-migration", nodes: [{ id: "one", kind: "function", handler: "one" }] },
+      { workspace: root, handlers: { one: () => ({}) } },
+    );
+    const after = {
+      graphId: "recover-migration",
+      nodes: [{ id: "one", kind: "function" as const, handler: "two" }],
+    };
+    expect(() =>
+      applyEngineeringGraphMigration(root, after, {
+        faultInjector: (point) => {
+          if (point === "after_journal_prepared") throw new Error("simulated crash");
+        },
+      }),
+    ).toThrow(/simulated crash/);
+    expect(loadEngineeringGraphState(root, "recover-migration")?.fingerprint).toBe(before.fingerprint);
+    expect(readEngineeringGraphMigrationJournal(root, "recover-migration")?.phase).toBe("prepared");
+    const recovered = applyEngineeringGraphMigration(root, after);
+    expect(recovered.state.fingerprint).not.toBe(before.fingerprint);
+    expect(readEngineeringGraphMigrationJournal(root, "recover-migration")?.phase).toBe("committed");
+  });
+
+  it("repairs history exactly once after the migrated checkpoint was committed", async () => {
+    const root = workspace();
+    await runEngineeringGraph(
+      deps,
+      { graphId: "recover-history", nodes: [{ id: "one", kind: "function", handler: "one" }] },
+      { workspace: root, handlers: { one: () => ({}) } },
+    );
+    const after = {
+      graphId: "recover-history",
+      nodes: [{ id: "one", kind: "function" as const, handler: "two" }],
+    };
+    expect(() =>
+      applyEngineeringGraphMigration(root, after, {
+        faultInjector: (point) => {
+          if (point === "after_checkpoint_committed") throw new Error("simulated checkpoint crash");
+        },
+      }),
+    ).toThrow(/simulated checkpoint crash/);
+    expect(readEngineeringGraphMigrationJournal(root, "recover-history")?.phase).toBe("prepared");
+    expect(
+      readEngineeringGraphHistory(root, "recover-history").filter(({ event }) => event.type === "graph.migrated"),
+    ).toHaveLength(0);
+
+    const recovered = applyEngineeringGraphMigration(root, after);
+    expect(recovered.state.events.at(-1)?.type).toBe("graph.migrated");
+    expect(readEngineeringGraphMigrationJournal(root, "recover-history")?.phase).toBe("committed");
+    expect(
+      readEngineeringGraphHistory(root, "recover-history").filter(({ event }) => event.type === "graph.migrated"),
+    ).toHaveLength(1);
+    applyEngineeringGraphMigration(root, after);
+    expect(
+      readEngineeringGraphHistory(root, "recover-history").filter(({ event }) => event.type === "graph.migrated"),
+    ).toHaveLength(1);
+  });
+
+  it("finishes a committed replacement before starting the next migration", async () => {
+    const root = workspace();
+    await runEngineeringGraph(
+      deps,
+      { graphId: "serial-migration", nodes: [{ id: "one", kind: "function", handler: "one" }] },
+      { workspace: root, handlers: { one: () => ({}) } },
+    );
+    const second = {
+      graphId: "serial-migration",
+      nodes: [{ id: "one", kind: "function" as const, handler: "two" }],
+    };
+    expect(() =>
+      applyEngineeringGraphMigration(root, second, {
+        faultInjector: (point) => {
+          if (point === "after_checkpoint_committed") throw new Error("simulated serial crash");
+        },
+      }),
+    ).toThrow(/simulated serial crash/);
+
+    const third = applyEngineeringGraphMigration(root, {
+      graphId: "serial-migration",
+      nodes: [{ id: "one", kind: "function", handler: "three" }],
+    });
+    expect(readEngineeringGraphMigrationJournal(root, "serial-migration")).toMatchObject({
+      phase: "committed",
+      targetFingerprint: third.state.fingerprint,
+      resourceGeneration: third.state.resourceGeneration,
+    });
+    expect(
+      readEngineeringGraphHistory(root, "serial-migration").filter(({ event }) => event.type === "graph.migrated"),
+    ).toHaveLength(2);
+  });
+
+  it("rejects a prepared journal from another resource generation", async () => {
+    const root = workspace();
+    await runEngineeringGraph(
+      deps,
+      { graphId: "generation-conflict", nodes: [{ id: "one", kind: "function", handler: "one" }] },
+      { workspace: root, handlers: { one: () => ({}) } },
+    );
+    const after = {
+      graphId: "generation-conflict",
+      nodes: [{ id: "one", kind: "function" as const, handler: "two" }],
+    };
+    expect(() =>
+      applyEngineeringGraphMigration(root, after, {
+        faultInjector: (point) => {
+          if (point === "after_checkpoint_committed") throw new Error("simulated generation crash");
+        },
+      }),
+    ).toThrow(/simulated generation crash/);
+    const current = loadEngineeringGraphState(root, "generation-conflict")!;
+    saveEngineeringGraphState(root, {
+      ...current,
+      resourceGeneration: "00000000-0000-4000-8000-000000000000",
+    });
+    expect(() => applyEngineeringGraphMigration(root, after)).toThrow(/unresolved migration journal/);
   });
 
   it("rejects running and managed-worktree checkpoints", async () => {

@@ -10,6 +10,10 @@ export type GraphSchedulingObservation = {
   nodeId: string;
   fingerprint: string;
   durationMs: number;
+  /** Forecast made before execution; retained only to calibrate later forecasts. */
+  predictedDurationMs?: number;
+  /** Time the node was ready but blocked by concurrency or resource capacity. */
+  resourceWaitMs?: number;
   passed: boolean;
   recordedAt: string;
 };
@@ -23,6 +27,13 @@ export type GraphSchedulingIntelligence = {
   failures: number;
   consecutiveFailures: number;
   averageDurationMs: number;
+  p50DurationMs: number;
+  p95DurationMs: number;
+  durationDeviationMs: number;
+  decayedFailureRate: number;
+  confidence: "low" | "medium" | "high";
+  averagePredictionErrorMs?: number;
+  averageResourceWaitMs?: number;
   lastPassed: boolean;
   updatedAt: string;
 };
@@ -47,7 +58,16 @@ const FINGERPRINT_RE = /^[a-f0-9]{64}$/;
 function validObservation(value: unknown, now: number): value is GraphSchedulingObservation {
   if (
     !isRecord(value) ||
-    !hasOnlyKeys(value, ["graphId", "nodeId", "fingerprint", "durationMs", "passed", "recordedAt"])
+    !hasOnlyKeys(value, [
+      "graphId",
+      "nodeId",
+      "fingerprint",
+      "durationMs",
+      "predictedDurationMs",
+      "resourceWaitMs",
+      "passed",
+      "recordedAt",
+    ])
   ) {
     return false;
   }
@@ -60,6 +80,17 @@ function validObservation(value: unknown, now: number): value is GraphScheduling
     typeof value.durationMs === "number" &&
     Number.isSafeInteger(value.durationMs) &&
     value.durationMs >= 0 &&
+    value.durationMs <= MAX_DURATION_MS &&
+    (value.predictedDurationMs === undefined ||
+      (typeof value.predictedDurationMs === "number" &&
+        Number.isSafeInteger(value.predictedDurationMs) &&
+        value.predictedDurationMs >= 0 &&
+        value.predictedDurationMs <= MAX_DURATION_MS)) &&
+    (value.resourceWaitMs === undefined ||
+      (typeof value.resourceWaitMs === "number" &&
+        Number.isSafeInteger(value.resourceWaitMs) &&
+        value.resourceWaitMs >= 0 &&
+        value.resourceWaitMs <= MAX_DURATION_MS)) &&
     typeof value.passed === "boolean" &&
     Number.isFinite(recordedAt) &&
     recordedAt <= now &&
@@ -71,7 +102,7 @@ function serializeObservations(observations: readonly GraphSchedulingObservation
   return serializeNewestJsonArray(observations, {
     maxItems: MAX_OBSERVATIONS,
     maxBytes: MAX_BYTES,
-    envelope: (retained) => ({ version: 2, observations: retained }),
+    envelope: (retained) => ({ version: 3, observations: retained }),
     overflowMessage: "Graph scheduling observation exceeds the durable byte limit",
   }).serialized;
 }
@@ -84,7 +115,7 @@ export function readGraphSchedulingObservations(workspace: string): GraphSchedul
     if (
       !isRecord(value) ||
       !hasOnlyKeys(value, ["version", "observations"]) ||
-      value.version !== 2 ||
+      (value.version !== 2 && value.version !== 3) ||
       !isDenseArray(value.observations) ||
       value.observations.length > MAX_OBSERVATIONS
     ) {
@@ -166,8 +197,12 @@ export function summarizeGraphSchedulingIntelligence(
   observations: readonly GraphSchedulingObservation[],
 ): GraphSchedulingIntelligence[] {
   const entries = new Map<string, GraphSchedulingIntelligence>();
+  const grouped = new Map<string, GraphSchedulingObservation[]>();
   for (const observation of chronologicalObservations(observations)) {
     const key = `${observation.graphId}\0${observation.nodeId}\0${observation.fingerprint}`;
+    const group = grouped.get(key) ?? [];
+    group.push(observation);
+    grouped.set(key, group);
     const previous = entries.get(key);
     if (!previous) {
       entries.set(key, {
@@ -179,6 +214,15 @@ export function summarizeGraphSchedulingIntelligence(
         failures: observation.passed ? 0 : 1,
         consecutiveFailures: observation.passed ? 0 : 1,
         averageDurationMs: observation.durationMs,
+        p50DurationMs: observation.durationMs,
+        p95DurationMs: observation.durationMs,
+        durationDeviationMs: 0,
+        decayedFailureRate: observation.passed ? 0 : 1,
+        confidence: "low",
+        ...(observation.predictedDurationMs !== undefined
+          ? { averagePredictionErrorMs: Math.abs(observation.durationMs - observation.predictedDurationMs) }
+          : {}),
+        ...(observation.resourceWaitMs !== undefined ? { averageResourceWaitMs: observation.resourceWaitMs } : {}),
         lastPassed: observation.passed,
         updatedAt: observation.recordedAt,
       });
@@ -195,7 +239,59 @@ export function summarizeGraphSchedulingIntelligence(
     previous.lastPassed = observation.passed;
     previous.updatedAt = observation.recordedAt;
   }
+  for (const [key, entry] of entries) {
+    const group = grouped.get(key)!;
+    const durations = group.map((item) => item.durationMs).sort((left, right) => left - right);
+    const percentile = (fraction: number): number =>
+      durations[Math.min(durations.length - 1, Math.max(0, Math.ceil(durations.length * fraction) - 1))]!;
+    entry.p50DurationMs = percentile(0.5);
+    entry.p95DurationMs = percentile(0.95);
+    entry.durationDeviationMs = Math.round(
+      Math.sqrt(group.reduce((sum, item) => sum + (item.durationMs - entry.averageDurationMs) ** 2, 0) / group.length),
+    );
+    let failureWeight = 0;
+    let totalWeight = 0;
+    for (const [index, item] of group.entries()) {
+      const weight = index + 1;
+      totalWeight += weight;
+      if (!item.passed) failureWeight += weight;
+    }
+    entry.decayedFailureRate = totalWeight === 0 ? 0 : failureWeight / totalWeight;
+    entry.confidence = group.length >= 12 ? "high" : group.length >= 4 ? "medium" : "low";
+    const calibrated = group.filter(
+      (item): item is GraphSchedulingObservation & { predictedDurationMs: number } =>
+        item.predictedDurationMs !== undefined,
+    );
+    if (calibrated.length > 0) {
+      entry.averagePredictionErrorMs = Math.round(
+        calibrated.reduce((sum, item) => sum + Math.abs(item.durationMs - item.predictedDurationMs), 0) /
+          calibrated.length,
+      );
+    }
+    const measuredWaits = group.flatMap((item) => (item.resourceWaitMs === undefined ? [] : [item.resourceWaitMs]));
+    if (measuredWaits.length > 0) {
+      entry.averageResourceWaitMs = Math.round(
+        measuredWaits.reduce((sum, resourceWaitMs) => sum + resourceWaitMs, 0) / measuredWaits.length,
+      );
+    }
+  }
   return [...entries.values()];
+}
+
+/** Returns a conservative advisory estimate; callers must not use it for eligibility. */
+export function predictGraphNodeScheduling(
+  observations: readonly GraphSchedulingObservation[],
+  graphId: string,
+  fingerprint: string,
+  nodeId: string,
+):
+  | Pick<GraphSchedulingIntelligence, "p50DurationMs" | "p95DurationMs" | "decayedFailureRate" | "confidence">
+  | undefined {
+  return summarizeGraphSchedulingIntelligence(
+    observations.filter(
+      (item) => item.graphId === graphId && item.fingerprint === fingerprint && item.nodeId === nodeId,
+    ),
+  )[0];
 }
 
 export function analyzeGraphSchedulingIntelligence(

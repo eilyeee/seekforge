@@ -1,13 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { hasOnlyKeys, isRecord } from "../util/guards.js";
+import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 import {
   engineeringSubgraphStateId,
+  graphNodeIsEffectful,
   graphDefinitionFingerprint,
   parseEngineeringGraphDefinition,
   type EngineeringGraphDefinition,
 } from "./graph-contract.js";
 import { resolveEngineeringGraphWorkspaces } from "./graph-engineering.js";
-import { createEngineeringGraphLogWriter } from "./graph-history.js";
+import { createEngineeringGraphLogWriter, readEngineeringGraphHistory } from "./graph-history.js";
 import { archiveEngineeringGraphRun } from "./graph-run-history.js";
 import {
   engineeringGraphStateExists,
@@ -20,6 +23,7 @@ import {
 } from "./graph-state.js";
 import { orchestrationDescendantClosure } from "./orchestration.js";
 import { acquireSessionLease } from "./session-lease.js";
+import { managedOrchestrationWorktreePath } from "./orchestration-worktrees.js";
 
 export type EngineeringGraphMigrationPlan = {
   graphId: string;
@@ -34,6 +38,21 @@ export type EngineeringGraphMigrationPlan = {
 export type EngineeringGraphMigrationResult = {
   plan: EngineeringGraphMigrationPlan;
   state: EngineeringGraphState;
+};
+export type EngineeringGraphMigrationOptions = {
+  /** Test/eval-only crash boundary hook; production callers should omit it. */
+  faultInjector?: (point: "after_journal_prepared" | "after_checkpoint_committed" | "after_journal_committed") => void;
+};
+
+export type EngineeringGraphMigrationJournal = {
+  version: 1;
+  graphId: string;
+  sourceFingerprint: string;
+  targetFingerprint: string;
+  resourceGeneration: string;
+  phase: "prepared" | "committed";
+  preparedAt: string;
+  committedAt?: string;
 };
 
 export class EngineeringGraphMigrationConflictError extends Error {
@@ -72,9 +91,74 @@ function assertMigrationEligible(before: EngineeringGraphState, after: Engineeri
     );
   }
   if (before.parentGraph) throw new Error("Nested child Graphs must be migrated through their parent Graph");
-  if (before.definition.managedWorktrees || after.managedWorktrees) {
-    throw new Error("Graph migration does not yet support managed worktrees; archive/prune and restart instead");
+  if (!isDeepStrictEqual(before.definition.managedWorktrees, after.managedWorktrees)) {
+    throw new Error("Graph migration cannot change managed worktrees policy; archive/prune and restart instead");
   }
+  if (before.definition.managedWorktrees) {
+    const managedIds = (definition: EngineeringGraphDefinition): string[] =>
+      [
+        ...definition.nodes.filter(graphNodeIsEffectful).map((node) => node.id),
+        ...(definition.fanIn ? ["__fan_in__"] : []),
+      ].sort();
+    if (!isDeepStrictEqual(managedIds(before.definition), managedIds(after))) {
+      throw new Error("Graph migration cannot change managed worktrees topology; archive/prune and restart instead");
+    }
+  }
+}
+
+function migrationJournalPath(graphId: string): string {
+  return `.seekforge/graphs/${graphId}.migration.json`;
+}
+
+export function readEngineeringGraphMigrationJournal(
+  workspace: string,
+  graphId: string,
+): EngineeringGraphMigrationJournal | undefined {
+  try {
+    const raw = readWorkspaceStateFile(workspace, migrationJournalPath(graphId), 16 * 1024);
+    if (raw === undefined) return undefined;
+    const value = JSON.parse(raw) as unknown;
+    if (
+      !isRecord(value) ||
+      !hasOnlyKeys(value, [
+        "version",
+        "graphId",
+        "sourceFingerprint",
+        "targetFingerprint",
+        "resourceGeneration",
+        "phase",
+        "preparedAt",
+        "committedAt",
+      ]) ||
+      value.version !== 1 ||
+      value.graphId !== graphId ||
+      typeof value.sourceFingerprint !== "string" ||
+      !/^[a-f0-9]{64}$/.test(value.sourceFingerprint) ||
+      typeof value.targetFingerprint !== "string" ||
+      !/^[a-f0-9]{64}$/.test(value.targetFingerprint) ||
+      typeof value.resourceGeneration !== "string" ||
+      (value.phase !== "prepared" && value.phase !== "committed") ||
+      typeof value.preparedAt !== "string" ||
+      !Number.isFinite(Date.parse(value.preparedAt)) ||
+      (value.phase === "prepared" && value.committedAt !== undefined) ||
+      (value.phase === "committed" &&
+        (typeof value.committedAt !== "string" || !Number.isFinite(Date.parse(value.committedAt))))
+    )
+      return undefined;
+    return value as EngineeringGraphMigrationJournal;
+  } catch {
+    return undefined;
+  }
+}
+
+function migrationWorkspaces(workspace: string, definition: EngineeringGraphDefinition): Map<string, string> {
+  if (!definition.managedWorktrees) return resolveEngineeringGraphWorkspaces(workspace, definition);
+  const overrides = new Map(
+    definition.nodes
+      .filter(graphNodeIsEffectful)
+      .map((node) => [node.id, managedOrchestrationWorktreePath(workspace, "graph", definition.graphId, node.id)]),
+  );
+  return resolveEngineeringGraphWorkspaces(workspace, definition, overrides);
 }
 
 function migratedPauseReason(results: EngineeringGraphState["results"]): EngineeringGraphState["pauseReason"] {
@@ -83,11 +167,52 @@ function migratedPauseReason(results: EngineeringGraphState["results"]): Enginee
   return "control";
 }
 
+function migrationJournalTargetsState(
+  journal: EngineeringGraphMigrationJournal,
+  state: EngineeringGraphState,
+): boolean {
+  return journal.targetFingerprint === state.fingerprint && journal.resourceGeneration === state.resourceGeneration;
+}
+
+function finishCommittedMigration(
+  workspace: string,
+  state: EngineeringGraphState,
+  journal: EngineeringGraphMigrationJournal,
+): void {
+  if (!migrationJournalTargetsState(journal, state)) return;
+  const migrated = [...state.events].reverse().find((event) => event.type === "graph.migrated");
+  if (migrated) {
+    const retained = readEngineeringGraphHistory(workspace, state.graphId, { limit: 2_000, tail: true });
+    const alreadyRecorded = retained.some((entry) => entry.event.sequence === migrated.sequence);
+    const latestEventSequence = retained.at(-1)?.event.sequence ?? 0;
+    if (!alreadyRecorded && latestEventSequence < migrated.sequence) {
+      try {
+        const writer = createEngineeringGraphLogWriter(workspace, state.graphId);
+        writer.append(migrated);
+        writer.close();
+      } catch {
+        // The checkpoint event remains authoritative when history repair fails.
+      }
+    }
+  }
+  if (journal.phase === "prepared") {
+    writeWorkspaceStateFileAtomic(
+      workspace,
+      migrationJournalPath(state.graphId),
+      `${JSON.stringify({ ...journal, phase: "committed", committedAt: new Date().toISOString() })}\n`,
+    );
+  }
+}
+
 /**
  * Applies a migration while holding the Graph's authoritative lease. The
  * preflight plan is deliberately recomputed after the checkpoint is reloaded.
  */
-export function applyEngineeringGraphMigration(workspace: string, input: unknown): EngineeringGraphMigrationResult {
+export function applyEngineeringGraphMigration(
+  workspace: string,
+  input: unknown,
+  options: EngineeringGraphMigrationOptions = {},
+): EngineeringGraphMigrationResult {
   const definition = parseEngineeringGraphDefinition(input);
   const preflight = loadEngineeringGraphState(workspace, definition.graphId);
   if (!preflight) {
@@ -95,7 +220,7 @@ export function applyEngineeringGraphMigration(workspace: string, input: unknown
     throw new Error(`Persisted Graph ${qualifier}: ${definition.graphId}`);
   }
   assertMigrationEligible(preflight, definition);
-  resolveEngineeringGraphWorkspaces(workspace, definition);
+  migrationWorkspaces(workspace, definition);
   planEngineeringGraphMigration(preflight.definition, definition);
 
   const lease = acquireSessionLease(workspace, `engineering-graph-${definition.graphId}`);
@@ -106,8 +231,26 @@ export function applyEngineeringGraphMigration(workspace: string, input: unknown
       throw new Error(`Persisted Graph ${qualifier}: ${definition.graphId}`);
     }
     assertMigrationEligible(current, definition);
-    const workspaces = resolveEngineeringGraphWorkspaces(workspace, definition);
+    const workspaces = migrationWorkspaces(workspace, definition);
     const plan = planEngineeringGraphMigration(current.definition, definition);
+    const existingJournal = readEngineeringGraphMigrationJournal(workspace, definition.graphId);
+    if (existingJournal) finishCommittedMigration(workspace, current, existingJournal);
+    if (
+      existingJournal?.phase === "prepared" &&
+      existingJournal.sourceFingerprint !== current.fingerprint &&
+      !migrationJournalTargetsState(existingJournal, current)
+    ) {
+      throw new EngineeringGraphMigrationConflictError("Graph has an unresolved migration journal");
+    }
+    if (!plan.graphPolicyChanged && plan.added.length === 0 && plan.removed.length === 0 && plan.changed.length === 0) {
+      return { plan, state: current };
+    }
+    if (current.definition.managedWorktrees) {
+      const invalidated = new Set([...plan.invalidated, ...plan.removed]);
+      if (current.definition.nodes.some((node) => graphNodeIsEffectful(node) && invalidated.has(node.id))) {
+        throw new Error("Graph migration cannot invalidate a managed worktree node; promote/prune and restart instead");
+      }
+    }
     const invalidatedExisting = new Set([...plan.invalidated, ...plan.removed]);
     if (
       current.definition.nodes.some(
@@ -186,8 +329,29 @@ export function applyEngineeringGraphMigration(workspace: string, input: unknown
       ...(current.parentGraph ? { parentGraph: current.parentGraph } : {}),
       ...(fanIn ? { fanIn } : {}),
     });
+    const journal: EngineeringGraphMigrationJournal = {
+      version: 1,
+      graphId: definition.graphId,
+      sourceFingerprint: current.fingerprint,
+      targetFingerprint: next.fingerprint,
+      resourceGeneration: next.resourceGeneration!,
+      phase: "prepared",
+      preparedAt: now,
+    };
+    writeWorkspaceStateFileAtomic(workspace, migrationJournalPath(definition.graphId), `${JSON.stringify(journal)}\n`);
+    options.faultInjector?.("after_journal_prepared");
+    // Snapshot archival is idempotent by fingerprint/completedAt. Doing it
+    // before replacement avoids losing the source run if the process exits in
+    // the checkpoint-to-journal window; a retry safely observes the snapshot.
     archiveEngineeringGraphRun(workspace, current);
     saveEngineeringGraphState(workspace, next);
+    options.faultInjector?.("after_checkpoint_committed");
+    writeWorkspaceStateFileAtomic(
+      workspace,
+      migrationJournalPath(definition.graphId),
+      `${JSON.stringify({ ...journal, phase: "committed", committedAt: new Date().toISOString() })}\n`,
+    );
+    options.faultInjector?.("after_journal_committed");
     try {
       const writer = createEngineeringGraphLogWriter(workspace, definition.graphId);
       writer.append(event);

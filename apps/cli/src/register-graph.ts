@@ -5,6 +5,7 @@ import {
   graphDiagnoseCommand,
   graphListCommand,
   graphExplainCommand,
+  graphHealthCommand,
   graphIntelligenceCommand,
   graphMigrateCommand,
   graphMigrationPlanCommand,
@@ -104,6 +105,11 @@ export function registerGraphCommands(
     .argument("<graph-id>")
     .description("check a Graph checkpoint against its retained event history")
     .action(graphDiagnoseCommand);
+  graph
+    .command("health")
+    .argument("<graph-id>")
+    .description("forecast critical path, drift, anomalies, and child lineage")
+    .action(graphHealthCommand);
   graph
     .command("migration-plan")
     .argument("<file>")

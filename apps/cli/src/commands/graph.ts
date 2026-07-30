@@ -1,6 +1,7 @@
 import {
   applyEngineeringGraphMigration,
   analyzeGraphSchedulingIntelligence,
+  buildEngineeringGraphHealthReport,
   graphHandlersWithPlugins,
   archiveEngineeringGraphResources,
   clearEngineeringGraphRecovery,
@@ -213,6 +214,20 @@ export function graphIntelligenceCommand(graphId?: string): void {
     );
     const entries = summarizeGraphSchedulingIntelligence(observations);
     console.log(JSON.stringify({ entries, findings: analyzeGraphSchedulingIntelligence(entries) }, null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+export function graphHealthCommand(graphId: string): void {
+  try {
+    if (!isValidLoopDagId(graphId)) throw new Error(`Invalid Graph id: ${graphId}`);
+    const state = loadEngineeringGraphState(process.cwd(), graphId);
+    if (!state) throw new Error(`Persisted Graph not found or invalid: ${graphId}`);
+    console.log(
+      JSON.stringify(buildEngineeringGraphHealthReport(state, readGraphSchedulingObservations(process.cwd())), null, 2),
+    );
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

@@ -428,6 +428,11 @@ describe("loop management API", () => {
       findings: [],
     });
     expect((await authed("/api/graph-scheduling-intelligence?graphId=../bad")).status).toBe(400);
+    expect(await jsonOf(await authed("/api/graphs/rest-graph/health"))).toMatchObject({
+      graphId: "rest-graph",
+      status: "healthy",
+      nodes: [expect.objectContaining({ nodeId: "done" })],
+    });
     expect((await authed("/api/graphs/scheduling-intelligence")).status).toBe(404);
     expect(
       await jsonOf(
@@ -680,6 +685,25 @@ describe("loop management API", () => {
       definition: { graphId: "rest-release" },
       plan: { waves: [["run"]], compensationOrder: [] },
     });
+    const comparison = await authed("/api/graphs/templates/rest-template/1.0.0/compare", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...template,
+        version: "1.1.0",
+        parameters: { ...template.parameters, optional: { type: "boolean", default: true } },
+      }),
+    });
+    expect(await jsonOf(comparison)).toMatchObject({ classification: "compatible" });
+    expect(
+      await jsonOf(
+        await authed("/api/graphs/templates/rest-template/1.0.0/deprecate", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        }),
+      ),
+    ).toMatchObject({ deprecatedAt: expect.any(String) });
   });
 
   it("signals and automatically resumes a waiting Engineering Graph", async () => {

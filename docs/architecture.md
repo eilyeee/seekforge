@@ -84,7 +84,9 @@ entry points; consumers do not reach into another package's private source tree.
 
 Session traces are append-only JSONL and remain the source of truth for agent
 runs. Automatic context compaction writes a fingerprinted derivative snapshot;
-resume uses it only while its source prefix still matches. Context admission
+resume uses it only while its source prefix still matches. Each compacted summary
+also carries the SHA-256 identity and turn count of its exact dropped segment so
+later audit can correlate the derivative with source history. Context admission
 budgets the complete provider request, including advertised tool schemas.
 Approved project-memory writes may trigger opt-in deterministic maintenance.
 It shares the cross-process memory transaction lease, checks count/byte and

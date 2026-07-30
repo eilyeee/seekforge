@@ -57,7 +57,15 @@ describe("Engineering Graph CLI input", () => {
     );
     const graph = program.commands.find((command) => command.name() === "graph");
     expect(graph?.commands.map((command) => command.name())).toEqual(
-      expect.arrayContaining(["diagnose", "intelligence", "migration-plan", "migrate", "simulate", "explain"]),
+      expect.arrayContaining([
+        "diagnose",
+        "health",
+        "intelligence",
+        "migration-plan",
+        "migrate",
+        "simulate",
+        "explain",
+      ]),
     );
   });
 

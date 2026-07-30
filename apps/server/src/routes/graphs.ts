@@ -3,6 +3,7 @@ import {
   analyzeGraphSchedulingIntelligence,
   archiveEngineeringGraphResources,
   buildEngineeringGraphEvidenceReport,
+  buildEngineeringGraphHealthReport,
   buildEngineeringGraphArtifactCatalog,
   clearEngineeringGraphRecovery,
   diagnoseEngineeringGraphCheckpoint,
@@ -35,6 +36,8 @@ import {
   registerEngineeringGraphTemplate,
   resolveEngineeringGraphTemplate,
   compareEngineeringGraphRuns,
+  compareEngineeringGraphTemplates,
+  deprecateEngineeringGraphTemplate,
   removeEngineeringGraphState,
   setEngineeringGraphPriority,
   SessionBusyError,
@@ -390,7 +393,19 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
         return true;
       }
       if (method === "GET" && segs.length === 5) sendJson(res, 200, template);
-      else if (method === "POST" && segs.length === 6 && segs[5] === "materialize") {
+      else if (method === "POST" && segs.length === 6 && segs[5] === "compare") {
+        const body = await readJsonBody(ctx.req, res);
+        if (body === undefined) return true;
+        sendJson(res, 200, compareEngineeringGraphTemplates(template, body));
+      } else if (method === "POST" && segs.length === 6 && segs[5] === "deprecate") {
+        const body = await readJsonBody(ctx.req, res, { emptyOk: true });
+        if (body === undefined) return true;
+        if (!isRecord(body) || Object.keys(body).length > 0) {
+          sendApiError(res, 400, "bad_request", "Graph template deprecation body must be empty");
+          return true;
+        }
+        sendJson(res, 200, deprecateEngineeringGraphTemplate(workspace, templateId, version));
+      } else if (method === "POST" && segs.length === 6 && segs[5] === "materialize") {
         const body = await readJsonBody(ctx.req, res, { emptyOk: true });
         if (body === undefined) return true;
         if (!isRecord(body) || (body.parameters !== undefined && !isRecord(body.parameters))) {
@@ -468,6 +483,13 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
           readEngineeringGraphHistory(workspace, graphId, { limit: 2_000, tail: true }),
         ),
       );
+    } else sendApiError(res, 404, "not_found", `unknown Graph: ${graphId}`);
+    return true;
+  }
+  if (method === "GET" && segs.length === 4 && segs[3] === "health") {
+    const state = loadEngineeringGraphState(workspace, graphId);
+    if (state) {
+      sendJson(res, 200, buildEngineeringGraphHealthReport(state, readGraphSchedulingObservations(workspace)));
     } else sendApiError(res, 404, "not_found", `unknown Graph: ${graphId}`);
     return true;
   }

@@ -211,6 +211,11 @@ export {
   type EngineeringGraphRunComparison,
 } from "./graph-observability.js";
 export {
+  buildEngineeringGraphHealthReport,
+  type EngineeringGraphHealthNode,
+  type EngineeringGraphHealthReport,
+} from "./graph-health.js";
+export {
   diagnoseEngineeringGraphCheckpoint,
   diagnoseLoopCheckpoint,
   replayOrchestrationTransitions,
@@ -222,8 +227,11 @@ export {
   applyEngineeringGraphMigration,
   EngineeringGraphMigrationConflictError,
   planEngineeringGraphMigration,
+  readEngineeringGraphMigrationJournal,
   type EngineeringGraphMigrationResult,
   type EngineeringGraphMigrationPlan,
+  type EngineeringGraphMigrationJournal,
+  type EngineeringGraphMigrationOptions,
 } from "./graph-migration.js";
 export {
   explainEngineeringGraphNode,
@@ -244,6 +252,7 @@ export {
 export {
   analyzeGraphSchedulingIntelligence,
   graphSchedulingScore,
+  predictGraphNodeScheduling,
   readGraphSchedulingObservations,
   recordGraphSchedulingObservation,
   summarizeGraphSchedulingIntelligence,
@@ -264,9 +273,12 @@ export {
 } from "./graph-template.js";
 export {
   listEngineeringGraphTemplates,
+  compareEngineeringGraphTemplates,
+  deprecateEngineeringGraphTemplate,
   registerEngineeringGraphTemplate,
   resolveEngineeringGraphTemplate,
   type RegisteredEngineeringGraphTemplate,
+  type EngineeringGraphTemplateCompatibility,
 } from "./graph-template-registry.js";
 export {
   createGraphMaintenanceScheduler,
@@ -334,8 +346,10 @@ export {
   loopVerificationIntelligenceScore,
   readLoopVerificationIntelligence,
   recordLoopVerificationIntelligence,
+  summarizeLoopVerificationReliability,
   type LoopVerificationIntelligence,
   type LoopVerificationIntelligenceFinding,
+  type LoopVerificationReliability,
 } from "./loop-verification-intelligence.js";
 export {
   isLoopFailureCategory,

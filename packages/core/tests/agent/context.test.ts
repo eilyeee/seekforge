@@ -223,6 +223,8 @@ describe("compactMessages", () => {
     expect(result).not.toBeNull();
     expect(estimateMessagesTokens(result!.messages)).toBeLessThan(before);
     expect(result!.droppedTurns).toBeGreaterThan(0);
+    expect(result!.provenance).toMatchObject({ algorithm: "sha256", droppedTurns: result!.droppedTurns });
+    expect(result!.messages[2]!.content).toContain(`sha256:${result!.provenance!.digest}`);
   });
 
   it("keeps system prompt and original task at the head", () => {
