@@ -5,6 +5,13 @@ import {
 } from "./graph-scheduling-history.js";
 import { simulateEngineeringGraph } from "./graph-simulation.js";
 import type { EngineeringGraphState } from "./graph-state.js";
+import {
+  graphNodeIsEffectful,
+  MAX_GRAPH_CONCURRENCY,
+  MAX_GRAPH_RESOURCE_CAPACITIES,
+  MAX_GRAPH_RESOURCE_CAPACITY,
+} from "./graph-contract.js";
+import { orchestrationResourcesOverlap } from "./orchestration-scheduler.js";
 
 export type EngineeringGraphHealthNode = {
   nodeId: string;
@@ -26,8 +33,18 @@ export type EngineeringGraphHealthReport = {
   generatedAt: string;
   status: "unknown" | "healthy" | "warning" | "critical";
   predictedMakespanMs: number;
+  predictedP95MakespanMs: number;
+  forecastCoverage: { measuredNodes: number; totalNodes: number; ratio: number };
   criticalPath: string[];
   bottlenecks: string[];
+  risks: string[];
+  recommendations: Array<{
+    kind: "max_concurrency" | "resource_capacity";
+    target: string;
+    currentValue: number;
+    suggestedValue: number;
+    predictedSavingsMs: number;
+  }>;
   nodes: EngineeringGraphHealthNode[];
   findings: ReturnType<typeof analyzeGraphSchedulingIntelligence>;
   lineage: Array<{ nodeId: string; sessionId: string }>;
@@ -49,14 +66,83 @@ export function buildEngineeringGraphHealthReport(
       .filter((entry) => entry.p50DurationMs > 0)
       .map((entry) => [entry.nodeId, { durationMs: entry.p50DurationMs }]),
   );
+  const p95Estimates = Object.fromEntries(
+    intelligence
+      .filter((entry) => entry.p95DurationMs > 0)
+      .map((entry) => [entry.nodeId, { durationMs: entry.p95DurationMs }]),
+  );
   const simulation = simulateEngineeringGraph(state.definition, { estimates });
+  const p95Simulation = simulateEngineeringGraph(state.definition, { estimates: p95Estimates });
   const findings = analyzeGraphSchedulingIntelligence(intelligence);
+  const forecastable = state.definition.nodes.filter(graphNodeIsEffectful);
+  const measuredNodes = forecastable.filter((node) => byNode.has(node.id)).length;
+  const forecastCoverage = {
+    measuredNodes,
+    totalNodes: forecastable.length,
+    ratio: forecastable.length === 0 ? 1 : measuredNodes / forecastable.length,
+  };
+  const recommendations: EngineeringGraphHealthReport["recommendations"] = [];
+  const currentConcurrency = state.definition.maxConcurrency ?? 1;
+  const concurrencyIncreaseIsValid = currentConcurrency > 1 || state.definition.managedWorktrees !== undefined;
+  if (currentConcurrency < MAX_GRAPH_CONCURRENCY && concurrencyIncreaseIsValid) {
+    const candidate = simulateEngineeringGraph(
+      { ...state.definition, maxConcurrency: currentConcurrency + 1 },
+      { estimates },
+    );
+    if (candidate.makespanMs < simulation.makespanMs) {
+      recommendations.push({
+        kind: "max_concurrency",
+        target: "maxConcurrency",
+        currentValue: currentConcurrency,
+        suggestedValue: currentConcurrency + 1,
+        predictedSavingsMs: simulation.makespanMs - candidate.makespanMs,
+      });
+    }
+  }
+  const configuredCapacities = state.definition.resourceCapacities ?? {};
+  const configuredResources = Object.keys(configuredCapacities);
+  const capacityCandidates = new Set([
+    ...configuredResources,
+    ...simulation.nodes.filter((node) => node.resourceWaitMs > 0).flatMap((node) => node.resources),
+  ]);
+  const relevantCapacities = [...capacityCandidates]
+    .map((resource) => [resource, configuredCapacities[resource] ?? 1] as const)
+    .filter(
+      ([resource, capacity]) =>
+        capacity < MAX_GRAPH_RESOURCE_CAPACITY &&
+        (Object.hasOwn(configuredCapacities, resource) || configuredResources.length < MAX_GRAPH_RESOURCE_CAPACITIES) &&
+        simulation.nodes.some(
+          (node) =>
+            node.resourceWaitMs > 0 &&
+            node.resources.some((requested) => orchestrationResourcesOverlap(resource, requested)),
+        ),
+    )
+    .slice(0, 8);
+  for (const [resource, capacity] of relevantCapacities) {
+    const candidate = simulateEngineeringGraph(
+      {
+        ...state.definition,
+        resourceCapacities: { ...configuredCapacities, [resource]: capacity + 1 },
+      },
+      { estimates },
+    );
+    if (candidate.makespanMs < simulation.makespanMs) {
+      recommendations.push({
+        kind: "resource_capacity",
+        target: resource,
+        currentValue: capacity,
+        suggestedValue: capacity + 1,
+        predictedSavingsMs: simulation.makespanMs - candidate.makespanMs,
+      });
+    }
+  }
+  recommendations.sort((left, right) => right.predictedSavingsMs - left.predictedSavingsMs);
   const status =
     intelligence.length === 0
       ? "unknown"
       : findings.some((finding) => finding.severity === "critical")
         ? "critical"
-        : findings.length > 0
+        : findings.length > 0 || p95Simulation.risks.length > 0 || forecastCoverage.ratio < 1
           ? "warning"
           : "healthy";
   const duration = (result: EngineeringGraphState["results"][number] | undefined): number | undefined => {
@@ -100,8 +186,12 @@ export function buildEngineeringGraphHealthReport(
     generatedAt: now.toISOString(),
     status,
     predictedMakespanMs: simulation.makespanMs,
+    predictedP95MakespanMs: p95Simulation.makespanMs,
+    forecastCoverage,
     criticalPath: simulation.criticalPath,
     bottlenecks: simulation.bottlenecks,
+    risks: p95Simulation.risks,
+    recommendations,
     nodes,
     findings,
     lineage: nodes.flatMap((node) => (node.sessionId ? [{ nodeId: node.nodeId, sessionId: node.sessionId }] : [])),

@@ -316,6 +316,11 @@ describe("loop management API", () => {
       verification: [{ id: "verify", command: "npm run build", required: true }],
       integrity: { algorithm: "sha256", digest: expect.stringMatching(/^[0-9a-f]{64}$/) },
     });
+    expect(await jsonOf(await authed("/api/loops/rest-loop/health"))).toMatchObject({
+      loopId: "rest-loop",
+      status: "unknown",
+      progress: { iterations: 0, maxIterations: 4, remainingIterations: 4 },
+    });
     createLoopState({
       loopId: "rest-loop-other",
       task: "compare me",
@@ -431,6 +436,10 @@ describe("loop management API", () => {
     expect(await jsonOf(await authed("/api/graphs/rest-graph/health"))).toMatchObject({
       graphId: "rest-graph",
       status: "healthy",
+      predictedP95MakespanMs: expect.any(Number),
+      forecastCoverage: { measuredNodes: 1, totalNodes: 1, ratio: 1 },
+      risks: [],
+      recommendations: [],
       nodes: [expect.objectContaining({ nodeId: "done" })],
     });
     expect((await authed("/api/graphs/scheduling-intelligence")).status).toBe(404);

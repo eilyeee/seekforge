@@ -18,6 +18,7 @@ import {
 } from "./fixtures";
 import type {
   EvolutionProposal,
+  LoopHealthReport,
   LoopStateSummary,
   McpServer,
   MemoryCandidate,
@@ -234,6 +235,35 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   if (method === "POST" && path === "/api/loops/prune") return { candidates: [], removed: [], skipped: [] };
   const loopHistory = /^\/api\/loops\/([^/]+)\/history$/.exec(path);
   if (method === "GET" && loopHistory) return [];
+  const loopHealth = /^\/api\/loops\/([^/]+)\/health$/.exec(path);
+  if (method === "GET" && loopHealth) {
+    const loop = mockLoops.find((item) => item.loopId === loopHealth[1]);
+    if (!loop) throw mockError(404, "not_found", "unknown loop");
+    const remainingIterations = Math.max(0, loop.maxIterations - loop.iterations);
+    return {
+      loopId: loop.loopId,
+      generatedAt: new Date().toISOString(),
+      status: "healthy",
+      progress: {
+        iterations: loop.iterations,
+        maxIterations: loop.maxIterations,
+        remainingIterations,
+        completionRatio: loop.maxIterations === 0 ? 0 : loop.iterations / loop.maxIterations,
+      },
+      usage: { costUsd: loop.costUsd, tokensUsed: 0, elapsedMs: 0, verifyRuns: 0 },
+      forecast: {
+        samples: 0,
+        nextIterationCostUsd: 0,
+        nextIterationTokens: 0,
+        nextIterationDurationMs: 0,
+        nextIterationVerifyRuns: 0,
+        affordableIterations: remainingIterations,
+        limitingBudget: "iterations",
+      },
+      verification: [],
+      findings: [],
+    } satisfies LoopHealthReport;
+  }
   const loopItem = /^\/api\/loops\/([^/]+)$/.exec(path);
   if (method === "GET" && loopItem) {
     const loop = mockLoops.find((item) => item.loopId === loopItem[1]);

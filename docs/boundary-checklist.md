@@ -3369,6 +3369,31 @@ zero drift regardless of the original prediction.
 - **Caught:** Graph health initially compared node duration with a P50 that already
   included that same completed node.
 
+## 313. Capacity forecasts must preserve the hard-limit comparator
+
+A runtime that stops at `usage >= limit` cannot describe `remaining / forecast`
+whole steps as affordable: a step that lands exactly on the limit is already
+rejected. Missing forecast samples also do not restore capacity after the current
+usage has exhausted a hard limit.
+
+- **Do:** derive capacity with the same strict comparator as the authoritative
+  budget gate, and report zero immediately when remaining capacity is zero.
+- **Caught:** Loop health initially reported one affordable verifier iteration when
+  its forecast landed exactly on `maxVerifyRuns`, and reported edit capacity after
+  an unsampled cost budget was already exhausted.
+
+## 314. Configuration advice must satisfy the advised contract
+
+A pure simulator may accept a hypothetical object that the public parser or
+workspace validator would reject. Reporting that result as a recommendation makes
+the advice impossible to apply safely.
+
+- **Do:** bound every recommendation by the authoritative configuration constants
+  and suppress advice whose physical preconditions cannot be proven from retained
+  state; normal validation still remains mandatory when applying it.
+- **Caught:** Graph health could recommend concurrent execution for effectful nodes
+  sharing one workspace, or add a 65th resource-capacity key.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

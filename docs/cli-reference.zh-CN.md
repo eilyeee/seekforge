@@ -205,7 +205,7 @@
 `seekforge loop-list`、`loop-show`、`loop-delete` 管理持久化记录；
 `seekforge loop-deliver <loop-id> [--mode checkpoint|merge|patch|pr] [--wait-ci] [--ci-repairs N]` 可从保留 worktree
 重试失败的通过后交付，无需重跑 Loop；`loop-show` 会展示持久状态、尝试次数、错误与产物。`loop-history`
-回放持久事件，`loop-diagnose` 核对检查点与最新保留事件窗口，`loop-intelligence` 报告有界的跨运行验证可靠性与异常，`loop-recover` 把失去 owner 的记录标为 `interrupted`，`loop-priority <id> <n>`
+回放持久事件，`loop-diagnose` 核对检查点与最新保留事件窗口，`loop-health <id>` 报告预算余量、保守的下一轮需求、可承受轮数、恢复退避与匹配验证器可靠性，`loop-intelligence` 报告有界的跨运行验证可靠性与异常，`loop-recover` 把失去 owner 的记录标为 `interrupted`，`loop-priority <id> <n>`
 调整恢复顺序，`loop-prune` 只删除合格终态记录。`loop-dag <file>` 以完成驱动方式执行带共享加权预算、
 重试、失败策略、组合条件、可审计审批、独占资源、声明产物和结构化依赖输出的持久 JSON 依赖图，并支持
 `--resume` / `--dag-id` 检查点。`--approve <node-id>` 可通过节点审批门，
@@ -215,7 +215,7 @@
 `loop-speculate <file> --budget <usd>` 持久运行两到三个隔离策略；`loop-speculation-list` 与
 `loop-speculation-promote` 用于查看并显式合并胜出结果。
 `loop-evidence <id> --format json|sarif|junit [--compare <id>]` 可导出完整性证据或比较运行。
-`graph validate|run|resume|list|show|history|diagnose|health|priority|delete` 管理异构工程图；`graph intelligence [graph-id]` 报告有界、不含输出的自适应调度结果和异常，`graph health <graph-id>` 汇总精确指纹预测、关键路径、实际漂移、瓶颈与子会话血缘；`graph migration-plan <file>` 预览失效范围，`graph migrate <file>` 把带 journal 的迁移应用到暂停或终态 Graph，托管 worktree 必须保持策略与资源拓扑不变。`graph simulate <file> [--worst-case]` 在不创建状态的前提下预测调度，`graph explain <id> <node-id>` 报告当前阻塞。`graph priority <id> <-10..10>` 调整自动恢复顺序。定义可组合 Agent、Loop、函数、路由、审批门和嵌套图；`--approve` 通过审批门，`--rerun` 让一个节点及其下游失效，`--restart` 显式替换已有检查点。详见[图工程](graph-engineering.zh-CN.md)。
+`graph validate|run|resume|list|show|history|diagnose|health|priority|delete` 管理异构工程图；`graph intelligence [graph-id]` 报告有界、不含输出的自适应调度结果和异常，`graph health <graph-id>` 汇总精确指纹 P50/P95 预测、测量覆盖率、关键路径、实际漂移、瓶颈、子会话血缘，以及有界的并发/资源容量假设建议；`graph migration-plan <file>` 预览失效范围，`graph migrate <file>` 把带 journal 的迁移应用到暂停或终态 Graph，托管 worktree 必须保持策略与资源拓扑不变。`graph simulate <file> [--worst-case]` 在不创建状态的前提下预测调度，`graph explain <id> <node-id>` 报告当前阻塞。`graph priority <id> <-10..10>` 调整自动恢复顺序。定义可组合 Agent、Loop、函数、路由、审批门和嵌套图；`--approve` 通过审批门，`--rerun` 让一个节点及其下游失效，`--restart` 显式替换已有检查点。详见[图工程](graph-engineering.zh-CN.md)。
 TUI 与 Desktop/WebSocket Loop 还支持在安全边界暂停、继续、设置优先级和引导。
 `seekforge loop-cleanup <name>` 删除一个保留的 `seekforge/loop-*` worktree；有未提交改动的
 worktree 因其改动会被丢弃，需要显式加 `--force`。清理会拒绝仍活跃的 Loop 生命周期操作，并保留

@@ -66,6 +66,7 @@ export type {
   LoopStateSummary,
   LoopHistoryEntry,
   LoopEvidenceReport,
+  LoopHealthReport,
   LoopPruneResult,
   LoopDagSummary,
   LoopDagResourceReport,

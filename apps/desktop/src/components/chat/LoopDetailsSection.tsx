@@ -1,10 +1,11 @@
 import { useT } from "../../lib/i18n";
-import type { LoopEvidenceReport, LoopHistoryEntry } from "../../types";
+import type { LoopEvidenceReport, LoopHealthReport, LoopHistoryEntry } from "../../types";
 import { Badge, Button } from "../ui";
 
 export function LoopDetailsSection(props: {
   selected?: string;
   evidence?: LoopEvidenceReport;
+  health?: LoopHealthReport;
   history: LoopHistoryEntry[];
   onLoadMore: () => void;
 }) {
@@ -12,6 +13,36 @@ export function LoopDetailsSection(props: {
   if (!props.selected) return null;
   return (
     <div className="mt-2 rounded border border-subtle bg-surface p-2 text-xs text-secondary">
+      {props.health && (
+        <div className="mb-2 rounded border border-subtle p-2 text-tertiary">
+          <p>
+            {t("chat.loop.health")}:{" "}
+            <Badge
+              tone={
+                props.health.status === "healthy" ? "ok" : props.health.status === "critical" ? "danger" : "neutral"
+              }
+            >
+              {t(`chat.loop.health.status.${props.health.status}`)}
+            </Badge>
+            {` · ${t("chat.loop.health.affordable", { value: props.health.forecast.affordableIterations })}`}
+            {props.health.forecast.limitingBudget
+              ? ` · ${t("chat.loop.health.limitedBy", {
+                  value: t(`chat.loop.health.budget.${props.health.forecast.limitingBudget}`),
+                })}`
+              : ""}
+          </p>
+          <p>
+            {t("chat.loop.health.next", {
+              cost: props.health.forecast.nextIterationCostUsd.toFixed(4),
+              tokens: props.health.forecast.nextIterationTokens,
+              duration: props.health.forecast.nextIterationDurationMs,
+            })}
+          </p>
+          {props.health.findings.length > 0 && (
+            <p>{props.health.findings.map((finding) => finding.message).join("; ")}</p>
+          )}
+        </div>
+      )}
       {props.evidence && (
         <div className="mb-2 grid gap-2 md:grid-cols-3">
           <section>

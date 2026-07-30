@@ -228,7 +228,7 @@ export function GraphEngineeringSection(props: {
             {health && (
               <div className="mt-1 rounded border border-subtle p-2 text-tertiary">
                 <p>
-                  health:{" "}
+                  {t("chat.loop.health")}:{" "}
                   <Badge
                     tone={tone(
                       health.status === "healthy"
@@ -240,10 +240,14 @@ export function GraphEngineeringSection(props: {
                             : "unknown",
                     )}
                   >
-                    {health.status}
+                    {t(`chat.loop.health.status.${health.status}`)}
                   </Badge>
-                  {` · forecast ${(health.predictedMakespanMs / 1000).toFixed(1)}s`}
-                  {health.criticalPath.length > 0 ? ` · critical ${health.criticalPath.join(" → ")}` : ""}
+                  {` · ${t("chat.loop.graph.forecast", { value: (health.predictedMakespanMs / 1000).toFixed(1) })}`}
+                  {` / P95 ${(health.predictedP95MakespanMs / 1000).toFixed(1)}s`}
+                  {` · ${t("chat.loop.graph.coverage", { value: Math.round(health.forecastCoverage.ratio * 100) })}`}
+                  {health.criticalPath.length > 0
+                    ? ` · ${t("chat.loop.graph.criticalPath", { value: health.criticalPath.join(" → ") })}`
+                    : ""}
                 </p>
                 {health.nodes.some((node) => node.p50DurationMs !== undefined) && (
                   <p>
@@ -258,6 +262,18 @@ export function GraphEngineeringSection(props: {
                   </p>
                 )}
                 {health.findings.length > 0 && <p>{health.findings.map((finding) => finding.message).join("; ")}</p>}
+                {health.risks.length > 0 && <p>{health.risks.join("; ")}</p>}
+                {health.recommendations.length > 0 && (
+                  <p>
+                    {health.recommendations
+                      .slice(0, 4)
+                      .map(
+                        (recommendation) =>
+                          `${recommendation.target}: ${recommendation.currentValue} → ${recommendation.suggestedValue} (${t("chat.loop.graph.savings", { value: (recommendation.predictedSavingsMs / 1000).toFixed(1) })})`,
+                      )
+                      .join("; ")}
+                  </p>
+                )}
               </div>
             )}
             <div className="mt-1 flex flex-wrap gap-1">

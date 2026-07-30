@@ -92,6 +92,10 @@ test("registers the independent review gate and Loop diagnostics", () => {
     program.commands.some((command) => command.name() === "loop-intelligence"),
     true,
   );
+  assert.equal(
+    program.commands.some((command) => command.name() === "loop-health"),
+    true,
+  );
 });
 
 test("parses bounded model escalation routes without ambiguous duplicates", () => {

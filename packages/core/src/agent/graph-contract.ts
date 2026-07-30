@@ -8,6 +8,8 @@ import type { GraphRetryPolicy } from "./graph-retry-policy.js";
 export const MAX_GRAPH_NODES = 128;
 export const MAX_GRAPH_DEPTH = 4;
 export const MAX_GRAPH_CONCURRENCY = 8;
+export const MAX_GRAPH_RESOURCE_CAPACITIES = 64;
+export const MAX_GRAPH_RESOURCE_CAPACITY = 64;
 export const MAX_GRAPH_DEFINITION_BYTES = 256 * 1024;
 export const MAX_GRAPH_NODE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 export const MAX_GRAPH_HISTORY_SEGMENTS = 3;
@@ -698,7 +700,10 @@ export function parseEngineeringGraphDefinition(value: unknown, depth = 0): Engi
   }
   let resourceCapacities: Record<string, number> | undefined;
   if (value.resourceCapacities !== undefined) {
-    if (!isRecord(value.resourceCapacities) || Object.keys(value.resourceCapacities).length > 64) {
+    if (
+      !isRecord(value.resourceCapacities) ||
+      Object.keys(value.resourceCapacities).length > MAX_GRAPH_RESOURCE_CAPACITIES
+    ) {
       throw new Error("Graph resourceCapacities is invalid");
     }
     resourceCapacities = Object.create(null) as Record<string, number>;
@@ -707,7 +712,7 @@ export function parseEngineeringGraphDefinition(value: unknown, depth = 0): Engi
         !isValidOrchestrationResourceId(resource) ||
         !Number.isSafeInteger(capacity) ||
         (capacity as number) < 1 ||
-        (capacity as number) > 64
+        (capacity as number) > MAX_GRAPH_RESOURCE_CAPACITY
       ) {
         throw new Error(`Graph resource capacity is invalid: ${resource}`);
       }

@@ -12,6 +12,7 @@ import type {
   LoopDagResourceReport,
   LoopDagSummary,
   LoopEvidenceReport,
+  LoopHealthReport,
   LoopHistoryEntry,
   LoopSpeculationSummary,
   LoopStateSummary,
@@ -33,6 +34,7 @@ export function LoopManager({ running, onResume }: Props) {
   const [selected, setSelected] = useState<string>();
   const [history, setHistory] = useState<LoopHistoryEntry[]>([]);
   const [evidence, setEvidence] = useState<LoopEvidenceReport>();
+  const [loopHealth, setLoopHealth] = useState<LoopHealthReport>();
   const [dags, setDags] = useState<LoopDagSummary[]>([]);
   const [graphs, setGraphs] = useState<EngineeringGraphSummary[]>([]);
   const [graphDetails, setGraphDetails] = useState<Record<string, EngineeringGraphDetail>>({});
@@ -112,14 +114,17 @@ export function LoopManager({ running, onResume }: Props) {
     setSelected(loopId);
     setHistory([]);
     setEvidence(undefined);
+    setLoopHealth(undefined);
     try {
-      const [nextHistory, nextEvidence] = await Promise.all([
+      const [nextHistory, nextEvidence, nextHealth] = await Promise.all([
         api.loopHistory(loopId, 0, 100),
         api.loopEvidence(loopId),
+        api.loopHealth(loopId).catch(() => undefined),
       ]);
       if (historyRequests.current.isCurrent(request) && selectedRef.current === loopId) {
         setHistory(nextHistory);
         setEvidence(nextEvidence);
+        setLoopHealth(nextHealth);
         setError("");
       }
     } catch (caught) {
@@ -192,6 +197,7 @@ export function LoopManager({ running, onResume }: Props) {
         setSelected(undefined);
         setHistory([]);
         setEvidence(undefined);
+        setLoopHealth(undefined);
       }
       await refresh();
     } catch (caught) {
@@ -506,6 +512,7 @@ export function LoopManager({ running, onResume }: Props) {
       <LoopDetailsSection
         selected={selected}
         evidence={evidence}
+        health={loopHealth}
         history={history}
         onLoadMore={() => void loadMoreHistory()}
       />

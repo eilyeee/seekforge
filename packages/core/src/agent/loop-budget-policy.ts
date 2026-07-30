@@ -7,6 +7,30 @@ export type LoopBudgetLimits = {
   maxDurationMs?: number;
   maxVerifyRuns?: number;
 };
+export type LoopBudgetForecast = {
+  samples: number;
+  costUsd: number;
+  tokensUsed: number;
+  durationMs: number;
+  verifyRuns: number;
+};
+
+/** Conservative next-iteration usage derived only from completed snapshots. */
+export function forecastLoopBudgetUsage(snapshots: readonly LoopIterationSnapshot[]): LoopBudgetForecast {
+  const recent = snapshots.filter((snapshot) => snapshot.iteration > 0).slice(-3);
+  const conservative = (values: number[]): number => Math.max(...values.filter((value) => value > 0), 0);
+  return {
+    samples: recent.length,
+    costUsd: conservative(recent.map((snapshot) => snapshot.costUsd ?? 0)),
+    tokensUsed: conservative(recent.map((snapshot) => snapshot.tokensUsed ?? 0)),
+    durationMs: conservative(recent.map((snapshot) => snapshot.durationMs ?? 0)),
+    verifyRuns: conservative(
+      recent.map((snapshot) =>
+        snapshot.stageResults.reduce((total, stage) => Math.min(Number.MAX_SAFE_INTEGER, total + stage.attempts), 0),
+      ),
+    ),
+  };
+}
 
 export function currentLoopBudgetReason(
   usage: LoopBudgetUsage,
@@ -29,12 +53,11 @@ export function forecastLoopBudgetReason(
   limits: LoopBudgetLimits,
   snapshots: readonly LoopIterationSnapshot[],
 ): LoopBudgetReason | null {
-  const recent = snapshots.filter((snapshot) => snapshot.iteration > 0).slice(-3);
-  if (recent.length === 0) return null;
-  const conservative = (values: number[]): number => Math.max(...values.filter((value) => value > 0), 0);
-  const forecastCost = conservative(recent.map((snapshot) => snapshot.costUsd ?? 0));
-  const forecastTokens = conservative(recent.map((snapshot) => snapshot.tokensUsed ?? 0));
-  const forecastDuration = conservative(recent.map((snapshot) => snapshot.durationMs ?? 0));
+  const forecast = forecastLoopBudgetUsage(snapshots);
+  if (forecast.samples === 0) return null;
+  const forecastCost = forecast.costUsd;
+  const forecastTokens = forecast.tokensUsed;
+  const forecastDuration = forecast.durationMs;
   if (limits.costBudgetUsd !== undefined && forecastCost > 0 && usage.costUsd + forecastCost >= limits.costBudgetUsd) {
     return "cost";
   }
@@ -51,6 +74,13 @@ export function forecastLoopBudgetReason(
     usage.elapsedMs + forecastDuration >= limits.maxDurationMs
   ) {
     return "duration";
+  }
+  if (
+    limits.maxVerifyRuns !== undefined &&
+    forecast.verifyRuns > 0 &&
+    usage.verifyRuns + forecast.verifyRuns >= limits.maxVerifyRuns
+  ) {
+    return "verify_runs";
   }
   return null;
 }

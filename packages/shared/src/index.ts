@@ -1041,6 +1041,51 @@ export type LoopEvidenceReport = {
 
 export type LoopPruneResult = { candidates: string[]; removed: string[]; skipped: string[] };
 
+export type LoopHealthReport = {
+  loopId: string;
+  generatedAt: string;
+  status: "unknown" | "healthy" | "warning" | "critical";
+  progress: { iterations: number; maxIterations: number; remainingIterations: number; completionRatio: number };
+  usage: {
+    costUsd: number;
+    costBudgetUsd?: number;
+    remainingCostUsd?: number;
+    tokensUsed: number;
+    tokenBudget?: number;
+    remainingTokens?: number;
+    elapsedMs: number;
+    maxDurationMs?: number;
+    remainingDurationMs?: number;
+    verifyRuns: number;
+    maxVerifyRuns?: number;
+    remainingVerifyRuns?: number;
+  };
+  forecast: {
+    samples: number;
+    nextIterationCostUsd: number;
+    nextIterationTokens: number;
+    nextIterationDurationMs: number;
+    nextIterationVerifyRuns: number;
+    affordableIterations: number;
+    limitingBudget?: "cost" | "tokens" | "duration" | "verify_runs" | "iterations";
+  };
+  verification: Array<{
+    stageId: string;
+    confidence: "low" | "medium" | "high";
+    failureRate: number;
+    flakyRate: number;
+    ageWeight: number;
+    recommendedAttempts: 1 | 2 | 3;
+    quarantineCandidate: boolean;
+  }>;
+  findings: Array<{
+    kind: "terminal_failure" | "budget_risk" | "iteration_risk" | "recovery_backoff" | "verification_instability";
+    severity: "warning" | "critical";
+    message: string;
+    stageId?: string;
+  }>;
+};
+
 export type LoopDagSummary = {
   dagId: string;
   spentCost: number;
@@ -1164,8 +1209,18 @@ export type EngineeringGraphHealthReport = {
   generatedAt: string;
   status: "unknown" | "healthy" | "warning" | "critical";
   predictedMakespanMs: number;
+  predictedP95MakespanMs: number;
+  forecastCoverage: { measuredNodes: number; totalNodes: number; ratio: number };
   criticalPath: string[];
   bottlenecks: string[];
+  risks: string[];
+  recommendations: Array<{
+    kind: "max_concurrency" | "resource_capacity";
+    target: string;
+    currentValue: number;
+    suggestedValue: number;
+    predictedSavingsMs: number;
+  }>;
   nodes: Array<{
     nodeId: string;
     status: "pending" | GraphNodeStatus;

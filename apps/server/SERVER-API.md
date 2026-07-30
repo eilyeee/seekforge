@@ -113,6 +113,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/loops/:id | one persisted Loop state; 404 when absent |
 | GET /api/loops/:id/history?after=N&limit=N | up to 1000 retained lifecycle log entries after the sequence cursor; 404 when the Loop is absent |
 | GET /api/loops/:id/evidence?compare=:otherId | integrity-digested evidence report, or a bounded comparison with another persisted Loop |
+| GET /api/loops/:id/health | budget-burn forecast, affordable iterations, exact-stage reliability, recovery risk, and findings |
 | POST /api/loops/recover | body `{limit?:1..100}`; mark orphaned active records `interrupted` and return them |
 | POST /api/loops/prune | body `{maxAgeDays?,maxTerminalCount?,dryRun?}`; prune only retention-eligible terminal records |
 | POST /api/loops/:id/priority | body `{priority:-10..10}`; update recovery order under the Loop lifecycle guard |
@@ -135,7 +136,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/graphs/:id/history | bounded rotating lifecycle history; `format=entries` adds log sequence/cursor metadata |
 | GET /api/graphs/:id/evidence | node/usage/active-duration evidence summary with SHA-256 integrity digest and no node outputs |
 | GET /api/graphs/:id/compare | compare the latest archived terminal run (or `runNumber`) with current state |
-| GET /api/graphs/:id/health | exact-fingerprint scheduling forecast, P50/P95 drift, anomalies, critical path, and child-session lineage |
+| GET /api/graphs/:id/health | exact-fingerprint P50/P95 makespan and drift, measurement coverage, risks, critical path, child-session lineage, and bounded capacity recommendations |
 | POST /api/graphs/:id/priority | body `{priority:-10..10}`; update automatic recovery order under the Graph lease |
 | POST /api/graphs/:id/signals | enqueue a declared external wait signal and resume a wait-paused Graph |
 | GET /api/graphs/:id/resources | retained managed-worktree paths, disk usage, archival, and active status |

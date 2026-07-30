@@ -2,6 +2,7 @@ import {
   acquireLoopLifecycleLeaseWithPreemption,
   archiveLoopDagResources,
   buildLoopEvidenceReport,
+  buildLoopHealthReport,
   compareLoopEvidence,
   MAX_LOOP_ITERATIONS,
   WorktreeGitError,
@@ -514,6 +515,18 @@ export function loopIntelligenceCommand(): void {
   try {
     const entries = readLoopVerificationIntelligence(process.cwd());
     console.log(JSON.stringify({ entries, findings: analyzeLoopVerificationIntelligence(entries) }, null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+export async function loopHealthCommand(loopId: string): Promise<void> {
+  try {
+    const workspace = await findLoopWorkspace(loopId, false);
+    const state = workspace ? loadLoopState(workspace, loopId) : null;
+    if (!workspace || !state) throw new Error(`Persisted loop not found or invalid: ${loopId}`);
+    console.log(JSON.stringify(buildLoopHealthReport(state, readLoopVerificationIntelligence(workspace)), null, 2));
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

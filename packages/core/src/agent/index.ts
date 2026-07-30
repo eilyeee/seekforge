@@ -130,6 +130,8 @@ export {
   parseGraphValueSchema,
   parseEngineeringGraphDefinition,
   MAX_GRAPH_CONCURRENCY,
+  MAX_GRAPH_RESOURCE_CAPACITIES,
+  MAX_GRAPH_RESOURCE_CAPACITY,
   MAX_GRAPH_DEFINITION_BYTES,
   MAX_GRAPH_DEPTH,
   MAX_GRAPH_NODES,
@@ -314,6 +316,14 @@ export {
   type LoopBudgetPrediction,
 } from "./loop-budget-history.js";
 export {
+  currentLoopBudgetReason,
+  forecastLoopBudgetReason,
+  forecastLoopBudgetUsage,
+  type LoopBudgetForecast,
+  type LoopBudgetLimits,
+  type LoopBudgetUsage,
+} from "./loop-budget-policy.js";
+export {
   isValidOrchestrationResourceId,
   orchestrationResourcesOverlap,
   selectOrchestrationReadyNodes,
@@ -351,6 +361,7 @@ export {
   type LoopVerificationIntelligenceFinding,
   type LoopVerificationReliability,
 } from "./loop-verification-intelligence.js";
+export { buildLoopHealthReport, type LoopHealthFinding, type LoopHealthReport } from "./loop-health.js";
 export {
   isLoopFailureCategory,
   selectLoopModelRoute,

@@ -261,6 +261,7 @@ seekforge loop-resume <loop-id> [--approve-requirements] [--add-iters <n>] [--ad
 seekforge loop-list
 seekforge loop-show <loop-id>
 seekforge loop-diagnose <loop-id>
+seekforge loop-health <loop-id>
 seekforge loop-pause <loop-id>
 seekforge loop-continue <loop-id>
 seekforge loop-steer <loop-id> "<guidance>"
@@ -327,6 +328,12 @@ seekforge loop-cleanup <worktree-name> [--force]
   It includes a SHA-256 integrity digest, a Core verification helper, and immutable delivery revision/hash/URL.
   CLI export supports JSON, SARIF, and JUnit, while `--compare` reports changes
   between two persisted runs.
+- `loop-health <id>` and `GET /api/loops/:id/health` combine the current
+  checkpoint with only exact stage-and-command verification intelligence. The
+  output reports remaining hard budgets, a conservative next-iteration forecast
+  from up to three completed snapshots, affordable iterations, the limiting
+  budget, recovery backoff, and reliability findings. It is advisory and never
+  changes runtime eligibility or raises a budget.
 - `loop-dag <file>` durably checkpoints a JSON dependency graph. `--resume` and
   `--dag-id` restore completed nodes; ready nodes receive weighted shares of the
   remaining cost/token budgets and support priorities, bounded retries, and

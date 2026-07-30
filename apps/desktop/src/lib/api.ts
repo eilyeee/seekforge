@@ -240,6 +240,11 @@ export const api = {
       "GET",
       withWorkspace(`/api/loops/${encodeURIComponent(id)}/evidence`, ws),
     ),
+  loopHealth: (id: string, ws?: string) =>
+    request<import("../types").LoopHealthReport>(
+      "GET",
+      withWorkspace(`/api/loops/${encodeURIComponent(id)}/health`, ws),
+    ),
   loopRecover: (limit = 3, ws?: string) =>
     request<LoopStateSummary[]>("POST", withWorkspace("/api/loops/recover", ws), { limit }),
   loopPrune: (input: { maxAgeDays?: number; maxTerminalCount?: number; dryRun?: boolean }, ws?: string) =>

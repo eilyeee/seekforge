@@ -11,6 +11,7 @@ import {
   loopDagResourcesCommand,
   loopListCommand,
   loopHistoryCommand,
+  loopHealthCommand,
   loopIntelligenceCommand,
   loopRecoverCommand,
   loopPriorityCommand,
@@ -327,6 +328,11 @@ export function registerLoopCommands(program: Command, registration: LoopCommand
     .command("loop-intelligence")
     .description("show bounded cross-run verification reliability and anomaly findings")
     .action(loopIntelligenceCommand);
+  program
+    .command("loop-health")
+    .argument("<loop-id>")
+    .description("forecast Loop budget capacity, verifier reliability, and recovery risks")
+    .action(loopHealthCommand);
   program
     .command("loop-history")
     .argument("<loop-id>")
