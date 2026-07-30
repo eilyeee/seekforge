@@ -11,6 +11,7 @@ import {
   loopDagResourcesCommand,
   loopListCommand,
   loopHistoryCommand,
+  loopIntelligenceCommand,
   loopRecoverCommand,
   loopPriorityCommand,
   loopPruneCommand,
@@ -20,6 +21,7 @@ import {
   loopSpeculationListCommand,
   loopSpeculationPromoteCommand,
 } from "./commands/loop.js";
+import { isLoopFailureCategory, type LoopFailureCategory } from "@seekforge/core";
 
 type LoopCommandRegistration = {
   collect: (value: string, previous: string[]) => string[];
@@ -50,6 +52,39 @@ function parseLoopDelivery(val: string): "checkpoint" | "merge" | "patch" | "pr"
     throw new InvalidArgumentError('must be "checkpoint", "merge", "patch", or "pr"');
   }
   return val;
+}
+
+function parseModelEscalationThreshold(val: string): number {
+  if (!/^[1-8]$/.test(val)) throw new InvalidArgumentError("must be an integer from 1 to 8");
+  return Number(val);
+}
+
+export function parseLoopModelRoutes(values: readonly string[]): Partial<Record<LoopFailureCategory, string[]>> {
+  const routes: Partial<Record<LoopFailureCategory, string[]>> = {};
+  for (const value of values) {
+    const separator = value.indexOf("=");
+    const category = separator < 0 ? "" : value.slice(0, separator);
+    const models = separator < 0 ? [] : value.slice(separator + 1).split(",");
+    if (
+      !isLoopFailureCategory(category) ||
+      models.length === 0 ||
+      models.length > 8 ||
+      new Set(models).size !== models.length ||
+      models.some(
+        (model) =>
+          !model ||
+          model !== model.trim() ||
+          model.length > 256 ||
+          model.includes("=") ||
+          /[\u0000-\u001f]/.test(model),
+      ) ||
+      routes[category as LoopFailureCategory] !== undefined
+    ) {
+      throw new InvalidArgumentError("model route must be a unique category=model[,model...] chain");
+    }
+    routes[category as LoopFailureCategory] = models;
+  }
+  return routes;
 }
 
 export function registerLoopCommands(program: Command, registration: LoopCommandRegistration): void {
@@ -91,6 +126,12 @@ export function registerLoopCommands(program: Command, registration: LoopCommand
     .option("--requirements <mode>", "requirement gate: quick, analyze, or confirm", parseRequirementMode, "quick")
     .option("-y, --yes", "run autonomously (acceptEdits) without the auto-approve note")
     .option("-m, --model <model>", "override model")
+    .option("--model-route <category=models>", "route and escalate edits through comma-separated models", collect, [])
+    .option(
+      "--model-escalation-threshold <n>",
+      "same-category failures per routed model (1-8)",
+      parseModelEscalationThreshold,
+    )
     .option("--profile <name>", "use a named config profile (also SEEKFORGE_PROFILE env)")
     .option("--worktree [name]", "run in a retained isolated worktree (optional name)")
     .description("autonomously run → verify → continue until the verify command passes")
@@ -121,6 +162,8 @@ export function registerLoopCommands(program: Command, registration: LoopCommand
           ciRepairBudget?: number;
           yes?: boolean;
           model?: string;
+          modelRoute?: string[];
+          modelEscalationThreshold?: number;
           profile?: string;
           worktree?: boolean | string;
           requirements: "quick" | "analyze" | "confirm";
@@ -150,6 +193,9 @@ export function registerLoopCommands(program: Command, registration: LoopCommand
           ciRepairBudget: opts.ciRepairBudget,
           yes: opts.yes,
           model: opts.model,
+          modelRoutesByFailureCategory:
+            opts.modelRoute && opts.modelRoute.length > 0 ? parseLoopModelRoutes(opts.modelRoute) : undefined,
+          modelEscalationThreshold: opts.modelEscalationThreshold,
           profile: opts.profile ?? rootProfile(),
           worktree: opts.worktree,
           requirements: opts.requirements,
@@ -219,6 +265,12 @@ export function registerLoopCommands(program: Command, registration: LoopCommand
     .argument("<loop-id>", "persisted loop id to continue")
     .option("-y, --yes", "continue autonomously without the auto-approve note")
     .option("-m, --model <model>", "override model")
+    .option("--model-route <category=models>", "route and escalate edits through comma-separated models", collect, [])
+    .option(
+      "--model-escalation-threshold <n>",
+      "same-category failures per routed model (1-8)",
+      parseModelEscalationThreshold,
+    )
     .option("--add-iters <n>", "add iterations to the persisted loop limit", parsePositiveInt)
     .option("--add-budget <usd>", "add USD to the persisted cost budget", parsePositiveFloat)
     .option("--add-tokens <n>", "add tokens to the persisted token budget", parsePositiveInt)
@@ -233,6 +285,8 @@ export function registerLoopCommands(program: Command, registration: LoopCommand
         opts: {
           yes?: boolean;
           model?: string;
+          modelRoute?: string[];
+          modelEscalationThreshold?: number;
           addIters?: number;
           addBudget?: number;
           addTokens?: number;
@@ -245,6 +299,9 @@ export function registerLoopCommands(program: Command, registration: LoopCommand
         await loopResumeCommand(loopId, {
           yes: opts.yes,
           model: opts.model,
+          modelRoutesByFailureCategory:
+            opts.modelRoute && opts.modelRoute.length > 0 ? parseLoopModelRoutes(opts.modelRoute) : undefined,
+          modelEscalationThreshold: opts.modelEscalationThreshold,
           addIters: opts.addIters,
           addBudget: opts.addBudget,
           addTokens: opts.addTokens,
@@ -266,6 +323,10 @@ export function registerLoopCommands(program: Command, registration: LoopCommand
     .argument("<loop-id>")
     .description("check a Loop checkpoint against its retained event history")
     .action(loopDiagnoseCommand);
+  program
+    .command("loop-intelligence")
+    .description("show bounded cross-run verification reliability and anomaly findings")
+    .action(loopIntelligenceCommand);
   program
     .command("loop-history")
     .argument("<loop-id>")

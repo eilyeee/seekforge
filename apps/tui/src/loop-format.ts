@@ -71,6 +71,13 @@ export function formatLoopEvent(event: LoopEvent): LoopNotice[] {
       const tail = loopOutputTail(event.output);
       return tail ? [head, { text: `    ${tail}`, tone: "dim" }] : [head];
     }
+    case "loop.model.routed":
+      return [
+        {
+          text: `  loop · ${event.category} → ${event.model} · streak ${event.consecutiveFailures}${event.reason === "escalated_category" ? " · escalated" : ""}`,
+          tone: "dim",
+        },
+      ];
     case "requirements.started":
       return [
         {

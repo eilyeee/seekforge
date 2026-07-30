@@ -74,6 +74,17 @@ import { isDenseArray } from "./orchestration.js";
 import { selectOrchestrationReadyNodes } from "./orchestration-scheduler.js";
 import { readLoopVerificationCache, recordLoopVerificationCache } from "./loop-verification-cache.js";
 import {
+  isLoopFailureCategory,
+  selectLoopModelRoute,
+  validateLoopModelRoutes,
+  type LoopModelRouteReason,
+} from "./loop-model-routing.js";
+import {
+  loopVerificationIntelligenceScore,
+  readLoopVerificationIntelligence,
+  recordLoopVerificationIntelligence,
+} from "./loop-verification-intelligence.js";
+import {
   buildLoopCodeReviewPrompt,
   createLoopWorkingMemory,
   formatLoopCodeReviewGaps,
@@ -159,6 +170,9 @@ export type LoopIterationSnapshot = {
   tokensUsed?: number;
   changedPaths?: string[];
   failureCategory?: LoopFailureCategory;
+  editModel?: string;
+  modelRouteReason?: LoopModelRouteReason;
+  failureStreak?: number;
   rolledBack?: boolean;
 };
 
@@ -207,6 +221,10 @@ export type LoopOptions = {
   planModel?: string;
   /** Optional edit-model routing by the previous verification failure category. */
   modelByFailureCategory?: Partial<Record<LoopFailureCategory, string>>;
+  /** Ordered, caller-authorized model escalation chains by failure category. */
+  modelRoutesByFailureCategory?: Partial<Record<LoopFailureCategory, string[]>>;
+  /** Consecutive same-category failures spent on each routed model. Default 2. */
+  modelEscalationThreshold?: number;
   /** Require a fresh read-only reviewer to clear the final diff before success. */
   codeReview?: boolean;
   /** Hand failing runs to planModel (mirrors AgentCoreDeps.escalateOnFailure). */
@@ -262,6 +280,15 @@ export type LoopEvent =
   | { type: "verify.stage.started"; iteration: number; stageId: string; attempt: number }
   | { type: "verify.stage.completed"; iteration: number; result: LoopStageResult }
   | { type: "verify.flaky"; iteration: number; stageId: string; attempts: number }
+  | {
+      type: "loop.model.routed";
+      iteration: number;
+      category: LoopFailureCategory;
+      model: string;
+      consecutiveFailures: number;
+      candidateIndex: number;
+      reason: LoopModelRouteReason;
+    }
   | {
       type: "verify.impact";
       iteration: number;
@@ -542,29 +569,26 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
   const routedModels = new Set<string>();
   if (opts.modelByFailureCategory !== undefined) {
     if (!isRecord(opts.modelByFailureCategory)) throw new Error("Loop modelByFailureCategory must be an object");
-    const categories = new Set<LoopFailureCategory>([
-      "none",
-      "test",
-      "compile",
-      "lint",
-      "review",
-      "environment",
-      "timeout",
-      "permission",
-      "network",
-      "unknown",
-    ]);
     for (const [category, model] of Object.entries(opts.modelByFailureCategory)) {
-      if (
-        !categories.has(category as LoopFailureCategory) ||
-        typeof model !== "string" ||
-        !model.trim() ||
-        model.length > 256
-      ) {
+      if (!isLoopFailureCategory(category) || typeof model !== "string" || !model.trim() || model.length > 256) {
         throw new Error("Loop modelByFailureCategory contains an invalid category or model");
       }
       routedModels.add(model);
     }
+  }
+  if (opts.modelRoutesByFailureCategory !== undefined) {
+    for (const model of validateLoopModelRoutes(opts.modelRoutesByFailureCategory)) routedModels.add(model);
+  }
+  if (
+    opts.modelEscalationThreshold !== undefined &&
+    (!Number.isSafeInteger(opts.modelEscalationThreshold) ||
+      opts.modelEscalationThreshold < 1 ||
+      opts.modelEscalationThreshold > 8)
+  ) {
+    throw new RangeError("Loop modelEscalationThreshold must be an integer from 1 to 8");
+  }
+  if (opts.modelEscalationThreshold !== undefined && opts.modelRoutesByFailureCategory === undefined) {
+    throw new Error("Loop modelEscalationThreshold requires modelRoutesByFailureCategory");
   }
   const configuredIterations = opts.maxIterations ?? opts.resumeState?.maxIterations;
   if (
@@ -729,8 +753,11 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
   if (opts.model !== undefined && (!opts.model.trim() || opts.model.length > 256)) {
     throw new Error("Loop model must be a non-empty bounded string");
   }
-  if (opts.modelByFailureCategory !== undefined && !deps.providerForModel) {
-    throw new Error("Loop modelByFailureCategory requires providerForModel");
+  if (
+    (opts.modelByFailureCategory !== undefined || opts.modelRoutesByFailureCategory !== undefined) &&
+    !deps.providerForModel
+  ) {
+    throw new Error("Loop model routing requires providerForModel");
   }
   const requestedModels = new Set(routedModels);
   if (opts.model) requestedModels.add(opts.model);
@@ -977,6 +1004,12 @@ async function runAutoLoopWithLease(
   let controlSeq = opts.resumeState?.controlSeq ?? 0;
   let lastStageResults = opts.resumeState?.stageResults ?? [];
   let flakyObserved = lastStageResults.some((result) => result.flaky);
+  const verificationIntelligence = new Map(
+    (persistenceEnabled ? readLoopVerificationIntelligence(opts.workspace) : []).map((entry) => [
+      `${entry.stageId}\0${entry.command}`,
+      entry,
+    ]),
+  );
   const snapshots = [...(opts.resumeState?.snapshots ?? [])];
   const allChangedPaths = new Set<string>();
   let steeringGuidance: string[] = [];
@@ -1238,10 +1271,13 @@ async function runAutoLoopWithLease(
         break;
       }
       const historicalFailureScore = (id: string): number =>
-        (opts.resumeState?.snapshots ?? []).reduce((score, snapshot) => {
+        snapshots.reduce((score, snapshot) => {
           const result = snapshot.stageResults.find((stage) => stage.id === id);
           return score + (result?.code ? 1_000_000 : 0) + (result?.durationMs ?? 0);
-        }, 0);
+        }, 0) +
+        loopVerificationIntelligenceScore(
+          verificationIntelligence.get(`${id}\0${verificationPlan.find((stage) => stage.id === id)?.command ?? ""}`),
+        );
       const candidates = verificationPlan.filter(
         (stage) => pending.has(stage.id) && (stage.dependsOn ?? []).every((dependency) => outcomes.has(dependency)),
       );
@@ -1367,6 +1403,22 @@ async function runAutoLoopWithLease(
           completed = { ...completed, flaky: true };
           flakyObserved = true;
           emit({ type: "verify.flaky", iteration, stageId: stage.id, attempts: completed.attempts });
+        }
+        if (item.decision.reason !== "cache_hit" && persistenceEnabled) {
+          try {
+            const aggregate = item.diagnostics || completed.output;
+            const category =
+              completed.code === 0 ? "none" : verificationFailureCategory(parseVerifyDiagnostics(aggregate), aggregate);
+            const intelligence = recordLoopVerificationIntelligence(
+              opts.workspace,
+              completed,
+              category,
+              opts.workspaceGuard,
+            );
+            verificationIntelligence.set(`${completed.id}\0${completed.command}`, intelligence);
+          } catch {
+            // Historical intelligence is advisory; current verification remains authoritative.
+          }
         }
         stages.push(completed);
         outcomes.set(stage.id, completed);
@@ -1762,6 +1814,8 @@ async function runAutoLoopWithLease(
       workspaceFingerprint: previousWorkspace,
       failedTests: previousDiagnostics.failedTests.length,
       stageResults: compactSnapshotStages(lastStageResults),
+      failureCategory:
+        preVerify.code === 0 ? "none" : verificationFailureCategory(previousDiagnostics, preVerifyDiagnostics),
     };
     snapshots.push(initialSnapshot);
     persist({ snapshots, stageResults: lastStageResults, passStreak });
@@ -1846,8 +1900,19 @@ async function runAutoLoopWithLease(
     }
 
     let runSucceeded = false;
-    const priorFailureCategory = verificationFailureCategory(previousDiagnostics, lastVerify.output);
-    const editingAgent = editAgentForModel(opts.modelByFailureCategory?.[priorFailureCategory]);
+    const priorFailureCategory =
+      lastVerify.code === 0 ? "none" : verificationFailureCategory(previousDiagnostics, lastVerify.output);
+    const modelRoute = selectLoopModelRoute({
+      category: priorFailureCategory,
+      snapshots,
+      defaultModel: loopModel ?? deps.provider.model,
+      staticModel: opts.modelByFailureCategory?.[priorFailureCategory],
+      candidates: opts.modelRoutesByFailureCategory?.[priorFailureCategory],
+      escalationThreshold: opts.modelEscalationThreshold ?? 2,
+    });
+    const selectedEditModel = modelRoute.model ?? deps.provider.model;
+    emit({ type: "loop.model.routed", iteration: i, ...modelRoute, model: selectedEditModel });
+    const editingAgent = editAgentForModel(modelRoute.model);
     const changedPaths = new Set<string>();
     let forceFullFingerprint = false;
     for (let attempt = 0; attempt <= maxAgentRetries && !runSucceeded; attempt++) {
@@ -1984,6 +2049,9 @@ async function runAutoLoopWithLease(
       tokensUsed: tokensUsed - iterationStartingTokens,
       changedPaths: observedChangedPaths,
       failureCategory: v.code === 0 ? "none" : verificationFailureCategory(diagnostics, verifyDiagnostics),
+      editModel: selectedEditModel,
+      modelRouteReason: modelRoute.reason,
+      failureStreak: modelRoute.consecutiveFailures,
     };
     const regressionDetected =
       rollbackOnRegression &&
@@ -2119,7 +2187,11 @@ async function runAutoLoopWithLease(
           snapshot.failureCategory === undefined || snapshot.failureCategory === "none"
             ? "unknown"
             : snapshot.failureCategory;
-        const repeatedCategory = snapshots.slice(0, -1).some((item) => item.failureCategory === category);
+        // The iteration-zero pre-check classifies the failure but has not yet
+        // exercised a recovery strategy, so it cannot justify diversification.
+        const repeatedCategory = snapshots
+          .slice(0, -1)
+          .some((item) => item.iteration > 0 && item.failureCategory === category);
         const strategy = selectLoopRecoveryStrategy(
           opts.workspace,
           category,

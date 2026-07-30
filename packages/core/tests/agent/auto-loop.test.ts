@@ -23,6 +23,7 @@ import {
 import { createLoopControl } from "../../src/agent/loop-control.js";
 import { enqueueLoopControl } from "../../src/agent/loop-control-store.js";
 import { acquireWorkspaceSessionGuard } from "../../src/agent/session-lease.js";
+import { recordLoopVerificationIntelligence } from "../../src/agent/loop-verification-intelligence.js";
 import { setSandboxAvailabilityCheckForTests } from "../../src/tools/os-sandbox.js";
 
 const USAGE = { promptTokens: 10, completionTokens: 5, cacheHitTokens: 0, costUsd: 0.001 };
@@ -347,6 +348,47 @@ describe("runAutoLoop", () => {
     expect(resolutions).toBe(1);
   });
 
+  it("escalates through an explicit model chain and checkpoints the routing decision", async () => {
+    const base = alwaysDone("base");
+    const fast = alwaysDone("fast");
+    const strong = alwaysDone("strong");
+    const events: LoopEvent[] = [];
+    const result = await runAutoLoop(
+      {
+        provider: base,
+        providerForModel: (model) => ({ fast, strong })[model] ?? base,
+        dispatcher: noopDispatcher,
+        confirm: async () => true,
+      },
+      {
+        ...baseOpts(workspace, failNTimes(2)),
+        modelRoutesByFailureCategory: { unknown: ["fast", "strong"] },
+        modelEscalationThreshold: 1,
+        maxIterations: 2,
+        onEvent: (event) => events.push(event),
+      },
+    );
+    expect(result.status).toBe("passed");
+    expect(base.chats).toBe(0);
+    expect(fast.chats).toBe(1);
+    expect(strong.chats).toBe(1);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "loop.model.routed",
+        iteration: 2,
+        model: "strong",
+        reason: "escalated_category",
+        consecutiveFailures: 2,
+      }),
+    );
+    const state = loadLoopState(workspace, result.loopId!);
+    expect(state?.snapshots?.at(-1)).toMatchObject({
+      editModel: "strong",
+      modelRouteReason: "escalated_category",
+      failureStreak: 2,
+    });
+  });
+
   it("resolves routed providers only after pure validation and can route back to the default provider", async () => {
     const base = alwaysDone("base");
     const alternate = alwaysDone("alternate");
@@ -563,6 +605,35 @@ describe("runAutoLoop", () => {
     expect(maxActive).toBe(2);
     expect(completed.slice(0, 2).sort()).toEqual(["lint", "types"]);
     expect(completed[2]).toBe("tests");
+  });
+
+  it("prioritizes a historically failing verifier within an already-safe ready wave", async () => {
+    recordLoopVerificationIntelligence(
+      workspace,
+      {
+        id: "risky",
+        command: "risky",
+        code: 1,
+        output: "not retained",
+        attempts: 1,
+        flaky: false,
+        durationMs: 25,
+      },
+      "test",
+    );
+    const started: string[] = [];
+    const result = await runAutoLoop(mkDeps().deps, {
+      ...baseOpts(workspace, async () => ({ code: 0, output: "ok" })),
+      verificationPlan: [
+        { id: "stable", command: "stable", parallel: true, resources: ["shared-verifier"] },
+        { id: "risky", command: "risky", parallel: true, resources: ["shared-verifier"] },
+      ],
+      onEvent: (event) => {
+        if (event.type === "verify.stage.started") started.push(event.stageId);
+      },
+    });
+    expect(result.status).toBe("passed");
+    expect(started).toEqual(["risky", "stable"]);
   });
 
   it("settles every started parallel verifier when a peer throws", async () => {
@@ -885,16 +956,19 @@ describe("runAutoLoop", () => {
     ]);
     const deps: AgentCoreDeps = { provider, dispatcher: noopDispatcher, confirm: async () => true };
     let verifies = 0;
+    const events: LoopEvent[] = [];
     const result = await runAutoLoop(deps, {
       ...baseOpts(workspace, async () => {
         verifies++;
         return { code: 0, output: "ok" };
       }),
       requirementMode: "analyze",
+      onEvent: (event) => events.push(event),
     });
     expect(result.status).toBe("passed");
     expect(result.iterations).toBe(1);
     expect(verifies).toBe(2);
+    expect(events).toContainEqual(expect.objectContaining({ type: "loop.model.routed", category: "none" }));
     expect(
       provider.seen.some((messages) =>
         messages.some((message) => String(message.content).includes("feature is missing")),
@@ -1428,7 +1502,12 @@ describe("runAutoLoop", () => {
     });
     expect(result.status).toBe("no_progress");
     expect(events).toContainEqual(
-      expect.objectContaining({ type: "loop.recovery", category: "review", strategy: "repair_review" }),
+      expect.objectContaining({
+        type: "loop.recovery",
+        iteration: 1,
+        category: "review",
+        strategy: "repair_review",
+      }),
     );
     expect(
       provider.seen

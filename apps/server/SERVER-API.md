@@ -109,6 +109,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | POST /api/runs/prune | compact run history immediately. Optional body `{maxTerminalRuns?, maxAgeDays?}` overrides the workspace retention policy for this prune; active runs are always retained; returns `{removed, kept}` |
 | GET /api/loops | all persisted Loop states in the selected workspace |
 | GET /api/loops/verification-plan | discover a conservative root verification plan without executing it |
+| GET /api/loops/verification-intelligence | bounded output-free verifier reliability history and anomaly findings |
 | GET /api/loops/:id | one persisted Loop state; 404 when absent |
 | GET /api/loops/:id/history?after=N&limit=N | up to 1000 retained lifecycle log entries after the sequence cursor; 404 when the Loop is absent |
 | GET /api/loops/:id/evidence?compare=:otherId | integrity-digested evidence report, or a bounded comparison with another persisted Loop |

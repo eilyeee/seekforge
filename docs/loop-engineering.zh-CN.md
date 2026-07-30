@@ -314,7 +314,7 @@ seekforge loop-cleanup <worktree-name> [--force]
   不需要这些依赖。
 - REST Loop 列表支持 `status`、`q`、`limit` 与 `after`；活跃 Loop 可接受
   `POST /api/loops/:id/control`，`/api/loop-dags` 暴露持久图状态。Prometheus 输出增加 Loop 总数、
-  活跃数、成本、Token 与验证次数聚合。Desktop 增加筛选、轮询、历史分页、CI 状态、验证选择/耗时、
+  活跃数、成本、Token、验证次数及验证智能异常/严重异常聚合。Desktop 增加筛选、轮询、历史分页、CI 状态、验证选择/耗时、
   验收证据、迭代时间线、fan-in 与 DAG 节点状态，以及安全边界控制；
   当查询或所选 Loop 已变化时，会丢弃迟到的筛选与历史响应。
 - 验证发现会保留权威根门禁，同时加入安全的路径级 pnpm workspace、嵌套 Cargo、Go 与 Python 阶段。
@@ -334,7 +334,19 @@ Token/变更路径、失败类别、回滚标记、恢复次数和连续
 超限替换会在触碰最后一份可读状态前失败。Loop 成功后只抽取一次记忆，并对整个 Loop 只记录一次已选技能效果，而不会按内部
 Agent 迭代重复记账。
 
-状态还会记录最近进入的 `requirements`、`precheck`、`editing`、`verification`、`acceptance`、`review` 或 `settled` 阶段，用于崩溃诊断与恢复展示。可缓存验证阶段会发布一条有界、七天有效的跨运行提示，并绑定精确命令、权威工作区指纹以及 Node 平台/运行时身份。持久提示可跳过增量工作，但它始终会强制执行、且绝不能授权强制完整流水线。嵌入方可通过 `modelByFailureCategory` 按上一次失败类别路由编辑迭代；该能力必须显式提供 `providerForModel`，且不会改变验证、权限或预算。
+状态还会记录最近进入的 `requirements`、`precheck`、`editing`、`verification`、`acceptance`、`review` 或 `settled` 阶段，用于崩溃诊断与恢复展示。可缓存验证阶段会发布一条有界、七天有效的跨运行提示，并绑定精确命令、权威工作区指纹以及 Node 平台/运行时身份。持久提示可跳过增量工作，但它始终会强制执行、且绝不能授权强制完整流水线。
+
+真实执行的验证器还会更新一份有界、保留 30 天的可靠性记录，并绑定精确阶段 id、
+命令与运行时身份。它只保存次数、失败连续次数、抖动频率和平均耗时，不保存验证器输出。
+调度器只能用它调整同一安全就绪波次内阶段的优先级；`loop-intelligence` 或
+`GET /api/loops/verification-intelligence` 可查看持续异常。该历史不能跳过阶段、满足门禁，
+也不能改变依赖与资源冲突。
+
+嵌入方既可通过 `modelByFailureCategory` 按上一次失败类别精确路由编辑迭代，也可通过
+`modelRoutesByFailureCategory` 提供显式有序升级链；`modelEscalationThreshold` 控制每个模型
+处理多少次连续同类失败。精确路由优先于升级链，所有候选项都会在预检阶段通过
+`providerForModel` 解析，每次选择会写入 `loop.model.routed` 与迭代快照。路由不会改变验证、
+权限或预算。
 
 编辑迭代复用**一个 worker 会话**；需求分析和验收复用状态中记录的独立 reviewer
 会话。这样评审上下文不会进入编辑对话，同时两条 trace 都可审计。
@@ -369,6 +381,8 @@ type LoopOptions = {
   maxAgentRetries?: number;     // 瞬时错误默认重试 1 次
   approvalMode?: ApprovalMode;  // default "acceptEdits"
   model?: string; planModel?: string; escalateOnFailure?: boolean;
+  modelRoutesByFailureCategory?: Partial<Record<LoopFailureCategory, string[]>>;
+  modelEscalationThreshold?: number; // 1-8，默认 2
   signal?: AbortSignal;         // cooperative stop
   control?: LoopControl;        // 在安全边界暂停/继续/引导
   onEvent?: (e: LoopEvent) => void;

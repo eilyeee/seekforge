@@ -11,6 +11,8 @@ import {
   loadLoopState,
   pruneLoopStates,
   readLoopHistory,
+  readLoopVerificationIntelligence,
+  analyzeLoopVerificationIntelligence,
   recoverInterruptedLoops,
   removeLoopState,
   setLoopPriority,
@@ -70,6 +72,11 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
     } catch (error) {
       sendApiError(res, 400, "not_found", error instanceof Error ? error.message : String(error));
     }
+    return true;
+  }
+  if (method === "GET" && segs[2] === "verification-intelligence" && segs.length === 3) {
+    const entries = readLoopVerificationIntelligence(workspace);
+    sendJson(res, 200, { entries, findings: analyzeLoopVerificationIntelligence(entries) });
     return true;
   }
   if (method === "POST" && segs[2] === "recover" && segs.length === 3) {

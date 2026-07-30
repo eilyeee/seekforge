@@ -20,6 +20,7 @@ import {
   resolveOutputStyle,
   type DispatchManager,
   type LoopControl,
+  type LoopEvent,
 } from "@seekforge/core";
 import type {
   ApiErrorCode,
@@ -144,6 +145,12 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       cacheSequence: !terminal,
     });
     send({ ...frame, runId, seq: stored.seq } as unknown as ServerFrame);
+  };
+  const sendLoopEvent = (runId: string, workspace: string, event: LoopEvent): void => {
+    // Model routing is internal until the frozen shared WS contract explicitly
+    // adopts it; persisted snapshots and local CLI/TUI observers retain it.
+    if (event.type === "loop.model.routed") return;
+    sendRun(runId, workspace, { type: "loop.event", event });
   };
   const fail = (code: string, message: string): void => send({ type: "error", code: code as ApiErrorCode, message });
   const launch = (operation: Promise<void>): void => {
@@ -532,7 +539,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           ...(input.requirementMode !== undefined ? { requirementMode: input.requirementMode } : {}),
           approvalMode: "acceptEdits",
           signal: runController.signal,
-          onEvent: (event) => sendRun(runId, input.workspace, { type: "loop.event", event }),
+          onEvent: (event) => sendLoopEvent(runId, input.workspace, event),
           control: input.control,
         },
       );
@@ -611,7 +618,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           ...(input.approveRequirements !== undefined ? { approveRequirements: input.approveRequirements } : {}),
           approvalMode: "acceptEdits",
           signal: runController.signal,
-          onEvent: (event) => sendRun(runId, input.workspace, { type: "loop.event", event }),
+          onEvent: (event) => sendLoopEvent(runId, input.workspace, event),
           control: input.control,
         },
       );

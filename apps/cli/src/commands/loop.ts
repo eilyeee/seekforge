@@ -27,6 +27,8 @@ import {
   promoteLoopSpeculation,
   pruneLoopDagResources,
   readLoopHistory,
+  readLoopVerificationIntelligence,
+  analyzeLoopVerificationIntelligence,
   recoverInterruptedLoops,
   pruneLoopStates,
   readFileIfExists,
@@ -49,6 +51,7 @@ import {
   type LoopEvidenceFormat,
   type LoopState,
   type LoopRequirementMode,
+  type LoopFailureCategory,
 } from "@seekforge/core";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -101,6 +104,8 @@ export type LoopOptions = {
   yes?: boolean;
   /** Override model. */
   model?: string;
+  modelRoutesByFailureCategory?: Partial<Record<LoopFailureCategory, string[]>>;
+  modelEscalationThreshold?: number;
   /** Named config profile to overlay (CLI --profile / SEEKFORGE_PROFILE). */
   profile?: string;
   /** Run in a retained isolated worktree, optionally with a user-facing name. */
@@ -180,6 +185,8 @@ export function formatLoopEvent(event: LoopEvent): string {
       return `  ${event.result.code === 0 ? "✓" : "✗"} verifier ${event.result.id} · ${event.result.durationMs}ms${event.result.flaky ? " · flaky" : ""}`;
     case "verify.flaky":
       return `Warning: verifier ${event.stageId} passed after ${event.attempts} attempts (flaky)`;
+    case "loop.model.routed":
+      return `  model route · ${event.category} → ${event.model} · streak ${event.consecutiveFailures}${event.reason === "escalated_category" ? " · escalated" : ""}`;
     case "verify.impact":
       return `  verification impact · ${event.decisions.filter((decision) => decision.action === "run").length} run, ${event.decisions.filter((decision) => decision.action === "reuse").length} reused, ${event.decisions.filter((decision) => decision.action === "skip").length} skipped, ${event.decisions.filter((decision) => decision.action === "blocked").length} blocked${event.fullFallback ? " · full" : ""}`;
     case "loop.paused":
@@ -379,6 +386,8 @@ type ResumeAutoLoop = (
     signal?: AbortSignal;
     onEvent?: (event: LoopEvent) => void;
     model?: string;
+    modelRoutesByFailureCategory?: Partial<Record<LoopFailureCategory, string[]>>;
+    modelEscalationThreshold?: number;
     planModel?: string;
     escalateOnFailure?: boolean;
     additionalIterations?: number;
@@ -497,6 +506,16 @@ export async function loopDiagnoseCommand(loopId: string): Promise<void> {
     if (!report.healthy) process.exitCode = 1;
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+  }
+}
+
+export function loopIntelligenceCommand(): void {
+  try {
+    const entries = readLoopVerificationIntelligence(process.cwd());
+    console.log(JSON.stringify({ entries, findings: analyzeLoopVerificationIntelligence(entries) }, null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   }
 }
@@ -1057,6 +1076,12 @@ async function runPreparedLoop(
       async ({ deps, controller }) => {
         const common = {
           ...(model ? { model } : {}),
+          ...(opts.modelRoutesByFailureCategory
+            ? { modelRoutesByFailureCategory: opts.modelRoutesByFailureCategory }
+            : {}),
+          ...(opts.modelEscalationThreshold !== undefined
+            ? { modelEscalationThreshold: opts.modelEscalationThreshold }
+            : {}),
           ...(config.planModel ? { planModel: config.planModel } : {}),
           ...(config.escalateOnFailure ? { escalateOnFailure: true } : {}),
           signal: controller.signal,

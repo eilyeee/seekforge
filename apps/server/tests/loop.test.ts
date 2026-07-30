@@ -315,6 +315,15 @@ describe("loop -> loop.event -> idle", () => {
         seen = loopOpts;
         const result = loopResult();
         loopOpts.onEvent?.({ type: "iteration.start", iteration: 1 });
+        loopOpts.onEvent?.({
+          type: "loop.model.routed",
+          iteration: 1,
+          category: "test",
+          model: "deepseek-routed",
+          consecutiveFailures: 2,
+          candidateIndex: 1,
+          reason: "escalated_category",
+        });
         loopOpts.onEvent?.({ type: "verify.output", iteration: 1, stream: "stdout", chunk: "running\n" });
         loopOpts.onEvent?.({ type: "verify", iteration: 1, code: 0, passed: true, output: "ok" });
         loopOpts.onEvent?.({ type: "loop.done", result });
@@ -359,6 +368,12 @@ describe("loop -> loop.event -> idle", () => {
     const done = await rx.waitFor((f) => f.type === "loop.event" && (f.event as { type: string }).type === "loop.done");
     expect(done.event).toMatchObject({ type: "loop.done", result: { status: "passed" } });
     await rx.waitFor((f) => f.type === "idle");
+    expect(rx.frames).not.toContainEqual(
+      expect.objectContaining({
+        type: "loop.event",
+        event: expect.objectContaining({ type: "loop.model.routed" }),
+      }),
+    );
 
     // The loop frame fields are mapped onto the core LoopOptions exactly.
     expect(seen).toMatchObject({

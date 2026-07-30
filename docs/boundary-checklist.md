@@ -2094,6 +2094,8 @@ rejects.
   budget before atomic replacement, and keep the last readable file on overflow.
 - **Caught:** 100 Loop snapshots could repeat 16 verifier commands and output tails,
   exceeding the 1 MiB state-reader limit.
+- **Also caught:** Loop verification intelligence bounded entry count and each
+  command but did not evict by total UTF-8 bytes before its 512 KiB write.
 
 ## 167. Evidence existence is not evidence relevance
 
@@ -3153,6 +3155,8 @@ Bounding array counts alone is insufficient when individual values, allowed enum
 
 - **Do:** normalize advisory data through the same field rules used at deserialization, and test producer output with the parser.
 - **Caught:** Loop working-memory creation could retain unsafe paths or unknown categories that its state loader later rejected.
+- **Also caught:** the public Loop verification-intelligence recorder deferred
+  stage/command and flaky-attempt consistency checks until after acquiring a lease.
 
 ## 293. A mutation plan expires before its lease is acquired
 
@@ -3202,6 +3206,73 @@ An unresolved durable wait drains in-flight work and pauses the workflow before 
 
 - **Do:** make forecasts and replay models follow the runtime's pause-and-drain transition before advancing the durable timer.
 - **Caught:** Graph simulation initially launched an independent sibling before a `notBefore` wait had resumed.
+
+## 300. Observability files must not perturb the identity they describe
+
+A verifier-history write made after a real stage execution can change the workspace
+fingerprint before convergence is sampled, manufacturing progress or invalidating a
+cache even though product files did not change.
+
+- **Do:** exclude only the exact bounded internal observability file from the
+  authoritative content identity; keep its parser, lease, runtime key, age, and
+  count limits independent.
+- **Caught:** Loop verification intelligence initially wrote inside the workspace
+  without an explicit workspace-fingerprint exclusion.
+
+## 301. Read-modify-write state must be read after ownership is acquired
+
+Two recorders can both read the same aggregate, then serialize their writes under a
+lease while the second still commits its stale pre-lease snapshot. Serialization of
+writes alone does not prevent the lost update.
+
+- **Do:** acquire the shared mutation lease first, then read, merge, and atomically
+  replace the state while ownership is held.
+- **Caught:** Loop verification intelligence initially loaded its aggregate before
+  acquiring the cross-process lease.
+
+## 302. A new historical consumer needs every producer generation
+
+Adding a field to later iteration snapshots is insufficient when routing or
+convergence reads the initial pre-check snapshot too. Missing metadata in generation
+zero silently resets a consecutive-history calculation.
+
+- **Do:** enumerate and test initial, resumed, retry, rollback, and ordinary
+  producers whenever a new persisted field drives a history-based decision.
+- **Caught:** adaptive Loop model routing initially omitted the pre-check failure
+  category, delaying escalation by one iteration.
+
+## 303. Diagnostic shape does not prove failure outcome
+
+A successful verifier can still identify its framework, while a separate acceptance
+gate keeps the workflow editing. Classifying from framework shape alone then reports
+a test failure that never occurred.
+
+- **Do:** determine success/failure from the authoritative exit outcome first; run
+  diagnostic-category classification only for actual failures.
+- **Caught:** Loop model routing initially categorized a green verifier with unmet
+  acceptance as `test` instead of `none`.
+
+## 304. Bounded operands can still overflow during aggregation
+
+Two safe integers do not guarantee that their product or weighted sum remains safe.
+Large-but-valid durations multiplied by sample counts can corrupt an average or
+scheduler score.
+
+- **Do:** prefer numerically stable incremental averages and clamp heuristic-only
+  scores to their declared numeric domain before sorting.
+- **Caught:** Loop verification intelligence initially multiplied a safe duration
+  by up to 10,000 retained samples.
+
+## 305. Observation history is not action history
+
+A pre-check can classify the same failure as a later edit iteration without having
+attempted any recovery. Treating that classification as an executed strategy skips
+the first category-specific repair and diversifies too early.
+
+- **Do:** base action diversification on generations that could actually have
+  executed the action, not merely on snapshots that share its input category.
+- **Caught:** adaptive Loop routing added a category to the iteration-zero snapshot,
+  causing the first SARIF recovery to skip `repair_review` and select `replan`.
 
 ---
 

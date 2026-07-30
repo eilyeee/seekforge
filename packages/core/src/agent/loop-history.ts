@@ -65,6 +65,7 @@ export function readLoopHistory(
     "verify.stage.started",
     "verify.stage.completed",
     "verify.flaky",
+    "loop.model.routed",
     "verify.impact",
     "loop.paused",
     "loop.resumed",

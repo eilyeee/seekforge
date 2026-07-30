@@ -380,6 +380,15 @@ function parseSnapshots(value: unknown): LoopIterationSnapshot[] | null {
         item.failureCategory !== "permission" &&
         item.failureCategory !== "network" &&
         item.failureCategory !== "unknown") ||
+      (item.editModel !== undefined &&
+        (typeof item.editModel !== "string" || item.editModel.length === 0 || item.editModel.length > 256)) ||
+      (item.modelRouteReason !== undefined &&
+        item.modelRouteReason !== "default" &&
+        item.modelRouteReason !== "static_category" &&
+        item.modelRouteReason !== "category" &&
+        item.modelRouteReason !== "escalated_category") ||
+      (item.failureStreak !== undefined &&
+        (!isSafeInteger(item.failureStreak) || item.failureStreak < 0 || item.failureStreak > MAX_LOOP_ITERATIONS)) ||
       (item.rolledBack !== undefined && typeof item.rolledBack !== "boolean")
     )
       return null;
@@ -399,6 +408,11 @@ function parseSnapshots(value: unknown): LoopIterationSnapshot[] | null {
       ...(typeof item.failureCategory === "string"
         ? { failureCategory: item.failureCategory as LoopIterationSnapshot["failureCategory"] }
         : {}),
+      ...(typeof item.editModel === "string" ? { editModel: item.editModel } : {}),
+      ...(typeof item.modelRouteReason === "string"
+        ? { modelRouteReason: item.modelRouteReason as LoopIterationSnapshot["modelRouteReason"] }
+        : {}),
+      ...(typeof item.failureStreak === "number" ? { failureStreak: item.failureStreak } : {}),
       ...(typeof item.rolledBack === "boolean" ? { rolledBack: item.rolledBack } : {}),
     });
   }

@@ -99,6 +99,19 @@ describe("loopStatusTone", () => {
 });
 
 describe("formatLoopEvent", () => {
+  it("renders model escalation decisions", () => {
+    expect(
+      formatLoopEvent({
+        type: "loop.model.routed",
+        iteration: 2,
+        category: "test",
+        model: "strong",
+        consecutiveFailures: 2,
+        candidateIndex: 1,
+        reason: "escalated_category",
+      }),
+    ).toEqual([{ text: "  loop · test → strong · streak 2 · escalated", tone: "dim" }]);
+  });
   it("formats iteration.start as one dim line", () => {
     const e: LoopEvent = { type: "iteration.start", iteration: 2 };
     expect(formatLoopEvent(e)).toEqual([{ text: "⟳ loop · iteration 2", tone: "dim" }]);

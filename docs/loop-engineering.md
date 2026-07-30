@@ -392,7 +392,7 @@ seekforge loop-cleanup <worktree-name> [--force]
 - REST Loop listing supports `status`, `q`, `limit`, and `after`; active Loops
   accept `POST /api/loops/:id/control`, and `/api/loop-dags` exposes durable graph
   state. Prometheus output includes aggregate Loop count, activity, cost, tokens,
-  and verifier runs. Desktop adds filtering, polling, history paging, CI state,
+  verifier runs, and verification-intelligence anomaly/critical-anomaly counts. Desktop adds filtering, polling, history paging, CI state,
   verifier selection/duration, acceptance evidence, iteration timelines, fan-in
   and DAG node status, plus safe-boundary controls; late filter or history responses are
   discarded when their query or selected Loop is no longer current.
@@ -419,7 +419,23 @@ state is touched. Loop
 success performs memory extraction once and records selected-skill effectiveness
 once for the whole Loop rather than once per internal agent iteration.
 
-The state also checkpoints the last entered `requirements`, `precheck`, `editing`, `verification`, `acceptance`, `review`, or `settled` phase for crash diagnosis and resume presentation. Cacheable verification stages publish a bounded seven-day cross-run hint keyed by the exact command, authoritative workspace fingerprint, and Node platform/runtime identity. A persistent hint may skip incremental work, but it always forces and can never authorize the mandatory full pipeline. Embedders may route edit iterations by the previous failure category through `modelByFailureCategory`; routing requires an explicit `providerForModel` and never changes verification, permissions, or budgets.
+The state also checkpoints the last entered `requirements`, `precheck`, `editing`, `verification`, `acceptance`, `review`, or `settled` phase for crash diagnosis and resume presentation. Cacheable verification stages publish a bounded seven-day cross-run hint keyed by the exact command, authoritative workspace fingerprint, and Node platform/runtime identity. A persistent hint may skip incremental work, but it always forces and can never authorize the mandatory full pipeline.
+
+Real verifier executions also update a bounded 30-day reliability record keyed by
+the exact stage id, command, and runtime identity. It stores counts, failure
+streaks, flake frequency, and average duration—but never verifier output. The
+scheduler may use it only to prioritize stages already eligible in the same safe
+wave, and `loop-intelligence` or `GET /api/loops/verification-intelligence`
+reports sustained anomalies. This history cannot skip a stage, satisfy a gate,
+or change dependencies and resource conflicts.
+
+Embedders may route edit iterations by the previous failure category through
+`modelByFailureCategory`, or provide an explicit ordered escalation chain through
+`modelRoutesByFailureCategory`. `modelEscalationThreshold` controls how many
+consecutive same-category failures each model receives. The exact route wins over
+a chain, every candidate is resolved during preflight through `providerForModel`,
+and each decision is retained in `loop.model.routed` plus the iteration snapshot.
+Routing never changes verification, permissions, or budgets.
 
 Edit iterations reuse **one worker session**. Requirement analysis and acceptance
 review reuse a separate reviewer session recorded in Loop state, keeping evaluator
@@ -456,6 +472,8 @@ type LoopOptions = {
   maxAgentRetries?: number;     // transient failures; default 1
   approvalMode?: ApprovalMode;  // default "acceptEdits"
   model?: string; planModel?: string; escalateOnFailure?: boolean;
+  modelRoutesByFailureCategory?: Partial<Record<LoopFailureCategory, string[]>>;
+  modelEscalationThreshold?: number; // 1-8, default 2
   signal?: AbortSignal;         // cooperative stop
   control?: LoopControl;        // safe-boundary pause/resume/steer
   onEvent?: (e: LoopEvent) => void;

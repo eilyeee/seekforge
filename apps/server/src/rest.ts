@@ -18,6 +18,8 @@ import {
   listEngineeringGraphStates,
   MODEL_PRICING,
   resolveProviderPreset,
+  readLoopVerificationIntelligence,
+  analyzeLoopVerificationIntelligence,
 } from "@seekforge/core";
 import { ConfigValueError, loadConfig } from "./config.js";
 import { FileBrowseError, RawFileError, UploadError } from "./files.js";
@@ -98,12 +100,20 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
       const metrics = ctx.runManager.metrics();
       const loops = ctx.registry.summary.flatMap((workspace) => listLoopStates(workspace.path));
       const graphs = ctx.registry.summary.flatMap((workspace) => listEngineeringGraphStates(workspace.path));
+      const loopIntelligence = ctx.registry.summary.flatMap((workspace) =>
+        readLoopVerificationIntelligence(workspace.path),
+      );
+      const loopIntelligenceFindings = analyzeLoopVerificationIntelligence(loopIntelligence);
       const loopMetrics: Record<string, number> = {
         seekforge_loops_total: loops.length,
         seekforge_loops_active: loops.filter((loop) => loop.status === "running" || loop.status === "paused").length,
         seekforge_loops_cost_usd_total: loops.reduce((sum, loop) => sum + loop.costUsd, 0),
         seekforge_loops_tokens_total: loops.reduce((sum, loop) => sum + (loop.tokensUsed ?? 0), 0),
         seekforge_loops_verify_runs_total: loops.reduce((sum, loop) => sum + (loop.verifyRuns ?? 0), 0),
+        seekforge_loop_verification_anomalies: loopIntelligenceFindings.length,
+        seekforge_loop_verification_critical_anomalies: loopIntelligenceFindings.filter(
+          (finding) => finding.severity === "critical",
+        ).length,
       };
       const graphMetrics: Record<string, number> = {
         seekforge_graphs_total: graphs.length,

@@ -13,6 +13,7 @@ import {
   createLoopState,
   readGraphControlEntries,
   readLoopControlEntries,
+  recordLoopVerificationIntelligence,
 } from "@seekforge/core";
 
 const TOKEN = "test-token-rest";
@@ -275,6 +276,24 @@ describe("loop management API", () => {
     const plan = await authed("/api/loops/verification-plan");
     expect(plan.status).toBe(200);
     expect((await jsonOf(plan)).stages).toEqual([{ id: "build", command: "npm run build" }]);
+    recordLoopVerificationIntelligence(
+      workspace,
+      {
+        id: "build",
+        command: "npm run build",
+        code: 1,
+        output: "not retained",
+        attempts: 1,
+        flaky: false,
+        durationMs: 25,
+      },
+      "compile",
+    );
+    const intelligence = await authed("/api/loops/verification-intelligence");
+    expect(await jsonOf(intelligence)).toMatchObject({
+      entries: [expect.objectContaining({ stageId: "build", failures: 1, lastFailureCategory: "compile" })],
+      findings: [],
+    });
     const listed = await authed("/api/loops");
     expect((await jsonOf(listed)).some((loop: { loopId: string }) => loop.loopId === "rest-loop")).toBe(true);
     const filtered = await authed("/api/loops?status=running&q=manage&limit=1");

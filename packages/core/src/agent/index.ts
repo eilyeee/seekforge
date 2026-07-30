@@ -325,6 +325,21 @@ export {
 } from "./loop-verification-plan.js";
 export { readLoopVerificationCache, recordLoopVerificationCache } from "./loop-verification-cache.js";
 export {
+  analyzeLoopVerificationIntelligence,
+  loopVerificationIntelligenceScore,
+  readLoopVerificationIntelligence,
+  recordLoopVerificationIntelligence,
+  type LoopVerificationIntelligence,
+  type LoopVerificationIntelligenceFinding,
+} from "./loop-verification-intelligence.js";
+export {
+  isLoopFailureCategory,
+  selectLoopModelRoute,
+  validateLoopModelRoutes,
+  type LoopModelRoute,
+  type LoopModelRouteReason,
+} from "./loop-model-routing.js";
+export {
   buildLoopEvidenceReport,
   compareLoopEvidence,
   exportLoopEvidence,

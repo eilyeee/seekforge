@@ -193,6 +193,8 @@
 | `--worktree [name]` | 在新建并保留的 git worktree 中运行；可选择其分支后缀。 |
 | `-y, --yes` | 省去自主编辑提示；循环运行本就使用 `acceptEdits`。 |
 | `-m, --model <model>` | 覆盖已配置的模型。 |
+| `--model-route <类别=模型[,模型...]>` | 让某个失败类别沿显式有序编辑模型链路由；其他类别可重复传入。 |
+| `--model-escalation-threshold <n>` | 每个路由模型处理的连续同类失败次数；1-8，默认 2。 |
 | `--profile <name>` | 应用一个具名配置 profile。 |
 
 每次调用都会把编排状态持久化到 `.seekforge/loops/`。`loop-resume` 可用
@@ -203,7 +205,7 @@
 `seekforge loop-list`、`loop-show`、`loop-delete` 管理持久化记录；
 `seekforge loop-deliver <loop-id> [--mode checkpoint|merge|patch|pr] [--wait-ci] [--ci-repairs N]` 可从保留 worktree
 重试失败的通过后交付，无需重跑 Loop；`loop-show` 会展示持久状态、尝试次数、错误与产物。`loop-history`
-回放持久事件，`loop-diagnose` 核对检查点与最新保留事件窗口，`loop-recover` 把失去 owner 的记录标为 `interrupted`，`loop-priority <id> <n>`
+回放持久事件，`loop-diagnose` 核对检查点与最新保留事件窗口，`loop-intelligence` 报告有界的跨运行验证可靠性与异常，`loop-recover` 把失去 owner 的记录标为 `interrupted`，`loop-priority <id> <n>`
 调整恢复顺序，`loop-prune` 只删除合格终态记录。`loop-dag <file>` 以完成驱动方式执行带共享加权预算、
 重试、失败策略、组合条件、可审计审批、独占资源、声明产物和结构化依赖输出的持久 JSON 依赖图，并支持
 `--resume` / `--dag-id` 检查点。`--approve <node-id>` 可通过节点审批门，

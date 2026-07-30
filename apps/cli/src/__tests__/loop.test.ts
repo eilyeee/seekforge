@@ -50,7 +50,7 @@ import {
   resolveLoopRepository,
 } from "../loop-worktree.js";
 import { setLocale } from "../i18n.js";
-import { registerLoopCommands } from "../register-loop.js";
+import { parseLoopModelRoutes, registerLoopCommands } from "../register-loop.js";
 
 setLocale("en"); // deterministic strings
 
@@ -69,9 +69,40 @@ test("registers the independent review gate and Loop diagnostics", () => {
     true,
   );
   assert.equal(
+    loop?.options.some((option) => option.long === "--model-route"),
+    true,
+  );
+  assert.equal(
+    program.commands
+      .find((command) => command.name() === "loop-resume")
+      ?.options.some((option) => option.long === "--model-route"),
+    true,
+  );
+  assert.equal(
+    program.commands
+      .find((command) => command.name() === "loop-dag")
+      ?.options.some((option) => option.long === "--model-route"),
+    false,
+  );
+  assert.equal(
     program.commands.some((command) => command.name() === "loop-diagnose"),
     true,
   );
+  assert.equal(
+    program.commands.some((command) => command.name() === "loop-intelligence"),
+    true,
+  );
+});
+
+test("parses bounded model escalation routes without ambiguous duplicates", () => {
+  assert.deepEqual(parseLoopModelRoutes(["compile=fast,strong", "test=tester"]), {
+    compile: ["fast", "strong"],
+    test: ["tester"],
+  });
+  assert.throws(() => parseLoopModelRoutes(["compile=fast", "compile=strong"]), /unique/);
+  assert.throws(() => parseLoopModelRoutes(["compile=fast,fast"]), /unique/);
+  assert.throws(() => parseLoopModelRoutes(["made-up=fast"]), /unique/);
+  assert.throws(() => parseLoopModelRoutes(["compile= fast"]), /unique/);
 });
 
 // --- outputTail -------------------------------------------------------------
@@ -218,6 +249,21 @@ test("run.completed shows iteration and 4-decimal cost", () => {
   const line = formatLoopEvent(e);
   assert.match(line, /1/);
   assert.match(line, /0\.1235/); // toFixed(4) rounds
+});
+
+test("model routing events expose the selected escalation", () => {
+  assert.match(
+    formatLoopEvent({
+      type: "loop.model.routed",
+      iteration: 2,
+      category: "compile",
+      model: "strong",
+      consecutiveFailures: 3,
+      candidateIndex: 1,
+      reason: "escalated_category",
+    }),
+    /compile → strong · streak 3 · escalated/,
+  );
 });
 test("verify passed line says PASSED and has no exit code", () => {
   const e: LoopEvent = { type: "verify", iteration: 3, code: 0, passed: true, output: "" };

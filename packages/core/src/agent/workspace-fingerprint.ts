@@ -9,7 +9,11 @@ const MAX_FINGERPRINT_FILES = 20_000;
 const FINGERPRINT_TIMEOUT_MS = 5_000;
 const GIT_OUTPUT_BYTES = 32 * 1024 * 1024;
 const INTERNAL_PREFIXES = [".seekforge/loops/", ".seekforge/memory/", ".seekforge/sessions/", ".seekforge/uploads/"];
-const INTERNAL_FILES = new Set([".seekforge/skills-usage.jsonl", ".seekforge/loop-verification-cache.json"]);
+const INTERNAL_FILES = new Set([
+  ".seekforge/skills-usage.jsonl",
+  ".seekforge/loop-verification-cache.json",
+  ".seekforge/loop-verification-intelligence.json",
+]);
 const FALLBACK_IGNORES = new Set([".git", "node_modules", "dist", "build", "coverage", "target"]);
 
 class FingerprintLimitError extends Error {}

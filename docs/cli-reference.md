@@ -215,6 +215,8 @@ cooperative cancellation.
 | `--worktree [name]` | Run in a new retained git worktree; optionally choose its branch suffix. |
 | `-y, --yes` | Suppress the autonomous-edit notice; loop runs already use `acceptEdits`. |
 | `-m, --model <model>` | Override the configured model. |
+| `--model-route <category=model[,model...]>` | Route a failure category through an explicit ordered edit-model chain; repeat for other categories. |
+| `--model-escalation-threshold <n>` | Consecutive same-category failures per routed model; 1-8, default 2. |
 | `--profile <name>` | Apply a named configuration profile. |
 
 Every invocation persists orchestration state in `.seekforge/loops/`. Use
@@ -231,7 +233,7 @@ runtime control.
 `seekforge loop-deliver <loop-id> [--mode checkpoint|merge|patch|pr] [--wait-ci] [--ci-repairs N]` retries a
 failed post-pass delivery from the retained worktree without rerunning the Loop;
 `loop-show` exposes its durable status, attempt count, error, and artifact.
-`loop-history` replays durable events, `loop-diagnose` checks the checkpoint against the newest retained event window, and `loop-recover` marks orphaned owners as
+`loop-history` replays durable events, `loop-diagnose` checks the checkpoint against the newest retained event window, `loop-intelligence` reports bounded cross-run verifier reliability/anomalies, and `loop-recover` marks orphaned owners as
 `interrupted`, `loop-priority <id> <n>` changes recovery order, and `loop-prune`
 removes only eligible terminal records. `loop-dag <file>` persists a JSON graph
 with completion-driven scheduling, weighted budgets, retries, failure policies, composite conditions,
