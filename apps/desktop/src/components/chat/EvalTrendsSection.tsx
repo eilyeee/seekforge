@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api";
+import { parseControlPlaneScenarioInput } from "../../lib/control-plane-input";
 import { useT } from "../../lib/i18n";
 import type { ControlPlaneEvalReport, EvalTrendEntry } from "../../types";
 import { Button } from "../ui";
@@ -25,6 +26,7 @@ export function EvalTrendsSection(props: { workspaceId?: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [controlPlane, setControlPlane] = useState<ControlPlaneEvalReport>();
+  const [scenarioText, setScenarioText] = useState("");
 
   const refresh = async () => {
     const request = ++generation.current;
@@ -47,9 +49,27 @@ export function EvalTrendsSection(props: { workspaceId?: string }) {
     }
   };
 
+  const evaluateCustom = async () => {
+    const request = ++generation.current;
+    setBusy(true);
+    try {
+      const scenarios = parseControlPlaneScenarioInput(scenarioText);
+      const report = await api.evalControlPlaneEvaluate(scenarios, props.workspaceId);
+      if (generation.current === request) {
+        setControlPlane(report);
+        setError("");
+      }
+    } catch (caught) {
+      if (generation.current === request) setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      if (generation.current === request) setBusy(false);
+    }
+  };
+
   useEffect(() => {
     setEntries([]);
     setControlPlane(undefined);
+    setScenarioText("");
     void refresh();
     return () => {
       generation.current += 1;
@@ -72,15 +92,41 @@ export function EvalTrendsSection(props: { workspaceId?: string }) {
         <div className="mt-2 rounded border border-subtle p-2">
           <p className="font-medium">{t("chat.loop.eval.controlPlane")}</p>
           <p className="text-tertiary">
-            {controlPlane.summary.improved} improved · {controlPlane.summary.neutral} neutral ·{" "}
-            {controlPlane.summary.regressed} regressed
+            {t("chat.loop.eval.controlPlaneSummary", {
+              improved: controlPlane.summary.improved,
+              neutral: controlPlane.summary.neutral,
+              regressed: controlPlane.summary.regressed,
+            })}
           </p>
           {controlPlane.scenarios.map((scenario) => (
-            <p key={scenario.id} className="mt-1 text-tertiary">
-              {scenario.id} · {scenario.samples} days · recovery {(scenario.recoveryTimeImprovement * 100).toFixed(0)}%
-              · cost {(scenario.costImprovement * 100).toFixed(0)}%
-            </p>
+            <div key={scenario.id} className="mt-1 flex flex-wrap items-center gap-1 text-tertiary">
+              <span>
+                {scenario.id} · {scenario.samples} {t("chat.loop.eval.days")} · {t("chat.loop.eval.recoveryRate")}{" "}
+                {(scenario.baselineRecoveryRate * 100).toFixed(0)}% →{" "}
+                {(scenario.controlledRecoveryRate * 100).toFixed(0)}% · {t("chat.loop.eval.recoveryTime")}{" "}
+                {(scenario.recoveryTimeImprovement * 100).toFixed(0)}% · {t("chat.loop.eval.cost")}{" "}
+                {(scenario.costImprovement * 100).toFixed(0)}%
+              </span>
+              <span className="rounded bg-surface-overlay px-1">{t(`chat.loop.eval.verdict.${scenario.verdict}`)}</span>
+            </div>
           ))}
+          <details className="mt-2">
+            <summary className="cursor-pointer">{t("chat.loop.eval.customScenario")}</summary>
+            <textarea
+              className="mt-2 h-28 w-full rounded border border-subtle bg-surface p-2 font-mono text-2xs"
+              value={scenarioText}
+              onChange={(event) => setScenarioText(event.target.value)}
+              placeholder={t("chat.loop.eval.customScenarioPlaceholder")}
+            />
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy || !scenarioText.trim()}
+              onClick={() => void evaluateCustom()}
+            >
+              {t("chat.loop.eval.evaluateScenario")}
+            </Button>
+          </details>
         </div>
       )}
       {entries.length === 0 ? (

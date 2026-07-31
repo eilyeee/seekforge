@@ -495,6 +495,10 @@ export const api = {
     ),
   evalControlPlane: (ws?: string) =>
     request<import("../types").ControlPlaneEvalReport>("GET", withWorkspace("/api/evals/control-plane", ws)),
+  evalControlPlaneEvaluate: (scenarios: unknown[], ws?: string) =>
+    request<import("../types").ControlPlaneEvalReport>("POST", withWorkspace("/api/evals/control-plane", ws), {
+      scenarios,
+    }),
   loopDelete: (id: string, ws?: string) =>
     request<{ removed: true; loopId: string }>("DELETE", withWorkspace(`/api/loops/${encodeURIComponent(id)}`, ws)),
   diff: (staged?: boolean, ws?: string) =>

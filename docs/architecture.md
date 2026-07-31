@@ -169,6 +169,11 @@ reimplementing them. Security Center uses Core's Finding, threat, fix, and
 export lifecycle; MCP settings retain project/global ownership and mask
 secrets; restored sessions rebuild subagent cards from persisted events. Team
 plans are validated before being handed to the Core `dispatch_team` path.
+The unified diagnostics page projects the bounded run ledger with local
+status/source/text filters and aggregate outcomes; memory governance expands
+duplicate, contradiction, provenance, decay, and use evidence without mutating
+facts. Optional newer endpoints degrade independently so older servers retain
+their base pages.
 
 Continuous eval scenarios choose an explicit runner (`agent`, `loop`, or
 `session_scenario`). Loop, resume, and memory behavior therefore execute the

@@ -73,6 +73,7 @@ Desktop 的 **Eval 趋势** 面板通过 `GET /api/evals/trends?limit=<1..200>`
 格式错误或不兼容的文件仍由 eval harness 解析器负责，UI 不会自行解释。
 
 `GET /api/evals/control-plane` 增加由有序每日故障观测组成的纵向模拟，对比基线与控制面执行的恢复率、平均恢复时间和成本，避免从互不相关的单任务样本推断 SLO、路由或灰度行为。报告明确标记来源为 `simulation`；调用方也可向同一路径 POST 有界自定义场景。
+桌面面板可输入场景数组或 `{scenarios}` JSON 信封，并从服务端校验后的报告展示基线到控制面的恢复率、恢复时间、成本和本地化结论。
 
 ### Runner 模式
 

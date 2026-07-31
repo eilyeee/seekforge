@@ -1,8 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api";
+import {
+  decodeDesktopGraphTemplates,
+  graphTemplateDefaultParameters,
+  graphTemplateVisualDefinition,
+  type DesktopGraphTemplate,
+} from "../../lib/graph-template-ui";
 import { useT } from "../../lib/i18n";
 import type { EngineeringGraphPlanSummary, EngineeringGraphSimulationSummary } from "../../types";
-import { appendGraphNode, buildVisualGraph } from "../../lib/graph-visual";
+import { appendGraphNode, buildVisualGraph, removeGraphNode, setGraphNodeDependencies } from "../../lib/graph-visual";
 import { Button } from "../ui";
 
 const INITIAL_DEFINITION = JSON.stringify(
@@ -16,17 +22,12 @@ const INITIAL_DEFINITION = JSON.stringify(
   2,
 );
 
-function templateLabel(value: unknown, index: number): string {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return `Template ${index + 1}`;
-  const record = value as Record<string, unknown>;
-  return `${String(record.templateId ?? record.id ?? `Template ${index + 1}`)}@${String(record.version ?? "latest")}`;
-}
-
 export function GraphCreationSection(props: { workspaceId?: string; onStarted: (runId: string) => void }) {
   const t = useT();
   const [definitionText, setDefinitionText] = useState(INITIAL_DEFINITION);
   const [parametersText, setParametersText] = useState("{}");
-  const [templates, setTemplates] = useState<unknown[]>([]);
+  const [templates, setTemplates] = useState<DesktopGraphTemplate[]>([]);
+  const [skippedTemplates, setSkippedTemplates] = useState(0);
   const [plan, setPlan] = useState<EngineeringGraphPlanSummary>();
   const [simulation, setSimulation] = useState<EngineeringGraphSimulationSummary>();
   const [validatedSource, setValidatedSource] = useState<string>();
@@ -35,26 +36,42 @@ export function GraphCreationSection(props: { workspaceId?: string; onStarted: (
   const [nodeId, setNodeId] = useState("");
   const [nodeKind, setNodeKind] = useState("function");
   const [dependencies, setDependencies] = useState("");
-  const generation = useRef(0);
+  const [selectedNodeId, setSelectedNodeId] = useState("");
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState("");
+  const actionGeneration = useRef(0);
+  const templateGeneration = useRef(0);
   const source = `${definitionText}\0${parametersText}`;
   const previewCurrent = validatedSource === source;
 
   useEffect(() => {
-    const current = ++generation.current;
+    actionGeneration.current += 1;
+    const current = ++templateGeneration.current;
+    setDefinitionText(INITIAL_DEFINITION);
+    setParametersText("{}");
+    setTemplates([]);
     setPlan(undefined);
     setSimulation(undefined);
     setValidatedSource(undefined);
+    setBusy(false);
     setError("");
+    setSkippedTemplates(0);
+    setSelectedNodeId("");
+    setSelectedTemplateKey("");
     void api
       .graphTemplates(props.workspaceId)
       .then((items) => {
-        if (generation.current === current) setTemplates(items);
+        if (templateGeneration.current === current) {
+          const decoded = decodeDesktopGraphTemplates(items);
+          setTemplates(decoded.templates);
+          setSkippedTemplates(decoded.skipped);
+        }
       })
       .catch((caught) => {
-        if (generation.current === current) setError(caught instanceof Error ? caught.message : String(caught));
+        if (templateGeneration.current === current) setError(caught instanceof Error ? caught.message : String(caught));
       });
     return () => {
-      generation.current += 1;
+      actionGeneration.current += 1;
+      templateGeneration.current += 1;
     };
   }, [props.workspaceId]);
 
@@ -70,11 +87,47 @@ export function GraphCreationSection(props: { workspaceId?: string; onStarted: (
       return { error: caught instanceof Error ? caught.message : String(caught) };
     }
   }, [definitionText, parametersText]);
-  const visual = useMemo(() => buildVisualGraph("error" in parsed ? undefined : parsed.definition), [parsed]);
+  const visual = useMemo(
+    () => buildVisualGraph("error" in parsed ? undefined : graphTemplateVisualDefinition(parsed.definition)),
+    [parsed],
+  );
+  const selectedNode = visual.nodes.find((node) => node.id === selectedNodeId);
+
+  const commitDefinition = (next: unknown) => {
+    actionGeneration.current += 1;
+    setDefinitionText(JSON.stringify(next, null, 2));
+    setSelectedTemplateKey("");
+    setValidatedSource(undefined);
+    setPlan(undefined);
+    setSimulation(undefined);
+    setBusy(false);
+    setError("");
+  };
+
+  const changeDefinitionText = (next: string) => {
+    actionGeneration.current += 1;
+    setDefinitionText(next);
+    setSelectedTemplateKey("");
+    setValidatedSource(undefined);
+    setPlan(undefined);
+    setSimulation(undefined);
+    setBusy(false);
+    setError("");
+  };
+
+  const changeParametersText = (next: string) => {
+    actionGeneration.current += 1;
+    setParametersText(next);
+    setValidatedSource(undefined);
+    setPlan(undefined);
+    setSimulation(undefined);
+    setBusy(false);
+    setError("");
+  };
 
   const preview = async () => {
     if ("error" in parsed) return setError(parsed.error ?? "Invalid Graph JSON");
-    const request = ++generation.current;
+    const request = ++actionGeneration.current;
     const requestedSource = source;
     setBusy(true);
     try {
@@ -82,37 +135,37 @@ export function GraphCreationSection(props: { workspaceId?: string; onStarted: (
         api.graphValidate(parsed.definition, parsed.parameters, props.workspaceId),
         api.graphSimulate(parsed.definition, parsed.parameters, props.workspaceId),
       ]);
-      if (generation.current !== request) return;
+      if (actionGeneration.current !== request) return;
       setPlan(validated.plan);
       setSimulation(simulated);
       setValidatedSource(requestedSource);
       setError("");
     } catch (caught) {
-      if (generation.current === request) {
+      if (actionGeneration.current === request) {
         setPlan(undefined);
         setSimulation(undefined);
         setValidatedSource(undefined);
         setError(caught instanceof Error ? caught.message : String(caught));
       }
     } finally {
-      if (generation.current === request) setBusy(false);
+      if (actionGeneration.current === request) setBusy(false);
     }
   };
 
   const start = async () => {
     if (!previewCurrent || "error" in parsed) return;
-    const request = ++generation.current;
+    const request = ++actionGeneration.current;
     setBusy(true);
     try {
       const started = await api.graphStart(parsed.definition, parsed.parameters, props.workspaceId);
-      if (generation.current === request) {
+      if (actionGeneration.current === request) {
         setError("");
         props.onStarted(started.runId);
       }
     } catch (caught) {
-      if (generation.current === request) setError(caught instanceof Error ? caught.message : String(caught));
+      if (actionGeneration.current === request) setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      if (generation.current === request) setBusy(false);
+      if (actionGeneration.current === request) setBusy(false);
     }
   };
 
@@ -122,31 +175,36 @@ export function GraphCreationSection(props: { workspaceId?: string; onStarted: (
       {templates.length > 0 && (
         <select
           className="mt-2 w-full rounded border border-subtle bg-surface px-2 py-1"
-          defaultValue=""
+          value={templates.some((template) => template.key === selectedTemplateKey) ? selectedTemplateKey : ""}
           onChange={(event) => {
-            const index = Number(event.target.value);
-            if (Number.isSafeInteger(index) && templates[index] !== undefined) {
-              setDefinitionText(JSON.stringify(templates[index], null, 2));
-              setValidatedSource(undefined);
+            const selected = templates.find((template) => template.key === event.target.value);
+            if (selected) {
+              commitDefinition(selected.template);
+              changeParametersText(JSON.stringify(graphTemplateDefaultParameters(selected.template), null, 2));
+              setSelectedTemplateKey(selected.key);
+              setSelectedNodeId("");
+            } else {
+              setSelectedTemplateKey("");
             }
           }}
         >
           <option value="">{t("chat.loop.graph.chooseTemplate")}</option>
-          {templates.map((template, index) => (
-            <option key={templateLabel(template, index)} value={index}>
-              {templateLabel(template, index)}
+          {templates.map((template) => (
+            <option key={template.key} value={template.key}>
+              {template.label}
+              {template.deprecated ? ` (${t("chat.loop.graph.deprecated")})` : ""}
             </option>
           ))}
         </select>
+      )}
+      {skippedTemplates > 0 && (
+        <p className="mt-1 text-warn">{t("chat.loop.graph.templateSkipped", { count: skippedTemplates })}</p>
       )}
       <textarea
         className="mt-2 h-48 w-full rounded border border-subtle bg-surface p-2 font-mono text-2xs"
         value={definitionText}
         aria-label={t("chat.loop.graph.definition")}
-        onChange={(event) => {
-          setDefinitionText(event.target.value);
-          setValidatedSource(undefined);
-        }}
+        onChange={(event) => changeDefinitionText(event.target.value)}
       />
       {visual.nodes.length > 0 && (
         <div className="mt-2 overflow-auto rounded border border-subtle bg-surface-overlay/40 p-1">
@@ -174,7 +232,14 @@ export function GraphCreationSection(props: { workspaceId?: string; onStarted: (
             })}
             {visual.nodes.map((node) => (
               <g key={node.id} transform={`translate(${node.x} ${node.y})`}>
-                <rect width="130" height="44" rx="6" className="fill-surface stroke-accent" />
+                <rect
+                  width="130"
+                  height="44"
+                  rx="6"
+                  className={
+                    node.id === selectedNodeId ? "fill-accent-muted stroke-accent" : "fill-surface stroke-accent"
+                  }
+                />
                 <text x="8" y="18" className="fill-primary text-[11px] font-medium">
                   {node.id}
                 </text>
@@ -191,6 +256,67 @@ export function GraphCreationSection(props: { workspaceId?: string; onStarted: (
           {warning}
         </p>
       ))}
+      {visual.nodes.length > 0 && (
+        <select
+          className="mt-2 w-full rounded border border-subtle bg-surface px-2 py-1"
+          value={selectedNode ? selectedNodeId : ""}
+          onChange={(event) => setSelectedNodeId(event.target.value)}
+        >
+          <option value="">{t("chat.loop.graph.chooseNode")}</option>
+          {visual.nodes.map((node) => (
+            <option key={node.id} value={node.id}>
+              {node.id} · {node.kind}
+            </option>
+          ))}
+        </select>
+      )}
+      {selectedNode && !("error" in parsed) && (
+        <div className="mt-2 rounded border border-subtle p-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="font-medium">
+              {t("chat.loop.graph.selectedNode")}: {selectedNode.id} · {selectedNode.kind}
+            </p>
+            <Button
+              size="sm"
+              variant="danger"
+              onClick={() => {
+                try {
+                  commitDefinition(removeGraphNode(parsed.definition, selectedNode.id));
+                  setSelectedNodeId("");
+                } catch (caught) {
+                  setError(caught instanceof Error ? caught.message : String(caught));
+                }
+              }}
+            >
+              {t("chat.loop.graph.removeNode")}
+            </Button>
+          </div>
+          <p className="mt-2 text-tertiary">{t("chat.loop.graph.editDependencies")}</p>
+          <div className="mt-1 flex flex-wrap gap-2">
+            {visual.nodes
+              .filter((node) => node.id !== selectedNode.id)
+              .map((candidate) => (
+                <label key={candidate.id} className="flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    checked={selectedNode.dependsOn.includes(candidate.id)}
+                    onChange={(event) => {
+                      const next = event.target.checked
+                        ? [...selectedNode.dependsOn, candidate.id]
+                        : selectedNode.dependsOn.filter((id) => id !== candidate.id);
+                      try {
+                        commitDefinition(setGraphNodeDependencies(parsed.definition, selectedNode.id, next));
+                      } catch (caught) {
+                        setError(caught instanceof Error ? caught.message : String(caught));
+                      }
+                    }}
+                  />
+                  {candidate.id}
+                </label>
+              ))}
+          </div>
+        </div>
+      )}
       <div className="mt-2 grid gap-1 sm:grid-cols-4">
         <input
           className="rounded border border-subtle bg-surface px-2 py-1"
@@ -228,11 +354,9 @@ export function GraphCreationSection(props: { workspaceId?: string; onStarted: (
                   .map((item) => item.trim())
                   .filter(Boolean),
               });
-              setDefinitionText(JSON.stringify(next, null, 2));
+              commitDefinition(next);
               setNodeId("");
               setDependencies("");
-              setValidatedSource(undefined);
-              setError("");
             } catch (caught) {
               setError(caught instanceof Error ? caught.message : String(caught));
             }
@@ -245,10 +369,7 @@ export function GraphCreationSection(props: { workspaceId?: string; onStarted: (
         className="mt-2 h-20 w-full rounded border border-subtle bg-surface p-2 font-mono text-2xs"
         value={parametersText}
         aria-label={t("chat.loop.graph.parameters")}
-        onChange={(event) => {
-          setParametersText(event.target.value);
-          setValidatedSource(undefined);
-        }}
+        onChange={(event) => changeParametersText(event.target.value)}
       />
       <div className="mt-2 flex gap-2">
         <Button size="sm" variant="ghost" disabled={busy} onClick={() => void preview()}>

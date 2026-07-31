@@ -409,6 +409,15 @@ function GovernancePanel({ report }: { report: MemoryGovernanceReport | null }) 
     .slice()
     .sort((left, right) => left.qualityScore - right.qualityScore)
     .slice(0, 3);
+  const factsByIndex = new Map(report.facts.map((fact) => [fact.index, fact]));
+  const duplicatePairs = report.duplicateGroups
+    .map((group) => group.map((index) => factsByIndex.get(index)).filter((fact) => fact !== undefined))
+    .filter((group) => group.length > 1)
+    .slice(0, 5);
+  const conflicts = report.contradictionCandidates
+    .map((candidate) => [factsByIndex.get(candidate.left), factsByIndex.get(candidate.right)] as const)
+    .filter((pair) => pair[0] !== undefined && pair[1] !== undefined)
+    .slice(0, 5);
   return (
     <section>
       <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">{t("memory.governanceTitle")}</h2>
@@ -438,8 +447,51 @@ function GovernancePanel({ report }: { report: MemoryGovernanceReport | null }) 
             <summary className="cursor-pointer">{t("memory.lowQuality")}</summary>
             <ul className="mt-2 space-y-1">
               {weakest.map((fact) => (
-                <li key={fact.index} className="truncate" title={fact.content}>
-                  {(fact.qualityScore * 100).toFixed(0)}% · {fact.content}
+                <li key={fact.index} title={fact.content}>
+                  <span className="block truncate">
+                    {(fact.qualityScore * 100).toFixed(0)}% · {fact.content}
+                  </span>
+                  <span className="text-2xs text-tertiary">
+                    {t("memory.qualityDetail", {
+                      age: fact.ageDays.toFixed(0),
+                      decay: (fact.decayScore * 100).toFixed(0),
+                      uses: fact.uses,
+                      source: fact.sourceSessionId ?? t("memory.unknownSource"),
+                    })}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+        {duplicatePairs.length > 0 && (
+          <details>
+            <summary className="cursor-pointer">{t("memory.duplicateDetails")}</summary>
+            <ul className="mt-2 space-y-2">
+              {duplicatePairs.map((group) => (
+                <li key={group.map((fact) => fact!.index).join("-")} className="rounded bg-surface-overlay p-2">
+                  {group.map((fact) => (
+                    <p key={fact!.index} className="truncate" title={fact!.content}>
+                      #{fact!.index} {fact!.content}
+                    </p>
+                  ))}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+        {conflicts.length > 0 && (
+          <details>
+            <summary className="cursor-pointer">{t("memory.conflictDetails")}</summary>
+            <ul className="mt-2 space-y-2">
+              {conflicts.map(([left, right]) => (
+                <li key={`${left!.index}-${right!.index}`} className="rounded bg-warn/10 p-2">
+                  <p className="truncate" title={left!.content}>
+                    #{left!.index} {left!.content}
+                  </p>
+                  <p className="truncate" title={right!.content}>
+                    #{right!.index} {right!.content}
+                  </p>
                 </li>
               ))}
             </ul>

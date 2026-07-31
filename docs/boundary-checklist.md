@@ -2481,6 +2481,9 @@ order, so an old success, error, or `finally` can overwrite the current resource
   the selected resource id, and guard success, failure, append, and busy cleanup.
 - **Caught:** Desktop Loop management could show an older filter result or append
   history from a previously selected Loop.
+- **Also caught:** Desktop Graph template discovery and preview shared one token,
+  so starting a preview could discard an otherwise current template response,
+  while a workspace switch could leave stale busy state behind.
 
 ## 203. Cancellation errors remain control flow across wrapper layers
 
@@ -4289,6 +4292,31 @@ filesystem truth inconsistent.
   copy only after the complete swap succeeds.
 - **Caught:** plugin force-update originally installed the new digest before a
   rollback-directory rotation failure could be reported.
+
+## 395. Registry records are not their nested domain payloads
+
+A listing endpoint often returns lifecycle metadata around the object accepted
+by a domain operation. Passing that wrapper onward can typecheck as `unknown`
+but fail semantic validation later; duplicate wrapper identities can also
+collide in keyed UI collections.
+
+- **Do:** decode the wrapper once, retain identity and lifecycle state, reject
+  duplicate identities, and pass the explicitly named nested payload. Test the
+  real listing response shape.
+- **Caught:** the Desktop Graph template selector treated
+  `{template, registeredAt, deprecatedAt?}` as the template itself.
+
+## 396. Reference-safe edits must enumerate every contract-bearing field
+
+A dependency can be represented outside the obvious dependency array. Protecting
+only direct edges lets an editor remove a value still referenced by a condition,
+binding, route, compensation target, or another domain-specific field.
+
+- **Do:** derive the complete reference inventory from the authoritative
+  contract, keep nested scopes separate, and test every reference-bearing
+  variant before allowing dependency removal or node deletion.
+- **Caught:** Desktop Graph editing initially omitted router `routes[].when`
+  conditions from its reference guard.
 
 ---
 

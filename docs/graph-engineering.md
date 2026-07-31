@@ -7,6 +7,10 @@ Graph Engineering is SeekForge's durable orchestration layer for workflows that 
 The Desktop creation workbench renders a deterministic dependency canvas from
 the same JSON definition and supports structured node/dependency insertion. A
 graph can start only after server validation and simulation succeed.
+Versioned registry entries are decoded as `{template, registeredAt}` records;
+selecting one edits and submits the nested semantic template, preserves its
+parameter envelope, pre-fills declared defaults, and supports dependency editing plus reference-safe leaf
+deletion before another validation/simulation pass.
 
 ## Execution model
 

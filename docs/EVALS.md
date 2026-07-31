@@ -83,7 +83,9 @@ daily fault observations. It compares recovery rate, mean recovery time, and
 cost for baseline versus controlled execution, so SLO/routing/rollout behavior
 is not inferred from unrelated single-task samples. Reports identify their
 source as `simulation`; callers may POST bounded custom scenarios to the same
-endpoint.
+endpoint. The Desktop panel accepts either a scenario array or a `{scenarios}`
+JSON envelope and renders baseline-to-controlled recovery rate, recovery-time,
+cost, and localized verdicts from the server-validated report.
 
 ### Runner modes
 
