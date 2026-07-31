@@ -22,6 +22,9 @@ const TARGETS = [
   { path: "apps/desktop/package.json", kind: "json" },
   { path: "apps/desktop/src-tauri/tauri.conf.json", kind: "json" },
   { path: "apps/desktop/src-tauri/Cargo.toml", kind: "cargo" },
+  // The VS Code client ships as a release asset from the same tag, and
+  // release-npm.yml refuses to package it when this version disagrees.
+  { path: "apps/vscode/package.json", kind: "json" },
 ];
 
 const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/;

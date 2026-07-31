@@ -2,9 +2,21 @@
   "name": "seekforge-vscode",
   "displayName": "SeekForge",
   "description": "Thin VS Code client for a local SeekForge server",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "license": "MIT",
+  "publisher": "eilyeee",
+  "icon": "icon.png",
+  "homepage": "https://github.com/eilyeee/seekforge",
+  "bugs": {
+    "url": "https://github.com/eilyeee/seekforge/issues"
+  },
+  "keywords": [
+    "seekforge",
+    "coding agent",
+    "deepseek",
+    "local-first"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/eilyeee/seekforge.git",
@@ -21,7 +33,8 @@
     "onCommand:seekforge.setToken",
     "onCommand:seekforge.newTask",
     "onCommand:seekforge.resumeSession",
-    "onCommand:seekforge.showDiff"
+    "onCommand:seekforge.showDiff",
+    "onCommand:seekforge.showOutput"
   ],
   "main": "./src/extension.cjs",
   "scripts": {
@@ -48,6 +61,10 @@
       {
         "command": "seekforge.showDiff",
         "title": "SeekForge: Show Workspace Diff"
+      },
+      {
+        "command": "seekforge.showOutput",
+        "title": "SeekForge: Show Activity Output"
       }
     ],
     "configuration": {

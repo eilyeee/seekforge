@@ -5,6 +5,7 @@ dist/
 coverage/
 target/
 *.tgz
+*.vsix
 *.log
 .env
 .env.*

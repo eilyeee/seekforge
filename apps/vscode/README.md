@@ -7,13 +7,22 @@ Thin local client for the versioned `seekforge serve` REST/WebSocket contract.
 3. Set `seekforge.serverUrl`, then run **SeekForge: Set Server Token**. The
    bearer token is stored in VS Code SecretStorage; legacy `seekforge.token`
    settings are migrated and removed automatically.
-4. Run **SeekForge: New Task**, **Resume Session**, or **Show Workspace Diff**.
+4. Run **SeekForge: New Task**, **Resume Session**, **Show Workspace Diff**, or
+   **Show Activity Output**.
 
-The extension streams model output to the SeekForge output channel, surfaces
-raw commands/paths/diffs in permission prompts, answers agent questions, and
-adds the active file or selection as `@file` context. It deliberately remains a
-thin client: orchestration, permissions, traces, and workspace coordination stay
-inside the local SeekForge server.
+The extension streams model output, thinking, tool activity (`⏺ tool(arg)` /
+`⎿ result`), changed files, sub-agent progress, and live command output to the
+SeekForge output channel, and ends a run with the final report and its cost. A
+status-bar item keeps the run state and cost/cache-hit accounting visible after
+the progress notification disappears.
+
+Permission prompts always show the raw command or path. A proposed diff opens as
+its own `diff` document beside the editor instead of being squeezed into a modal
+that would elide it, and multi-edit `apply_patch` requests offer **Allow selected
+edits…** to approve individual hunks (dismissing that picker approves nothing).
+
+It deliberately remains a thin client: orchestration, permissions, traces, and
+workspace coordination stay inside the local SeekForge server.
 
 In a multi-root window, commands target the workspace containing the active
 editor (falling back to the first folder when no editor is active). The extension
@@ -25,5 +34,13 @@ safety timeout and the VS Code progress notification is cancellable; cancelling
 sends the server's `cancel` frame before closing the local socket. The extension
 does not replay an interrupted edit run automatically.
 
-Build a local VSIX with `pnpm --filter seekforge-vscode package`. Marketplace
-publishing still requires the publisher's external credentials.
+Build a local VSIX with `pnpm --filter seekforge-vscode package`, or install the
+`seekforge-vscode-<version>.vsix` attached to each GitHub release
+(`code --install-extension <file>`). Its version is bumped by
+`scripts/release.mjs` together with the CLI, TUI, and desktop app, and the
+release workflow refuses to package a mismatched version.
+
+Marketplace publishing is deliberately not automated: `vsce publish` needs the
+`publisher` account's personal access token, which is not a repository secret.
+The `publisher` field must match the account that owns that token before any
+Marketplace publish.

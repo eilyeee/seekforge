@@ -3,10 +3,14 @@ const { EventEmitter } = require("node:events");
 const test = require("node:test");
 const {
   SeekForgeBridge,
+  formatAgentEvent,
+  hasDiffPreview,
   normalizeServerUrl,
-  permissionDetail,
+  permissionHunkItems,
+  permissionSummary,
   readStoredToken,
   taskWithEditorContext,
+  usageSummary,
   websocketUrl,
   withWorkspace,
   writeStoredToken,
@@ -59,16 +63,92 @@ test("includes only active files inside the workspace", () => {
   assert.equal(taskWithEditorContext("review", editor, "/other"), "review");
 });
 
-test("permission prompts surface raw commands, paths, and diffs", () => {
-  const detail = permissionDetail({
+test("permission prompts surface raw commands and paths, and route diffs to a document", () => {
+  const request = {
     description: "run a command",
     command: "npm test",
     path: "/repo/package.json",
     preview: { diff: "+changed" },
-  });
+  };
+  const detail = permissionSummary(request);
   assert.match(detail, /Raw command:\nnpm test/);
   assert.match(detail, /Raw path:\n\/repo\/package.json/);
-  assert.match(detail, /Proposed diff:\n\+changed/);
+  // The diff is opened as a document, so it must not be inlined into the modal.
+  assert.doesNotMatch(detail, /\+changed/);
+  assert.equal(hasDiffPreview(request), true);
+  assert.equal(hasDiffPreview({ description: "read a file" }), false);
+  assert.equal(hasDiffPreview({ description: "empty", preview: { diff: "" } }), false);
+});
+
+test("offers per-hunk selection only for genuinely multi-hunk edits", () => {
+  assert.deepEqual(permissionHunkItems({ hunks: [{ index: 0, preview: "only" }] }), []);
+  assert.deepEqual(permissionHunkItems({}), []);
+  const items = permissionHunkItems({
+    hunks: [
+      { index: 0, preview: "-  a\n+  b" },
+      { index: 1, preview: "-  c\n+  d" },
+    ],
+  });
+  assert.deepEqual(
+    items.map((item) => [item.label, item.index, item.picked]),
+    [
+      ["Hunk 1", 0, true],
+      ["Hunk 2", 1, true],
+    ],
+  );
+  assert.equal(items[0].detail, "- a + b");
+});
+
+test("renders tool activity, subagents, and failures as single output rows", () => {
+  assert.equal(
+    formatAgentEvent({ type: "tool.started", toolName: "run_command", args: { command: "npm test" } }),
+    "⏺ run_command(npm test)",
+  );
+  assert.equal(
+    formatAgentEvent({ type: "tool.completed", toolName: "run_command", result: { ok: true, data: "2 passed" } }),
+    "  ⎿ 2 passed",
+  );
+  assert.equal(
+    formatAgentEvent({
+      type: "tool.completed",
+      toolName: "apply_patch",
+      result: { ok: false, error: { code: "e", message: "no match" } },
+    }),
+    "  ⎿ error: no match",
+  );
+  assert.equal(formatAgentEvent({ type: "file.changed", path: "src/app.ts" }), "  ± src/app.ts");
+  assert.equal(
+    formatAgentEvent({
+      type: "subagent.completed",
+      agentId: "explorer",
+      dispatchId: "d",
+      task: "t",
+      status: "done",
+      resultSummary: "found it",
+    }),
+    "  ⎿ subagent explorer done: found it",
+  );
+  assert.equal(formatAgentEvent({ type: "model.delta", chunk: "x" }), null);
+  assert.equal(formatAgentEvent(undefined), null);
+});
+
+test("clips long tool arguments without severing surrogate pairs", () => {
+  const line = formatAgentEvent({ type: "tool.started", toolName: "search_text", args: { pattern: "🙂".repeat(200) } });
+  // 160 code points plus the ellipsis, never a lone surrogate half.
+  assert.equal(Array.from(line).filter((character) => character === "🙂").length, 160);
+  assert.match(line, /…\)$/);
+});
+
+test("reports cost first and marks cache hits in the usage readout", () => {
+  assert.equal(
+    usageSummary({ promptTokens: 12_500, completionTokens: 800, cacheHitTokens: 3_100, costUsd: 0.004242 }),
+    "$0.0042 · 12.5k prompt (3.1k cached) · 800 completion",
+  );
+  assert.equal(
+    usageSummary({ promptTokens: 10, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 }),
+    "$0.0000 · 10 prompt · 0 completion",
+  );
+  assert.equal(usageSummary(undefined), "");
 });
 
 test("migrates legacy tokens to SecretStorage and supports clearing", async () => {

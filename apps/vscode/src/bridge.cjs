@@ -4,6 +4,8 @@ const path = require("node:path");
 const MAX_SELECTION_CHARS = 20_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_RUN_TIMEOUT_MS = 30 * 60_000;
+/** Tool rows are activity, not transcripts: keep one line readable in the panel. */
+const MAX_EVENT_LINE_CHARS = 400;
 
 function normalizeServerUrl(serverUrl) {
   const url = new URL(serverUrl);
@@ -79,13 +81,139 @@ function taskWithEditorContext(task, editor, workspaceRoot) {
   return `${task.trim()}${context}`;
 }
 
-function permissionDetail(request) {
+/**
+ * The raw command/path an approval actually grants. Modal dialogs elide long
+ * text, so the diff is shown in its own editor document instead of inlined here
+ * — but the raw strings must always stay in front of the approver.
+ */
+function permissionSummary(request) {
   return [
     request.description,
     request.command ? `\nRaw command:\n${request.command}` : "",
     request.path ? `\nRaw path:\n${request.path}` : "",
-    request.preview?.diff ? `\nProposed diff:\n${request.preview.diff}` : "",
   ].join("");
+}
+
+/** True when the request carries a diff worth opening in its own document. */
+function hasDiffPreview(request) {
+  return typeof request?.preview?.diff === "string" && request.preview.diff.length > 0;
+}
+
+/** Per-hunk picker rows for multi-hunk apply_patch approvals. */
+function permissionHunkItems(request) {
+  const hunks = Array.isArray(request?.hunks) ? request.hunks : [];
+  if (hunks.length < 2) return [];
+  return hunks.map((hunk) => ({
+    label: `Hunk ${hunk.index + 1}`,
+    detail: clipLine(hunk.preview, 200),
+    index: hunk.index,
+    picked: true,
+  }));
+}
+
+function clipLine(text, max = MAX_EVENT_LINE_CHARS) {
+  const flat = String(text ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  // Array.from splits by code point, so clipping never severs a surrogate pair.
+  const points = Array.from(flat);
+  return points.length <= max ? flat : `${points.slice(0, max).join("")}…`;
+}
+
+/** The single most identifying argument of a tool call, for the activity row. */
+function toolArgsSummary(args) {
+  if (!args || typeof args !== "object") return "";
+  for (const key of ["command", "path", "file_path", "pattern", "query", "url", "agentId", "id"]) {
+    const value = args[key];
+    if (typeof value === "string" && value.length > 0) return clipLine(value, 160);
+  }
+  try {
+    return clipLine(JSON.stringify(args), 160);
+  } catch {
+    return "";
+  }
+}
+
+function toolResultSummary(result) {
+  if (!result || typeof result !== "object") return "";
+  if (result.ok === false) {
+    return `error: ${clipLine(result.error?.message ?? result.error?.code ?? "failed", 200)}`;
+  }
+  const data = result.data;
+  if (typeof data === "string") return clipLine(data, 200);
+  if (data === undefined || data === null) return "ok";
+  try {
+    return clipLine(JSON.stringify(data), 200);
+  } catch {
+    return "ok";
+  }
+}
+
+function formatTokens(count) {
+  const value = Number(count) || 0;
+  return value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value);
+}
+
+/** Cost first: DeepSeek cache-hit accounting is a first-class part of the product. */
+function usageSummary(usage) {
+  if (!usage || typeof usage !== "object") return "";
+  const cached = Number(usage.cacheHitTokens) || 0;
+  const prompt = `${formatTokens(usage.promptTokens)} prompt${cached ? ` (${formatTokens(cached)} cached)` : ""}`;
+  return `$${(Number(usage.costUsd) || 0).toFixed(4)} · ${prompt} · ${formatTokens(usage.completionTokens)} completion`;
+}
+
+/**
+ * Renders one agent event as an output-channel line, or null when the event
+ * carries no standalone row (streamed deltas and usage updates are handled by
+ * the caller, which appends them without a line break or shows them elsewhere).
+ */
+function formatAgentEvent(event) {
+  if (!event || typeof event.type !== "string") return null;
+  switch (event.type) {
+    case "tool.started":
+      return `⏺ ${event.toolName}(${toolArgsSummary(event.args)})`;
+    case "tool.completed":
+      return `  ⎿ ${toolResultSummary(event.result) || "ok"}`;
+    case "file.changed":
+      return `  ± ${event.path}`;
+    case "notice":
+      return `${event.level === "warn" ? "!" : "i"} ${clipLine(event.message)}`;
+    case "context.compacted":
+      return `  ⎿ context compacted (${event.droppedTurns} turns, ${formatTokens(event.summaryTokens)} summary tokens)`;
+    case "context.microcompacted":
+      return `  ⎿ context micro-compacted (${event.clearedResults} tool results cleared)`;
+    case "provider.retry":
+      return `⟳ provider retry ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms — ${clipLine(event.reason, 120)}`;
+    case "subagent.started":
+      return `⏺ subagent ${event.agentId}: ${clipLine(event.task, 160)}`;
+    case "subagent.step":
+      return `  ⎿ subagent ${event.agentId} → ${event.toolName}`;
+    case "subagent.completed":
+      return `  ⎿ subagent ${event.agentId} done: ${clipLine(event.resultSummary, 200)}`;
+    case "subagent.failed":
+      return `  ⎿ subagent ${event.agentId} failed: ${clipLine(event.error?.message ?? "failed", 200)}`;
+    case "subagent.cancelled":
+      return `  ⎿ subagent ${event.agentId} cancelled: ${clipLine(event.reason, 160)}`;
+    case "session.created":
+      return `\nSession: ${event.sessionId}\n`;
+    case "session.completed": {
+      const report = event.report ?? {};
+      const changed = Array.isArray(report.changedFiles) ? report.changedFiles : [];
+      return [
+        "",
+        `⏺ ${clipLine(report.summary, 600)}`,
+        changed.length > 0 ? `  ⎿ changed: ${changed.join(", ")}` : "",
+        report.verification ? `  ⎿ verification: ${clipLine(report.verification, 200)}` : "",
+        `  ⎿ usage: ${usageSummary(report.usage)}`,
+      ]
+        .filter((line) => line !== "")
+        .join("\n");
+    }
+    case "session.failed":
+      return `\nError: ${clipLine(event.error?.message ?? "run failed", 400)}`;
+    default:
+      return null;
+  }
 }
 
 class SeekForgeBridge {
@@ -201,10 +329,16 @@ class SeekForgeBridge {
 module.exports = {
   DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_RUN_TIMEOUT_MS,
+  MAX_EVENT_LINE_CHARS,
   MAX_SELECTION_CHARS,
   SeekForgeBridge,
+  clipLine,
+  formatAgentEvent,
+  hasDiffPreview,
   normalizeServerUrl,
-  permissionDetail,
+  permissionHunkItems,
+  permissionSummary,
+  usageSummary,
   readStoredToken,
   taskWithEditorContext,
   websocketUrl,

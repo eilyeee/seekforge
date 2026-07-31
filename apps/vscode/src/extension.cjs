@@ -2,9 +2,13 @@ const vscode = require("vscode");
 const WebSocket = require("ws");
 const {
   SeekForgeBridge,
-  permissionDetail,
+  formatAgentEvent,
+  hasDiffPreview,
+  permissionHunkItems,
+  permissionSummary,
   readStoredToken,
   taskWithEditorContext,
+  usageSummary,
   withWorkspace,
   writeStoredToken,
   workspaceRootForEditor,
@@ -30,7 +34,42 @@ async function configuredBridge(context) {
   });
 }
 
-async function runTask(context, output, options = {}) {
+/**
+ * Modal dialogs elide long text, so the diff goes to a real editor document and
+ * the modal keeps only the raw command/path the approval actually grants.
+ */
+async function reviewPermission(request) {
+  if (hasDiffPreview(request)) {
+    const document = await vscode.workspace.openTextDocument({ language: "diff", content: request.preview.diff });
+    await vscode.window.showTextDocument(document, {
+      preview: true,
+      preserveFocus: true,
+      viewColumn: vscode.ViewColumn.Beside,
+    });
+  }
+  const hunks = permissionHunkItems(request);
+  const choice = await vscode.window.showWarningMessage(
+    request.description,
+    { modal: true, detail: permissionSummary(request) },
+    ...(hunks.length > 0 ? ["Allow selected edits…"] : []),
+    "Allow once",
+    "Allow for session",
+    "Reject",
+  );
+  if (choice === "Allow for session") return { approved: true, remember: "session" };
+  if (choice === "Allow once") return { approved: true };
+  if (choice !== "Allow selected edits…") return { approved: false };
+
+  const picked = await vscode.window.showQuickPick(hunks, {
+    canPickMany: true,
+    placeHolder: `Apply which of the ${hunks.length} edits?`,
+  });
+  // An empty or dismissed selection applies nothing, so it must not read as approval.
+  if (!picked || picked.length === 0) return { approved: false };
+  return { approved: true, selectedHunks: picked.map((item) => item.index) };
+}
+
+async function runTask(context, output, statusBar, options = {}) {
   const { resumeSessionId } = options;
   const workspaceRoot =
     options.workspaceRoot ?? workspaceRootForEditor(vscode.workspace, vscode.window.activeTextEditor);
@@ -60,49 +99,100 @@ async function runTask(context, output, options = {}) {
   output.clear();
   output.show(true);
   output.appendLine(`> ${prompt}\n`);
-  await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: "SeekForge is running…", cancellable: true },
-    (_progress, cancellationToken) => {
-      const controller = new AbortController();
-      const cancellation = cancellationToken.onCancellationRequested(() => controller.abort());
-      return bridge
-        .run(
-          frame,
-          async (message, reply) => {
-            if (message.type === "permission.request") {
-              const choice = await vscode.window.showWarningMessage(
-                permissionDetail(message.request),
-                { modal: true },
-                "Allow once",
-                "Allow for session",
-                "Reject",
-              );
-              reply({
-                type: "permission.response",
-                requestId: message.requestId,
-                approved: choice === "Allow once" || choice === "Allow for session",
-                ...(choice === "Allow for session" ? { remember: "session" } : {}),
-              });
-              return;
-            }
-            if (message.type === "question.request") {
-              const answer = await vscode.window.showQuickPick(message.options, { placeHolder: message.question });
-              reply({ type: "question.answer", id: message.id, answer: answer ?? "" });
-              return;
-            }
-            if (message.type !== "event") return;
-            if (message.event.type === "model.delta") output.append(message.event.chunk);
-            else if (message.event.type === "reasoning.delta") output.append(`[thinking] ${message.event.chunk}`);
-            else if (message.event.type === "session.created")
-              output.appendLine(`\n\nSession: ${message.event.sessionId}\n`);
-            else if (message.event.type === "session.failed")
-              output.appendLine(`\n\nError: ${message.event.error.message}`);
-          },
-          { signal: controller.signal },
-        )
-        .finally(() => cancellation.dispose());
+  statusBar.startRun();
+  await vscode.window
+    .withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "SeekForge is running…", cancellable: true },
+      (progress, cancellationToken) => {
+        const controller = new AbortController();
+        const cancellation = cancellationToken.onCancellationRequested(() => controller.abort());
+        return bridge
+          .run(
+            frame,
+            async (message, reply) => {
+              if (message.type === "permission.request") {
+                const decision = await reviewPermission(message.request);
+                reply({ type: "permission.response", requestId: message.requestId, ...decision });
+                return;
+              }
+              if (message.type === "question.request") {
+                const answer = await vscode.window.showQuickPick(message.options, { placeHolder: message.question });
+                reply({ type: "question.answer", id: message.id, answer: answer ?? "" });
+                return;
+              }
+              if (message.type !== "event") return;
+              const event = message.event;
+              if (event.type === "model.delta") {
+                output.append(event.chunk);
+                return;
+              }
+              if (event.type === "reasoning.delta") {
+                output.append(`[thinking] ${event.chunk}`);
+                return;
+              }
+              if (event.type === "command.output") {
+                output.append(event.chunk);
+                return;
+              }
+              if (event.type === "usage.updated") {
+                statusBar.reportUsage(event.usage);
+                return;
+              }
+              if (event.type === "step.started") {
+                progress.report({ message: event.title });
+                return;
+              }
+              const line = formatAgentEvent(event);
+              if (line !== null) output.appendLine(line);
+              if (event.type === "session.completed") statusBar.reportUsage(event.report?.usage);
+            },
+            { signal: controller.signal },
+          )
+          .finally(() => cancellation.dispose());
+      },
+    )
+    .then(
+      () => statusBar.endRun(),
+      (error) => {
+        statusBar.endRun();
+        throw error;
+      },
+    );
+}
+
+/**
+ * A persistent cost/token readout: DeepSeek cache-hit accounting is a product
+ * guarantee, so a run's spend stays visible after the notification disappears.
+ */
+function createStatusBar() {
+  const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  item.command = "seekforge.showOutput";
+  let lastUsage;
+  const render = (running) => {
+    const usage = lastUsage ? usageSummary(lastUsage) : "";
+    item.text = running ? "$(sync~spin) SeekForge" : usage ? `$(check) SeekForge` : "$(rocket) SeekForge";
+    item.tooltip = usage ? `SeekForge — ${usage}` : "SeekForge: no run yet";
+    if (usage) item.text += ` ${usage.split(" · ")[0]}`;
+    item.show();
+  };
+  render(false);
+  return {
+    item,
+    startRun() {
+      lastUsage = undefined;
+      render(true);
     },
-  );
+    reportUsage(usage) {
+      if (usage) lastUsage = usage;
+      render(true);
+    },
+    endRun() {
+      render(false);
+    },
+    dispose() {
+      item.dispose();
+    },
+  };
 }
 
 async function runSafely(action) {
@@ -119,8 +209,11 @@ async function runSafely(action) {
 
 function activate(context) {
   const output = vscode.window.createOutputChannel("SeekForge");
+  const statusBar = createStatusBar();
   context.subscriptions.push(
     output,
+    statusBar,
+    vscode.commands.registerCommand("seekforge.showOutput", () => output.show(true)),
     vscode.commands.registerCommand("seekforge.setToken", () =>
       runSafely(async () => {
         const token = await vscode.window.showInputBox({
@@ -135,7 +228,7 @@ function activate(context) {
         );
       }),
     ),
-    vscode.commands.registerCommand("seekforge.newTask", () => runSafely(() => runTask(context, output))),
+    vscode.commands.registerCommand("seekforge.newTask", () => runSafely(() => runTask(context, output, statusBar))),
     vscode.commands.registerCommand("seekforge.resumeSession", () =>
       runSafely(async () => {
         const bridge = await configuredBridge(context);
@@ -151,7 +244,11 @@ function activate(context) {
           { placeHolder: "Resume a SeekForge session" },
         );
         if (picked) {
-          await runTask(context, output, { resumeSessionId: picked.session.id, workspaceRoot, workspaceId });
+          await runTask(context, output, statusBar, {
+            resumeSessionId: picked.session.id,
+            workspaceRoot,
+            workspaceId,
+          });
         }
       }),
     ),
