@@ -1,7 +1,11 @@
 import { createServer, type IncomingHttpHeaders, type Server, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createMcpClient } from "../../src/mcp/client.js";
+import { recordMcpOAuthTokens } from "../../src/mcp/oauth-store.js";
 import { readLimitedResponseText } from "../../src/mcp/http.js";
 
 const SESSION_ID = "sess-42";
@@ -422,6 +426,39 @@ describe("mcp client over streamable HTTP", () => {
       expect(getTokenRefreshes() - before).toBe(1);
     } finally {
       client.dispose();
+    }
+  });
+
+  it("reuses a stored access token instead of spending a request earning a 401", async () => {
+    const home = mkdtempSync(join(tmpdir(), "seekforge-mcp-token-"));
+    const previousHome = process.env.SEEKFORGE_HOME;
+    process.env.SEEKFORGE_HOME = home;
+    const before = getTokenRefreshes();
+    try {
+      recordMcpOAuthTokens(
+        {
+          serverName: "stored-oauth-http",
+          serverUrl: url,
+          tokenEndpoint: url.replace(/\/mcp$/, "/token"),
+          clientId: "client",
+        },
+        { accessToken: "refreshed-token", refreshToken: "refresh", tokenType: "Bearer" },
+      );
+      const client = createMcpClient({
+        name: "stored-oauth-http",
+        config: { url, headers: { "x-require-oauth": "yes" } },
+      });
+      try {
+        expect((await client.listTools()).map((tool) => tool.name)).toEqual(["echo"]);
+        // No 401 happened, so no refresh was needed.
+        expect(getTokenRefreshes() - before).toBe(0);
+      } finally {
+        client.dispose();
+      }
+    } finally {
+      if (previousHome === undefined) delete process.env.SEEKFORGE_HOME;
+      else process.env.SEEKFORGE_HOME = previousHome;
+      rmSync(home, { recursive: true, force: true });
     }
   });
 

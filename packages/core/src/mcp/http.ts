@@ -183,6 +183,13 @@ export function createMcpHttpTransport(options: McpClientOptions): {
   let disposed = false;
   let oauthAccessToken: string | undefined;
   let oauthRefresh: Promise<string> | undefined;
+  if (options.config.oauth === undefined) {
+    // Reuse a stored, unexpired access token so the first request is not spent
+    // earning a 401 — and so servers that answer 403 instead of 401 still work.
+    const stored = readMcpOAuthCredential(options.name, serverUrl);
+    const unexpired = stored?.expiresAt === undefined || Date.parse(stored.expiresAt) > Date.now();
+    if (stored?.accessToken && unexpired) oauthAccessToken = stored.accessToken;
+  }
   const inflight = new Set<AbortController>();
   let eventStreamController: AbortController | undefined;
   let eventStreamSupported: boolean | undefined;
