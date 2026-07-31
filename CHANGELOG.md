@@ -2,6 +2,91 @@
 
 ## Unreleased
 
+## 1.0.0 (2026-07-31)
+
+0.7.0 shipped the five surfaces (CLI, REPL, TUI, local web, desktop app). 1.0.0
+is about what runs inside them: agents that finish work unattended and can be
+audited afterwards. Sixty-seven development rounds are summarized below; the
+per-round log follows.
+
+### Autonomous Loop (rounds 49–72)
+
+Run a task to green without supervision: `seekforge loop "<task>" --verify
+"<cmd>"` runs the agent, runs the verification command, feeds failures back, and
+repeats until the command exits 0 or a guardrail trips — as one resumed,
+rewindable session. Guardrails default on: iteration cap, cumulative cost/token/
+time budgets, no-progress detection, and cooperative cancel.
+
+Around that core: requirement confirmation before work starts, durable state
+that survives a crash or a closed server, cross-process controls (pause, resume,
+steer), verification DAGs with dependency-aware stage selection, managed
+worktrees for isolated parallel attempts, evidence-backed delivery (checkpoint,
+merge, or pull request) that cannot publish an unverified tree, bounded CI-log
+repair, and idle recovery for orphaned runs.
+
+### Graph Engineering (rounds 73–78)
+
+Heterogeneous execution graphs over Agent, Loop, function, router, approval-gate
+and nested-graph nodes, with completion-driven scheduling, shared budgets,
+retries, pause/resume, downstream reruns, typed input/output contracts, and
+content-addressed artifact attestation. On top: durable migration between graph
+versions, remote-executor capacity fencing, SLO burn-rate policy, and explicit
+shadow/canary/promotion rollouts with opt-in regression rollback.
+
+Both engines are exposed through Core, CLI, REST, and the desktop app, and both
+persist enough evidence to reconstruct what happened after the fact.
+
+### Agent quality (rounds 36, 43–44, 51–54)
+
+Code navigation, a finalize gate, durable plans, task-relevant file retrieval,
+auto-verification, and a reviewer subagent — each measured with paired A/B eval
+runs rather than assumed. Round 54 recorded the verdicts and kept only what paid
+for itself: auto-verify default-on (~30% cheaper), retrieval default-on (value
+concentrated on hard navigation), review gate opt-in (cost without measured
+benefit). A low-end-model audit fixed the findings that only show up on weaker
+models.
+
+### Memory (rounds 37, 40, 42–43)
+
+Global cross-project facts, `@import` composition, exposure/retrieval metrics,
+and extraction levers chosen by measurement instead of intuition.
+
+### Interfaces (rounds 18, 26–33, 35, 45–48)
+
+Headless CLI parity (`-p`, `--output-format`, `--permission-mode`,
+`--fallback-model`, `--settings`), per-hunk partial apply across every surface,
+English + 简体中文 for the CLI, TUI, and desktop, a redesigned desktop app with a
+file browser, source control, ⌘K palette, and live run controls, and a VS Code
+client over the same REST/WS contract.
+
+### Security, correctness, and distribution (rounds 34, 38–39, 41, 55, 57, 68)
+
+Dependency audit to zero vulnerabilities, a self-contained desktop bundle (the
+DMG no longer needs a system-installed CLI), full-project boundary reviews whose
+findings are recorded as reusable bug *classes* in `docs/boundary-checklist.md`,
+and release wiring for npm, native desktop packages, and the VS Code extension.
+
+### Also in 1.0.0
+
+- Interactive OAuth 2.1 (PKCE) login for remote MCP servers: `seekforge mcp
+  login <name>` stores the refresh token owner-only outside the shared config.
+- OpenAI-compatible providers: `reasoning` streams, legacy `function_call`
+  finish reasons, index-less tool-call deltas, and
+  `prompt_tokens_details.cached_tokens` are all normalized, with a fixture
+  matrix pinning each dialect.
+- CI gates the Loop/Graph control plane's test coverage, and fails the build on
+  cross-surface documentation drift (undocumented command, config key, REST
+  route, or missing translation).
+
+### Upgrading from 0.7.0
+
+- `git push` is no longer denied outright; it prompts every time (headless runs
+  auto-reject). `--force` pushes remain denied.
+- Cost accounting stays DeepSeek-specific: non-DeepSeek presets report 0 until
+  you set `modelPricing`.
+- `@seekforge/core` remains internal and unpublished; the exit criteria are in
+  `docs/core-package-policy.md`.
+
 ### round 78: adaptive Loop and Graph control plane
 - Added contextual Loop route learning, unfinished-node Graph runtime replanning, workspace-wide remote executor capacity fencing, and verified artifact attestations.
 - Added durable SLO burn rates and forecast calibration, explicit shadow/canary/promotion rollouts, safe idle orchestration maintenance, and opt-in regression rollback.
