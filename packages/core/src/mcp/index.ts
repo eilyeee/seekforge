@@ -16,3 +16,21 @@ export {
 } from "./tools.js";
 export type { McpClientEntry, McpPromptRef, McpResourceRef } from "./tools.js";
 export type { McpPrompt, McpPromptArgument, McpResource, McpServerConfig, McpTool } from "./types.js";
+export {
+  buildMcpAuthorizationUrl,
+  createMcpOAuthState,
+  createMcpPkcePair,
+  discoverMcpOAuthMetadata,
+  exchangeMcpAuthorizationCode,
+  readMcpOAuthCallback,
+  registerMcpOAuthClient,
+} from "./oauth.js";
+export type { McpOAuthClient, McpOAuthMetadata, McpOAuthTokens, McpPkcePair } from "./oauth.js";
+export {
+  deleteMcpOAuthCredential,
+  listMcpOAuthCredentials,
+  mcpOAuthStorePath,
+  readMcpOAuthCredential,
+  recordMcpOAuthTokens,
+} from "./oauth-store.js";
+export type { McpOAuthCredential } from "./oauth-store.js";

@@ -1,5 +1,7 @@
 import type { McpClientOptions } from "./client.js";
 import { McpError } from "./errors.js";
+import { readMcpOAuthCredential, recordMcpOAuthTokens } from "./oauth-store.js";
+import { isRecord } from "../util/guards.js";
 import { abortablePromise, onAbortOnce } from "../util/abort.js";
 import { pathToFileURL } from "node:url";
 
@@ -151,10 +153,12 @@ async function readSseResponse(
  * Static `headers` cover bearer-token servers — and each header value may interpolate
  * `${ENV_VAR}` so secrets live in the environment, not in committed config
  * (e.g. `"Authorization": "Bearer ${GITHUB_MCP_TOKEN}"`). Optional OAuth
- * refresh-token config renews an expired bearer token after HTTP 401. Initial
- * interactive authorization remains frontend-owned. After initialization, a
- * standalone GET SSE stream is kept open when the server supports it; roots/list
- * requests are answered and notifications are delivered to `onNotification`.
+ * refresh-token config renews an expired bearer token after HTTP 401; when no
+ * OAuth block is configured, a credential stored by `seekforge mcp login` is
+ * used instead and renewed in place (rotated refresh tokens are persisted).
+ * After initialization, a standalone GET SSE stream is kept open when the server
+ * supports it; roots/list requests are answered and notifications are delivered
+ * to `onNotification`.
  */
 
 /** Expands `${VAR}` in a header value from process.env (missing → empty). */
@@ -167,6 +171,8 @@ export function createMcpHttpTransport(options: McpClientOptions): {
 } {
   const url = options.config.url;
   if (!url) throw new McpError("mcp_config", `MCP server "${options.name}" has no url`);
+  /** Same endpoint, already narrowed — stored credentials are keyed by it. */
+  const serverUrl: string = url;
   const timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
 
   let sessionId: string | undefined;
@@ -200,21 +206,52 @@ export function createMcpHttpTransport(options: McpClientOptions): {
     };
   }
 
+  /**
+   * Configured OAuth wins over an interactively stored credential: an explicit
+   * config entry is the operator's deliberate choice, and `seekforge mcp login`
+   * only fills the gap when there is none.
+   */
+  function oauthGrant():
+    | { tokenEndpoint: string; clientId: string; clientSecret?: string; refreshToken: string; scope?: string }
+    | undefined {
+    const oauth = options.config.oauth;
+    if (oauth) {
+      return {
+        tokenEndpoint: expandEnvRefs(oauth.tokenEndpoint),
+        clientId: expandEnvRefs(oauth.clientId),
+        ...(oauth.clientSecret !== undefined ? { clientSecret: expandEnvRefs(oauth.clientSecret) } : {}),
+        refreshToken: expandEnvRefs(oauth.refreshToken),
+        ...(oauth.scope !== undefined ? { scope: expandEnvRefs(oauth.scope) } : {}),
+      };
+    }
+    const stored = readMcpOAuthCredential(options.name, serverUrl);
+    if (!stored?.refreshToken) return undefined;
+    return {
+      tokenEndpoint: stored.tokenEndpoint,
+      clientId: stored.clientId,
+      ...(stored.clientSecret !== undefined ? { clientSecret: stored.clientSecret } : {}),
+      refreshToken: stored.refreshToken,
+      ...(stored.scope !== undefined ? { scope: stored.scope } : {}),
+    };
+  }
+
+  const canRenewToken = (): boolean => oauthGrant() !== undefined;
+
   async function refreshAccessToken(signal: AbortSignal): Promise<string> {
     if (oauthRefresh) return oauthRefresh;
-    const oauth = options.config.oauth;
+    const oauth = oauthGrant();
     if (!oauth) throw new McpError("mcp_auth_error", `MCP server "${options.name}" requires authentication`);
     oauthRefresh = (async () => {
       const body = new URLSearchParams({
         grant_type: "refresh_token",
-        refresh_token: expandEnvRefs(oauth.refreshToken),
-        client_id: expandEnvRefs(oauth.clientId),
-        ...(oauth.clientSecret !== undefined ? { client_secret: expandEnvRefs(oauth.clientSecret) } : {}),
-        ...(oauth.scope !== undefined ? { scope: expandEnvRefs(oauth.scope) } : {}),
+        refresh_token: oauth.refreshToken,
+        client_id: oauth.clientId,
+        ...(oauth.clientSecret !== undefined ? { client_secret: oauth.clientSecret } : {}),
+        ...(oauth.scope !== undefined ? { scope: oauth.scope } : {}),
       });
       let response: Response;
       try {
-        response = await fetch(expandEnvRefs(oauth.tokenEndpoint), {
+        response = await fetch(oauth.tokenEndpoint, {
           method: "POST",
           headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
           body,
@@ -247,6 +284,31 @@ export function createMcpHttpTransport(options: McpClientOptions): {
         throw new McpError("mcp_auth_error", `MCP OAuth refresh for "${options.name}" omitted access_token`);
       }
       oauthAccessToken = token;
+      // A stored credential is renewed in place; a rotated refresh token would
+      // otherwise be lost and the next process would have to log in again.
+      // Config-declared OAuth stays untouched: config is never written back.
+      if (options.config.oauth === undefined) {
+        const rotated = isRecord(parsed) ? parsed.refresh_token : undefined;
+        const expiresIn = isRecord(parsed) ? parsed.expires_in : undefined;
+        recordMcpOAuthTokens(
+          {
+            serverName: options.name,
+            serverUrl,
+            tokenEndpoint: oauth.tokenEndpoint,
+            clientId: oauth.clientId,
+            ...(oauth.clientSecret !== undefined ? { clientSecret: oauth.clientSecret } : {}),
+          },
+          {
+            accessToken: token,
+            tokenType: "Bearer",
+            ...(typeof rotated === "string" && rotated.length > 0 ? { refreshToken: rotated } : {}),
+            ...(typeof expiresIn === "number" && Number.isFinite(expiresIn) && expiresIn > 0
+              ? { expiresAt: new Date(Date.now() + Math.floor(expiresIn) * 1000).toISOString() }
+              : {}),
+            ...(oauth.scope !== undefined ? { scope: oauth.scope } : {}),
+          },
+        );
+      }
       return token;
     })().finally(() => {
       oauthRefresh = undefined;
@@ -283,7 +345,7 @@ export function createMcpHttpTransport(options: McpClientOptions): {
           signal: controller.signal,
         });
       let response = await send();
-      if (response.status === 401 && options.config.oauth) {
+      if (response.status === 401 && canRenewToken()) {
         await response.body?.cancel().catch(() => {});
         await refreshAccessToken(controller.signal);
         response = await send();
@@ -334,7 +396,7 @@ export function createMcpHttpTransport(options: McpClientOptions): {
     void (async () => {
       try {
         let response = await fetch(url!, { method: "GET", headers: headers(), signal: controller.signal });
-        if (response.status === 401 && options.config.oauth) {
+        if (response.status === 401 && canRenewToken()) {
           await response.body?.cancel().catch(() => {});
           await refreshAccessToken(controller.signal);
           response = await fetch(url!, { method: "GET", headers: headers(), signal: controller.signal });
@@ -385,7 +447,7 @@ export function createMcpHttpTransport(options: McpClientOptions): {
             signal: controller.signal,
           });
         res = await send();
-        if (res.status === 401 && options.config.oauth) {
+        if (res.status === 401 && canRenewToken()) {
           await res.body?.cancel().catch(() => {});
           await refreshAccessToken(controller.signal);
           res = await send();

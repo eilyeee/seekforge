@@ -107,6 +107,43 @@ seekforge mcp add fs npx -y @modelcontextprotocol/server-filesystem .
 
 Deletes a server from `mcpServers`. Accepts `--global` for the global config.
 
+#### `seekforge mcp login <name>`
+
+Runs the interactive OAuth 2.1 authorization-code flow (PKCE, `S256`) against a
+remote server that has a `url` but no `oauth` block:
+
+1. Discovers the authorization server from
+   `/.well-known/oauth-protected-resource`, falling back to the MCP server's own
+   origin, and reads its `/.well-known/oauth-authorization-server` metadata.
+2. Binds a one-shot listener on `127.0.0.1` and registers a client for that exact
+   redirect URI (RFC 7591), or uses `--client-id` / `--client-secret` when the
+   server does not support dynamic registration.
+3. Opens the browser, accepts the single callback, and exchanges the code with
+   the PKCE verifier. `--scope` overrides the server's advertised scopes.
+
+The resulting refresh token is written to `~/.seekforge/mcp-oauth.json` with
+owner-only permissions (`0600`), keyed by server name **and** URL — never to
+`.seekforge/config.json`, which is routinely committed and shared. Repointing a
+server name at a different URL therefore requires a fresh login.
+
+Every hop is re-validated before use: endpoints must be `https` (loopback may be
+`http`), the metadata `issuer` must match the discovery origin, the callback
+`state` is compared in constant time, and a server advertising PKCE without
+`S256` is rejected.
+
+```text
+$ seekforge mcp login docs
+authorization server: https://auth.example.com/
+opening your browser to authorize (paste the URL manually if it does not open):
+  https://auth.example.com/authorize?response_type=code&...
+stored credentials for "docs" in ~/.seekforge/mcp-oauth.json
+```
+
+#### `seekforge mcp logout <name>`
+
+Deletes the stored credential for that server. Config-declared `oauth` blocks
+are untouched.
+
 ### 1.3 Config Layering
 
 The config merge order (later wins) is:
@@ -168,10 +205,13 @@ include the negotiated `MCP-Protocol-Version` header. Streamable HTTP responses
 must be JSON-RPC objects whose id matches
 the pending request; scalar, array, null, and mismatched-id responses are rejected.
 When `oauth` is configured, an HTTP 401 triggers one standards-based
-`refresh_token` exchange and retries the original request once. SeekForge does
-not persist the returned access token. Initial interactive authorization is a
-frontend responsibility; unattended processes therefore need a refresh token
-or a static header before startup.
+`refresh_token` exchange and retries the original request once. Config-declared
+credentials are never written back, so the refreshed access token stays in
+memory. When there is no `oauth` block, a credential stored by
+`seekforge mcp login` is used the same way and renewed in place — a rotated
+refresh token is persisted, and a response that omits one keeps the previous
+token rather than dropping it. Unattended processes therefore need either a
+prior `mcp login`, a configured refresh token, or a static header.
 
 `tools/list`, `resources/list`, and `prompts/list` consume every opaque
 `nextCursor`. Repeated cursors are rejected and discovery is capped at 100 pages

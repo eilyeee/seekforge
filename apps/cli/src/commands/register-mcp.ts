@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { mcpLoginCommand, mcpLogoutCommand } from "./mcp-login.js";
 import { mcpServeCommand } from "./mcp-serve.js";
 import { mcpAddCommand, mcpListCommand, mcpRemoveCommand } from "./mcp.js";
 
@@ -23,6 +24,31 @@ export function registerMcpCommands(program: Command): void {
     .description("add a stdio MCP server to config")
     .action((name: string, command: string[], opts: { global?: boolean }) => {
       mcpAddCommand(name, command, opts);
+    });
+  mcp
+    .command("login")
+    .argument("<name>", "remote server name (key under mcpServers)")
+    .option("--scope <scope>", "space-separated OAuth scopes (default: the server's advertised scopes)")
+    .option("--client-id <id>", "pre-registered OAuth client id (default: dynamic registration)")
+    .option("--client-secret <secret>", "client secret for a confidential pre-registered client")
+    .description("authorize a remote MCP server interactively (OAuth 2.1 + PKCE)")
+    .addHelpText(
+      "after",
+      `
+The refresh token is stored in ~/.seekforge/mcp-oauth.json (owner-only), never
+in .seekforge/config.json. Servers configured with an explicit "oauth" block
+already carry their own credentials and are rejected here.
+`,
+    )
+    .action(async (name: string, opts: { scope?: string; clientId?: string; clientSecret?: string }) => {
+      await mcpLoginCommand(name, opts);
+    });
+  mcp
+    .command("logout")
+    .argument("<name>", "remote server name to forget")
+    .description("delete the stored OAuth credential for an MCP server")
+    .action((name: string) => {
+      mcpLogoutCommand(name);
     });
   mcp
     .command("remove")

@@ -91,6 +91,7 @@ session resume, permission prompts, questions, diff viewing, and active-file con
 | `seekforge security scan\|list\|show\|status\|fix\|verify\|threat-model\|export` | deep repository security review, Finding queue/lifecycle, verified remediation, threat modeling, and JSON/Markdown/SARIF evidence export — see [Security scanning](docs/security-scanning.md) |
 | `seekforge init` | scaffold `.seekforge/` and an `AGENTS.md` template |
 | `seekforge mcp add\|list\|remove <name>` | manage MCP servers in config (list, add a stdio server, or remove) — see [docs/mcp.md](docs/mcp.md) |
+| `seekforge mcp login\|logout <name>` | authorize a remote MCP server interactively (OAuth 2.1 + PKCE), or forget its stored credential |
 | `seekforge mcp-serve [--allow-write]` | run SeekForge as an MCP server on stdio (read-only tool set by default); `--allow-write` exposes write tools (TRUSTED callers only) |
 | `seekforge skill list\|show\|create\|enable\|disable <id>` | procedure skills (project > global > builtin); enable/disable toggles a skill |
 | `seekforge skill import <path> [-g] [-f]` | import a Claude-style SKILL.md (YAML frontmatter) as a project or global skill |

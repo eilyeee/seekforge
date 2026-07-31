@@ -102,6 +102,40 @@ seekforge mcp add fs npx -y @modelcontextprotocol/server-filesystem .
 
 从 `mcpServers` 中删除一个服务器。同样接受 `--global` 操作全局配置。
 
+#### `seekforge mcp login <name>`
+
+对「配置了 `url` 但没有 `oauth` 段」的远程服务器执行交互式 OAuth 2.1
+授权码流程（PKCE，`S256`）：
+
+1. 先从 `/.well-known/oauth-protected-resource` 解析授权服务器（缺失时回退到
+   MCP 服务器自身 origin），再读取其
+   `/.well-known/oauth-authorization-server` 元数据。
+2. 在 `127.0.0.1` 上绑定一次性回调监听端口，并针对该确切 redirect URI 动态
+   注册客户端（RFC 7591）；服务器不支持动态注册时用 `--client-id` /
+   `--client-secret` 指定预注册客户端。
+3. 打开浏览器，接受唯一一次回调，并用 PKCE verifier 兑换授权码。
+   `--scope` 可覆盖服务器公布的 scope。
+
+得到的刷新令牌写入 `~/.seekforge/mcp-oauth.json`（权限 `0600`，仅属主可读），
+按「服务器名 + URL」双键存储——**不会**写进会被提交与共享的
+`.seekforge/config.json`。因此把同一个服务器名指向新 URL 后必须重新登录。
+
+每一跳都会在使用前重新校验：端点必须是 `https`（loopback 允许 `http`）、
+元数据的 `issuer` 必须与发现来源同源、回调 `state` 采用常量时间比较、
+公布 PKCE 但不支持 `S256` 的服务器直接拒绝。
+
+```text
+$ seekforge mcp login docs
+授权服务器：https://auth.example.com/
+正在打开浏览器完成授权（若未自动打开，请手动粘贴以下地址）：
+  https://auth.example.com/authorize?response_type=code&...
+已将「docs」的凭据保存到 ~/.seekforge/mcp-oauth.json
+```
+
+#### `seekforge mcp logout <name>`
+
+删除该服务器已存储的凭据。配置中声明的 `oauth` 段不受影响。
+
 ### 1.3 配置分层
 
 配置合并顺序（后者优先）为：
@@ -157,8 +191,11 @@ stdio 客户端在其 initialize capabilities 中声明 `roots.listChanged: true
 `MCP-Protocol-Version` 头。Streamable HTTP 的响应必须是 JSON-RPC 对象，
 且其 id 与待处理请求匹配；标量、数组、null 以及 id 不匹配的响应都会被拒绝。
 配置了 `oauth` 时，HTTP 401 会触发一次符合标准的 `refresh_token` 交换，
-并将原请求重试一次。SeekForge 不会持久化返回的 access token。首次交互式授权
-由前端负责；因此无人值守的进程需要在启动前准备好 refresh token 或静态 header。
+并将原请求重试一次。配置中声明的凭据永不回写，刷新到的 access token 只留在
+内存中。若没有 `oauth` 段，则改用 `seekforge mcp login` 存储的凭据，并就地续期：
+轮换后的 refresh token 会被持久化；若响应未返回新的 refresh token，则保留原有
+的而不是丢弃。因此无人值守的进程需要先完成一次 `mcp login`，或在启动前准备好
+refresh token 或静态 header。
 
 `tools/list`、`resources/list` 和 `prompts/list` 会逐页消费每个不透明的
 `nextCursor`。重复出现的 cursor 会被拒绝，发现过程上限为 100 页和 10,000 条，

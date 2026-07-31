@@ -133,6 +133,24 @@ export const commands = {
     "cmd.mcp.trusted": "trusted",
     "cmd.mcp.untrusted": "untrusted",
 
+    // ── cmd.mcpLogin.* ──────────────────────────────────────────────────
+    "cmd.mcpLogin.unknownServer": 'no MCP server named "{name}" in config',
+    "cmd.mcpLogin.unknownServerHint": "run `seekforge mcp list` to see configured servers",
+    "cmd.mcpLogin.notRemote": '"{name}" is a stdio server; OAuth applies to remote servers with a url',
+    "cmd.mcpLogin.alreadyConfigured":
+      '"{name}" already has an oauth block in config; remove it to authorize interactively',
+    "cmd.mcpLogin.discoveryHint": "the server must publish OAuth metadata under /.well-known/",
+    "cmd.mcpLogin.discovered": "authorization server: {issuer}",
+    "cmd.mcpLogin.openBrowser": "opening your browser to authorize (paste the URL manually if it does not open):",
+    "cmd.mcpLogin.browserDone": "SeekForge is authorized. You can close this tab.",
+    "cmd.mcpLogin.browserFailed": "SeekForge could not accept this callback. Check the terminal.",
+    "cmd.mcpLogin.timedOut": "timed out waiting for the browser authorization",
+    "cmd.mcpLogin.cancelled": "authorization cancelled",
+    "cmd.mcpLogin.stored": 'stored credentials for "{name}" in ~/.seekforge/mcp-oauth.json',
+    "cmd.mcpLogin.noRefreshToken": "the server issued no refresh token; you will have to log in again when it expires",
+    "cmd.mcpLogin.removed": 'removed stored credentials for "{name}"',
+    "cmd.mcpLogin.nothingStored": 'no stored credentials for "{name}"',
+
     // ── cmd.rewind.* ────────────────────────────────────────────────────
     "cmd.rewind.restore": "restore  {path}",
     "cmd.rewind.delete": "delete   {path}",
@@ -320,6 +338,23 @@ export const commands = {
     "cmd.mcp.serverError": "{name}  ({cmd}, {trust})  错误：{error}",
     "cmd.mcp.trusted": "受信任",
     "cmd.mcp.untrusted": "不受信任",
+
+    // ── cmd.mcpLogin.* ──────────────────────────────────────────────────
+    "cmd.mcpLogin.unknownServer": "配置中没有名为「{name}」的 MCP 服务器",
+    "cmd.mcpLogin.unknownServerHint": "运行 `seekforge mcp list` 查看已配置的服务器",
+    "cmd.mcpLogin.notRemote": "「{name}」是 stdio 服务器；OAuth 仅适用于配置了 url 的远程服务器",
+    "cmd.mcpLogin.alreadyConfigured": "「{name}」的配置中已有 oauth 段；如需交互授权，请先移除它",
+    "cmd.mcpLogin.discoveryHint": "服务器需在 /.well-known/ 下发布 OAuth 元数据",
+    "cmd.mcpLogin.discovered": "授权服务器：{issuer}",
+    "cmd.mcpLogin.openBrowser": "正在打开浏览器完成授权（若未自动打开，请手动粘贴以下地址）：",
+    "cmd.mcpLogin.browserDone": "SeekForge 已获授权，可以关闭此标签页。",
+    "cmd.mcpLogin.browserFailed": "SeekForge 无法接受此回调，请查看终端。",
+    "cmd.mcpLogin.timedOut": "等待浏览器授权超时",
+    "cmd.mcpLogin.cancelled": "授权已取消",
+    "cmd.mcpLogin.stored": "已将「{name}」的凭据保存到 ~/.seekforge/mcp-oauth.json",
+    "cmd.mcpLogin.noRefreshToken": "服务器未签发刷新令牌；过期后需要重新登录",
+    "cmd.mcpLogin.removed": "已删除「{name}」的存储凭据",
+    "cmd.mcpLogin.nothingStored": "「{name}」没有存储的凭据",
 
     // ── cmd.rewind.* ────────────────────────────────────────────────────
     "cmd.rewind.restore": "恢复    {path}",

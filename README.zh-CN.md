@@ -89,6 +89,7 @@ VS Code 用户可以使用 [`apps/vscode`](apps/vscode/README.md) 中的轻量�
 | `seekforge security scan\|list\|show\|status\|fix\|verify\|threat-model\|export` | 深度仓库安全审查、Finding 队列/生命周期、经验证的修复、威胁建模、JSON/Markdown/SARIF 证据导出——见[安全扫描](docs/security-scanning.zh-CN.md) |
 | `seekforge init` | 脚手架生成 `.seekforge/` 与 `AGENTS.md` 模板 |
 | `seekforge mcp add\|list\|remove <name>` | 管理配置中的 MCP server（列出、添加 stdio server、移除）——见 [docs/mcp.zh-CN.md](docs/mcp.zh-CN.md) |
+| `seekforge mcp login\|logout <name>` | 交互式授权远程 MCP server（OAuth 2.1 + PKCE），或删除已存储的凭据 |
 | `seekforge mcp-serve [--allow-write]` | 把 SeekForge 作为 MCP server 跑在 stdio 上（默认只读工具集）；`--allow-write` 暴露写工具（仅限受信调用方） |
 | `seekforge skill list\|show\|create\|enable\|disable <id>` | 流程技能（项目 > 全局 > 内置）；enable/disable 开关技能 |
 | `seekforge skill import <path> [-g] [-f]` | 导入 Claude 风格的 SKILL.md（YAML frontmatter）为项目或全局技能 |
