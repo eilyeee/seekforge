@@ -152,12 +152,21 @@ function processLine(
     acc.content += delta["content"];
     onDelta?.(delta["content"]);
   }
-  if (typeof delta["reasoning_content"] === "string" && delta["reasoning_content"].length > 0) {
-    if (delta["reasoning_content"].length > acc.limits.reasoningChars - acc.reasoningContent.length) {
+  // DeepSeek streams `reasoning_content`; OpenAI-compatible relays (OpenRouter,
+  // Ark, vLLM) stream the same thing as `reasoning`. Without both spellings the
+  // thinking stream is silently empty on those providers.
+  const reasoningDelta =
+    typeof delta["reasoning_content"] === "string"
+      ? delta["reasoning_content"]
+      : typeof delta["reasoning"] === "string"
+        ? delta["reasoning"]
+        : "";
+  if (reasoningDelta.length > 0) {
+    if (reasoningDelta.length > acc.limits.reasoningChars - acc.reasoningContent.length) {
       throw protocolLimit("reasoning content", acc.limits.reasoningChars);
     }
-    acc.reasoningContent += delta["reasoning_content"];
-    onReasoningDelta?.(delta["reasoning_content"]);
+    acc.reasoningContent += reasoningDelta;
+    onReasoningDelta?.(reasoningDelta);
   }
   const toolCalls = Array.isArray(delta["tool_calls"]) ? delta["tool_calls"] : [];
   for (const tc of toolCalls) {
@@ -214,7 +223,11 @@ export function finalizeSse(acc: SseAccumulator): SseResult {
     content: acc.content,
     reasoningContent: acc.reasoningContent,
     toolCalls,
-    finishReason: mapFinishReason(acc.rawFinishReason),
+    // Some OpenAI-compatible endpoints end a tool-calling turn without any
+    // finish_reason. Reporting "other" there would drop the tool calls the
+    // stream just delivered, so accumulated tool calls decide the outcome.
+    finishReason:
+      acc.rawFinishReason === null && toolCalls.length > 0 ? "tool_calls" : mapFinishReason(acc.rawFinishReason),
     usage: acc.usage,
   };
 }

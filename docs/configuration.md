@@ -135,6 +135,29 @@ this preset: the DeepSeek `thinking` request parameter is not sent, context-cach
 hit tokens are not read, and cost/balance accounting are turned off (cost is
 reported as `0` and the `/user/balance` endpoint is not queried).
 
+### What "OpenAI-compatible" actually covers
+
+Compatible endpoints agree on the protocol but differ in how they spell parts of
+it. SeekForge normalizes these divergences, each pinned by a fixture in
+`packages/core/tests/provider/dialects.test.ts`:
+
+| Divergence | Handling |
+| --- | --- |
+| Streamed thinking as `reasoning` instead of `reasoning_content` | Both spellings accumulate into the same reasoning stream |
+| Cache hits under `prompt_tokens_details.cached_tokens` instead of `prompt_cache_hit_tokens` | Both are read; DeepSeek's field wins when both appear, and the preset's `cacheHitTokens` capability still decides whether the count is reported |
+| `finish_reason: "function_call"` (legacy) | Treated as `tool_calls`, so the tool calls still run |
+| Tool-call deltas without `index`, or with the id only on the first chunk | Accumulated into one call per index, defaulting to index 0 |
+| A tool-calling stream that ends with no `finish_reason` at all | Reported as `tool_calls` when tool calls were delivered |
+| An empty `choices: []` chunk, keep-alive comments, blank lines | Ignored |
+
+One incompatibility is deliberate: a stream that ends **without** the `[DONE]`
+terminator is rejected rather than returned as a partial answer, because a cut
+connection and a clean close are otherwise indistinguishable. An endpoint that
+never sends `[DONE]` is not usable without a proxy that terminates properly.
+
+Capability differences (thinking, cache-hit tokens, cost, balance) stay explicit
+per preset instead of being guessed at runtime — see `PROVIDER_PRESETS`.
+
 ### `runtimeBin`
 
 Path to the `seekforge-runtime` binary (Rust execution backend). When set, file

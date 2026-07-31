@@ -127,6 +127,28 @@ seekforge config set model glm-5.2
 不发送 DeepSeek 的 `thinking` 请求参数，不读取上下文缓存命中 token，
 并关闭成本/余额核算（成本报告为 `0`，也不查询 `/user/balance` 端点）。
 
+### 「OpenAI 兼容」到底覆盖了什么
+
+各家兼容端点在协议上一致，但对协议某些部分的**拼写**并不一致。SeekForge 会把这些
+差异归一化，每一条都由 `packages/core/tests/provider/dialects.test.ts` 中的
+fixture 锁定：
+
+| 差异 | 处理方式 |
+| --- | --- |
+| 流式思维用 `reasoning` 而非 `reasoning_content` | 两种拼写都累积到同一条 reasoning 流 |
+| 缓存命中放在 `prompt_tokens_details.cached_tokens` 而非 `prompt_cache_hit_tokens` | 两者都读；同时出现时以 DeepSeek 的字段为准，是否上报仍由预设的 `cacheHitTokens` 能力决定 |
+| `finish_reason: "function_call"`（旧式） | 视同 `tool_calls`，工具调用照常执行 |
+| 工具调用分片没有 `index`，或只在首个分片带 id | 按 index 归并为同一个调用，缺失时默认 index 0 |
+| 工具调用流结束时完全没有 `finish_reason` | 只要已收到工具调用，就按 `tool_calls` 上报 |
+| `choices: []` 空分片、keep-alive 注释行、空行 | 直接忽略 |
+
+有一处不兼容是刻意为之：流若**没有** `[DONE]` 终止符就结束，会直接报错而不是把
+半截内容当作完整回答——因为连接被切断与正常关闭在网络层无法区分。永不发送
+`[DONE]` 的端点必须经由能正确终止流的代理才能使用。
+
+能力差异（thinking、缓存命中 token、成本、余额）按预设显式声明，不在运行时猜测
+——见 `PROVIDER_PRESETS`。
+
 ### `runtimeBin`
 
 `seekforge-runtime` 二进制文件（Rust 执行后端）的路径。设置后，文件 I/O、

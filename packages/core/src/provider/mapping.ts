@@ -47,11 +47,19 @@ export type WireUsage = {
   completion_tokens?: number;
   prompt_cache_hit_tokens?: number;
   prompt_cache_miss_tokens?: number;
+  /** OpenAI-compatible spelling of the cache-hit count (`prompt_cache_hit_tokens` on DeepSeek). */
+  prompt_tokens_details?: { cached_tokens?: number };
 };
 
 export type WireChatCompletion = {
   choices?: Array<{
-    message?: { content?: string | null; reasoning_content?: string | null; tool_calls?: WireToolCall[] };
+    message?: {
+      content?: string | null;
+      reasoning_content?: string | null;
+      /** OpenAI-compatible spelling of `reasoning_content`. */
+      reasoning?: string | null;
+      tool_calls?: WireToolCall[];
+    };
     finish_reason?: string | null;
   }>;
   usage?: WireUsage | null;
@@ -176,6 +184,10 @@ export function mapFinishReason(raw: string | null | undefined): ChatFinishReaso
     case "stop":
       return "stop";
     case "tool_calls":
+    // Legacy OpenAI spelling, still emitted by some OpenAI-compatible
+    // endpoints. Treating it as "other" would end the turn with unexecuted
+    // tool calls, so it maps to the same outcome as tool_calls.
+    case "function_call":
       return "tool_calls";
     case "length":
       return "length";
@@ -190,8 +202,7 @@ export function mapUsage(
   capabilities?: ProviderCapabilities,
   modelPricing?: Record<string, ModelPricing>,
 ): TokenUsage {
-  const tokenCount = (field: keyof WireUsage): number => {
-    const value = raw?.[field];
+  const validCount = (value: number | undefined, field: string): number => {
     if (value === undefined) return 0;
     if (!Number.isSafeInteger(value) || value < 0 || value > MAX_PROVIDER_USAGE_TOKENS) {
       throw new ProviderProtocolError(
@@ -200,10 +211,16 @@ export function mapUsage(
     }
     return value;
   };
+  const tokenCount = (field: Exclude<keyof WireUsage, "prompt_tokens_details">): number =>
+    validCount(raw?.[field], field);
   // Validate every token field the wire protocol can report, including the
   // miss count that cost accounting derives from prompt minus cache-hit tokens.
   tokenCount("prompt_cache_miss_tokens");
-  const cacheHitTokens = tokenCount("prompt_cache_hit_tokens");
+  const detailsCached = validCount(raw?.prompt_tokens_details?.cached_tokens, "prompt_tokens_details.cached_tokens");
+  // OpenAI-compatible endpoints report cache hits under prompt_tokens_details;
+  // DeepSeek's own field wins when both are present.
+  const cacheHitTokens =
+    raw?.prompt_cache_hit_tokens !== undefined ? tokenCount("prompt_cache_hit_tokens") : detailsCached;
   const tokens = {
     promptTokens: tokenCount("prompt_tokens"),
     completionTokens: tokenCount("completion_tokens"),
@@ -275,7 +292,10 @@ export function mapChatResponse(
   if (!message) {
     throw new ProviderProtocolError("Provider protocol error: first choice has no message");
   }
-  const reasoning = message?.["reasoning_content"];
+  // DeepSeek spells it `reasoning_content`; OpenAI-compatible relays
+  // (OpenRouter, Ark, vLLM) spell the same field `reasoning`.
+  const reasoning =
+    typeof message?.["reasoning_content"] === "string" ? message["reasoning_content"] : message?.["reasoning"];
   const content = typeof message?.["content"] === "string" ? message["content"] : "";
   if (content.length > MAX_SSE_CONTENT_CHARS) {
     throw new ProviderProtocolError(`Provider protocol error: content exceeds ${MAX_SSE_CONTENT_CHARS}`);
