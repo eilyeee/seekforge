@@ -94,6 +94,17 @@ describe("memory stats + compact", () => {
     expect(body).toHaveProperty("pending");
   });
 
+  it("GET /api/memory/governance returns read-only quality signals", async () => {
+    const response = await authed("/api/memory/governance");
+    expect(response.status).toBe(200);
+    expect(await jsonOf(response)).toMatchObject({
+      facts: expect.any(Array),
+      duplicateGroups: expect.any(Array),
+      contradictionCandidates: expect.any(Array),
+      retrieval: expect.objectContaining({ staleFacts: expect.any(Number) }),
+    });
+  });
+
   it("POST /api/memory/compact dryRun reports the plan without writing", async () => {
     const res = await authed("/api/memory/compact", {
       method: "POST",

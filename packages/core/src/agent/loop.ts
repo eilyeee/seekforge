@@ -457,6 +457,10 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       if (!Number.isSafeInteger(maxAutoContinuations) || maxAutoContinuations < 0) {
         throw new RangeError("maxAutoContinuations must be a non-negative safe integer");
       }
+      const maxNoProgressTurns = input.maxNoProgressTurns ?? 0;
+      if (!Number.isSafeInteger(maxNoProgressTurns) || maxNoProgressTurns < 0 || maxNoProgressTurns > 32) {
+        throw new RangeError("maxNoProgressTurns must be an integer from 0 to 32");
+      }
       const executionSlices = maxAutoContinuations + 1;
       const totalTurnLimit = limits.maxAgentTurns * executionSlices;
       if (!Number.isSafeInteger(executionSlices) || !Number.isSafeInteger(totalTurnLimit)) {
@@ -951,6 +955,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           // FAILED, so an identical re-failure can be caught as a loop.
           const actionProgress = createActionProgressTracker();
           let reflectionCooldown = 0;
+          let consecutiveNoProgressTurns = 0;
           // Default-off failure escalation (see AgentCoreDeps): one-shot.
           let escalated = false;
           // Finalize gate (see finalize.ts): plan/verify/lint/review checks run
@@ -1524,6 +1529,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             const { repeatedFailure, cyclePeriod } = actionProgress.observe(turnCalls, callResults, changedFiles);
             const cyclicStagnation = cyclePeriod !== null;
             const stuck = repeatedFailure || cyclicStagnation;
+            consecutiveNoProgressTurns = stuck ? consecutiveNoProgressTurns + 1 : 0;
             if (stuck && reflectionCooldown === 0) {
               reflectionCooldown = REFLECTION_COOLDOWN_TURNS;
               messages.push({
@@ -1557,6 +1563,12 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                   content: `[harness] Escalated to ${deps.planModel} for the rest of this run.`,
                 });
               }
+            }
+            if (maxNoProgressTurns > 0 && consecutiveNoProgressTurns >= maxNoProgressTurns) {
+              throw new AgentLimitError(
+                "no_progress",
+                `stopped after ${consecutiveNoProgressTurns} consecutive stagnant tool turns`,
+              );
             }
           }
 

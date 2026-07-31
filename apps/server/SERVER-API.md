@@ -184,6 +184,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/skills | `Skill[]` (without `content`) |
 | GET /api/skills/diagnostics | `{diagnostics: SkillDiagnostic[]}` for malformed, mismatched, linked, or otherwise unsafe skill installations |
 | GET /api/skills/stats | `{stats: SkillEffectiveness[]}` derived from bounded local selection/outcome telemetry |
+| GET /api/skills/supply-chain | active skill digests, API compatibility, risk/dependency metadata, and loader diagnostics |
 | POST /api/skills/repair | body `{global?, id?}` → atomically add the current API version to safely repairable legacy metadata |
 | GET /api/skills/:id | full `Skill` |
 | POST /api/skills | body `{id}` → scaffold a project skill under the repository/workspace mutation guard |
@@ -191,11 +192,14 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | PUT /api/skills/:id | body `{enabled, scope?: "project"\|"global"}` → atomically toggle a non-builtin skill |
 | DELETE /api/skills/:id[?scope=project\|global] | remove a physical non-builtin skill directory; returns 409 while the workspace is active |
 | GET /api/plugins | installed and project-discovered `PluginRecord[]`; project records are always review-only |
+| GET /api/plugins/supply-chain | digest lock, integrity, capability, compatibility, and rollback status for every plugin |
 | POST /api/plugins | body `{id}` → scaffold a project plugin; workspace-coordinated |
 | POST /api/plugins/install | body `{path, force?}` → atomically install a bounded local plugin into the user store, disabled |
 | PUT /api/plugins/:id | body `{enabled}` → approve the current installed digest or disable contributions |
+| POST /api/plugins/:id/rollback | atomically swap to the retained previous version; restored version remains disabled |
 | DELETE /api/plugins/:id | uninstall a user plugin and remove its approval state |
 | GET /api/memory | `{projectMd: string \| null, candidates: MemoryCandidate[], facts: MemoryFact[], maintenance: MemoryMaintenanceState \| null}`; maintenance is the last successful automatic-compaction summary, never a live mutation |
+| GET /api/memory/governance | read-only decay/quality/provenance, retrieval effectiveness, duplicate groups, and conflict candidates |
 | POST /api/memory/:id/approve | updated `MemoryCandidate` |
 | POST /api/memory/:id/reject | updated `MemoryCandidate` |
 | GET /api/output-styles | `{styles: [{name, kind: "builtin"\|"custom"}]}` — selectable output styles: the in-package built-ins plus every custom `.seekforge/output-styles/*.md` of the workspace |
@@ -280,8 +284,10 @@ edit the same workspace concurrently; read-only ask runs remain parallel.
 
 ```jsonc
 {"type": "start",  "task": "...", "mode": "edit"|"ask", "approvalMode": "auto"|"confirm", "plan": true?, "ws": "<id>"?,
+                   "continuation": {"maxSlices": 4, "noProgressLimit": 5}?,
                    "model": "deepseek-v4-pro"?, "thinking": true?, "reasoningEffort": "high"|"max"?}
 {"type": "send",   "sessionId": "...", "task": "...", "mode": "edit"?, "ws": "<id>"?,   // continue; mode overrides
+                   "continuation": {"maxSlices": 4, "noProgressLimit": 5}?,
                    "model": "..."?, "thinking": true?, "reasoningEffort": "high"|"max"?} // the session's own (plan -> execute)
 {"type": "permission.response", "requestId": "p1", "approved": true}
 {"type": "question.answer", "id": "q1", "answer": "Option A"} // answer a pending question.request
@@ -341,12 +347,14 @@ return `bad_frame`.
 {"type": "idle"}                                              // sent when a run/loop finishes and a new start/send/loop is accepted
 ```
 
-Normal interactive chat automatically continues through at most two extra
-`maxAgentTurns` execution slices in the same session. Each boundary emits the
+Normal interactive chat defaults to three total `maxAgentTurns` slices in the
+same session. Clients may select 1-8 total slices and a 1-16 consecutive
+no-progress limit; the latter fails early with `no_progress` when repeated
+failed/cyclic tool actions remain stagnant. Each slice boundary emits the
 non-terminal progress event
 `{"type":"session.continuing","continuation":1,"maxContinuations":2}`;
 there is no intermediate `session.failed`, synthetic user turn, or lease
-release. Plan runs remain single-slice. Exhausting all three slices still emits
+release. Plan runs remain single-slice. Exhausting the selected slices still emits
 the ordinary terminal `max_turns_exceeded` failure.
 
 Run snapshots are append-only JSONL at `.seekforge/runs.jsonl`; replay frames
@@ -492,6 +500,9 @@ Rules:
 - `GET /api/evals/trends?limit=<1..200>` reads valid bounded reports from
   `evals/reports`, returning normalized success-rate confidence intervals and
   cost distributions for Desktop visualization.
+- `GET /api/evals/control-plane` returns the built-in ordered fault simulation;
+  `POST /api/evals/control-plane` accepts `{scenarios}` with 1-32 scenarios and
+  2-365 strictly increasing daily observations per scenario.
 
 ## Implementation notes (binding)
 

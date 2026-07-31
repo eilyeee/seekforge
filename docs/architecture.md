@@ -101,9 +101,11 @@ also carries the SHA-256 identity and turn count of its exact dropped segment so
 later audit can correlate the derivative with source history. Context admission
 budgets the complete provider request, including advertised tool schemas.
 Interactive Server/Desktop chat treats `maxAgentTurns` as one bounded execution
-slice rather than the lifetime of a user task. Normal chat may continue through
-two additional slices in the same Core run, session lease, and in-memory
-conversation; the transient `session.continuing` event is observable, but its
+slice rather than the lifetime of a user task. Desktop users select a bounded
+2/4/8-slice policy; each slice stays in the same Core run, session lease, and
+in-memory conversation. Consecutive stagnant tool cycles trip an independent
+no-progress limit, so a larger turn budget does not merely prolong a loop. The
+transient `session.continuing` event is observable, but its
 harness nudge is not written as a synthetic user turn. Plan mode and direct
 CLI/SDK runs retain single-slice semantics, and the existing tool, context,
 cost, cancellation, and final continuation bounds still terminate the run.
@@ -116,7 +118,10 @@ user-owned configuration. Long-lived Server/Desktop, TUI, and REPL processes
 own cancellable idle schedulers. Each tick non-blockingly claims the memory
 lease, then acquires a workspace guard that excludes only that proven lease;
 active sessions or memory writers skip the tick instead of being queued behind
-housekeeping. One-shot CLI processes retain the write-triggered fallback.
+housekeeping. One-shot CLI processes retain the write-triggered fallback. The
+read-only memory governance report adds per-fact decay/quality/provenance,
+retrieval effectiveness, bounded near-duplicate groups, and conservative
+contradiction candidates; it never deletes facts automatically.
 Autonomous Loop state is a separate orchestration checkpoint that points to a
 session and owns the frozen requirement specification, acceptance evidence, and
 optional approval gate. Requirement analysis and acceptance review run through

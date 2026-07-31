@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api";
 import { useT } from "../../lib/i18n";
-import type { EvalTrendEntry } from "../../types";
+import type { ControlPlaneEvalReport, EvalTrendEntry } from "../../types";
 import { Button } from "../ui";
 
 function points(entries: EvalTrendEntry[], select: (entry: EvalTrendEntry) => number): string {
@@ -24,14 +24,20 @@ export function EvalTrendsSection(props: { workspaceId?: string }) {
   const [entries, setEntries] = useState<EvalTrendEntry[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [controlPlane, setControlPlane] = useState<ControlPlaneEvalReport>();
 
   const refresh = async () => {
     const request = ++generation.current;
     setBusy(true);
     try {
-      const report = await api.evalTrends(40, props.workspaceId);
+      const [trendsResult, controlPlaneResult] = await Promise.allSettled([
+        api.evalTrends(40, props.workspaceId),
+        api.evalControlPlane(props.workspaceId),
+      ]);
+      if (trendsResult.status === "rejected") throw trendsResult.reason;
       if (generation.current === request) {
-        setEntries(report.entries);
+        setEntries(trendsResult.value.entries);
+        setControlPlane(controlPlaneResult.status === "fulfilled" ? controlPlaneResult.value : undefined);
         setError("");
       }
     } catch (caught) {
@@ -42,6 +48,8 @@ export function EvalTrendsSection(props: { workspaceId?: string }) {
   };
 
   useEffect(() => {
+    setEntries([]);
+    setControlPlane(undefined);
     void refresh();
     return () => {
       generation.current += 1;
@@ -60,6 +68,21 @@ export function EvalTrendsSection(props: { workspaceId?: string }) {
         </Button>
       </div>
       {error && <p className="mt-2 text-danger">{error}</p>}
+      {controlPlane && (
+        <div className="mt-2 rounded border border-subtle p-2">
+          <p className="font-medium">{t("chat.loop.eval.controlPlane")}</p>
+          <p className="text-tertiary">
+            {controlPlane.summary.improved} improved · {controlPlane.summary.neutral} neutral ·{" "}
+            {controlPlane.summary.regressed} regressed
+          </p>
+          {controlPlane.scenarios.map((scenario) => (
+            <p key={scenario.id} className="mt-1 text-tertiary">
+              {scenario.id} · {scenario.samples} days · recovery {(scenario.recoveryTimeImprovement * 100).toFixed(0)}%
+              · cost {(scenario.costImprovement * 100).toFixed(0)}%
+            </p>
+          ))}
+        </div>
+      )}
       {entries.length === 0 ? (
         <p className="mt-2 text-tertiary">{t("chat.loop.eval.empty")}</p>
       ) : (

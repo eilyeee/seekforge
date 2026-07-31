@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { useT } from "../lib/i18n";
 import { useStore } from "../store";
-import type { PluginRecord, PluginStatus } from "../types";
+import type { PluginRecord, PluginStatus, PluginSupplyChainEntry } from "../types";
 import { Badge, Button, Card, EmptyState, IconPlugins, Input, type BadgeTone } from "../components/ui";
 import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 
@@ -19,6 +19,7 @@ export function PluginsView() {
   const ws = useStore((state) => state.activeWorkspaceId);
   const requests = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
   const [plugins, setPlugins] = useState<PluginRecord[] | null>(null);
+  const [supplyChain, setSupplyChain] = useState<PluginSupplyChainEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [newId, setNewId] = useState("");
@@ -27,10 +28,13 @@ export function PluginsView() {
   const refresh = (workspaceId = ws) => {
     const request = requests.beginLatest(workspaceId);
     if (!request) return;
-    api
-      .plugins(workspaceId)
-      .then((records) => {
-        if (requests.isCurrent(request)) setPlugins(records);
+    Promise.allSettled([api.plugins(workspaceId), api.pluginSupplyChain(workspaceId)])
+      .then(([recordsResult, supplyResult]) => {
+        if (recordsResult.status === "rejected") throw recordsResult.reason;
+        if (requests.isCurrent(request)) {
+          setPlugins(recordsResult.value);
+          setSupplyChain(supplyResult.status === "fulfilled" ? supplyResult.value.entries : []);
+        }
       })
       .catch((cause: unknown) => {
         if (requests.isCurrent(request)) setError(String(cause));
@@ -39,6 +43,7 @@ export function PluginsView() {
 
   useEffect(() => {
     setPlugins(null);
+    setSupplyChain([]);
     setError(null);
     setBusy(null);
     refresh(ws);
@@ -132,6 +137,28 @@ export function PluginsView() {
           <div className="grid gap-3 xl:grid-cols-2">
             {plugins.map((plugin) => (
               <Card key={`${plugin.scope}:${plugin.id}`} className="p-4">
+                {(() => {
+                  const supply = supplyChain.find((entry) => entry.id === plugin.id && entry.scope === plugin.scope);
+                  return supply ? (
+                    <div className="mb-2 flex flex-wrap gap-1">
+                      <Badge
+                        tone={
+                          supply.integrity === "verified" ? "ok" : supply.integrity === "changed" ? "warn" : "neutral"
+                        }
+                      >
+                        {supply.integrity}
+                      </Badge>
+                      <Badge tone={supply.compatibility.compatible ? "ok" : "danger"}>
+                        API v{supply.compatibility.apiVersion}
+                      </Badge>
+                      {supply.capabilities.map((capability) => (
+                        <Badge key={capability} tone="neutral">
+                          {capability}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : null;
+                })()}
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
@@ -245,6 +272,19 @@ export function PluginsView() {
                       }}
                     >
                       {t("plugins.remove")}
+                    </Button>
+                  )}
+                  {supplyChain.find((entry) => entry.id === plugin.id && entry.scope === plugin.scope)
+                    ?.rollbackAvailable && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy !== null}
+                      onClick={() =>
+                        mutate(`rollback:${plugin.id}`, (workspaceId) => api.pluginRollback(plugin.id, workspaceId))
+                      }
+                    >
+                      {t("plugins.rollback")}
                     </Button>
                   )}
                 </div>

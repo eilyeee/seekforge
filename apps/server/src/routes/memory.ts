@@ -11,6 +11,7 @@ import {
   listProjectFacts,
   MEMORY_CANDIDATE_TYPES,
   memoryStats,
+  memoryGovernance,
   readMemoryMaintenanceState,
   readFactMeta,
   readProjectMemory,
@@ -138,6 +139,10 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
   // Read-only extraction-quality stats for the workspace's memory state.
   if (method === "GET" && path === "/api/memory/stats") {
     return sendJson(res, 200, memoryStats(workspace));
+  }
+
+  if (method === "GET" && path === "/api/memory/governance") {
+    return sendJson(res, 200, memoryGovernance(workspace));
   }
 
   // Deterministic project-memory compaction (dedupe/merge, optional prune).

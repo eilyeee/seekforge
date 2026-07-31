@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api";
 import { useT } from "../../lib/i18n";
 import type { EngineeringGraphPlanSummary, EngineeringGraphSimulationSummary } from "../../types";
+import { appendGraphNode, buildVisualGraph } from "../../lib/graph-visual";
 import { Button } from "../ui";
 
 const INITIAL_DEFINITION = JSON.stringify(
@@ -31,6 +32,9 @@ export function GraphCreationSection(props: { workspaceId?: string; onStarted: (
   const [validatedSource, setValidatedSource] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [nodeId, setNodeId] = useState("");
+  const [nodeKind, setNodeKind] = useState("function");
+  const [dependencies, setDependencies] = useState("");
   const generation = useRef(0);
   const source = `${definitionText}\0${parametersText}`;
   const previewCurrent = validatedSource === source;
@@ -66,6 +70,7 @@ export function GraphCreationSection(props: { workspaceId?: string; onStarted: (
       return { error: caught instanceof Error ? caught.message : String(caught) };
     }
   }, [definitionText, parametersText]);
+  const visual = useMemo(() => buildVisualGraph("error" in parsed ? undefined : parsed.definition), [parsed]);
 
   const preview = async () => {
     if ("error" in parsed) return setError(parsed.error ?? "Invalid Graph JSON");
@@ -143,6 +148,99 @@ export function GraphCreationSection(props: { workspaceId?: string; onStarted: (
           setValidatedSource(undefined);
         }}
       />
+      {visual.nodes.length > 0 && (
+        <div className="mt-2 overflow-auto rounded border border-subtle bg-surface-overlay/40 p-1">
+          <svg
+            viewBox={`0 0 ${visual.width} ${visual.height}`}
+            className="min-h-32 min-w-full"
+            style={{ width: Math.max(visual.width, 320) }}
+            role="img"
+            aria-label={t("chat.loop.graph.visual")}
+          >
+            {visual.edges.map((edge) => {
+              const from = visual.nodes.find((node) => node.id === edge.from);
+              const to = visual.nodes.find((node) => node.id === edge.to);
+              return from && to ? (
+                <line
+                  key={`${edge.from}-${edge.to}`}
+                  x1={from.x + 130}
+                  y1={from.y + 22}
+                  x2={to.x}
+                  y2={to.y + 22}
+                  stroke="currentColor"
+                  className="text-tertiary"
+                />
+              ) : null;
+            })}
+            {visual.nodes.map((node) => (
+              <g key={node.id} transform={`translate(${node.x} ${node.y})`}>
+                <rect width="130" height="44" rx="6" className="fill-surface stroke-accent" />
+                <text x="8" y="18" className="fill-primary text-[11px] font-medium">
+                  {node.id}
+                </text>
+                <text x="8" y="34" className="fill-tertiary text-[9px]">
+                  {node.kind}
+                </text>
+              </g>
+            ))}
+          </svg>
+        </div>
+      )}
+      {visual.warnings.map((warning) => (
+        <p key={warning} className="mt-1 text-warn">
+          {warning}
+        </p>
+      ))}
+      <div className="mt-2 grid gap-1 sm:grid-cols-4">
+        <input
+          className="rounded border border-subtle bg-surface px-2 py-1"
+          value={nodeId}
+          onChange={(event) => setNodeId(event.target.value)}
+          placeholder={t("chat.loop.graph.nodeId")}
+        />
+        <select
+          className="rounded border border-subtle bg-surface px-2 py-1"
+          value={nodeKind}
+          onChange={(event) => setNodeKind(event.target.value)}
+        >
+          {["function", "agent", "loop", "gate", "join", "router", "wait"].map((kind) => (
+            <option key={kind}>{kind}</option>
+          ))}
+        </select>
+        <input
+          className="rounded border border-subtle bg-surface px-2 py-1"
+          value={dependencies}
+          onChange={(event) => setDependencies(event.target.value)}
+          placeholder={t("chat.loop.graph.dependencies")}
+        />
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={!nodeId.trim() || "error" in parsed}
+          onClick={() => {
+            if ("error" in parsed) return;
+            try {
+              const next = appendGraphNode(parsed.definition, {
+                id: nodeId.trim(),
+                kind: nodeKind,
+                dependsOn: dependencies
+                  .split(",")
+                  .map((item) => item.trim())
+                  .filter(Boolean),
+              });
+              setDefinitionText(JSON.stringify(next, null, 2));
+              setNodeId("");
+              setDependencies("");
+              setValidatedSource(undefined);
+              setError("");
+            } catch (caught) {
+              setError(caught instanceof Error ? caught.message : String(caught));
+            }
+          }}
+        >
+          {t("chat.loop.graph.addNode")}
+        </Button>
+      </div>
       <textarea
         className="mt-2 h-20 w-full rounded border border-subtle bg-surface p-2 font-mono text-2xs"
         value={parametersText}

@@ -39,6 +39,10 @@ function installedDir(id: string): string {
   return join(root, id);
 }
 
+function rollbackDir(id: string): string {
+  return join(dirname(installedDir(id)), `.rollback-${id}`);
+}
+
 export type InstallPluginResult = { manifest: PluginManifest; path: string; digest: string; updated: boolean };
 
 export function createPluginScaffold(workspace: string, id: string): { manifest: PluginManifest; path: string } {
@@ -87,24 +91,70 @@ export function installPlugin(sourcePath: string, options: { force?: boolean } =
     if (existed && !options.force) throw new Error(`plugin ${manifest.id} is already installed; use --force to update`);
     const temp = join(root, `.install-${manifest.id}-${randomUUID()}`);
     const backup = join(root, `.backup-${manifest.id}-${randomUUID()}`);
+    const rollback = join(root, `.rollback-${manifest.id}`);
+    const previousRollback = join(root, `.rollback-previous-${manifest.id}-${randomUUID()}`);
+    const displacedNew = join(root, `.install-displaced-${manifest.id}-${randomUUID()}`);
+    let committed = false;
     try {
       cpSync(source, temp, { recursive: true, errorOnExist: true, force: false });
       if (digestPluginDirectory(temp) !== digest) throw new Error("plugin changed while it was being installed");
+      if (existed && existsSync(rollback)) renameSync(rollback, previousRollback);
       if (existed) renameSync(target, backup);
-      try {
-        renameSync(temp, target);
-      } catch (error) {
-        if (existed && existsSync(backup)) renameSync(backup, target);
-        throw error;
+      renameSync(temp, target);
+      if (existsSync(backup)) renameSync(backup, rollback);
+      committed = true;
+    } catch (error) {
+      if (existsSync(target) && existsSync(backup)) {
+        renameSync(target, displacedNew);
+        renameSync(backup, target);
+      } else if (!existsSync(target) && existsSync(backup)) {
+        renameSync(backup, target);
       }
-      if (existsSync(backup)) rmSync(backup, { recursive: true, force: true });
+      if (existsSync(previousRollback) && !existsSync(rollback)) renameSync(previousRollback, rollback);
+      throw error;
     } finally {
       if (existsSync(temp)) rmSync(temp, { recursive: true, force: true });
+      if (existsSync(displacedNew) && existsSync(target)) rmSync(displacedNew, { recursive: true, force: true });
+      if (committed && existsSync(previousRollback)) rmSync(previousRollback, { recursive: true, force: true });
     }
     const state = readState();
     state.plugins[manifest.id] = { enabled: false, digest, updatedAt: new Date().toISOString() };
     writeState(state);
     return { manifest, path: target, digest, updated: existed };
+  } finally {
+    lease.release();
+  }
+}
+
+/** Atomically restores the previous installed version and disables it for review. */
+export function rollbackPlugin(id: string): InstallPluginResult {
+  if (!PLUGIN_ID_RE.test(id)) throw new Error("invalid plugin id");
+  const lease = acquireSessionLease(seekforgeHome(), "plugins-mutation");
+  try {
+    const target = installedDir(id);
+    const rollback = rollbackDir(id);
+    if (!existsSync(target) || !existsSync(rollback)) throw new Error(`plugin ${id} has no rollback version`);
+    const manifest = readPluginManifest(rollback);
+    if (manifest.id !== id) throw new Error(`rollback manifest id does not match ${id}`);
+    const digest = digestPluginDirectory(rollback);
+    const displaced = join(dirname(target), `.rollback-swap-${id}-${randomUUID()}`);
+    renameSync(target, displaced);
+    try {
+      renameSync(rollback, target);
+      renameSync(displaced, rollback);
+    } catch (error) {
+      if (existsSync(target) && existsSync(displaced) && !existsSync(rollback)) {
+        renameSync(target, rollback);
+        renameSync(displaced, target);
+      } else if (!existsSync(target) && existsSync(displaced)) {
+        renameSync(displaced, target);
+      }
+      throw error;
+    }
+    const state = readState();
+    state.plugins[id] = { enabled: false, digest, updatedAt: new Date().toISOString() };
+    writeState(state);
+    return { manifest, path: target, digest, updated: true };
   } finally {
     lease.release();
   }
@@ -134,8 +184,10 @@ export function removePlugin(id: string): { id: string; removed: string } {
     const target = installedDir(id);
     if (!existsSync(target)) throw new Error(`plugin ${id} is not installed`);
     const trash = join(dirname(target), `.removed-${basename(target)}-${randomUUID()}`);
+    const rollback = rollbackDir(id);
     renameSync(target, trash);
     rmSync(trash, { recursive: true, force: true });
+    if (existsSync(rollback)) rmSync(rollback, { recursive: true, force: true });
     const state = readState();
     delete state.plugins[id];
     writeState(state);

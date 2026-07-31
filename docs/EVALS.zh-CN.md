@@ -72,6 +72,8 @@ Desktop 的 **Eval 趋势** 面板通过 `GET /api/evals/trends?limit=<1..200>`
 读取同一份有界数据源，绘制成功率和总成本历史，并列出最新报告/变体数据点。
 格式错误或不兼容的文件仍由 eval harness 解析器负责，UI 不会自行解释。
 
+`GET /api/evals/control-plane` 增加由有序每日故障观测组成的纵向模拟，对比基线与控制面执行的恢复率、平均恢复时间和成本，避免从互不相关的单任务样本推断 SLO、路由或灰度行为。报告明确标记来源为 `simulation`；调用方也可向同一路径 POST 有界自定义场景。
+
 ### Runner 模式
 
 没有 `runner` 字段的任务保持历史的单会话 `agent` 行为。支持三种 runner 值：

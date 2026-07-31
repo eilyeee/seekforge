@@ -26,9 +26,11 @@ import type {
   MemoryCandidateType,
   MemoryResponse,
   MemoryStats,
+  MemoryGovernanceReport,
   ModelInfo,
   PruneResult,
   PluginRecord,
+  PluginSupplyChainEntry,
   RewindResult,
   SearchResult,
   SecurityEvidencePackage,
@@ -38,6 +40,7 @@ import type {
   SessionMeta,
   SessionTurn,
   Skill,
+  SkillSupplyChainEntry,
   SkillScope,
   Todo,
   ThreatModel,
@@ -189,8 +192,18 @@ export const api = {
       withWorkspace(`/api/sessions/${encodeURIComponent(id)}`, ws),
     ),
   skills: (ws?: string) => request<Skill[]>("GET", withWorkspace("/api/skills", ws)),
+  skillSupplyChain: (ws?: string) =>
+    request<{ generatedAt: string; entries: SkillSupplyChainEntry[]; diagnostics: unknown[] }>(
+      "GET",
+      withWorkspace("/api/skills/supply-chain", ws),
+    ),
   skill: (id: string, ws?: string) => request<Skill>("GET", withWorkspace(`/api/skills/${encodeURIComponent(id)}`, ws)),
   plugins: (ws?: string) => request<PluginRecord[]>("GET", withWorkspace("/api/plugins", ws)),
+  pluginSupplyChain: (ws?: string) =>
+    request<{ generatedAt: string; entries: PluginSupplyChainEntry[] }>(
+      "GET",
+      withWorkspace("/api/plugins/supply-chain", ws),
+    ),
   memory: (ws?: string) => request<MemoryResponse>("GET", withWorkspace("/api/memory", ws)),
   memoryAction: (id: string, action: "approve" | "reject", scope?: "project" | "user", ws?: string) =>
     request<MemoryCandidate>(
@@ -480,6 +493,8 @@ export const api = {
       "GET",
       withWorkspace(`/api/evals/trends?limit=${encodeURIComponent(String(limit))}`, ws),
     ),
+  evalControlPlane: (ws?: string) =>
+    request<import("../types").ControlPlaneEvalReport>("GET", withWorkspace("/api/evals/control-plane", ws)),
   loopDelete: (id: string, ws?: string) =>
     request<{ removed: true; loopId: string }>("DELETE", withWorkspace(`/api/loops/${encodeURIComponent(id)}`, ws)),
   diff: (staged?: boolean, ws?: string) =>
@@ -574,6 +589,8 @@ export const api = {
 
   // Memory stats + compaction (workspace-scoped).
   memoryStats: (ws?: string) => request<MemoryStats>("GET", withWorkspace("/api/memory/stats", ws)),
+  memoryGovernance: (ws?: string) =>
+    request<MemoryGovernanceReport>("GET", withWorkspace("/api/memory/governance", ws)),
   memoryCompact: (opts?: { dryRun?: boolean; pruneUnusedDays?: number }, ws?: string) =>
     request<CompactResult>("POST", withWorkspace("/api/memory/compact", ws), opts ?? {}),
 
@@ -635,6 +652,12 @@ export const api = {
     ),
   pluginDelete: (id: string, ws?: string) =>
     request<{ id: string; removed: string }>("DELETE", withWorkspace(`/api/plugins/${encodeURIComponent(id)}`, ws)),
+  pluginRollback: (id: string, ws?: string) =>
+    request<{ manifest: PluginRecord["manifest"]; path: string; digest: string }>(
+      "POST",
+      withWorkspace(`/api/plugins/${encodeURIComponent(id)}/rollback`, ws),
+      {},
+    ),
 
   // Sessions lifecycle (workspace-scoped).
   sessionDelete: (id: string, ws?: string) =>
@@ -711,6 +734,18 @@ export const api = {
 
   // Environment diagnostics (workspace-scoped).
   doctor: (ws?: string) => request<DoctorReport>("GET", withWorkspace("/api/doctor", ws)),
+  runs: (ws?: string) => request<import("../types").RunRecordSummary[]>("GET", withWorkspace("/api/runs", ws)),
+  runEvents: (id: string, afterSeq = 0, ws?: string) =>
+    request<{ events: import("../types").RunEventSummary[]; nextAfterSeq: number; hasMore: boolean }>(
+      "GET",
+      withWorkspace(`/api/runs/${encodeURIComponent(id)}/events?afterSeq=${encodeURIComponent(String(afterSeq))}`, ws),
+    ),
+  runCancel: (id: string, ws?: string) =>
+    request<{ runId: string; status: string }>(
+      "POST",
+      withWorkspace(`/api/runs/${encodeURIComponent(id)}/cancel`, ws),
+      {},
+    ),
 
   // Files browser + editor (workspace-scoped). `path` is workspace-relative.
   tree: (path?: string, ws?: string) =>

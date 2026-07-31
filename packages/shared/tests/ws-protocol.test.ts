@@ -4,7 +4,15 @@ import { decodeClientFrame, parseClientFrame } from "../src/ws-protocol.js";
 const limits = { maxLoopIterations: 100, maxSteerMessageLength: 4_000 };
 
 const validFrames = [
-  { type: "start", task: "fix it", mode: "edit", approvalMode: "confirm", plan: false, ws: "main" },
+  {
+    type: "start",
+    task: "fix it",
+    mode: "edit",
+    approvalMode: "confirm",
+    plan: false,
+    ws: "main",
+    continuation: { maxSlices: 4, noProgressLimit: 5 },
+  },
   { type: "send", sessionId: "session-1", task: "continue", thinking: true },
   {
     type: "loop",
@@ -54,6 +62,14 @@ const invalidFrames = [
   { task: "missing type" },
   { type: "start", task: "", mode: "edit", approvalMode: "auto" },
   { type: "send", sessionId: 1, task: "continue" },
+  {
+    type: "start",
+    task: "fix",
+    mode: "edit",
+    approvalMode: "confirm",
+    continuation: { maxSlices: 9, noProgressLimit: 2 },
+  },
+  { type: "send", sessionId: "s1", task: "go", continuation: { maxSlices: 2, noProgressLimit: 0 } },
   { type: "loop", task: "fix", verifyCommand: "test", maxIterations: 101 },
   { type: "loop", task: "fix", verifyCommand: "test", tokenBudget: 0 },
   { type: "loop", task: "fix", verifyCommand: "test", maxAgentRetries: -1 },

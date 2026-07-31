@@ -87,3 +87,6 @@ export {
 } from "./extract.js";
 
 export { DIRECT_SOURCE_MARKER, memoryStats, type MemoryStats } from "./stats.js";
+
+export { memoryGovernance } from "./governance.js";
+export type { MemoryGovernanceFact, MemoryGovernanceReport } from "@seekforge/shared";

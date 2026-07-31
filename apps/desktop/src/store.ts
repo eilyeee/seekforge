@@ -3,7 +3,14 @@ import type { AgentEvent, ChatMessage } from "@seekforge/shared";
 import { api, ApiError, setTokenProvider, setWorkspaceProvider } from "./lib/api";
 import { truncateChatAtItem } from "./lib/backtrack";
 import { appendUser, initialChatState } from "./lib/events";
-import { buildExecutePlanFrame, buildSendFrame, buildStartFrame, overridesOf, EXECUTE_PLAN_TASK } from "./lib/frames";
+import {
+  buildExecutePlanFrame,
+  buildSendFrame,
+  buildStartFrame,
+  continuationOf,
+  overridesOf,
+  EXECUTE_PLAN_TASK,
+} from "./lib/frames";
 import { emptyLoopProgress } from "./lib/loop";
 import { messagesToItems } from "./lib/messages";
 import { notify, requestNotifyPermission } from "./lib/notify";
@@ -21,6 +28,7 @@ import {
   DEFAULT_TAB_TITLE,
   type ApprovalChoice,
   type ChatTab,
+  type ContinuationPreset,
   type PendingPermission,
   type PendingQuestion,
   type StartMode,
@@ -46,7 +54,7 @@ export type View =
   | "settings"
   | "diagnostics";
 
-export type { ApprovalChoice, ChatTab, PendingPermission, PendingQuestion, StartMode };
+export type { ApprovalChoice, ChatTab, ContinuationPreset, PendingPermission, PendingQuestion, StartMode };
 export { activeTab };
 
 function readTokenFromLocation(): string {
@@ -200,6 +208,7 @@ type AppStore = {
   setReasoningEffort: (effort: "high" | "max") => void;
   setOutputStyle: (style: string) => void;
   setSandbox: (sandbox: ChatTab["sandbox"]) => void;
+  setContinuationPreset: (preset: ChatTab["continuationPreset"]) => void;
   /**
    * Drops the given user item and everything after it from the active tab's
    * transcript (after a successful POST backtrack on the server).
@@ -597,6 +606,9 @@ export const useStore = create<AppStore>()((set, get) => {
 
     setSandbox: (sandbox) => set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { sandbox }) })),
 
+    setContinuationPreset: (continuationPreset) =>
+      set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { continuationPreset }) })),
+
     todosOpen: false,
     toggleTodos: () => set((s) => ({ todosOpen: !s.todosOpen })),
 
@@ -632,14 +644,15 @@ export const useStore = create<AppStore>()((set, get) => {
       requestNotifyPermission();
 
       const overrides = overridesOf(tab);
+      const continuation = continuationOf(tab.continuationPreset);
       const patch: Partial<ChatTab> = {
         chat: { ...appendUser(tab.chat, task), running: true },
         wsError: null,
         planReady: false,
       };
       const frame = tab.chat.sessionId
-        ? buildSendFrame(tab.chat.sessionId, task, tab.approvalMode, tab.mode, tab.ws, overrides)
-        : buildStartFrame(task, tab.mode, tab.approvalMode, tab.ws, overrides);
+        ? buildSendFrame(tab.chat.sessionId, task, tab.approvalMode, tab.mode, tab.ws, overrides, continuation)
+        : buildStartFrame(task, tab.mode, tab.approvalMode, tab.ws, overrides, continuation);
       if (encodeClientFrame(frame) === null) {
         set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, { wsError: SEND_TOO_LARGE_ERROR }) }));
         return false;

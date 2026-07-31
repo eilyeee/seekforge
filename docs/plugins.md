@@ -18,6 +18,10 @@ tool permissions, and contributed hooks activate only after explicit approval.
   disables all contributions until the new digest is explicitly approved.
 - `disable` keeps the installation but removes all contributions; `remove`
   uninstalls it and deletes its approval record.
+- A forced update retains one previous installation. The supply-chain report
+  shows lock/current digests, integrity, API compatibility, capabilities, and
+  rollback availability. Rollback is atomic and restores the prior version
+  disabled so its content must be reviewed again.
 
 The Desktop has a top-level **Plugins** page for the same review/install/enable
 flow. The TUI `/plugins` command is a read-only status view.

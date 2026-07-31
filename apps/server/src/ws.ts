@@ -29,6 +29,7 @@ import type {
   ConfirmResult,
   PermissionRequest,
   RunOverrides,
+  ChatContinuationPolicy,
   ServerFrame,
 } from "@seekforge/shared";
 import { decodeClientFrame } from "@seekforge/shared/ws-protocol";
@@ -82,6 +83,7 @@ type RunInput = {
   workspace: string;
   /** Per-run model/thinking overrides from the frame (win over config). */
   overrides?: RunOverrides;
+  continuation?: ChatContinuationPolicy;
 };
 
 type RunSubscription = {
@@ -404,7 +406,8 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         plan: input.plan,
         approvalMode: input.approvalMode,
         resumeSessionId: input.resumeSessionId,
-        maxAutoContinuations: input.plan ? 0 : CHAT_MAX_AUTO_CONTINUATIONS,
+        maxAutoContinuations: input.plan ? 0 : (input.continuation?.maxSlices ?? CHAT_MAX_AUTO_CONTINUATIONS + 1) - 1,
+        maxNoProgressTurns: input.plan ? 0 : (input.continuation?.noProgressLimit ?? 4),
         ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
         signal: runController.signal,
       })) {
@@ -681,7 +684,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     switch (frame["type"]) {
       case "start": {
         if (running) return fail("busy", "a session is already running on this connection");
-        const { task, mode, approvalMode, plan, ws: wsId } = frame;
+        const { task, mode, approvalMode, plan, continuation, ws: wsId } = frame;
         const parsed = runOverrides(frame);
         // Omitted ws -> the default (first) workspace, preserving old clients.
         const workspace = deps.registry.resolve(wsId);
@@ -695,7 +698,15 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           (runController) =>
             run(
               ledgerRun.runId,
-              { task, mode, approvalMode, plan, workspace: workspace.path, ...parsed },
+              {
+                task,
+                mode,
+                approvalMode,
+                plan,
+                ...(continuation ? { continuation } : {}),
+                workspace: workspace.path,
+                ...parsed,
+              },
               runController,
             ),
           mode === "edit",
@@ -706,7 +717,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
 
       case "send": {
         if (running) return fail("busy", "a session is already running on this connection");
-        const { sessionId, task, mode, approvalMode, ws: wsId } = frame;
+        const { sessionId, task, mode, approvalMode, continuation, ws: wsId } = frame;
         const parsed = runOverrides(frame);
         const workspace = deps.registry.resolve(wsId);
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
@@ -734,6 +745,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
                 mode: mode ?? meta.mode,
                 approvalMode: (approvalMode as ApprovalMode | undefined) ?? "confirm",
                 resumeSessionId: sessionId,
+                ...(continuation ? { continuation } : {}),
                 workspace: workspace.path,
                 ...parsed,
               },

@@ -1,7 +1,7 @@
 import { useT } from "../../lib/i18n";
 import { Select, IconShield, type SelectOption } from "../ui";
 import { WorkspaceMenu } from "../WorkspaceMenu";
-import type { ApprovalChoice, ChatTab, StartMode } from "../../store";
+import type { ApprovalChoice, ChatTab, ContinuationPreset, StartMode } from "../../store";
 import type { ServerConfig } from "../../types";
 
 const MODES: StartMode[] = ["edit", "ask", "plan"];
@@ -13,6 +13,7 @@ type Props = {
   onSetMode: (m: StartMode) => void;
   onSetApprovalMode: (a: ApprovalChoice) => void;
   onSetSandbox: (s: Sandbox | null) => void;
+  onSetContinuationPreset: (preset: ContinuationPreset) => void;
 };
 
 /**
@@ -21,7 +22,14 @@ type Props = {
  * edit/ask stay changeable mid-conversation; "plan" is start-only and the
  * controls lock while a message is in flight. Dropdowns open upward.
  */
-export function RunControls({ tab, config, onSetMode, onSetApprovalMode, onSetSandbox }: Props) {
+export function RunControls({
+  tab,
+  config,
+  onSetMode,
+  onSetApprovalMode,
+  onSetSandbox,
+  onSetContinuationPreset,
+}: Props) {
   const t = useT();
   const running = tab.chat.running;
   const inSession = !!tab.chat.sessionId;
@@ -41,6 +49,11 @@ export function RunControls({ tab, config, onSetMode, onSetApprovalMode, onSetSa
     { value: "acceptEdits", label: t("chat.approval.acceptEdits"), hint: t("chat.approval.acceptEditsHint") },
     { value: "auto", label: `${t("chat.approval.auto")} ⚠`, hint: t("chat.approval.autoHint") },
   ];
+  const continuationOptions: SelectOption[] = [
+    { value: "standard", label: t("chat.continuation.standard") },
+    { value: "extended", label: t("chat.continuation.extended") },
+    { value: "maximum", label: t("chat.continuation.maximum") },
+  ];
 
   return (
     <div className="flex flex-wrap items-center gap-2 border-t border-subtle bg-surface-raised/40 px-4 py-2">
@@ -56,6 +69,17 @@ export function RunControls({ tab, config, onSetMode, onSetApprovalMode, onSetSa
         leading={<IconShield size={14} />}
         title={t("chat.sandboxTitle")}
         className="w-36"
+      />
+
+      <Select
+        up
+        value={tab.continuationPreset}
+        options={continuationOptions}
+        onChange={(value) => onSetContinuationPreset(value as ContinuationPreset)}
+        size="sm"
+        disabled={running || tab.mode === "plan"}
+        title={t("chat.continuation.title")}
+        className="w-32"
       />
 
       {/* Run mode: segmented (edit/ask switchable mid-session; plan start-only). */}

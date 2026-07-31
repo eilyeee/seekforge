@@ -168,6 +168,26 @@ describe("agent loop", () => {
     expect(listSessions(workspace)).toHaveLength(0);
   });
 
+  it("fails early when the configured consecutive no-progress limit is reached", async () => {
+    const toolTurn = (id: string) =>
+      response({
+        toolCalls: [{ id, name: "read_file", argumentsJson: '{"path":"missing.ts"}' }],
+        finishReason: "tool_calls",
+      });
+    const agent = createAgentCore({
+      provider: fakeProvider([toolTurn("read-1"), toolTurn("read-2"), toolTurn("read-3")]),
+      dispatcher: fakeDispatcher({ ok: false, error: { code: "not_found", message: "missing" } }),
+      confirm: async () => true,
+      limits: { maxAgentTurns: 10 },
+    });
+    const events = await collect(
+      agent.runTask({ ...baseInput, projectPath: workspace, maxAutoContinuations: 2, maxNoProgressTurns: 2 }),
+    );
+    expect(events.find((event) => event.type === "session.failed")).toMatchObject({
+      error: { code: "no_progress", message: expect.stringContaining("2 consecutive") },
+    });
+  });
+
   it("continues instead of accepting an output-truncated response as complete", async () => {
     const provider = fakeProvider([
       response({ content: "## Summary\npartial", finishReason: "length" }),

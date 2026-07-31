@@ -286,6 +286,14 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   if (method === "GET" && path === "/api/evals/trends") {
     return { generatedAt: new Date().toISOString(), entries: [] };
   }
+  if (method === "GET" && path === "/api/evals/control-plane") {
+    return {
+      generatedAt: new Date().toISOString(),
+      source: "simulation",
+      scenarios: [],
+      summary: { improved: 0, neutral: 0, regressed: 0 },
+    };
+  }
   if (method === "GET" && path === "/api/orchestration/report") {
     return {
       portfolio: {
@@ -489,9 +497,42 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   if (method === "GET" && path === "/api/skills") return skills.map((s) => ({ ...s }));
   if (method === "GET" && path === "/api/skills/diagnostics") return { diagnostics: [] };
   if (method === "GET" && path === "/api/skills/stats") return { stats: [] };
+  if (method === "GET" && path === "/api/skills/supply-chain") {
+    return {
+      generatedAt: new Date().toISOString(),
+      entries: skills.map((skill) => ({
+        id: skill.id,
+        scope: skill.scope,
+        apiVersion: 1,
+        digest: `mock-${skill.id.padEnd(64, "0")}`.slice(0, 64),
+        integrity: "valid",
+        risk: skill.risk,
+        dependencies: [],
+        conflicts: [],
+      })),
+      diagnostics: [],
+    };
+  }
   if (method === "POST" && path === "/api/skills/repair") return { repaired: [], skipped: [] };
 
   if (method === "GET" && path === "/api/plugins") return plugins.map((plugin) => ({ ...plugin }));
+  if (method === "GET" && path === "/api/plugins/supply-chain") {
+    return {
+      generatedAt: new Date().toISOString(),
+      entries: plugins.map((plugin) => ({
+        id: plugin.id,
+        scope: plugin.scope,
+        status: plugin.status,
+        version: plugin.manifest?.version,
+        digest: plugin.digest,
+        lockedDigest: plugin.scope === "global" ? plugin.digest : undefined,
+        integrity: plugin.status === "changed" ? "changed" : plugin.scope === "global" ? "verified" : "unlocked",
+        rollbackAvailable: false,
+        capabilities: [],
+        compatibility: { apiVersion: 1, compatible: true },
+      })),
+    };
+  }
   if (method === "POST" && path === "/api/plugins") {
     const { id } = (body ?? {}) as { id?: string };
     if (!id) throw mockError(400, "bad_request", "body must be {id: string}");
@@ -642,12 +683,31 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
       autoExtractedFacts: facts.filter((f) => f.addedAt !== undefined).length,
       directAddedFacts: facts.filter((f) => f.addedAt === undefined).length,
       usedFraction: facts.length > 0 ? used / facts.length : 0,
+      exposedFraction: 0,
+      retrievalCount: used,
       rejectionRate: total > 0 ? rejected / total : 0,
       avgConfidenceUsed: 0.82,
       avgConfidenceUnused: 0.61,
       pending,
       approved,
       rejected,
+    };
+  }
+  if (method === "GET" && path === "/api/memory/governance") {
+    return {
+      generatedAt: new Date().toISOString(),
+      facts: facts.map((fact) => ({
+        ...fact,
+        ageDays: 1,
+        decayScore: 0.99,
+        qualityScore: fact.uses > 0 ? 0.9 : 0.5,
+        exposures: 0,
+        retrievals: fact.uses,
+        stale: false,
+      })),
+      duplicateGroups: [],
+      contradictionCandidates: [],
+      retrieval: { exposureToUseRate: 0, retrievalToUseRate: 1, staleFacts: 0 },
     };
   }
   if (method === "POST" && path === "/api/memory/compact") {
@@ -1076,6 +1136,11 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
       workspace: "/mock/workspace",
     };
   }
+  if (method === "GET" && path === "/api/runs") return [];
+  if (method === "GET" && /^\/api\/runs\/[^/]+\/events$/.test(path)) {
+    return { events: [], nextAfterSeq: 0, hasMore: false };
+  }
+  if (method === "POST" && /^\/api\/runs\/[^/]+\/cancel$/.test(path)) return { status: "cancelled" };
 
   // --- Files browser + editor ----------------------------------------------
   if (method === "GET" && path === "/api/tree") {

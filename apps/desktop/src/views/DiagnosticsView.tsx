@@ -3,7 +3,8 @@ import { api, ApiError } from "../lib/api";
 import { useStore } from "../store";
 import { useT } from "../lib/i18n";
 import { Badge, Button, Card, IconSettings } from "../components/ui";
-import type { DoctorReport } from "../types";
+import type { DoctorReport, RunEventSummary, RunRecordSummary, WorkspaceOperationalDiagnostics } from "../types";
+import { fetchRunEventTail } from "../lib/run-events";
 import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 
 type Check = { label: string; value: string; ok: boolean };
@@ -51,6 +52,9 @@ export function DiagnosticsView() {
   const [report, setReport] = useState<DoctorReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [runs, setRuns] = useState<RunRecordSummary[]>([]);
+  const [operations, setOperations] = useState<WorkspaceOperationalDiagnostics | null>(null);
+  const [events, setEvents] = useState<Record<string, RunEventSummary[]>>({});
   const ws = useStore((s) => s.activeWorkspaceId);
   const requests = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
 
@@ -59,10 +63,18 @@ export function DiagnosticsView() {
     if (!request) return;
     setLoading(true);
     setError(null);
-    api
-      .doctor(request.workspaceId)
-      .then((nextReport) => {
-        if (requests.isCurrent(request)) setReport(nextReport);
+    Promise.allSettled([
+      api.doctor(request.workspaceId),
+      api.runs(request.workspaceId),
+      api.orchestrationDiagnostics(request.workspaceId),
+    ])
+      .then(([reportResult, runsResult, operationsResult]) => {
+        if (reportResult.status === "rejected") throw reportResult.reason;
+        if (requests.isCurrent(request)) {
+          setReport(reportResult.value);
+          setRuns(runsResult.status === "fulfilled" ? runsResult.value : []);
+          setOperations(operationsResult.status === "fulfilled" ? operationsResult.value : null);
+        }
       })
       .catch((e: unknown) => {
         if (!requests.isCurrent(request)) return;
@@ -81,11 +93,61 @@ export function DiagnosticsView() {
 
   useEffect(() => {
     setReport(null);
+    setRuns([]);
+    setOperations(null);
+    setEvents({});
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requests]);
 
+  useEffect(() => {
+    if (!runs.some((run) => run.status === "queued" || run.status === "running" || run.status === "waiting")) return;
+    const timer = window.setInterval(() => {
+      const request = requests.capture(ws);
+      if (!request) return;
+      void api
+        .runs(request.workspaceId)
+        .then((nextRuns) => {
+          if (requests.isCurrent(request)) setRuns(nextRuns);
+        })
+        .catch((cause: unknown) => {
+          if (requests.isCurrent(request)) setError(t("diagnostics.error", { error: String(cause) }));
+        });
+    }, 5_000);
+    return () => window.clearInterval(timer);
+  }, [requests, runs, ws]);
+
   const checks = report ? toChecks(t, report) : [];
+  const activeRuns = runs.filter(
+    (run) => run.status === "queued" || run.status === "running" || run.status === "waiting",
+  );
+
+  const showEvents = (runId: string) => {
+    const request = requests.capture(ws);
+    if (!request) return;
+    setError(null);
+    void fetchRunEventTail((afterSeq) => api.runEvents(runId, afterSeq, request.workspaceId), 20, runId)
+      .then((tail) => {
+        if (requests.isCurrent(request)) setEvents((current) => ({ ...current, [runId]: tail }));
+      })
+      .catch((cause: unknown) => {
+        if (requests.isCurrent(request)) setError(t("diagnostics.error", { error: String(cause) }));
+      });
+  };
+
+  const cancelRun = (runId: string) => {
+    const request = requests.capture(ws);
+    if (!request) return;
+    setError(null);
+    void api
+      .runCancel(runId, request.workspaceId)
+      .then(() => {
+        if (requests.isCurrent(request)) refresh();
+      })
+      .catch((cause: unknown) => {
+        if (requests.isCurrent(request)) setError(t("diagnostics.error", { error: String(cause) }));
+      });
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -107,7 +169,7 @@ export function DiagnosticsView() {
         {report === null ? (
           !error && <p className="text-sm text-tertiary">{t("diagnostics.loading")}</p>
         ) : (
-          <Card flush className="max-w-2xl divide-y divide-subtle">
+          <Card flush className="divide-y divide-subtle">
             {checks.map((c) => (
               <div key={c.label} className="flex items-center justify-between gap-4 p-4">
                 <div className="min-w-0">
@@ -118,6 +180,75 @@ export function DiagnosticsView() {
               </div>
             ))}
           </Card>
+        )}
+
+        <section className="mt-6">
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="text-sm font-semibold">{t("diagnostics.runsTitle")}</h2>
+            <Badge tone={activeRuns.length > 0 ? "accent" : "neutral"}>
+              {activeRuns.length} {t("diagnostics.active")}
+            </Badge>
+          </div>
+          <div className="grid gap-3 lg:grid-cols-2">
+            {runs.slice(0, 20).map((run) => (
+              <Card key={run.runId} className="p-3 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono text-primary">{run.runId}</span>
+                  <Badge tone={run.status === "failed" ? "danger" : run.status === "succeeded" ? "ok" : "accent"}>
+                    {run.status}
+                  </Badge>
+                </div>
+                <p className="mt-1 text-tertiary">
+                  {run.source} · {new Date(run.updatedAt).toLocaleString()} · ${(run.costUsd ?? 0).toFixed(4)}
+                </p>
+                {run.labels && (
+                  <p className="mt-1 break-words text-tertiary">
+                    {Object.entries(run.labels)
+                      .map(([key, value]) => `${key}=${value}`)
+                      .join(" · ")}
+                  </p>
+                )}
+                {run.error && (
+                  <p className="mt-1 text-danger">
+                    {run.error.code}: {run.error.message}
+                  </p>
+                )}
+                <div className="mt-2 flex gap-2">
+                  <Button size="sm" variant="ghost" onClick={() => showEvents(run.runId)}>
+                    {t("diagnostics.events")}
+                  </Button>
+                  {(run.status === "queued" || run.status === "running" || run.status === "waiting") && (
+                    <Button size="sm" variant="danger" onClick={() => cancelRun(run.runId)}>
+                      {t("diagnostics.cancel")}
+                    </Button>
+                  )}
+                </div>
+                {events[run.runId] && (
+                  <pre className="mt-2 max-h-40 overflow-auto rounded bg-surface-overlay p-2 text-[10px]">
+                    {events[run.runId]!.map(
+                      (event) => `${event.seq} ${event.ts} ${String(event.frame.type ?? "event")}`,
+                    ).join("\n")}
+                  </pre>
+                )}
+              </Card>
+            ))}
+          </div>
+        </section>
+
+        {operations && (
+          <section className="mt-6">
+            <h2 className="mb-2 text-sm font-semibold">{t("diagnostics.operationsTitle")}</h2>
+            <Card className="p-4 text-xs text-secondary">
+              <p>
+                {operations.healthy ? t("diagnostics.healthy") : t("diagnostics.degraded")} · {operations.loops.length}{" "}
+                loops · {operations.graphs.length} graphs · {operations.artifactStore.attestations} attestations
+              </p>
+              <p className="mt-1 text-tertiary">
+                controller: {operations.controller.mode} · decisions {operations.decisions.length} · rollouts{" "}
+                {operations.rollouts.length} · reservations {operations.reservations.length}
+              </p>
+            </Card>
+          </section>
         )}
       </div>
     </div>

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type RunningServer } from "../src/index.js";
@@ -70,6 +70,17 @@ describe("skill management", () => {
     expect(
       JSON.parse(readFileSync(join(workspace, ".seekforge/skills/demo-skill/skill.json"), "utf8")).apiVersion,
     ).toBe(1);
+  });
+
+  it("exposes canonical skill supply-chain metadata", async () => {
+    const response = await authed("/api/skills/supply-chain");
+    expect(response.status).toBe(200);
+    expect(await jsonOf(response)).toMatchObject({
+      entries: expect.arrayContaining([
+        expect.objectContaining({ id: "demo-skill", scope: "project", integrity: "valid", apiVersion: 1 }),
+      ]),
+      diagnostics: expect.any(Array),
+    });
   });
 
   it("PUT /api/skills/:id disables then re-enables a project skill", async () => {
@@ -154,6 +165,23 @@ describe("plugin management", () => {
     expect(res.status).toBe(200);
     plugins = await jsonOf(authed("/api/plugins"));
     expect(plugins.find((plugin: { scope: string }) => plugin.scope === "global").status).toBe("enabled");
+    expect(await jsonOf(authed("/api/plugins/supply-chain"))).toMatchObject({
+      entries: expect.arrayContaining([
+        expect.objectContaining({ id: "rest-plugin", scope: "global", integrity: "verified" }),
+      ]),
+    });
+
+    const manifestPath = join(created.path, "plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, version: "0.2.0" })}\n`);
+    res = await authed("/api/plugins/install", {
+      method: "POST",
+      body: JSON.stringify({ path: created.path, force: true }),
+    });
+    expect(res.status).toBe(200);
+    res = await authed("/api/plugins/rest-plugin/rollback", { method: "POST" });
+    expect(res.status).toBe(200);
+    expect((await jsonOf(res)).manifest.version).toBe("0.1.0");
 
     res = await authed("/api/plugins/rest-plugin", { method: "DELETE" });
     expect(res.status).toBe(200);

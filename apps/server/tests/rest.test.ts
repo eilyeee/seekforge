@@ -589,6 +589,19 @@ describe("loop management API", () => {
     ).toMatchObject({ mode: "active", reason: "operator review completed" });
     expect(await jsonOf(await authed("/api/evals/trends?limit=40"))).toMatchObject({ entries: [] });
     expect((await authed("/api/evals/trends?limit=0")).status).toBe(400);
+    expect(await jsonOf(await authed("/api/evals/control-plane"))).toMatchObject({
+      source: "simulation",
+      summary: { improved: 1, neutral: 0, regressed: 0 },
+    });
+    expect(
+      (
+        await authed("/api/evals/control-plane", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ scenarios: [] }),
+        })
+      ).status,
+    ).toBe(400);
     const { publicKey } = generateKeyPairSync("ed25519");
     expect(
       await jsonOf(

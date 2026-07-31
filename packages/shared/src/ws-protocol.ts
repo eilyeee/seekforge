@@ -63,6 +63,25 @@ function parseOverrides(frame: RecordValue): { value: RunOverrides } | { error: 
   };
 }
 
+function continuationError(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return "continuation must be an object when present";
+  if (Object.keys(value).some((key) => key !== "maxSlices" && key !== "noProgressLimit")) {
+    return "continuation contains an unknown field";
+  }
+  if (!Number.isSafeInteger(value.maxSlices) || (value.maxSlices as number) < 1 || (value.maxSlices as number) > 8) {
+    return "continuation.maxSlices must be an integer from 1 to 8";
+  }
+  if (
+    !Number.isSafeInteger(value.noProgressLimit) ||
+    (value.noProgressLimit as number) < 1 ||
+    (value.noProgressLimit as number) > 16
+  ) {
+    return "continuation.noProgressLimit must be an integer from 1 to 16";
+  }
+  return undefined;
+}
+
 function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrameDecodeResult {
   const type = frame["type"];
   if (typeof type !== "string") return bad("frames must be JSON objects with a type field");
@@ -75,6 +94,8 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
       return bad('start.approvalMode must be "auto", "acceptEdits", or "confirm"');
     }
     if (plan !== undefined && typeof plan !== "boolean") return bad("start.plan must be a boolean when present");
+    const continuation = continuationError(frame["continuation"]);
+    if (continuation) return bad(`start.${continuation}`);
     const wsError = workspaceError(frame, "start");
     if (wsError) return bad(wsError);
     const overrides = parseOverrides(frame);
@@ -98,6 +119,8 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
     ) {
       return bad('send.approvalMode must be "auto", "acceptEdits", or "confirm" when present');
     }
+    const continuation = continuationError(frame["continuation"]);
+    if (continuation) return bad(`send.${continuation}`);
     const wsError = workspaceError(frame, "send");
     if (wsError) return bad(wsError);
     const overrides = parseOverrides(frame);

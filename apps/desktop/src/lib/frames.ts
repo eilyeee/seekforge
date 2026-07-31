@@ -1,8 +1,14 @@
 /** Pure builders for the start/send client frames (plan & approval controls). */
 import type { ClientFrame, RunOverrides } from "./ws-types";
-import type { ApprovalChoice, StartMode } from "./tabs";
+import type { ApprovalChoice, ContinuationPreset, StartMode } from "./tabs";
 
 export type { RunOverrides };
+
+export function continuationOf(preset: ContinuationPreset): { maxSlices: number; noProgressLimit: number } {
+  if (preset === "standard") return { maxSlices: 2, noProgressLimit: 3 };
+  if (preset === "maximum") return { maxSlices: 8, noProgressLimit: 8 };
+  return { maxSlices: 4, noProgressLimit: 5 };
+}
 
 /** The canned follow-up task that turns a completed plan into execution. */
 export const EXECUTE_PLAN_TASK =
@@ -55,11 +61,15 @@ export function buildStartFrame(
   approvalMode: ApprovalChoice,
   ws?: string,
   overrides: RunOverrides = {},
+  continuation?: { maxSlices: number; noProgressLimit: number },
 ): ClientFrame {
   if (mode === "plan") {
     return withWs({ type: "start", task, mode: "ask", approvalMode, plan: true, ...overrides }, ws);
   }
-  return withWs({ type: "start", task, mode, approvalMode, ...overrides }, ws);
+  return withWs(
+    { type: "start", task, mode, approvalMode, ...(continuation ? { continuation } : {}), ...overrides },
+    ws,
+  );
 }
 
 /**
@@ -75,9 +85,21 @@ export function buildSendFrame(
   mode: StartMode,
   ws?: string,
   overrides: RunOverrides = {},
+  continuation?: { maxSlices: number; noProgressLimit: number },
 ): ClientFrame {
   const modeOverride = mode === "edit" || mode === "ask" ? { mode } : {};
-  return withWs({ type: "send", sessionId, task, approvalMode, ...modeOverride, ...overrides }, ws);
+  return withWs(
+    {
+      type: "send",
+      sessionId,
+      task,
+      approvalMode,
+      ...(continuation ? { continuation } : {}),
+      ...modeOverride,
+      ...overrides,
+    },
+    ws,
+  );
 }
 
 /** Continue the plan session with an edit-mode override, in the tab's workspace. */

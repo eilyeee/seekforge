@@ -78,6 +78,13 @@ The desktop **Eval trends** panel reads the same bounded source through `GET
 and lists the newest report/variant points; malformed or incompatible files
 remain owned by the eval harness parser rather than being interpreted by the UI.
 
+`GET /api/evals/control-plane` adds a longitudinal simulation made of ordered
+daily fault observations. It compares recovery rate, mean recovery time, and
+cost for baseline versus controlled execution, so SLO/routing/rollout behavior
+is not inferred from unrelated single-task samples. Reports identify their
+source as `simulation`; callers may POST bounded custom scenarios to the same
+endpoint.
+
 ### Runner modes
 
 Tasks without `runner` retain the historical single-session `agent` behavior.

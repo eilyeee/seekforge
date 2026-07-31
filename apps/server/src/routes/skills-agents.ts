@@ -17,7 +17,9 @@ import {
   loadSkills,
   loadSkillsDetailed,
   listPlugins,
+  pluginSupplyChainReport,
   removePlugin,
+  rollbackPlugin,
   removeSkill,
   readSkillEffectiveness,
   repairSkills,
@@ -25,6 +27,7 @@ import {
   seekforgeHome,
   setEvolutionProposalStatus,
   setSkillEnabled,
+  skillSupplyChainReport,
   setPluginEnabled,
   SessionBusyError,
 } from "@seekforge/core";
@@ -46,6 +49,21 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
 
   if (method === "GET" && path === "/api/plugins") {
     return sendJson(res, 200, listPlugins(workspace));
+  }
+
+  if (method === "GET" && path === "/api/plugins/supply-chain") {
+    return sendJson(res, 200, pluginSupplyChainReport(workspace));
+  }
+
+  if (method === "POST" && segs.length === 4 && segs[1] === "plugins" && segs[3] === "rollback") {
+    try {
+      return sendJson(res, 200, rollbackPlugin(segs[2]!));
+    } catch (error) {
+      if (error instanceof SessionBusyError) {
+        return sendApiError(res, 409, "session_busy", "another plugin mutation is active");
+      }
+      return sendApiError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
+    }
   }
 
   if (method === "POST" && path === "/api/plugins") {
@@ -125,6 +143,10 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
 
   if (method === "GET" && path === "/api/skills/stats") {
     return sendJson(res, 200, { stats: readSkillEffectiveness(workspace) });
+  }
+
+  if (method === "GET" && path === "/api/skills/supply-chain") {
+    return sendJson(res, 200, skillSupplyChainReport(workspace));
   }
 
   if (method === "POST" && path === "/api/skills/repair") {

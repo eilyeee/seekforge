@@ -20,6 +20,8 @@ export type RunAgentTaskInput = {
    * Default 0 preserves CLI/SDK limit semantics.
    */
   maxAutoContinuations?: number;
+  /** Fail early after this many consecutive stagnant tool turns. */
+  maxNoProgressTurns?: number;
   /** Cooperative cancellation (Ctrl+C). Checked between turns and tool calls. */
   signal?: AbortSignal;
   /**

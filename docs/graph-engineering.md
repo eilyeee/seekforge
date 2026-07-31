@@ -4,6 +4,10 @@
 
 Graph Engineering is SeekForge's durable orchestration layer for workflows that combine Agents, autonomous Loops, deterministic functions, bounded maps, quorum joins, routers, approval gates, and nested graphs. It complements `loop-dag`: Loop DAG is optimized for homogeneous run→verify nodes and managed worktrees, while an Engineering Graph coordinates heterogeneous work.
 
+The Desktop creation workbench renders a deterministic dependency canvas from
+the same JSON definition and supports structured node/dependency insertion. A
+graph can start only after server validation and simulation succeed.
+
 ## Execution model
 
 ```mermaid

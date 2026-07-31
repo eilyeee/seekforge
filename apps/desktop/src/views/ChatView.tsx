@@ -50,6 +50,7 @@ export function ChatView() {
     setReasoningEffort,
     setOutputStyle,
     setSandbox,
+    setContinuationPreset,
     truncateAtItem,
     startLoop,
     resumeLoop,
@@ -510,6 +511,7 @@ export function ChatView() {
             onSetMode={setMode}
             onSetApprovalMode={setApprovalMode}
             onSetSandbox={setSandbox}
+            onSetContinuationPreset={setContinuationPreset}
           />
         </div>
       </div>

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildExecutePlanFrame, buildSendFrame, buildStartFrame, overridesOf, EXECUTE_PLAN_TASK } from "./frames";
+import {
+  buildExecutePlanFrame,
+  buildSendFrame,
+  buildStartFrame,
+  continuationOf,
+  overridesOf,
+  EXECUTE_PLAN_TASK,
+} from "./frames";
 
 describe("buildStartFrame", () => {
   it("plan mode sends mode:ask with the plan flag", () => {
@@ -142,5 +149,15 @@ describe("frame builders carry per-run overrides", () => {
       approvalMode: "confirm",
     });
     expect(buildExecutePlanFrame("s-1", "", { thinking: false })).toMatchObject({ thinking: false });
+  });
+});
+
+describe("long-task continuation", () => {
+  it("maps presets to bounded policies and carries them on edit frames", () => {
+    expect(continuationOf("extended")).toEqual({ maxSlices: 4, noProgressLimit: 5 });
+    const continuation = continuationOf("maximum");
+    expect(buildStartFrame("go", "edit", "confirm", "", {}, continuation)).toMatchObject({ continuation });
+    expect(buildSendFrame("s-1", "go", "confirm", "edit", "", {}, continuation)).toMatchObject({ continuation });
+    expect(buildStartFrame("plan", "plan", "confirm", "", {}, continuation)).not.toHaveProperty("continuation");
   });
 });

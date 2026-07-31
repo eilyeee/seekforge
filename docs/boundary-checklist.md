@@ -4278,6 +4278,18 @@ becomes a surprising editable project and can accumulate domain state.
 - **Caught:** removing the startup folder dialog otherwise required exposing an
   app-data directory as Desktop's active workspace.
 
+## 394. Retaining rollback state is part of the atomic upgrade
+
+Replacing the active directory first and only then rotating its prior rollback
+can report failure after the new version is already live, leaving state and
+filesystem truth inconsistent.
+
+- **Do:** move the previous rollback aside before the active swap, restore both
+  active and rollback generations on every failed rename, and retire the older
+  copy only after the complete swap succeeds.
+- **Caught:** plugin force-update originally installed the new digest before a
+  rollback-directory rotation failure could be reported.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

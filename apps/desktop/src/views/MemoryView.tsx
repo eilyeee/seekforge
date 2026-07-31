@@ -22,6 +22,7 @@ import type {
   MemoryFact,
   MemoryResponse,
   MemoryStats,
+  MemoryGovernanceReport,
 } from "../types";
 import { createSerialQueue } from "./async-coordination";
 import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
@@ -65,6 +66,7 @@ export function MemoryView() {
   const t = useT();
   const [memory, setMemory] = useState<MemoryResponse | null>(null);
   const [stats, setStats] = useState<MemoryStats | null>(null);
+  const [governance, setGovernance] = useState<MemoryGovernanceReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Where new/approved memory is written: this project or the user-level file
   // (~/.seekforge, shared across all projects). Governs add + approve.
@@ -88,12 +90,26 @@ export function MemoryView() {
       });
   };
 
+  const loadGovernance = (workspaceId: string) => {
+    const operation = coordinator.capture(workspaceId);
+    if (!operation) return Promise.resolve();
+    return api
+      .memoryGovernance(workspaceId)
+      .then((value) => {
+        if (coordinator.isCurrent(operation)) setGovernance(value);
+      })
+      .catch(() => {
+        if (coordinator.isCurrent(operation)) setGovernance(null);
+      });
+  };
+
   useEffect(() => {
     const operation = coordinator.beginLatest(ws);
     if (!operation) return;
     serverMemoryRef.current = null;
     setMemory(null);
     setStats(null);
+    setGovernance(null);
     setError(null);
     api
       .memory(ws)
@@ -106,12 +122,14 @@ export function MemoryView() {
         if (coordinator.isCurrent(operation)) setError(String(e));
       });
     void loadStats(ws);
+    void loadGovernance(ws);
   }, [coordinator, ws]);
 
   const refresh = (workspaceId = ws) => {
     const operation = coordinator.beginLatest(workspaceId);
     if (!operation) return Promise.resolve();
     void loadStats(workspaceId);
+    void loadGovernance(workspaceId);
     return api
       .memory(workspaceId)
       .then((value) => {
@@ -287,6 +305,8 @@ export function MemoryView() {
             <aside className="space-y-6 lg:col-span-1">
               <StatsPanel stats={stats} />
 
+              <GovernancePanel report={governance} />
+
               <CompactControl
                 key={ws}
                 workspaceId={ws}
@@ -379,6 +399,54 @@ function CandidateCard({
         </div>
       )}
     </Card>
+  );
+}
+
+function GovernancePanel({ report }: { report: MemoryGovernanceReport | null }) {
+  const t = useT();
+  if (!report) return null;
+  const weakest = report.facts
+    .slice()
+    .sort((left, right) => left.qualityScore - right.qualityScore)
+    .slice(0, 3);
+  return (
+    <section>
+      <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">{t("memory.governanceTitle")}</h2>
+      <Card className="space-y-2 p-4 text-xs text-secondary">
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div>
+            <strong className="block text-primary">{report.duplicateGroups.length}</strong>
+            {t("memory.duplicates")}
+          </div>
+          <div>
+            <strong className="block text-primary">{report.contradictionCandidates.length}</strong>
+            {t("memory.conflicts")}
+          </div>
+          <div>
+            <strong className="block text-primary">{report.retrieval.staleFacts}</strong>
+            {t("memory.stale")}
+          </div>
+        </div>
+        <p className="text-tertiary">
+          {t("memory.retrievalEffectiveness", {
+            exposure: (report.retrieval.exposureToUseRate * 100).toFixed(0),
+            retrieval: (report.retrieval.retrievalToUseRate * 100).toFixed(0),
+          })}
+        </p>
+        {weakest.length > 0 && (
+          <details>
+            <summary className="cursor-pointer">{t("memory.lowQuality")}</summary>
+            <ul className="mt-2 space-y-1">
+              {weakest.map((fact) => (
+                <li key={fact.index} className="truncate" title={fact.content}>
+                  {(fact.qualityScore * 100).toFixed(0)}% · {fact.content}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+      </Card>
+    </section>
   );
 }
 

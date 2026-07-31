@@ -624,6 +624,50 @@ export type MemoryStats = {
   rejected: number;
 };
 
+export type MemoryGovernanceFact = {
+  index: number;
+  type: string | null;
+  content: string;
+  sourceSessionId?: string;
+  confidence?: number;
+  ageDays: number;
+  decayScore: number;
+  qualityScore: number;
+  uses: number;
+  exposures: number;
+  retrievals: number;
+  stale: boolean;
+};
+
+export type MemoryGovernanceReport = {
+  generatedAt: string;
+  facts: MemoryGovernanceFact[];
+  duplicateGroups: number[][];
+  contradictionCandidates: Array<{ left: number; right: number }>;
+  retrieval: { exposureToUseRate: number; retrievalToUseRate: number; staleFacts: number };
+};
+
+export type RunRecordSummary = {
+  runId: string;
+  source: "ws" | "loop" | "graph" | "schedule" | "trigger" | "background";
+  status: "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled";
+  attempt: number;
+  workspace: string;
+  createdAt: string;
+  updatedAt: string;
+  sessionId?: string;
+  costUsd?: number;
+  error?: { code: string; message: string };
+  labels?: Record<string, string>;
+};
+
+export type RunEventSummary = {
+  runId: string;
+  seq: number;
+  ts: string;
+  frame: Record<string, unknown>;
+};
+
 /** POST /api/memory/compact — mirror of @seekforge/core CompactResult. */
 export type CompactResult = {
   /** Bullet count before compaction. */
@@ -1783,6 +1827,44 @@ export type EvalTrendEntry = {
 };
 
 export type EvalTrendReport = { generatedAt: string; entries: EvalTrendEntry[] };
+export type ControlPlaneEvalReport = {
+  generatedAt: string;
+  source: "simulation";
+  scenarios: Array<{
+    id: string;
+    samples: number;
+    baselineRecoveryRate: number;
+    controlledRecoveryRate: number;
+    recoveryTimeImprovement: number;
+    costImprovement: number;
+    verdict: "improved" | "neutral" | "regressed";
+  }>;
+  summary: { improved: number; neutral: number; regressed: number };
+};
+
+export type PluginSupplyChainEntry = {
+  id: string;
+  scope: "global" | "project";
+  status: "enabled" | "disabled" | "changed" | "review_required" | "invalid";
+  version?: string;
+  digest?: string;
+  lockedDigest?: string;
+  integrity: "verified" | "changed" | "unlocked" | "invalid";
+  rollbackAvailable: boolean;
+  capabilities: string[];
+  compatibility: { apiVersion: number; compatible: boolean; seekforge?: string };
+};
+
+export type SkillSupplyChainEntry = {
+  id: string;
+  scope: SkillScope;
+  apiVersion: number;
+  digest: string;
+  integrity: "valid";
+  risk: "low" | "medium" | "high";
+  dependencies: string[];
+  conflicts: string[];
+};
 
 export type LoopDagResourceReport = {
   dagId: string;
@@ -1873,6 +1955,14 @@ export type RunOverrides = {
   sandbox?: "off" | "read-only" | "workspace-write" | "restricted";
 };
 
+/** Bounded continuation policy for long interactive tasks. */
+export type ChatContinuationPolicy = {
+  /** Total execution slices, including the initial slice. */
+  maxSlices: number;
+  /** Consecutive stagnant tool turns allowed before failing early. */
+  noProgressLimit: number;
+};
+
 /** WS client → server frames (path /ws). */
 export type ClientFrame =
   | ({
@@ -1881,6 +1971,7 @@ export type ClientFrame =
       mode: "edit" | "ask";
       approvalMode: "auto" | "acceptEdits" | "confirm";
       plan?: boolean;
+      continuation?: ChatContinuationPolicy;
       /** Workspace id (default: first workspace when omitted). */
       ws?: string;
     } & RunOverrides)
@@ -1892,6 +1983,7 @@ export type ClientFrame =
       mode?: "edit" | "ask";
       /** Approval mode can change between turns; absent defaults to "confirm". */
       approvalMode?: "auto" | "acceptEdits" | "confirm";
+      continuation?: ChatContinuationPolicy;
       ws?: string;
     } & RunOverrides)
   | {

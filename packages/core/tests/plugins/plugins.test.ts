@@ -7,7 +7,9 @@ import {
   installPlugin,
   listPlugins,
   loadPluginContributions,
+  pluginSupplyChainReport,
   removePlugin,
+  rollbackPlugin,
   setPluginEnabled,
 } from "../../src/plugins/index.js";
 import { loadSkills } from "../../src/skills/index.js";
@@ -136,5 +138,34 @@ describe("first-class plugins", () => {
     fs.mkdirSync(path.join(home, ".seekforge"));
     fs.symlinkSync(outside, path.join(home, ".seekforge", "plugins"));
     expect(() => installPlugin(source.path)).toThrow(/physical directory/);
+  });
+
+  it("reports locked capabilities and atomically rolls back an update", () => {
+    const home = temp("seekforge-plugin-home-");
+    const workspace = temp("seekforge-plugin-workspace-");
+    process.env.SEEKFORGE_HOME = home;
+    const scaffold = createPluginScaffold(workspace, "versioned-plugin");
+    installPlugin(scaffold.path);
+    setPluginEnabled("versioned-plugin", true);
+    expect(pluginSupplyChainReport(workspace).entries.find((entry) => entry.scope === "global")).toMatchObject({
+      integrity: "verified",
+      capabilities: ["skills", "agents"],
+      rollbackAvailable: false,
+    });
+
+    fs.writeFileSync(
+      path.join(scaffold.path, "plugin.json"),
+      `${JSON.stringify({ ...scaffold.manifest, version: "0.2.0" })}\n`,
+    );
+    installPlugin(scaffold.path, { force: true });
+    expect(pluginSupplyChainReport(workspace).entries.find((entry) => entry.scope === "global")).toMatchObject({
+      version: "0.2.0",
+      rollbackAvailable: true,
+    });
+    expect(rollbackPlugin("versioned-plugin").manifest.version).toBe("0.1.0");
+    expect(listPlugins(workspace).find((plugin) => plugin.scope === "global")).toMatchObject({
+      status: "disabled",
+      manifest: { version: "0.1.0" },
+    });
   });
 });

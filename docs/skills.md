@@ -6,6 +6,10 @@ Skills are bounded procedure briefs selected for the current task. They add
 instructions to the system prompt; they never grant tool permissions, approve
 commands, or weaken the sandbox.
 
+`GET /api/skills/supply-chain` and the Desktop Skills page expose a canonical
+SHA-256 digest, API version, scope, risk, dependencies, conflicts, and loader
+diagnostics for every active skill, including plugin-contributed skills.
+
 ## Layout and precedence
 
 A native skill is a physical directory containing two regular files:

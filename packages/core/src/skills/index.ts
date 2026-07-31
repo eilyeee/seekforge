@@ -48,3 +48,5 @@ export {
   type ImportSkillOptions,
   type ParsedExternalSkill,
 } from "./import.js";
+export { skillSupplyChainReport } from "./supply-chain.js";
+export type { SkillSupplyChainEntry } from "@seekforge/shared";

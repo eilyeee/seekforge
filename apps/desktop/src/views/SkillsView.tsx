@@ -5,7 +5,7 @@ import { Markdown } from "../components/Markdown";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useT } from "../lib/i18n";
 import { Badge, Button, Card, EmptyState, IconChevron, IconSkills, Input, type BadgeTone } from "../components/ui";
-import type { Skill, SkillScope } from "../types";
+import type { Skill, SkillScope, SkillSupplyChainEntry } from "../types";
 import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 
 const SCOPE_TONE: Record<SkillScope, BadgeTone> = {
@@ -54,6 +54,7 @@ export function SkillsView() {
     [],
   );
   const [stats, setStats] = useState<SkillStats[]>([]);
+  const [supplyChain, setSupplyChain] = useState<SkillSupplyChainEntry[]>([]);
   const [detail, setDetail] = useState<Skill | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
@@ -67,12 +68,18 @@ export function SkillsView() {
   const refresh = (workspaceId = ws) => {
     const request = requests.beginLatest(workspaceId);
     if (!request) return;
-    Promise.all([api.skills(workspaceId), api.skillDiagnostics(workspaceId), api.skillStats(workspaceId)])
-      .then(([nextSkills, diagnosticResult, statsResult]) => {
+    Promise.allSettled([
+      Promise.all([api.skills(workspaceId), api.skillDiagnostics(workspaceId), api.skillStats(workspaceId)]),
+      api.skillSupplyChain(workspaceId),
+    ])
+      .then(([existingResult, supplyResult]) => {
+        if (existingResult.status === "rejected") throw existingResult.reason;
+        const [nextSkills, diagnosticResult, statsResult] = existingResult.value;
         if (requests.isCurrent(request)) {
           setSkills(nextSkills);
           setDiagnostics(diagnosticResult.diagnostics);
           setStats(statsResult.stats);
+          setSupplyChain(supplyResult.status === "fulfilled" ? supplyResult.value.entries : []);
         }
       })
       .catch((e: unknown) => {
@@ -85,6 +92,7 @@ export function SkillsView() {
     setDetail(null);
     setDiagnostics([]);
     setStats([]);
+    setSupplyChain([]);
     setError(null);
     setFilter("all");
     setQuery("");
@@ -158,6 +166,10 @@ export function SkillsView() {
   };
 
   const statsById = useMemo(() => new Map(stats.map((row) => [row.skillId, row])), [stats]);
+  const supplyByKey = useMemo(
+    () => new Map(supplyChain.map((entry) => [`${entry.scope}:${entry.id}`, entry])),
+    [supplyChain],
+  );
 
   const counts = useMemo(() => {
     const c = { all: 0, builtin: 0, global: 0, project: 0 };
@@ -297,69 +309,77 @@ export function SkillsView() {
           <EmptyState icon={<IconSkills size={28} />} title={t("skills.emptyTitle")} />
         ) : (
           <div className="space-y-2">
-            {visible.map((skill) => (
-              <Card
-                key={skill.id}
-                flush
-                onClick={() => openSkill(skill.id)}
-                className="group flex cursor-pointer items-center gap-4 p-4 transition-colors hover:border-strong hover:bg-surface-overlay"
-              >
-                <span className={`grid size-10 shrink-0 place-items-center rounded-xl ${iconTone(skill.id)}`}>
-                  <IconSkills size={18} />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="truncate font-mono text-sm font-medium text-primary">{skill.id}</span>
-                    {!skill.enabled && <Badge tone="danger">{t("skills.disabled")}</Badge>}
+            {visible.map((skill) => {
+              const supply = supplyByKey.get(`${skill.scope}:${skill.id}`);
+              return (
+                <Card
+                  key={`${skill.scope}:${skill.id}`}
+                  flush
+                  onClick={() => openSkill(skill.id)}
+                  className="group flex cursor-pointer items-center gap-4 p-4 transition-colors hover:border-strong hover:bg-surface-overlay"
+                >
+                  <span className={`grid size-10 shrink-0 place-items-center rounded-xl ${iconTone(skill.id)}`}>
+                    <IconSkills size={18} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="truncate font-mono text-sm font-medium text-primary">{skill.id}</span>
+                      {!skill.enabled && <Badge tone="danger">{t("skills.disabled")}</Badge>}
+                    </div>
+                    <p className="mt-1 truncate text-xs text-secondary">{skill.description}</p>
+                    {supply && (
+                      <p className="mt-1 font-mono text-2xs text-tertiary">
+                        sha256 {supply.digest.slice(0, 12)} · API v{supply.apiVersion} · risk {supply.risk}
+                      </p>
+                    )}
+                    {statsById.get(skill.id) && (
+                      <p className="mt-1 font-mono text-2xs text-tertiary">
+                        {t("skills.statsLine", {
+                          used: statsById.get(skill.id)!.selections,
+                          outcomes: statsById.get(skill.id)!.completedOutcomes,
+                          success:
+                            statsById.get(skill.id)!.successRate === undefined
+                              ? "-"
+                              : `${Math.round(statsById.get(skill.id)!.successRate! * 100)}%`,
+                          weight: statsById.get(skill.id)!.learnedAdjustment.toFixed(3),
+                        })}
+                      </p>
+                    )}
                   </div>
-                  <p className="mt-1 truncate text-xs text-secondary">{skill.description}</p>
-                  {statsById.get(skill.id) && (
-                    <p className="mt-1 font-mono text-2xs text-tertiary">
-                      {t("skills.statsLine", {
-                        used: statsById.get(skill.id)!.selections,
-                        outcomes: statsById.get(skill.id)!.completedOutcomes,
-                        success:
-                          statsById.get(skill.id)!.successRate === undefined
-                            ? "-"
-                            : `${Math.round(statsById.get(skill.id)!.successRate! * 100)}%`,
-                        weight: statsById.get(skill.id)!.learnedAdjustment.toFixed(3),
-                      })}
-                    </p>
-                  )}
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  {skill.scope === "builtin" ? (
-                    <span className="text-2xs text-tertiary">{t("skills.builtinReadonly")}</span>
-                  ) : (
-                    <>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleEnabled(skill);
-                        }}
-                      >
-                        {skill.enabled ? t("skills.disable") : t("skills.enable")}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-tertiary hover:text-danger"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setPendingDelete(skill);
-                        }}
-                      >
-                        {t("skills.deleteBtn")}
-                      </Button>
-                    </>
-                  )}
-                  <ScopeChip scope={skill.scope} />
-                  <IconChevron size={16} className="text-tertiary transition-colors group-hover:text-secondary" />
-                </div>
-              </Card>
-            ))}
+                  <div className="flex shrink-0 items-center gap-2">
+                    {skill.scope === "builtin" ? (
+                      <span className="text-2xs text-tertiary">{t("skills.builtinReadonly")}</span>
+                    ) : (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleEnabled(skill);
+                          }}
+                        >
+                          {skill.enabled ? t("skills.disable") : t("skills.enable")}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-tertiary hover:text-danger"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPendingDelete(skill);
+                          }}
+                        >
+                          {t("skills.deleteBtn")}
+                        </Button>
+                      </>
+                    )}
+                    <ScopeChip scope={skill.scope} />
+                    <IconChevron size={16} className="text-tertiary transition-colors group-hover:text-secondary" />
+                  </div>
+                </Card>
+              );
+            })}
           </div>
         )}
       </div>

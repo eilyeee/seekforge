@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
+import type { PluginSupplyChainEntry } from "@seekforge/shared";
 import { seekforgeHome } from "../memory/store.js";
 import type { HookConfig, HookEntry, HookStage } from "../hooks/index.js";
 import type { McpServerConfig } from "../mcp/types.js";
@@ -258,6 +259,46 @@ export function listPlugins(workspace: string): PluginRecord[] {
     ...(globalRoot ? readRoot(globalRoot, "global", state) : []),
     ...(projectRoot ? readRoot(projectRoot, "project", state) : []),
   ];
+}
+
+export function pluginSupplyChainReport(workspace: string): { generatedAt: string; entries: PluginSupplyChainEntry[] } {
+  const state = pluginState();
+  const entries = listPlugins(workspace).map((plugin): PluginSupplyChainEntry => {
+    const lockedDigest = plugin.scope === "global" ? state.plugins[plugin.id]?.digest : undefined;
+    const contributions = plugin.manifest?.contributes;
+    const capabilities = [
+      ...(contributions?.skillRoots?.length ? ["skills"] : []),
+      ...(contributions?.agentRoots?.length ? ["agents"] : []),
+      ...(Object.keys(contributions?.mcpServers ?? {}).length ? ["mcp"] : []),
+      ...(Object.keys(contributions?.hooks ?? {}).length ? ["hooks"] : []),
+      ...(Object.keys(contributions?.graphHandlers ?? {}).length ? ["graph-handlers"] : []),
+      ...(Object.keys(contributions?.graphExecutors ?? {}).length ? ["graph-executors"] : []),
+    ];
+    return {
+      id: plugin.id,
+      scope: plugin.scope,
+      status: plugin.status,
+      ...(plugin.manifest ? { version: plugin.manifest.version } : {}),
+      ...(plugin.digest ? { digest: plugin.digest } : {}),
+      ...(lockedDigest ? { lockedDigest } : {}),
+      integrity:
+        plugin.status === "invalid"
+          ? "invalid"
+          : lockedDigest === undefined
+            ? "unlocked"
+            : lockedDigest === plugin.digest
+              ? "verified"
+              : "changed",
+      rollbackAvailable: plugin.scope === "global" && existsSync(join(dirname(plugin.path), `.rollback-${plugin.id}`)),
+      capabilities,
+      compatibility: {
+        apiVersion: plugin.manifest?.apiVersion ?? 0,
+        compatible: plugin.manifest?.apiVersion === PLUGIN_API_VERSION,
+        ...(plugin.manifest?.seekforge ? { seekforge: plugin.manifest.seekforge } : {}),
+      },
+    };
+  });
+  return { generatedAt: new Date().toISOString(), entries };
 }
 
 const HOOK_STAGES: HookStage[] = [

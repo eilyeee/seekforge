@@ -92,3 +92,11 @@ export {
   type OrchestrationEvalMatrix,
   type OrchestrationEvalObservation,
 } from "./orchestration-matrix.js";
+export {
+  defaultControlPlaneScenarios,
+  evaluateControlPlaneScenarios,
+  type ControlPlaneObservation,
+  type ControlPlaneReport,
+  type ControlPlaneScenario,
+  type ControlPlaneScenarioResult,
+} from "./control-plane.js";

@@ -14,6 +14,7 @@ export type StartMode = "edit" | "plan" | "ask";
 
 /** Approval selector for the NEXT start frame (maps to the run's approvalMode). */
 export type ApprovalChoice = "confirm" | "acceptEdits" | "auto";
+export type ContinuationPreset = "standard" | "extended" | "maximum";
 
 export type PendingPermission = { requestId: string; request: PermissionRequest };
 
@@ -77,6 +78,8 @@ export type ChatTab = {
   outputStyle: string;
   /** Run-local sandbox; null = use the project configuration. */
   sandbox: "off" | "read-only" | "workspace-write" | "restricted" | null;
+  /** Bounded long-task continuation policy applied to each chat turn. */
+  continuationPreset: ContinuationPreset;
   /**
    * Loop-mode progress for this tab: the streamed loop.event feed + the final
    * result. Reset when a new loop starts or the session is reset.
@@ -135,6 +138,7 @@ function makeTab(tabId: string, ws = ""): ChatTab {
     reasoningEffort: "high",
     outputStyle: "",
     sandbox: null,
+    continuationPreset: "extended",
     loop: emptyLoopProgress(),
     loopRunning: false,
     loopResetPending: false,
