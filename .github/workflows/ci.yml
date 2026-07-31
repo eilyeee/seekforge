@@ -120,6 +120,12 @@ jobs:
       - name: Security boundary coverage
         run: pnpm test:coverage:security
 
+      # The autonomous Loop/Graph control plane is roughly half of the agent
+      # core: it starts runs, spends budget, and publishes deliveries. It grew
+      # without a gate, so a test regression there was invisible to CI.
+      - name: Orchestration control-plane coverage
+        run: pnpm test:coverage:orchestration
+
       - name: Shared WS frame protocol coverage
         run: pnpm test:coverage:protocol
 

@@ -28,7 +28,9 @@ backend in `crates/runtime`.
 - Lint + format check: `pnpm lint` (biome ci; `pnpm lint:fix` to apply)
 - Coverage gates (CI-enforced; run when touching the covered modules):
   `pnpm test:coverage:critical` / `test:coverage:security` (permissions, sandbox,
-  agent loop, dispatch-tools) / `test:coverage:ws` (server ws.ts). Thresholds sit
+  agent loop, dispatch-tools) / `test:coverage:orchestration` (Loop/Graph control
+  plane: `src/agent/graph-*.ts` + `orchestration*.ts`) / `test:coverage:ws`
+  (server ws.ts) / `test:coverage:server` / `test:coverage:protocol`. Thresholds sit
   slightly below measured coverage — if a gate trips, improve tests or re-measure,
   don't blindly lower numbers.
 - Rust: `cargo test --workspace`, `cargo fmt --check`,
