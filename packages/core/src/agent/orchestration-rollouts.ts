@@ -9,10 +9,18 @@ import {
   type OrchestrationDeploymentVerdict,
 } from "./orchestration-deployments.js";
 import { recordOrchestrationDeploymentObservation } from "./orchestration-control.js";
+import { listOrchestrationControlObservations } from "./orchestration-control.js";
 import { listOrchestrationProposals } from "./orchestration-proposals.js";
 import { acquireSessionLease } from "./session-lease.js";
+import { fingerprintOrchestrationDecisionInput, recordOrchestrationDecision } from "./orchestration-decisions.js";
 
-export type OrchestrationRolloutPhase = "shadow" | "canary" | "promoted" | "rolled_back" | "failed";
+export type OrchestrationRolloutPhase = "shadow" | "canary" | "paused" | "promoted" | "rolled_back" | "failed";
+
+export type OrchestrationRolloutTimelineEntry = {
+  at: string;
+  event: "started" | "stage_5" | "stage_25" | "promoted" | "paused" | "resumed" | "rolled_back" | "failed";
+  reason: string;
+};
 
 export type OrchestrationRollout = {
   proposalId: string;
@@ -20,13 +28,17 @@ export type OrchestrationRollout = {
   scope: "loop" | "graph";
   sourceId: string;
   phase: OrchestrationRolloutPhase;
+  stagePercent: 0 | 5 | 25 | 100;
   minSamples: number;
   observationIds: string[];
+  stageObservationIds: string[];
+  timeline: OrchestrationRolloutTimelineEntry[];
   startedAt: string;
   updatedAt: string;
   canaryAt?: string;
   promotedAt?: string;
   rolledBackAt?: string;
+  pausedAt?: string;
   lastVerdict?: Exclude<OrchestrationDeploymentVerdict, "pending">;
   error?: string;
 };
@@ -35,10 +47,49 @@ const PATH = ".seekforge/orchestration-rollouts.json";
 const MAX_BYTES = 256 * 1024;
 const MAX_ROLLOUTS = 64;
 const MAX_OBSERVATIONS = 32;
-const MAX_CANARY_SAMPLES = 1;
+const MAX_CANARY_SAMPLES = 32;
+const MAX_TIMELINE = 64;
 const PROPOSAL_RE = /^opt-[a-f0-9]{20}$/;
 const HASH_RE = /^[a-f0-9]{64}$/;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+
+function validObservationIds(value: unknown): value is string[] {
+  return isDenseArray(value) && value.every((id) => typeof id === "string" && HASH_RE.test(id));
+}
+
+function validStageObservationIds(value: unknown, observationIds: unknown): value is string[] {
+  return (
+    validObservationIds(value) &&
+    validObservationIds(observationIds) &&
+    value.every((id) => observationIds.includes(id))
+  );
+}
+
+function validTimeline(value: unknown): value is OrchestrationRolloutTimelineEntry[] {
+  return (
+    isDenseArray(value) &&
+    value.every(
+      (entry) =>
+        isRecord(entry) &&
+        hasOnlyKeys(entry, ["at", "event", "reason"]) &&
+        typeof entry.at === "string" &&
+        Number.isFinite(Date.parse(entry.at)) &&
+        ["started", "stage_5", "stage_25", "promoted", "paused", "resumed", "rolled_back", "failed"].includes(
+          String(entry.event),
+        ) &&
+        typeof entry.reason === "string" &&
+        entry.reason.length > 0 &&
+        entry.reason.length <= 1_024,
+    )
+  );
+}
+
+function appendTimeline(
+  timeline: readonly OrchestrationRolloutTimelineEntry[],
+  entry: OrchestrationRolloutTimelineEntry,
+): OrchestrationRolloutTimelineEntry[] {
+  return [...timeline, entry].slice(-MAX_TIMELINE);
+}
 
 function validRollout(value: unknown): value is OrchestrationRollout {
   if (
@@ -49,13 +100,17 @@ function validRollout(value: unknown): value is OrchestrationRollout {
       "scope",
       "sourceId",
       "phase",
+      "stagePercent",
       "minSamples",
       "observationIds",
+      "stageObservationIds",
+      "timeline",
       "startedAt",
       "updatedAt",
       "canaryAt",
       "promotedAt",
       "rolledBackAt",
+      "pausedAt",
       "lastVerdict",
       "error",
     ]) ||
@@ -66,14 +121,19 @@ function validRollout(value: unknown): value is OrchestrationRollout {
     (value.scope !== "loop" && value.scope !== "graph") ||
     typeof value.sourceId !== "string" ||
     !ID_RE.test(value.sourceId) ||
-    !["shadow", "canary", "promoted", "rolled_back", "failed"].includes(String(value.phase)) ||
+    !["shadow", "canary", "paused", "promoted", "rolled_back", "failed"].includes(String(value.phase)) ||
+    ![0, 5, 25, 100].includes(value.stagePercent as number) ||
     !Number.isSafeInteger(value.minSamples) ||
     (value.minSamples as number) < 1 ||
     (value.minSamples as number) > MAX_CANARY_SAMPLES ||
-    !isDenseArray(value.observationIds) ||
+    !validObservationIds(value.observationIds) ||
     value.observationIds.length > MAX_OBSERVATIONS ||
-    !value.observationIds.every((id) => typeof id === "string" && HASH_RE.test(id)) ||
     new Set(value.observationIds).size !== value.observationIds.length ||
+    !validStageObservationIds(value.stageObservationIds, value.observationIds) ||
+    value.stageObservationIds.length > MAX_OBSERVATIONS ||
+    !validTimeline(value.timeline) ||
+    value.timeline.length < 1 ||
+    value.timeline.length > MAX_TIMELINE ||
     typeof value.startedAt !== "string" ||
     !Number.isFinite(Date.parse(value.startedAt)) ||
     typeof value.updatedAt !== "string" ||
@@ -89,28 +149,49 @@ function validRollout(value: unknown): value is OrchestrationRollout {
     return false;
   }
   const startedAt = value.startedAt as string;
-  const timestamps = [value.canaryAt, value.promotedAt, value.rolledBackAt].filter(
+  const updatedAt = value.updatedAt as string;
+  const timestamps = [value.canaryAt, value.promotedAt, value.rolledBackAt, value.pausedAt].filter(
     (item): item is string => item !== undefined,
   );
   if (timestamps.some((item) => !Number.isFinite(Date.parse(item)) || Date.parse(item) < Date.parse(startedAt))) {
     return false;
   }
+  if (
+    value.timeline.some(
+      (entry) => Date.parse(entry.at) < Date.parse(startedAt) || Date.parse(entry.at) > Date.parse(updatedAt),
+    )
+  ) {
+    return false;
+  }
   return (
     (value.phase === "shadow" &&
+      value.stagePercent === 0 &&
       value.canaryAt === undefined &&
       value.promotedAt === undefined &&
       value.rolledBackAt === undefined &&
+      value.pausedAt === undefined &&
       value.lastVerdict === undefined &&
       value.error === undefined) ||
     (value.phase === "canary" &&
+      (value.stagePercent === 5 || value.stagePercent === 25) &&
       typeof value.canaryAt === "string" &&
+      value.promotedAt === undefined &&
+      value.rolledBackAt === undefined &&
+      value.pausedAt === undefined &&
+      value.error === undefined) ||
+    (value.phase === "paused" &&
+      (value.stagePercent === 5 || value.stagePercent === 25) &&
+      typeof value.canaryAt === "string" &&
+      typeof value.pausedAt === "string" &&
       value.promotedAt === undefined &&
       value.rolledBackAt === undefined &&
       value.error === undefined) ||
     (value.phase === "promoted" &&
+      value.stagePercent === 100 &&
       typeof value.canaryAt === "string" &&
       typeof value.promotedAt === "string" &&
       value.rolledBackAt === undefined &&
+      value.pausedAt === undefined &&
       value.error === undefined) ||
     (value.phase === "rolled_back" &&
       typeof value.canaryAt === "string" &&
@@ -129,13 +210,33 @@ function readUnlocked(workspace: string): OrchestrationRollout[] {
     !hasOnlyKeys(value, ["version", "rollouts"]) ||
     value.version !== 1 ||
     !isDenseArray(value.rollouts) ||
-    value.rollouts.length > MAX_ROLLOUTS ||
-    !value.rollouts.every(validRollout) ||
-    new Set(value.rollouts.map((item) => item.proposalId)).size !== value.rollouts.length
+    value.rollouts.length > MAX_ROLLOUTS
   ) {
     throw new Error("Persisted orchestration rollouts are invalid");
   }
-  return value.rollouts;
+  const rollouts = value.rollouts.map((item): unknown => {
+    if (!isRecord(item) || item.stagePercent !== undefined) return item;
+    const stagePercent = item.phase === "shadow" ? 0 : item.phase === "promoted" ? 100 : 5;
+    return {
+      ...item,
+      stagePercent,
+      stageObservationIds: isDenseArray(item.observationIds) ? item.observationIds : [],
+      timeline: [
+        {
+          at: typeof item.startedAt === "string" ? item.startedAt : new Date(0).toISOString(),
+          event: item.phase === "shadow" ? "started" : item.phase === "promoted" ? "promoted" : "stage_5",
+          reason: "Migrated from the single-canary rollout format",
+        },
+      ],
+    };
+  });
+  if (
+    !rollouts.every(validRollout) ||
+    new Set(rollouts.map((item) => (item as OrchestrationRollout).proposalId)).size !== rollouts.length
+  ) {
+    throw new Error("Persisted orchestration rollouts are invalid");
+  }
+  return rollouts as OrchestrationRollout[];
 }
 
 function writeRollout(workspace: string, rollout: OrchestrationRollout): OrchestrationRollout {
@@ -146,18 +247,20 @@ function writeRollout(workspace: string, rollout: OrchestrationRollout): Orchest
     const ordered = [...current, rollout].sort(
       (left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt),
     );
-    const active = ordered.filter((item) => item.phase === "shadow" || item.phase === "canary");
-    if (active.length > MAX_ROLLOUTS) throw new Error("Too many active orchestration rollouts");
-    let retained = [...active, ...ordered.filter((item) => item.phase !== "shadow" && item.phase !== "canary")].slice(
-      0,
-      MAX_ROLLOUTS,
+    const active = ordered.filter(
+      (item) => item.phase === "shadow" || item.phase === "canary" || item.phase === "paused",
     );
+    if (active.length > MAX_ROLLOUTS) throw new Error("Too many active orchestration rollouts");
+    let retained = [
+      ...active,
+      ...ordered.filter((item) => item.phase !== "shadow" && item.phase !== "canary" && item.phase !== "paused"),
+    ].slice(0, MAX_ROLLOUTS);
     let serialized = `${JSON.stringify({ version: 1, rollouts: retained })}\n`;
     while (Buffer.byteLength(serialized) > MAX_BYTES) {
       let oldestTerminal = -1;
       for (let index = retained.length - 1; index >= 0; index--) {
         const item = retained[index]!;
-        if (item.phase !== "shadow" && item.phase !== "canary") {
+        if (item.phase !== "shadow" && item.phase !== "canary" && item.phase !== "paused") {
           oldestTerminal = index;
           break;
         }
@@ -174,6 +277,34 @@ function writeRollout(workspace: string, rollout: OrchestrationRollout): Orchest
   }
 }
 
+function recordRolloutGateDecision(
+  workspace: string,
+  rollout: OrchestrationRollout,
+  status: "adopted" | "rejected",
+  reason: string,
+): void {
+  try {
+    recordOrchestrationDecision(workspace, {
+      kind: "rollout_gate",
+      scope: rollout.scope,
+      sourceId: rollout.sourceId,
+      policyVersion: 2,
+      inputFingerprint: fingerprintOrchestrationDecisionInput({
+        proposalId: rollout.proposalId,
+        proposalUpdatedAt: rollout.proposalUpdatedAt,
+        stagePercent: rollout.stagePercent,
+        stageObservationIds: rollout.stageObservationIds,
+        lastVerdict: rollout.lastVerdict,
+      }),
+      status,
+      reasons: [reason],
+      selected: [rollout.proposalId],
+    });
+  } catch {
+    // Rollout state is authoritative when observational decision logging fails.
+  }
+}
+
 export function listOrchestrationRollouts(workspace: string): OrchestrationRollout[] {
   return readUnlocked(workspace);
 }
@@ -184,9 +315,9 @@ export function startOrchestrationRollout(
   options: { expectedUpdatedAt?: string; minSamples?: number } = {},
 ): OrchestrationRollout {
   if (!PROPOSAL_RE.test(proposalId)) throw new Error(`Invalid orchestration proposal id: ${proposalId}`);
-  const minSamples = options.minSamples ?? 1;
+  const minSamples = options.minSamples ?? 3;
   if (!Number.isSafeInteger(minSamples) || minSamples < 1 || minSamples > MAX_CANARY_SAMPLES) {
-    throw new RangeError("Orchestration rollout minSamples must be 1 for a single exact-generation canary");
+    throw new RangeError(`Orchestration rollout minSamples must be from 1 to ${MAX_CANARY_SAMPLES}`);
   }
   const lease = acquireSessionLease(workspace, `orchestration-rollout-${proposalId}`);
   try {
@@ -205,8 +336,11 @@ export function startOrchestrationRollout(
       scope: proposal.scope,
       sourceId: proposal.sourceId,
       phase: "shadow",
+      stagePercent: 0,
       minSamples,
       observationIds: [],
+      stageObservationIds: [],
+      timeline: [{ at: now, event: "started", reason: "Approved proposal entered shadow evaluation" }],
       startedAt: now,
       updatedAt: now,
     });
@@ -232,7 +366,19 @@ export function advanceOrchestrationRollout(
           expectedUpdatedAt: rollout.proposalUpdatedAt,
         });
         const canaryAt = nextOrchestrationVersion(rollout.updatedAt, deployment.updatedAt);
-        return writeRollout(workspace, { ...rollout, phase: "canary", canaryAt, updatedAt: canaryAt });
+        return writeRollout(workspace, {
+          ...rollout,
+          phase: "canary",
+          stagePercent: 5,
+          stageObservationIds: [],
+          canaryAt,
+          updatedAt: canaryAt,
+          timeline: appendTimeline(rollout.timeline, {
+            at: canaryAt,
+            event: "stage_5",
+            reason: "Exact proposal generation deployed to the 5% cohort",
+          }),
+        });
       } catch (error) {
         const updatedAt = nextOrchestrationVersion(rollout.updatedAt);
         writeRollout(workspace, {
@@ -240,19 +386,152 @@ export function advanceOrchestrationRollout(
           phase: "failed",
           updatedAt,
           error: (error instanceof Error ? error.message : String(error)).slice(0, 4_096) || "Rollout failed",
+          timeline: appendTimeline(rollout.timeline, {
+            at: updatedAt,
+            event: "failed",
+            reason: "The rollout deployment failed",
+          }),
         });
         throw error;
       }
     }
     if (rollout.phase === "canary") {
-      if (rollout.observationIds.length < rollout.minSamples || rollout.lastVerdict === undefined) {
+      if (rollout.stageObservationIds.length < rollout.minSamples || rollout.lastVerdict === undefined) {
         throw new Error("Orchestration rollout needs more terminal canary observations");
       }
-      if (rollout.lastVerdict === "regressed") throw new Error("A regressed rollout cannot be promoted");
+      if (rollout.lastVerdict === "regressed") {
+        const pausedAt = nextOrchestrationVersion(rollout.updatedAt);
+        const paused = writeRollout(workspace, {
+          ...rollout,
+          phase: "paused",
+          pausedAt,
+          updatedAt: pausedAt,
+          timeline: appendTimeline(rollout.timeline, {
+            at: pausedAt,
+            event: "paused",
+            reason: "A canary observation regressed",
+          }),
+        });
+        recordRolloutGateDecision(workspace, paused, "rejected", "A canary observation regressed");
+        return paused;
+      }
+      if (rollout.stagePercent === 5) {
+        const updatedAt = nextOrchestrationVersion(rollout.updatedAt);
+        const advanced = writeRollout(workspace, {
+          ...rollout,
+          stagePercent: 25,
+          stageObservationIds: [],
+          updatedAt,
+          timeline: appendTimeline(rollout.timeline, {
+            at: updatedAt,
+            event: "stage_25",
+            reason: "The 5% cohort met its evidence gate",
+          }),
+        });
+        recordRolloutGateDecision(workspace, rollout, "adopted", "The 5% cohort met its evidence gate");
+        return advanced;
+      }
       const promotedAt = nextOrchestrationVersion(rollout.updatedAt);
-      return writeRollout(workspace, { ...rollout, phase: "promoted", promotedAt, updatedAt: promotedAt });
+      const promoted = writeRollout(workspace, {
+        ...rollout,
+        phase: "promoted",
+        stagePercent: 100,
+        promotedAt,
+        updatedAt: promotedAt,
+        timeline: appendTimeline(rollout.timeline, {
+          at: promotedAt,
+          event: "promoted",
+          reason: "The 25% cohort met its evidence gate",
+        }),
+      });
+      recordRolloutGateDecision(workspace, rollout, "adopted", "The 25% cohort met its evidence gate");
+      return promoted;
     }
     return rollout;
+  } finally {
+    lease.release();
+  }
+}
+
+export function recordOrchestrationRolloutSample(
+  workspace: string,
+  proposalId: string,
+  sample: { observationId: string; verdict: Exclude<OrchestrationDeploymentVerdict, "pending"> },
+): OrchestrationRollout {
+  if (!PROPOSAL_RE.test(proposalId) || !HASH_RE.test(sample.observationId)) {
+    throw new Error("Orchestration rollout sample identity is invalid");
+  }
+  if (!["improved", "stable", "regressed"].includes(sample.verdict)) {
+    throw new Error("Orchestration rollout sample verdict is invalid");
+  }
+  const observation = listOrchestrationControlObservations(workspace).observations.find(
+    (candidate) => candidate.id === sample.observationId,
+  );
+  const lease = acquireSessionLease(workspace, `orchestration-rollout-${proposalId}`);
+  try {
+    const rollout = readUnlocked(workspace).find((item) => item.proposalId === proposalId);
+    if (rollout?.phase !== "canary") throw new Error("Orchestration rollout is not accepting samples");
+    if (
+      !observation ||
+      observation.proposalId !== proposalId ||
+      observation.proposalUpdatedAt !== rollout.proposalUpdatedAt ||
+      observation.verdict !== sample.verdict
+    ) {
+      throw new Error("Orchestration rollout sample is not durable evidence for this exact proposal generation");
+    }
+    if (rollout.observationIds.includes(sample.observationId)) return rollout;
+    const updatedAt = nextOrchestrationVersion(rollout.updatedAt);
+    if (sample.verdict === "regressed") {
+      const paused = writeRollout(workspace, {
+        ...rollout,
+        phase: "paused",
+        observationIds: [...rollout.observationIds, sample.observationId].slice(-MAX_OBSERVATIONS),
+        stageObservationIds: [...rollout.stageObservationIds, sample.observationId].slice(-MAX_OBSERVATIONS),
+        lastVerdict: "regressed",
+        pausedAt: updatedAt,
+        updatedAt,
+        timeline: appendTimeline(rollout.timeline, {
+          at: updatedAt,
+          event: "paused",
+          reason: "A cohort sample regressed",
+        }),
+      });
+      recordRolloutGateDecision(workspace, paused, "rejected", "A cohort sample regressed");
+      return paused;
+    }
+    return writeRollout(workspace, {
+      ...rollout,
+      observationIds: [...rollout.observationIds, sample.observationId].slice(-MAX_OBSERVATIONS),
+      stageObservationIds: [...rollout.stageObservationIds, sample.observationId].slice(-MAX_OBSERVATIONS),
+      lastVerdict: sample.verdict,
+      updatedAt,
+    });
+  } finally {
+    lease.release();
+  }
+}
+
+export function resumeOrchestrationRollout(workspace: string, proposalId: string): OrchestrationRollout {
+  if (!PROPOSAL_RE.test(proposalId)) throw new Error(`Invalid orchestration proposal id: ${proposalId}`);
+  const lease = acquireSessionLease(workspace, `orchestration-rollout-${proposalId}`);
+  try {
+    const rollout = readUnlocked(workspace).find((item) => item.proposalId === proposalId);
+    if (!rollout) throw new Error(`Orchestration rollout not found: ${proposalId}`);
+    if (rollout.phase !== "paused") return rollout;
+    const updatedAt = nextOrchestrationVersion(rollout.updatedAt);
+    return writeRollout(workspace, {
+      ...rollout,
+      phase: "canary",
+      pausedAt: undefined,
+      stageObservationIds: [],
+      lastVerdict: undefined,
+      updatedAt,
+      timeline: appendTimeline(rollout.timeline, {
+        at: updatedAt,
+        event: "resumed",
+        reason: "Operator resumed the current cohort with a fresh evidence window",
+      }),
+    });
   } finally {
     lease.release();
   }
@@ -273,7 +552,10 @@ export function reconcileOrchestrationRollouts(
     const candidateDeployment = deployments.get(candidate.proposalId);
     if (
       candidate.phase !== "canary" &&
-      !(candidate.phase === "promoted" && candidateDeployment?.status === "rolled_back")
+      !(
+        (candidate.phase === "promoted" || candidate.phase === "paused") &&
+        candidateDeployment?.status === "rolled_back"
+      )
     ) {
       results.push(candidate);
       continue;
@@ -283,14 +565,24 @@ export function reconcileOrchestrationRollouts(
       const rollout = readUnlocked(workspace).find((item) => item.proposalId === candidate.proposalId);
       const deployment = deployments.get(candidate.proposalId);
       if (rollout?.phase !== "canary" || !deployment) {
-        if (rollout?.phase === "promoted" && deployment?.status === "rolled_back") {
+        if ((rollout?.phase === "promoted" || rollout?.phase === "paused") && deployment?.status === "rolled_back") {
           const rolledBackAt = nextOrchestrationVersion(
             rollout.updatedAt,
             deployment.rolledBackAt ?? deployment.updatedAt,
           );
-          results.push(
-            writeRollout(workspace, { ...rollout, phase: "rolled_back", updatedAt: rolledBackAt, rolledBackAt }),
-          );
+          const rolledBack = writeRollout(workspace, {
+            ...rollout,
+            phase: "rolled_back",
+            updatedAt: rolledBackAt,
+            rolledBackAt,
+            timeline: appendTimeline(rollout.timeline, {
+              at: rolledBackAt,
+              event: "rolled_back",
+              reason: "The underlying deployment was rolled back",
+            }),
+          });
+          recordRolloutGateDecision(workspace, rollout, "rejected", "The underlying deployment was rolled back");
+          results.push(rolledBack);
         } else if (rollout) results.push(rollout);
         continue;
       }
@@ -303,16 +595,21 @@ export function reconcileOrchestrationRollouts(
           rollout.updatedAt,
           deployment.rolledBackAt ?? deployment.updatedAt,
         );
-        results.push(
-          writeRollout(workspace, {
-            ...rollout,
-            phase: "rolled_back",
-            observationIds,
-            updatedAt: rolledBackAt,
-            rolledBackAt,
-            ...(observation ? { lastVerdict: observation.verdict } : {}),
+        const rolledBack = writeRollout(workspace, {
+          ...rollout,
+          phase: "rolled_back",
+          observationIds,
+          updatedAt: rolledBackAt,
+          rolledBackAt,
+          timeline: appendTimeline(rollout.timeline, {
+            at: rolledBackAt,
+            event: "rolled_back",
+            reason: "The underlying deployment was rolled back",
           }),
-        );
+          ...(observation ? { lastVerdict: observation.verdict } : {}),
+        });
+        recordRolloutGateDecision(workspace, rollout, "rejected", "The underlying deployment was rolled back");
+        results.push(rolledBack);
         continue;
       }
       if (!observation) {
@@ -320,28 +617,80 @@ export function reconcileOrchestrationRollouts(
         continue;
       }
       const observationIds = [...new Set([...rollout.observationIds, observation.id])].slice(-MAX_OBSERVATIONS);
+      const stageObservationIds = rollout.observationIds.includes(observation.id)
+        ? rollout.stageObservationIds
+        : [...rollout.stageObservationIds, observation.id].slice(-MAX_OBSERVATIONS);
       const updatedAt = nextOrchestrationVersion(rollout.updatedAt, deployment.updatedAt);
       const observed = writeRollout(workspace, {
         ...rollout,
         observationIds,
+        stageObservationIds,
         updatedAt,
         lastVerdict: observation.verdict,
       });
       if (observation.verdict === "regressed" && options.autoRollback) {
         const rolled = rollbackOrchestrationDeployment(workspace, rollout.proposalId);
         const rolledBackAt = nextOrchestrationVersion(observed.updatedAt, rolled.updatedAt);
-        results.push(
-          writeRollout(workspace, {
-            ...observed,
-            phase: "rolled_back",
-            updatedAt: rolledBackAt,
-            rolledBackAt,
-            lastVerdict: "regressed",
+        const rolledBack = writeRollout(workspace, {
+          ...observed,
+          phase: "rolled_back",
+          updatedAt: rolledBackAt,
+          rolledBackAt,
+          lastVerdict: "regressed",
+          timeline: appendTimeline(observed.timeline, {
+            at: rolledBackAt,
+            event: "rolled_back",
+            reason: "A canary regression triggered automatic rollback",
           }),
-        );
-      } else if (observation.verdict !== "regressed" && observationIds.length >= rollout.minSamples) {
+        });
+        recordRolloutGateDecision(workspace, observed, "rejected", "A canary regression triggered automatic rollback");
+        results.push(rolledBack);
+      } else if (observation.verdict === "regressed") {
+        const pausedAt = nextOrchestrationVersion(observed.updatedAt);
+        const paused = writeRollout(workspace, {
+          ...observed,
+          phase: "paused",
+          pausedAt,
+          updatedAt: pausedAt,
+          timeline: appendTimeline(observed.timeline, {
+            at: pausedAt,
+            event: "paused",
+            reason: "A canary regression requires operator review",
+          }),
+        });
+        recordRolloutGateDecision(workspace, observed, "rejected", "A canary regression requires operator review");
+        results.push(paused);
+      } else if (stageObservationIds.length >= rollout.minSamples && rollout.stagePercent === 5) {
+        const stageAt = nextOrchestrationVersion(observed.updatedAt);
+        const advanced = writeRollout(workspace, {
+          ...observed,
+          stagePercent: 25,
+          stageObservationIds: [],
+          updatedAt: stageAt,
+          timeline: appendTimeline(observed.timeline, {
+            at: stageAt,
+            event: "stage_25",
+            reason: "The 5% cohort met its evidence gate",
+          }),
+        });
+        recordRolloutGateDecision(workspace, observed, "adopted", "The 5% cohort met its evidence gate");
+        results.push(advanced);
+      } else if (stageObservationIds.length >= rollout.minSamples && rollout.stagePercent === 25) {
         const promotedAt = nextOrchestrationVersion(observed.updatedAt);
-        results.push(writeRollout(workspace, { ...observed, phase: "promoted", updatedAt: promotedAt, promotedAt }));
+        const promoted = writeRollout(workspace, {
+          ...observed,
+          phase: "promoted",
+          stagePercent: 100,
+          updatedAt: promotedAt,
+          promotedAt,
+          timeline: appendTimeline(observed.timeline, {
+            at: promotedAt,
+            event: "promoted",
+            reason: "The 25% cohort met its evidence gate",
+          }),
+        });
+        recordRolloutGateDecision(workspace, observed, "adopted", "The 25% cohort met its evidence gate");
+        results.push(promoted);
       } else results.push(observed);
     } finally {
       lease.release();

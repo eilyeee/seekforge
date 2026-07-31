@@ -337,7 +337,7 @@ export const api = {
     ),
   orchestrationMaintain: (autoRollback = false, ws?: string) =>
     request<unknown>("POST", withWorkspace("/api/orchestration/maintain", ws), { autoRollback }),
-  orchestrationRolloutStart: (id: string, expectedUpdatedAt?: string, minSamples = 1, ws?: string) =>
+  orchestrationRolloutStart: (id: string, expectedUpdatedAt?: string, minSamples = 3, ws?: string) =>
     request<import("../types").OrchestrationRollout>(
       "POST",
       withWorkspace(`/api/orchestration/rollouts/${encodeURIComponent(id)}/start`, ws),
@@ -347,6 +347,12 @@ export const api = {
     request<import("../types").OrchestrationRollout>(
       "POST",
       withWorkspace(`/api/orchestration/rollouts/${encodeURIComponent(id)}/advance`, ws),
+      {},
+    ),
+  orchestrationRolloutResume: (id: string, ws?: string) =>
+    request<import("../types").OrchestrationRollout>(
+      "POST",
+      withWorkspace(`/api/orchestration/rollouts/${encodeURIComponent(id)}/resume`, ws),
       {},
     ),
   orchestrationRolloutReconcile: (autoRollback = false, ws?: string) =>

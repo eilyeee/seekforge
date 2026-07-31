@@ -81,9 +81,11 @@ export { evalsDir, fixturesDir, reportsDir, repoRoot, tasksDir } from "./paths.j
 export {
   buildOrchestrationEvaluationMatrix,
   compareOrchestrationEvaluationMatrices,
+  evaluateOrchestrationEvaluationDrift,
   type OrchestrationEvalCell,
   type OrchestrationEvalCellKey,
   type OrchestrationEvalDrift,
+  type OrchestrationEvalDriftGate,
   type OrchestrationEvalEcosystem,
   type OrchestrationEvalExecution,
   type OrchestrationEvalFault,

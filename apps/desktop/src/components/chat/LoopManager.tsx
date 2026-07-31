@@ -496,14 +496,18 @@ export function LoopManager({ running, onResume }: Props) {
     }
   };
 
-  const transitionOrchestrationRollout = async (proposal: OrchestrationProposal, operation: "start" | "advance") => {
+  const transitionOrchestrationRollout = async (
+    proposal: OrchestrationProposal,
+    operation: "start" | "advance" | "resume",
+  ) => {
     const request = orchestrationRequests.beginLatest(workspaceId);
     if (!request) return;
     setOrchestrationBusy(true);
     try {
       if (operation === "start") {
-        await api.orchestrationRolloutStart(proposal.id, proposal.updatedAt, 1, workspaceId);
-      } else await api.orchestrationRolloutAdvance(proposal.id, workspaceId);
+        await api.orchestrationRolloutStart(proposal.id, proposal.updatedAt, 3, workspaceId);
+      } else if (operation === "advance") await api.orchestrationRolloutAdvance(proposal.id, workspaceId);
+      else await api.orchestrationRolloutResume(proposal.id, workspaceId);
       const report = await api.orchestrationReport(workspaceId);
       if (orchestrationRequests.isCurrent(request)) setOrchestration(report);
     } catch (caught) {
@@ -619,6 +623,7 @@ export function LoopManager({ running, onResume }: Props) {
         onProposalRollback={(proposal) => void deployOrchestrationProposal(proposal, "rollback")}
         onRolloutStart={(proposal) => void transitionOrchestrationRollout(proposal, "start")}
         onRolloutAdvance={(proposal) => void transitionOrchestrationRollout(proposal, "advance")}
+        onRolloutResume={(proposal) => void transitionOrchestrationRollout(proposal, "resume")}
         onObserve={() => void observeOrchestration()}
       />
       <LoopDagSection

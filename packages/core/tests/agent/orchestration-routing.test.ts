@@ -44,7 +44,17 @@ describe("contextual Loop routing", () => {
       ...snapshot,
     }));
     saveLoopState(root, { ...state, snapshots });
-    expect(buildWorkspaceContextualLoopRoutingProfile(root)).toMatchObject({ loops: 1, samples: 3 });
+    expect(buildWorkspaceContextualLoopRoutingProfile(root)).toMatchObject({
+      loops: 1,
+      samples: 3,
+      routes: [
+        expect.objectContaining({
+          circuitOpen: false,
+          averageCostUsd: 0,
+          averageDurationMs: 0,
+        }),
+      ],
+    });
     expect(selectWorkspaceContextualLoopRoutes(root, state, { minimumSamples: 3, explorationRate: 0 })).toEqual({
       test: "model-a",
     });

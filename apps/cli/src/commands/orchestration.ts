@@ -17,8 +17,10 @@ import {
   advanceOrchestrationRollout,
   listOrchestrationRollouts,
   maintainWorkspaceOrchestration,
+  planWorkspaceOrchestrationMaintenance,
   reconcileOrchestrationRollouts,
   startOrchestrationRollout,
+  resumeOrchestrationRollout,
 } from "@seekforge/core";
 import { fail } from "../colors.js";
 
@@ -168,13 +170,13 @@ export function orchestrationIndexCommand(operation: "show" | "refresh"): void {
 }
 
 export function orchestrationRolloutCommand(
-  operation: "list" | "start" | "advance" | "reconcile",
+  operation: "list" | "start" | "advance" | "resume" | "reconcile",
   id?: string,
   options: { expectedUpdatedAt?: string; minSamples?: number; autoRollback?: boolean } = {},
 ): void {
   try {
     const workspace = process.cwd();
-    if ((operation === "start" || operation === "advance") && !id) {
+    if ((operation === "start" || operation === "advance" || operation === "resume") && !id) {
       throw new Error(`orchestration rollout ${operation} requires a proposal id`);
     }
     const result =
@@ -187,7 +189,9 @@ export function orchestrationRolloutCommand(
                 expectedUpdatedAt: options.expectedUpdatedAt,
                 minSamples: options.minSamples,
               })
-            : advanceOrchestrationRollout(workspace, id!, { executors: executors(workspace) });
+            : operation === "advance"
+              ? advanceOrchestrationRollout(workspace, id!, { executors: executors(workspace) })
+              : resumeOrchestrationRollout(workspace, id!);
     console.log(JSON.stringify(result, null, 2));
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
@@ -195,12 +199,17 @@ export function orchestrationRolloutCommand(
   }
 }
 
-export function orchestrationMaintenanceCommand(autoRollback = false): void {
+export function orchestrationMaintenanceCommand(autoRollback = false, dryRun = false): void {
   try {
     const workspace = process.cwd();
     console.log(
       JSON.stringify(
-        maintainWorkspaceOrchestration(workspace, { executors: executors(workspace), autoRollback }),
+        dryRun
+          ? planWorkspaceOrchestrationMaintenance(workspace, {
+              executors: executors(workspace),
+              autoRollback,
+            })
+          : maintainWorkspaceOrchestration(workspace, { executors: executors(workspace), autoRollback }),
         null,
         2,
       ),

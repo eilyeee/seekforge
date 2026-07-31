@@ -13,7 +13,15 @@ export type WorkspaceGraphExecutorReservation = {
   expiresAt: string;
 };
 
-export type WorkspaceGraphExecutorCapacityLease = WorkspaceGraphExecutorReservation & { release(): void };
+export type WorkspaceGraphExecutorCapacityLease = WorkspaceGraphExecutorReservation & {
+  renew(options?: { ttlMs?: number; now?: Date }): WorkspaceGraphExecutorReservation | undefined;
+  release(): void;
+};
+
+export type WorkspaceGraphExecutorCapacityReconcileResult = {
+  active: number;
+  removed: string[];
+};
 
 type Document = { version: 1; reservations: WorkspaceGraphExecutorReservation[] };
 
@@ -123,6 +131,32 @@ export function acquireWorkspaceGraphExecutorCapacity(
   let released = false;
   return {
     ...acquired,
+    renew(renewOptions = {}): WorkspaceGraphExecutorReservation | undefined {
+      if (released) return undefined;
+      const renewTtlMs = renewOptions.ttlMs ?? ttlMs;
+      if (!Number.isSafeInteger(renewTtlMs) || renewTtlMs < 1_000 || renewTtlMs > 24 * 60 * 60_000) {
+        throw new RangeError("Graph executor capacity ttlMs must be from 1000 to 86400000");
+      }
+      const renewNow = renewOptions.now ?? new Date();
+      const renewNowMs = renewNow.getTime();
+      if (!Number.isFinite(renewNowMs)) throw new Error("Graph executor capacity time is invalid");
+      const renewLease = acquireSessionLease(workspace, "graph-executor-capacity");
+      try {
+        const document = readDocument(workspace);
+        const current = document.reservations.find(
+          (item) => item.reservationId === reservationId && item.fencingToken === acquired.fencingToken,
+        );
+        if (!current || Date.parse(current.expiresAt) <= renewNowMs) return undefined;
+        const renewed = { ...current, expiresAt: new Date(renewNowMs + renewTtlMs).toISOString() };
+        writeDocument(
+          workspace,
+          document.reservations.map((item) => (item === current ? renewed : item)),
+        );
+        return renewed;
+      } finally {
+        renewLease.release();
+      }
+    },
     release(): void {
       if (released) return;
       released = true;
@@ -138,6 +172,38 @@ export function acquireWorkspaceGraphExecutorCapacity(
       }
     },
   };
+}
+
+/** Removes expired reservations and, when supplied, exact reservations already proven orphaned by the host. */
+export function reconcileWorkspaceGraphExecutorCapacity(
+  workspace: string,
+  options: { orphanReservationIds?: ReadonlySet<string>; now?: Date } = {},
+): WorkspaceGraphExecutorCapacityReconcileResult {
+  const now = options.now ?? new Date();
+  const nowMs = now.getTime();
+  if (!Number.isFinite(nowMs)) throw new Error("Graph executor capacity time is invalid");
+  if (options.orphanReservationIds) {
+    for (const id of options.orphanReservationIds) {
+      if (!RESERVATION_RE.test(id)) throw new Error("Graph executor reservation id is invalid");
+    }
+  }
+  const lease = acquireSessionLease(workspace, "graph-executor-capacity");
+  try {
+    const document = readDocument(workspace);
+    const retained = document.reservations.filter(
+      (reservation) =>
+        Date.parse(reservation.expiresAt) > nowMs && !options.orphanReservationIds?.has(reservation.reservationId),
+    );
+    const retainedIds = new Set(retained.map((reservation) => reservation.reservationId));
+    const removed = document.reservations
+      .filter((reservation) => !retainedIds.has(reservation.reservationId))
+      .map((reservation) => reservation.reservationId)
+      .sort();
+    if (removed.length > 0) writeDocument(workspace, retained);
+    return { active: retained.length, removed };
+  } finally {
+    lease.release();
+  }
 }
 
 export function listWorkspaceGraphExecutorReservations(

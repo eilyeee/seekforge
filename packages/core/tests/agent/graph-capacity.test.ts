@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   acquireWorkspaceGraphExecutorCapacity,
   listWorkspaceGraphExecutorReservations,
+  reconcileWorkspaceGraphExecutorCapacity,
 } from "../../src/agent/graph-capacity.js";
 
 describe("workspace Graph executor capacity", () => {
@@ -38,6 +39,24 @@ describe("workspace Graph executor capacity", () => {
     });
     expect(replacement?.reservationId).toBe("new");
     replacement?.release();
+  });
+
+  it("renews only the current fencing generation and reconciles exact orphans", () => {
+    const root = workspace();
+    const now = new Date("2026-01-01T00:00:00.000Z");
+    const first = acquireWorkspaceGraphExecutorCapacity(root, "remote", "graph:node:1", 2, { ttlMs: 1_000, now })!;
+    const second = acquireWorkspaceGraphExecutorCapacity(root, "remote", "graph:node:2", 2, { ttlMs: 1_000, now })!;
+    expect(first.renew({ ttlMs: 2_000, now: new Date(now.getTime() + 500) })?.expiresAt).toBe(
+      "2026-01-01T00:00:02.500Z",
+    );
+    expect(
+      reconcileWorkspaceGraphExecutorCapacity(root, {
+        orphanReservationIds: new Set([second.reservationId]),
+        now: new Date(now.getTime() + 600),
+      }),
+    ).toEqual({ active: 1, removed: [second.reservationId] });
+    expect(second.renew({ now: new Date(now.getTime() + 700) })).toBeUndefined();
+    first.release();
   });
 
   it("rejects a workspace capacity larger than the bounded reservation store", () => {

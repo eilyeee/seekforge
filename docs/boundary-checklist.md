@@ -4197,6 +4197,61 @@ transition.
   until both count and serialized-byte bounds hold.
 - **Caught:** rollout persistence enforced bytes only after its count-based slice.
 
+## 387. Expiring capacity leases must fence late results
+
+Releasing a lease in `finally` does not protect a long-running remote operation
+after its lease expires. A replacement owner may start while the old result is
+still accepted.
+
+- **Do:** renew well before expiry on a timer independent from optional remote
+  heartbeats, bind renewal to the exact fencing token, and
+  cancel/reject the attempt when renewal loses that generation.
+- **Caught:** workspace-wide Graph executor reservations expired during a long
+  remote node without preventing its late result from committing.
+
+## 388. Staged rollout evidence must be cohort-local and single-use
+
+Reusing one observation after moving to a larger cohort turns repeated polling
+into fake independent evidence and can promote without new executions.
+
+- **Do:** retain a global deduplication set and a separate current-stage sample
+  set; clear only the stage set on transition or manual resume.
+- **Caught:** a single exact-generation canary observation could otherwise be
+  counted again at the next rollout percentage.
+
+## 389. A zero retention allowance is not a negative slice
+
+JavaScript treats `slice(-0)` as `slice(0)`, so code that means “retain no
+terminal entries” can accidentally retain the complete collection exactly when
+protected records fill the limit.
+
+- **Do:** branch explicitly when the remaining slot count is zero before using
+  a negative tail slice, and test the exact full-window boundary.
+- **Caught:** Graph preflight decision retention kept every terminal decision
+  when unfinished preflights occupied all 512 protected slots.
+
+## 390. Transition audits must bind the evaluated snapshot
+
+A staged transition commonly clears the evidence window for the next cohort.
+Logging the resulting state instead of the state that passed the gate produces
+an audit record with no evidence for the decision it claims.
+
+- **Do:** commit the authoritative transition first, but build its observational
+  decision record from the immutable pre-transition evidence snapshot.
+- **Caught:** 5% and 25% rollout gate decisions initially fingerprinted the
+  newly cleared next-stage observation window.
+
+## 391. Dynamic safety state must be sampled at every advertised boundary
+
+Capturing a controller's startup state turns a temporary freeze into a
+run-lifetime policy even when the scheduler claims to reconcile at safe
+boundaries.
+
+- **Do:** cache immutable history and configuration, but re-read mutable safety
+  state at every boundary where it can change behavior in either direction.
+- **Caught:** a Graph started while the adaptive controller was frozen could not
+  resume learned scheduling after the controller recovered during that run.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

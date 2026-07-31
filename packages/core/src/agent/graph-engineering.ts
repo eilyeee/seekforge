@@ -44,7 +44,7 @@ import { acquireManagedOrchestrationWorktreeLease } from "./loop-managed-worktre
 import { loadLoopState, loopStateExists } from "./loop-state.js";
 import { createEngineeringGraphLogWriter, type GraphLogWriter } from "./graph-history.js";
 import { MAX_GRAPH_ARTIFACT_BYTES, storeEngineeringGraphArtifact } from "./graph-artifact-store.js";
-import { acquireWorkspaceGraphExecutorCapacity } from "./graph-capacity.js";
+import { acquireWorkspaceGraphExecutorCapacity, listWorkspaceGraphExecutorReservations } from "./graph-capacity.js";
 import { readGraphControlEntries } from "./graph-control-store.js";
 import { acknowledgeEngineeringGraphSignal, claimEngineeringGraphSignal } from "./graph-signal-store.js";
 import { archiveEngineeringGraphRun } from "./graph-run-history.js";
@@ -64,6 +64,14 @@ import {
   validateOrchestrationSelection,
 } from "./orchestration.js";
 import { selectOrchestrationReadyNodes } from "./orchestration-scheduler.js";
+import { simulateEngineeringGraph } from "./graph-simulation.js";
+import {
+  completeOrchestrationDecision,
+  fingerprintOrchestrationDecisionInput,
+  listOrchestrationDecisions,
+  readOrchestrationControllerState,
+  recordOrchestrationDecision,
+} from "./orchestration-decisions.js";
 import {
   managedOrchestrationWorktreeSlug,
   prepareManagedOrchestrationWorktrees,
@@ -1121,6 +1129,7 @@ async function executeNode(
     if (recovered !== undefined) {
       return finalizeRemoteResult(recovered);
     }
+    const workspaceReservationTtlMs = Math.min(24 * 60 * 60_000, Math.max(1_000, node.timeoutMs ?? 60 * 60_000));
     const workspaceReservation =
       adapter.workspaceCapacity === undefined
         ? undefined
@@ -1129,7 +1138,7 @@ async function executeNode(
             node.executor!,
             idempotencyKey,
             adapter.workspaceCapacity,
-            { ttlMs: Math.min(24 * 60 * 60_000, Math.max(1_000, node.timeoutMs ?? 60 * 60_000)) },
+            { ttlMs: workspaceReservationTtlMs },
           );
     if (adapter.workspaceCapacity !== undefined && !workspaceReservation) {
       throw new Error(`Graph remote ${node.id} workspace capacity is exhausted`);
@@ -1183,10 +1192,15 @@ async function executeNode(
     const offAbort = cancel ? onAbortOnce(signal, cancel) : () => {};
     const intervalMs = adapter.heartbeatIntervalMs;
     let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+    let workspaceRenewTimer: ReturnType<typeof setInterval> | undefined;
     let heartbeatRunning = false;
+    let rejectLeaseLost: ((reason: Error) => void) | undefined;
+    const leaseLost = new Promise<never>((_resolve, reject) => {
+      rejectLeaseLost = reject;
+    });
     const invokeHeartbeat = (): Promise<void> => Promise.resolve().then(() => adapter.heartbeat!(context));
     const heartbeat = (): void => {
-      if (!adapter.heartbeat || heartbeatRunning) return;
+      if (heartbeatRunning) return;
       heartbeatRunning = true;
       void invokeHeartbeat()
         .catch(() => undefined)
@@ -1194,22 +1208,43 @@ async function executeNode(
           heartbeatRunning = false;
         });
     };
+    const renewWorkspaceReservation = (): void => {
+      try {
+        if (workspaceReservation && !workspaceReservation.renew({ ttlMs: workspaceReservationTtlMs })) {
+          throw new GraphNodeNonRetryableError(`Graph remote ${node.id} lost its workspace capacity lease`);
+        }
+      } catch (error) {
+        rejectLeaseLost?.(error instanceof Error ? error : new Error(String(error)));
+        cancel?.();
+      }
+    };
     try {
       if (adapter.heartbeat) await invokeHeartbeat().catch(() => undefined);
       if (
         adapter.heartbeat &&
-        Number.isSafeInteger(intervalMs) &&
         intervalMs !== undefined &&
+        Number.isSafeInteger(intervalMs) &&
         intervalMs >= 1_000 &&
         intervalMs <= 60_000
       ) {
         heartbeatTimer = setInterval(heartbeat, intervalMs);
         heartbeatTimer.unref?.();
       }
-      return await finalizeRemoteResult(await adapter.execute(context));
+      if (workspaceReservation) {
+        workspaceRenewTimer = setInterval(
+          renewWorkspaceReservation,
+          Math.max(250, Math.floor(workspaceReservationTtlMs / 3)),
+        );
+        workspaceRenewTimer.unref?.();
+      }
+      const result = workspaceReservation
+        ? await Promise.race([adapter.execute(context), leaseLost])
+        : await adapter.execute(context);
+      return await finalizeRemoteResult(result);
     } finally {
       offAbort();
       if (heartbeatTimer) clearInterval(heartbeatTimer);
+      if (workspaceRenewTimer) clearInterval(workspaceRenewTimer);
       if (reservation) await Promise.resolve(reservation.release()).catch(() => undefined);
       workspaceReservation?.release();
     }
@@ -1382,6 +1417,7 @@ export async function runEngineeringGraph(
   let managedWorktrees: Map<string, ManagedOrchestrationWorktree> | undefined;
   let durableCheckpointStarted = false;
   let restartPriority = 0;
+  let preflightDecisionId: string | undefined;
   try {
     if (persistenceEnabled && !options.resume && !options.restart) {
       if (engineeringGraphStateExists(options.workspace, definition.graphId)) {
@@ -1431,6 +1467,20 @@ export async function runEngineeringGraph(
     const workspaces =
       staticWorkspaces ?? resolveEngineeringGraphWorkspaces(options.workspace, definition, workspaceOverrides);
     const fingerprint = graphDefinitionFingerprint(definition, workspaces);
+    const preflightSchedulingHistory = persistenceEnabled
+      ? readGraphSchedulingObservations(options.workspace)
+      : undefined;
+    const preflight = simulateEngineeringGraph(definition, {
+      startedAt: new Date(),
+      estimates: Object.fromEntries(
+        definition.nodes.flatMap((node) => {
+          const prediction = preflightSchedulingHistory
+            ? predictGraphNodeScheduling(preflightSchedulingHistory, definition.graphId, fingerprint, node.id)
+            : undefined;
+          return prediction ? [[node.id, { durationMs: Math.max(1, prediction.p50DurationMs) }]] : [];
+        }),
+      ),
+    });
     const now = new Date().toISOString();
     const controlRunId = `graph-run-${randomUUID()}`;
     let state: EngineeringGraphState = {
@@ -1476,6 +1526,37 @@ export async function runEngineeringGraph(
         delete state.recovery;
       }
       delete state.pauseReason;
+    }
+    if (persistenceEnabled) {
+      try {
+        const controller = readOrchestrationControllerState(options.workspace);
+        for (const previous of listOrchestrationDecisions(options.workspace)) {
+          if (previous.kind === "graph_preflight" && previous.sourceId === definition.graphId && !previous.outcome) {
+            completeOrchestrationDecision(options.workspace, previous.id, "superseded");
+          }
+        }
+        preflightDecisionId = recordOrchestrationDecision(options.workspace, {
+          kind: "graph_preflight",
+          scope: "graph",
+          sourceId: definition.graphId,
+          policyVersion: 2,
+          inputFingerprint: fingerprintOrchestrationDecisionInput({
+            fingerprint,
+            controlRunId,
+            makespanMs: preflight.makespanMs,
+            costUsd: preflight.estimatedCostUsd,
+            tokens: preflight.estimatedTokens,
+          }),
+          status: definition.adaptiveScheduling && controller.mode === "frozen" ? "frozen" : "advisory",
+          reasons:
+            preflight.risks.length > 0
+              ? preflight.risks.slice(0, 16)
+              : [`Predicted makespan ${preflight.makespanMs}ms with no static budget breach`],
+          selected: preflight.criticalPath,
+        }).id;
+      } catch {
+        // Decision telemetry is observational and cannot block an otherwise valid Graph run.
+      }
     }
     const priorElapsedMs = state.elapsedMs;
     const elapsedMs = (): number =>
@@ -1525,19 +1606,17 @@ export async function runEngineeringGraph(
     const criticality = engineeringGraphCriticality(definition);
     // Parse the bounded advisory history once; large graphs must not repeat
     // synchronous workspace I/O for every node in the initial ready queue.
-    const schedulingHistory =
-      persistenceEnabled && definition.adaptiveScheduling
-        ? readGraphSchedulingObservations(options.workspace)
-        : undefined;
-    const schedulingScores = new Map(
+    const adaptiveSchedulingConfigured = persistenceEnabled && definition.adaptiveScheduling === true;
+    const schedulingHistory = adaptiveSchedulingConfigured ? preflightSchedulingHistory : undefined;
+    const staticSchedulingScores = new Map(
+      definition.nodes.map((node) => [node.id, (criticality.get(node.id) ?? 0) * 1_000_000_000_000]),
+    );
+    const learnedSchedulingScores = new Map(
       definition.nodes.map((node) => [
         node.id,
-        // The static remaining-path rank is correctness-neutral and dominates
-        // advisory history, which only orders peers on the same critical tier.
-        (criticality.get(node.id) ?? 0) * 1_000_000_000_000 +
-          (persistenceEnabled && definition.adaptiveScheduling
-            ? graphSchedulingScore(options.workspace, definition.graphId, fingerprint, node.id, schedulingHistory)
-            : 0),
+        adaptiveSchedulingConfigured
+          ? graphSchedulingScore(options.workspace, definition.graphId, fingerprint, node.id, schedulingHistory)
+          : 0,
       ]),
     );
     const inFlight = new Map<string, Promise<{ id: string; result: GraphNodeResult }>>();
@@ -2530,6 +2609,35 @@ export async function runEngineeringGraph(
       let launchLimit = Math.min(availableSlots, readyNodes.length);
       if (remainingCost === 0 || remainingTokens === 0) launchLimit = 0;
       if (remainingTokens !== undefined) launchLimit = Math.min(launchLimit, Math.floor(remainingTokens));
+      const schedulingControllerMode = persistenceEnabled
+        ? readOrchestrationControllerState(options.workspace).mode
+        : "active";
+      const learnedSchedulingActive = adaptiveSchedulingConfigured && schedulingControllerMode === "active";
+      const executorReservations = learnedSchedulingActive
+        ? listWorkspaceGraphExecutorReservations(options.workspace, new Date(schedulerNow))
+        : [];
+      const workspaceExecutorActive = new Map<string, number>();
+      for (const reservation of executorReservations) {
+        workspaceExecutorActive.set(reservation.executor, (workspaceExecutorActive.get(reservation.executor) ?? 0) + 1);
+      }
+      const runtimeScore = (node: GraphNode): number => {
+        let score = staticSchedulingScores.get(node.id) ?? 0;
+        if (!learnedSchedulingActive) return score;
+        score += learnedSchedulingScores.get(node.id) ?? 0;
+        if (node.deadlineAt) {
+          const remainingMs = Date.parse(node.deadlineAt) - schedulerNow;
+          score += remainingMs <= 0 ? 1_000_000 : Math.round(1_000_000 / Math.max(1_000, remainingMs));
+        }
+        if (node.kind === "remote" && node.executor) {
+          const adapter = graphExecutor(options, node.executor);
+          const capacity = adapter?.workspaceCapacity ?? adapter?.capacity ?? 1;
+          const active = adapter?.workspaceCapacity
+            ? (workspaceExecutorActive.get(node.executor) ?? 0)
+            : (adapter?.active ?? 0);
+          score -= Math.round((active / capacity) * 1_000 + (adapter?.queueDepth ?? 0));
+        }
+        return score;
+      };
       const selectedIds = selectOrchestrationReadyNodes(
         readyNodes.map((node) => ({
           id: node.id,
@@ -2554,12 +2662,42 @@ export async function runEngineeringGraph(
                 )
               : 0),
           resources: node.resources,
-          score: schedulingScores.get(node.id),
+          score: runtimeScore(node),
         })),
         [...inFlight.keys()].map((id) => ({ resources: byId.get(id)?.resources })),
         launchLimit,
         definition.resourceCapacities,
       );
+      if (persistenceEnabled && definition.adaptiveScheduling && selectedIds.length > 0) {
+        try {
+          recordOrchestrationDecision(options.workspace, {
+            kind: "graph_schedule",
+            scope: "graph",
+            sourceId: definition.graphId,
+            policyVersion: 2,
+            inputFingerprint: fingerprintOrchestrationDecisionInput({
+              fingerprint,
+              controlRunId: state.controlRunId,
+              ready: readyNodes.map((node) => node.id),
+              running: [...inFlight.keys()],
+              remainingCost,
+              remainingTokens,
+              executorReservations: executorReservations.map((reservation) => reservation.reservationId),
+            }),
+            status: definition.adaptiveScheduling && schedulingControllerMode === "frozen" ? "frozen" : "adopted",
+            reasons: [
+              learnedSchedulingActive
+                ? "Replanned from criticality, learned duration, deadline, queue, and workspace capacity"
+                : schedulingControllerMode === "frozen"
+                  ? "Learned scheduling was frozen; static criticality and explicit priority remained active"
+                  : "Scheduled from static criticality, explicit priority, aging, resources, and budgets",
+            ],
+            selected: selectedIds,
+          });
+        } catch {
+          // Scheduling decisions remain effective when observational logging fails.
+        }
+      }
       const launchCount = selectedIds.length;
       const costShare = remainingCost === undefined || launchCount === 0 ? undefined : remainingCost / launchCount;
       const tokenShare =
@@ -2734,6 +2872,20 @@ export async function runEngineeringGraph(
         historyWriter?.close();
       } catch {
         // The atomic checkpoint remains authoritative when history I/O fails.
+      }
+      if (preflightDecisionId && persistenceEnabled) {
+        try {
+          const finalState = loadEngineeringGraphState(options.workspace, definition.graphId);
+          if (finalState?.completedAt && finalState.status !== "running" && finalState.status !== "paused") {
+            completeOrchestrationDecision(
+              options.workspace,
+              preflightDecisionId,
+              finalState.status === "passed" ? "passed" : finalState.status === "cancelled" ? "cancelled" : "failed",
+            );
+          }
+        } catch {
+          // Decision outcome telemetry is observational and never overrides the Graph checkpoint.
+        }
       }
       detachParentAbort();
       if (!durableCheckpointStarted && managedWorktrees) {

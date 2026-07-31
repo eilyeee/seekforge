@@ -50,7 +50,7 @@ function evaluationWindow(value: string): number {
 
 function rolloutSamples(value: string): number {
   const parsed = boundedInteger(value);
-  if (parsed !== 1) throw new InvalidArgumentError("value must be 1 for a single exact-generation canary");
+  if (parsed < 1 || parsed > 32) throw new InvalidArgumentError("value must be an integer from 1 to 32");
   return parsed;
 }
 
@@ -186,8 +186,8 @@ export function registerOrchestrationCommands(program: Command): void {
     });
   orchestration
     .command("rollout")
-    .argument("<operation>", "list, start, advance, or reconcile")
-    .argument("[id]", "proposal id for start or advance")
+    .argument("<operation>", "list, start, advance, resume, or reconcile")
+    .argument("[id]", "proposal id for start, advance, or resume")
     .option("--expected-updated-at <iso>", "reject a stale proposal when starting")
     .option("--min-samples <n>", "terminal canary samples required before promotion", rolloutSamples)
     .option("--auto-rollback", "roll back a regressed canary during reconciliation")
@@ -197,10 +197,10 @@ export function registerOrchestrationCommands(program: Command): void {
         id: string | undefined,
         options: { expectedUpdatedAt?: string; minSamples?: number; autoRollback?: boolean },
       ) => {
-        if (!(["list", "start", "advance", "reconcile"] as const).includes(operation as never)) {
-          throw new InvalidArgumentError("rollout operation must be list, start, advance, or reconcile");
+        if (!(["list", "start", "advance", "resume", "reconcile"] as const).includes(operation as never)) {
+          throw new InvalidArgumentError("rollout operation must be list, start, advance, resume, or reconcile");
         }
-        if ((operation === "start" || operation === "advance") !== (id !== undefined)) {
+        if ((operation === "start" || operation === "advance" || operation === "resume") !== (id !== undefined)) {
           throw new InvalidArgumentError(`${operation} ${id === undefined ? "requires" : "does not accept"} an id`);
         }
         if (operation !== "start" && (options.expectedUpdatedAt !== undefined || options.minSamples !== undefined)) {
@@ -209,12 +209,15 @@ export function registerOrchestrationCommands(program: Command): void {
         if (operation !== "reconcile" && options.autoRollback === true) {
           throw new InvalidArgumentError("--auto-rollback is valid only for reconcile");
         }
-        orchestrationRolloutCommand(operation as "list" | "start" | "advance" | "reconcile", id, options);
+        orchestrationRolloutCommand(operation as "list" | "start" | "advance" | "resume" | "reconcile", id, options);
       },
     );
   orchestration
     .command("maintain")
     .option("--auto-rollback", "roll back terminal regressions")
+    .option("--dry-run", "preview maintenance impact without workspace writes")
     .description("run one safe orchestration control tick without auto-approval or auto-apply")
-    .action((options: { autoRollback?: boolean }) => orchestrationMaintenanceCommand(options.autoRollback === true));
+    .action((options: { autoRollback?: boolean; dryRun?: boolean }) =>
+      orchestrationMaintenanceCommand(options.autoRollback === true, options.dryRun === true),
+    );
 }

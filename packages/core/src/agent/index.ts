@@ -217,9 +217,21 @@ export {
   type EngineeringGraphArtifactStoreEntry,
 } from "./graph-artifact-store.js";
 export {
+  listEngineeringGraphArtifactTrustKeys,
+  registerEngineeringGraphArtifactTrustKey,
+  revokeEngineeringGraphArtifactTrustKey,
+  signEngineeringGraphArtifactAttestation,
+  verifyEngineeringGraphArtifactAttestationTrust,
+  type EngineeringGraphArtifactProvenance,
+  type EngineeringGraphArtifactTrustKey,
+  type EngineeringGraphArtifactTrustVerification,
+} from "./graph-artifact-trust.js";
+export {
   acquireWorkspaceGraphExecutorCapacity,
   listWorkspaceGraphExecutorReservations,
+  reconcileWorkspaceGraphExecutorCapacity,
   type WorkspaceGraphExecutorCapacityLease,
+  type WorkspaceGraphExecutorCapacityReconcileResult,
   type WorkspaceGraphExecutorReservation,
 } from "./graph-capacity.js";
 export {
@@ -356,6 +368,17 @@ export {
   type WorkspaceOrchestrationControlAnalytics,
 } from "./orchestration-control.js";
 export {
+  completeOrchestrationDecision,
+  fingerprintOrchestrationDecisionInput,
+  listOrchestrationDecisions,
+  readOrchestrationControllerState,
+  reconcileOrchestrationController,
+  recordOrchestrationDecision,
+  resumeOrchestrationController,
+  type OrchestrationControllerState,
+  type OrchestrationDecision,
+} from "./orchestration-decisions.js";
+export {
   buildWorkspaceContextualLoopRoutingProfile,
   loopRoutingContext,
   selectWorkspaceContextualLoopRoutes,
@@ -366,13 +389,18 @@ export {
 export {
   advanceOrchestrationRollout,
   listOrchestrationRollouts,
+  recordOrchestrationRolloutSample,
   reconcileOrchestrationRollouts,
+  resumeOrchestrationRollout,
   startOrchestrationRollout,
   type OrchestrationRollout,
   type OrchestrationRolloutPhase,
+  type OrchestrationRolloutTimelineEntry,
 } from "./orchestration-rollouts.js";
 export {
   maintainWorkspaceOrchestration,
+  planWorkspaceOrchestrationMaintenance,
+  type WorkspaceOrchestrationMaintenancePlan,
   type WorkspaceOrchestrationMaintenanceResult,
 } from "./orchestration-maintenance.js";
 export {

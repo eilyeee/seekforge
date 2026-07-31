@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildOrchestrationEvaluationMatrix,
   compareOrchestrationEvaluationMatrices,
+  evaluateOrchestrationEvaluationDrift,
   type OrchestrationEvalObservation,
 } from "../src/orchestration-matrix.js";
 
@@ -49,6 +50,11 @@ describe("orchestration evaluation matrix", () => {
     expect(compareOrchestrationEvaluationMatrices(current, baseline)).toEqual([
       expect.objectContaining({ passRateDelta: -1, meanCostUsdDelta: 1 }),
     ]);
+    expect(evaluateOrchestrationEvaluationDrift(current, baseline, { minimumSamples: 1 })).toMatchObject({
+      passed: false,
+      violations: [expect.objectContaining({ baselineSamples: 1, currentSamples: 1, passRateDelta: -1 })],
+    });
+    expect(evaluateOrchestrationEvaluationDrift(current, baseline, { minimumSamples: 2 }).violations).toEqual([]);
     expect(() => buildOrchestrationEvaluationMatrix([observation("same"), observation("same")])).toThrow(/duplicate/);
   });
 });

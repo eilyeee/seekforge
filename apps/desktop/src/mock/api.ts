@@ -236,7 +236,7 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   if (method === "POST" && path === "/api/orchestration/deployments/observe") return { deployments: [] };
   if (method === "POST" && path === "/api/orchestration/maintain") return {};
   if (method === "POST" && path === "/api/orchestration/rollouts/reconcile") return { rollouts: [] };
-  if (method === "POST" && /^\/api\/orchestration\/rollouts\/[^/]+\/(?:start|advance)$/.test(path)) return {};
+  if (method === "POST" && /^\/api\/orchestration\/rollouts\/[^/]+\/(?:start|advance|resume)$/.test(path)) return {};
   if (method === "GET" && path === "/api/orchestration/report") {
     return {
       portfolio: {
@@ -281,6 +281,12 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
           confidence: "none",
         },
       },
+      controller: {
+        mode: "active",
+        reason: "No critical SLO burn is active",
+        updatedAt: new Date(0).toISOString(),
+      },
+      decisions: [],
       contextualRouting: { generatedAt: new Date().toISOString(), loops: mockLoops.length, samples: 0, routes: [] },
       executorCapacity: [],
       sloSummary: {

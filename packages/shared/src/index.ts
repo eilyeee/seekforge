@@ -1308,14 +1308,22 @@ export type OrchestrationRollout = {
   proposalUpdatedAt: string;
   scope: "loop" | "graph";
   sourceId: string;
-  phase: "shadow" | "canary" | "promoted" | "rolled_back" | "failed";
+  phase: "shadow" | "canary" | "paused" | "promoted" | "rolled_back" | "failed";
+  stagePercent: 0 | 5 | 25 | 100;
   minSamples: number;
   observationIds: string[];
+  stageObservationIds: string[];
+  timeline: Array<{
+    at: string;
+    event: "started" | "stage_5" | "stage_25" | "promoted" | "paused" | "resumed" | "rolled_back" | "failed";
+    reason: string;
+  }>;
   startedAt: string;
   updatedAt: string;
   canaryAt?: string;
   promotedAt?: string;
   rolledBackAt?: string;
+  pausedAt?: string;
   lastVerdict?: "improved" | "stable" | "regressed";
   error?: string;
 };
@@ -1398,6 +1406,26 @@ export type WorkspaceOrchestrationReport = {
       confidence: "none" | "low" | "medium" | "high";
     };
   };
+  controller: {
+    mode: "active" | "frozen";
+    reason: string;
+    updatedAt: string;
+    criticalSince?: string;
+  };
+  decisions: Array<{
+    id: string;
+    kind: "graph_preflight" | "graph_schedule" | "loop_route" | "rollout_gate";
+    scope: "graph" | "loop" | "workspace";
+    sourceId: string;
+    policyVersion: number;
+    inputFingerprint: string;
+    status: "adopted" | "advisory" | "frozen" | "rejected";
+    reasons: string[];
+    selected: string[];
+    decidedAt: string;
+    outcome?: "passed" | "failed" | "cancelled" | "superseded";
+    completedAt?: string;
+  }>;
   contextualRouting: {
     generatedAt: string;
     loops: number;
@@ -1410,7 +1438,13 @@ export type WorkspaceOrchestrationReport = {
       improvements: number;
       regressions: number;
       meanUtility: number;
+      decayedUtility: number;
       explorationScore: number;
+      averageCostUsd: number;
+      averageDurationMs: number;
+      regressionRate: number;
+      lastObservedAt: string;
+      circuitOpen: boolean;
       confidence: "none" | "low" | "medium" | "high";
     }>;
   };

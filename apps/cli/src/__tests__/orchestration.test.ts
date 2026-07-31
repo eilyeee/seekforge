@@ -53,8 +53,8 @@ describe("orchestration CLI", () => {
       /does not accept update options/,
     );
     expect(() =>
-      program.parse(["node", "seekforge", "orchestration", "rollout", "start", "opt-123", "--min-samples", "2"]),
-    ).toThrow(/single exact-generation canary/);
+      program.parse(["node", "seekforge", "orchestration", "rollout", "start", "opt-123", "--min-samples", "33"]),
+    ).toThrow(/1 to 32/);
     expect(() => program.parse(["node", "seekforge", "orchestration", "rollout", "list", "--auto-rollback"])).toThrow(
       /only for reconcile/,
     );

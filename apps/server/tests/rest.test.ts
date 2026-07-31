@@ -520,7 +520,7 @@ describe("loop management API", () => {
         await authed(`/api/orchestration/rollouts/${proposal.id}/start`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ minSamples: 2 }),
+          body: JSON.stringify({ minSamples: 33 }),
         })
       ).status,
     ).toBe(400);
@@ -547,6 +547,15 @@ describe("loop management API", () => {
     ).toMatchObject({ proposalId: proposal.id, phase: "canary" });
     expect(
       await jsonOf(
+        await authed(`/api/orchestration/rollouts/${proposal.id}/resume`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        }),
+      ),
+    ).toMatchObject({ proposalId: proposal.id, phase: "canary", stagePercent: 5 });
+    expect(
+      await jsonOf(
         await authed("/api/orchestration/rollouts/reconcile", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -554,6 +563,15 @@ describe("loop management API", () => {
         }),
       ),
     ).toMatchObject({ rollouts: [expect.objectContaining({ proposalId: proposal.id, phase: "canary" })] });
+    expect(
+      await jsonOf(
+        await authed("/api/orchestration/maintain", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ dryRun: true }),
+        }),
+      ),
+    ).toMatchObject({ proposalsDiscovered: expect.any(Number), actions: expect.any(Array) });
     expect(
       await jsonOf(
         await authed(`/api/orchestration/proposals/${proposal.id}/rollback`, {

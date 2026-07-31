@@ -108,13 +108,17 @@ flowchart LR
 
 ## 自适应控制面
 
-编排报告只重新评估未完成节点，并提供带依赖、截止时间和执行器负载原因的运行时重规划排序。远程适配器可以把 `workspaceCapacity` 显式设置为 1 到 512；跨进程持久 reservation 存储会用 attempt 幂等键、过期 lease 与 fencing token，在适配器自身实时 reservation 之外强制执行工作区级执行器上限。重规划和容量遥测会读取同一份物理工作区 reservation 状态。
+编排报告只重新评估未完成节点，并提供带依赖、截止时间和执行器负载原因的运行时重规划排序。启用 `adaptiveScheduling` 后，该排序会在每个安全调度边界真正参与决策，运行中和已完成节点不会被改写。每次持久运行还会记录包含策略版本、输入指纹、理由与关键路径的预运行预测决策。远程适配器可以把 `workspaceCapacity` 显式设置为 1 到 512；跨进程持久 reservation 存储会用 attempt 幂等键、可续租 lease、孤儿清理与 fencing token 强制执行工作区级上限。丢失当前 lease 代次会取消远程 attempt，并禁止提交其结果。
 
-每个复制进 CAS 的已验证产物都会记录有界、去重的证明，包含摘要、大小、精确 Graph fingerprint、生产节点、源路径与 SHA-256 校验方式。证明属于历史血缘，可能比已被垃圾回收的 blob 保留更久。可通过 `GET /api/graphs/artifact-store/attestations` 检查，并可按 `sha256` 过滤。
+每个复制进 CAS 的已验证产物都会记录有界、去重的证明，包含摘要、大小、精确 Graph fingerprint、生产节点、源路径与 SHA-256 校验方式。证明属于历史血缘，可能比已被垃圾回收的 blob 保留更久。嵌入方可以注册并轮换 Ed25519 信任密钥，把 builder、环境、工具链、输入和可选 SBOM 摘要一起签入证明，随后验证或撤销密钥；来自已撤销密钥的有效签名也会被视为不可信。可通过 `GET /api/graphs/artifact-store/attestations` 检查，并按 `sha256` 过滤。
 
-已批准提案可以走显式的 `shadow → canary → promoted` 灰度流程。启动 shadow 没有副作用；推进到 canary 时执行精确代际 apply 事务；reconcile 记录一个终态 canary 观测，并提升 stable/improved 结果。回归自动回滚仍需显式开启。持久控制历史会计算 1/6/24 小时 SLO 消耗率，以及 Graph 预测校准（P50 绝对误差、P95 覆盖率和 Brier 分数）。
+已批准提案会走显式的 `shadow → 5% → 25% → 100%` 灰度流程。每个 cohort 都有可配置的 1–32 条样本门禁和独立证据窗口。回归会暂停灰度等待复核，自动回滚仍需显式开启；恢复会在不改变精确提案代次的前提下开启新证据窗口。持久控制历史会计算 1/6/24 小时 SLO 消耗率，以及 Graph 预测校准（P50 绝对误差、P95 覆盖率和 Brier 分数）。持续的 critical burn 会冻结学习路由与自适应调度，而显式人工策略仍保持权威；恢复健康后维护任务会自动解冻。
 
-`seekforge orchestration maintain` 执行一次安全控制 tick：刷新提案、记录终态观测与校准、协调已有灰度，并重建物化索引；它不会批准提案或启动部署。`seekforge serve --orchestration-auto-maintain` 只在各工作区空闲时运行该 tick；额外添加 `--orchestration-auto-rollback` 才会对观测到的回归执行回滚。
+`seekforge orchestration maintain` 执行一次安全控制 tick：刷新提案、记录终态观测与校准、协调已有灰度、重建物化索引并协调自适应控制器；它不会批准提案或启动部署。添加 `--dry-run` 可在不写入的情况下预览影响。`seekforge serve --orchestration-auto-maintain` 只在各工作区空闲时运行该 tick；额外添加 `--orchestration-auto-rollback` 才会对观测到的回归执行回滚。
+
+### 桌面端使用流程
+
+从 Graph 视图或 REST/CLI 启动 Graph 后，打开 Loop 管理器中的「编排决策智能」。刷新会执行一次空闲安全的维护 tick，并加载共享工作区报告。面板会展示 SLO burn 与控制器冻结状态、上下文路由、执行器容量、运行时重规划顺序、预测不确定性、产物证明数量、精确提案动作和灰度阶段/时间线。先批准提案，再启动 shadow，显式进入 5% cohort，观察证据，并逐阶段推进证据已达标的 cohort；只有暂停的 cohort 才需要恢复。Graph 的执行控制、审批、信号、重跑、对比和保留 worktree 操作仍位于 Graph 详情页；两个视图共享同一份持久检查点和租约。
 
 ## CLI 与 API
 

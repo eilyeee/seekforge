@@ -13,6 +13,10 @@ export type OrchestrationEvalObservation = {
   actualDurationMs: number;
   breached: boolean;
   costUsd: number;
+  datasetId?: string;
+  environmentId?: string;
+  providerId?: string;
+  recordedAt?: string;
 };
 
 export type OrchestrationEvalCellKey = Pick<OrchestrationEvalObservation, "ecosystem" | "execution" | "fault">;
@@ -27,8 +31,14 @@ export type OrchestrationEvalCell = OrchestrationEvalCellKey & {
 };
 
 export type OrchestrationEvalMatrix = {
+  schemaVersion: 1;
   generatedAt: string;
   samples: number;
+  provenance: {
+    datasets: string[];
+    environments: string[];
+    providers: string[];
+  };
   cells: OrchestrationEvalCell[];
   missing: OrchestrationEvalCellKey[];
 };
@@ -61,6 +71,18 @@ function validateObservation(value: OrchestrationEvalObservation): void {
     value.predictedBreachProbability > 1
   ) {
     throw new Error("invalid orchestration eval predictedBreachProbability");
+  }
+  for (const [name, id] of [
+    ["datasetId", value.datasetId],
+    ["environmentId", value.environmentId],
+    ["providerId", value.providerId],
+  ] as const) {
+    if (id !== undefined && !/^[A-Za-z0-9][A-Za-z0-9:._/-]{0,255}$/.test(id)) {
+      throw new Error(`invalid orchestration eval ${name}`);
+    }
+  }
+  if (value.recordedAt !== undefined && !Number.isFinite(Date.parse(value.recordedAt))) {
+    throw new Error("invalid orchestration eval recordedAt");
   }
 }
 
@@ -125,11 +147,74 @@ export function buildOrchestrationEvaluationMatrix(
     const id = key(requirement);
     return !groups.has(id) && required.findIndex((candidate) => key(candidate) === id) === index;
   });
-  return { generatedAt: now.toISOString(), samples: observations.length, cells, missing };
+  const distinct = (values: Array<string | undefined>): string[] =>
+    [...new Set(values.filter((value): value is string => value !== undefined))].sort();
+  return {
+    schemaVersion: 1,
+    generatedAt: now.toISOString(),
+    samples: observations.length,
+    provenance: {
+      datasets: distinct(observations.map((item) => item.datasetId)),
+      environments: distinct(observations.map((item) => item.environmentId)),
+      providers: distinct(observations.map((item) => item.providerId)),
+    },
+    cells,
+    missing,
+  };
+}
+
+export type OrchestrationEvalDriftGate = {
+  passed: boolean;
+  minimumSamples: number;
+  provenanceMismatch: boolean;
+  violations: Array<OrchestrationEvalDrift & { reasons: string[] }>;
+};
+
+/** Applies a CI-ready regression gate to comparable matrix cells. */
+export function evaluateOrchestrationEvaluationDrift(
+  current: OrchestrationEvalMatrix,
+  baseline: OrchestrationEvalMatrix,
+  options: {
+    minimumSamples?: number;
+    maxPassRateDrop?: number;
+    maxCostIncreaseUsd?: number;
+    maxBrierIncrease?: number;
+  } = {},
+): OrchestrationEvalDriftGate {
+  const minimumSamples = options.minimumSamples ?? 3;
+  const maxPassRateDrop = options.maxPassRateDrop ?? 0.05;
+  const maxCostIncreaseUsd = options.maxCostIncreaseUsd ?? 0.1;
+  const maxBrierIncrease = options.maxBrierIncrease ?? 0.05;
+  if (!Number.isSafeInteger(minimumSamples) || minimumSamples < 1 || minimumSamples > 10_000) {
+    throw new RangeError("orchestration eval minimumSamples must be from 1 to 10000");
+  }
+  for (const [name, value] of [
+    ["maxPassRateDrop", maxPassRateDrop],
+    ["maxCostIncreaseUsd", maxCostIncreaseUsd],
+    ["maxBrierIncrease", maxBrierIncrease],
+  ] as const) {
+    if (!Number.isFinite(value) || value < 0) throw new RangeError(`orchestration eval ${name} must be non-negative`);
+  }
+  const violations = compareOrchestrationEvaluationMatrices(current, baseline).flatMap((drift) => {
+    if (drift.currentSamples < minimumSamples || drift.baselineSamples < minimumSamples) return [];
+    const reasons = [
+      ...(drift.passRateDelta < -maxPassRateDrop ? [`pass rate dropped by ${(-drift.passRateDelta).toFixed(4)}`] : []),
+      ...(drift.meanCostUsdDelta > maxCostIncreaseUsd
+        ? [`mean cost increased by ${drift.meanCostUsdDelta.toFixed(4)} USD`]
+        : []),
+      ...(drift.brierScoreDelta > maxBrierIncrease
+        ? [`Brier score increased by ${drift.brierScoreDelta.toFixed(4)}`]
+        : []),
+    ];
+    return reasons.length > 0 ? [{ ...drift, reasons }] : [];
+  });
+  const provenanceMismatch = JSON.stringify(current.provenance) !== JSON.stringify(baseline.provenance);
+  return { passed: violations.length === 0 && !provenanceMismatch, minimumSamples, provenanceMismatch, violations };
 }
 
 export type OrchestrationEvalDrift = OrchestrationEvalCellKey & {
   currentSamples: number;
+  baselineSamples: number;
   passRateDelta: number;
   meanCostUsdDelta: number;
   brierScoreDelta: number;
@@ -149,6 +234,7 @@ export function compareOrchestrationEvaluationMatrices(
             execution: cell.execution,
             fault: cell.fault,
             currentSamples: cell.samples,
+            baselineSamples: before.samples,
             passRateDelta: cell.passRate - before.passRate,
             meanCostUsdDelta: cell.meanCostUsd - before.meanCostUsd,
             brierScoreDelta: cell.brierScore - before.brierScore,

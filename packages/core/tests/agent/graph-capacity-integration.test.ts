@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runEngineeringGraph, type GraphExecutionAdapter } from "../../src/agent/graph-engineering.js";
-import { listWorkspaceGraphExecutorReservations } from "../../src/agent/graph-capacity.js";
+import {
+  listWorkspaceGraphExecutorReservations,
+  reconcileWorkspaceGraphExecutorCapacity,
+} from "../../src/agent/graph-capacity.js";
 import type { AgentCoreDeps } from "../../src/agent/loop.js";
 
 describe("Graph workspace executor capacity integration", () => {
@@ -50,6 +53,55 @@ describe("Graph workspace executor capacity integration", () => {
       expect(listWorkspaceGraphExecutorReservations(workspace)).toEqual([]);
     } finally {
       releaseFirst();
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a remote result after its exact workspace lease is lost", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-graph-capacity-loss-"));
+    let startedResolve = (): void => {};
+    const started = new Promise<void>((resolve) => {
+      startedResolve = resolve;
+    });
+    let executeResolve = (_value: { output: string }): void => {};
+    const execution = new Promise<{ output: string }>((resolve) => {
+      executeResolve = resolve;
+    });
+    let cancellations = 0;
+    const adapter: GraphExecutionAdapter = {
+      trusted: true,
+      locality: "remote",
+      workspaceCapacity: 1,
+      execute: () => {
+        startedResolve();
+        return execution;
+      },
+      cancel: () => {
+        cancellations++;
+        executeResolve({ output: "late" });
+      },
+    };
+    try {
+      const run = runEngineeringGraph(
+        {} as AgentCoreDeps,
+        {
+          graphId: "capacity-lost",
+          nodes: [{ id: "remote", kind: "remote", executor: "worker", timeoutMs: 1_000 }],
+        },
+        { workspace, executors: { worker: adapter } },
+      );
+      await started;
+      const reservation = listWorkspaceGraphExecutorReservations(workspace)[0]!;
+      reconcileWorkspaceGraphExecutorCapacity(workspace, {
+        orphanReservationIds: new Set([reservation.reservationId]),
+      });
+      const result = await run;
+      expect(result.status).toBe("failed");
+      expect(result.results[0]?.error).toMatch(/lost its workspace capacity lease/);
+      expect(cancellations).toBe(1);
+      expect(listWorkspaceGraphExecutorReservations(workspace)).toEqual([]);
+    } finally {
+      executeResolve({ output: "cleanup" });
       rmSync(workspace, { recursive: true, force: true });
     }
   });

@@ -439,12 +439,17 @@ Rules:
   authorization changes cannot be auto-applied.
 - `GET /api/orchestration/rollouts` lists durable rollout state. `POST
   /api/orchestration/rollouts/:id/start` creates a side-effect-free shadow from
-  an approved exact proposal, `.../:id/advance` applies it as a canary, and
-  `POST /api/orchestration/rollouts/reconcile` records terminal evidence and
-  promotes stable/improved canaries. `{autoRollback:true}` is explicit.
+  an approved exact proposal with an optional `minSamples` from 1 to 32.
+  `.../:id/advance` applies it to 5%, then advances evidence-complete cohorts to
+  25% and 100%; `.../:id/resume` restarts a paused cohort with a fresh evidence
+  window. `POST /api/orchestration/rollouts/reconcile` records exact-generation
+  terminal evidence and advances stable/improved cohorts. `{autoRollback:true}`
+  is explicit.
 - `POST /api/orchestration/maintain` runs one bounded safe maintenance tick:
   proposal refresh, observation/calibration collection, existing-rollout
-  reconciliation, and index refresh. It does not approve or start deployments.
+  reconciliation, index refresh, and adaptive-controller reconciliation. It
+  does not approve or start deployments. `{dryRun:true}` returns a read-only
+  impact plan without creating workspace state.
 - `POST /api/graphs/:id/migration-plan` preserves the existing flat migration
   fields and adds `tree`. The tree section resolves child identities and reports
   coordinated participants; `migration-apply` commits a journaled child-first,

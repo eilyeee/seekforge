@@ -12,6 +12,7 @@ export function OrchestrationIntelligenceSection(props: {
   onProposalRollback: (proposal: OrchestrationProposal) => void;
   onRolloutStart: (proposal: OrchestrationProposal) => void;
   onRolloutAdvance: (proposal: OrchestrationProposal) => void;
+  onRolloutResume: (proposal: OrchestrationProposal) => void;
   onObserve: () => void;
 }) {
   const t = useT();
@@ -48,6 +49,10 @@ export function OrchestrationIntelligenceSection(props: {
             {t("chat.loop.orchestration.slo")}: {report.sloSummary.status} ·{" "}
             {(report.sloSummary.breachRate * 100).toFixed(1)}%
             {` · ${report.sloSummary.evaluations} ${t("chat.loop.orchestration.evaluations")}`}
+          </p>
+          <p className="mt-1 text-tertiary">
+            {t("chat.loop.orchestration.controller")}: {report.controller.mode} · {report.controller.reason}
+            {` · ${report.decisions.length} ${t("chat.loop.orchestration.decisions")}`}
           </p>
           <p className="mt-1 text-tertiary">
             {t("chat.loop.orchestration.control")}:{" "}
@@ -199,6 +204,33 @@ export function OrchestrationIntelligenceSection(props: {
                       {t("chat.loop.orchestration.startCanary")}
                     </Button>
                   )}
+                  {report.rollouts.some(
+                    (rollout) =>
+                      rollout.proposalId === proposal.id &&
+                      rollout.phase === "canary" &&
+                      rollout.stageObservationIds.length >= rollout.minSamples,
+                  ) && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={props.busy}
+                      onClick={() => props.onRolloutAdvance(proposal)}
+                    >
+                      {t("chat.loop.orchestration.advanceRollout")}
+                    </Button>
+                  )}
+                  {report.rollouts.some(
+                    (rollout) => rollout.proposalId === proposal.id && rollout.phase === "paused",
+                  ) && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={props.busy}
+                      onClick={() => props.onRolloutResume(proposal)}
+                    >
+                      {t("chat.loop.orchestration.resumeRollout")}
+                    </Button>
+                  )}
                   {proposal.status === "approved" &&
                     proposal.action.kind !== "budget_review" &&
                     !report.deployments.some(
@@ -247,7 +279,7 @@ export function OrchestrationIntelligenceSection(props: {
               {report.rollouts
                 .map(
                   (rollout) =>
-                    `${rollout.proposalId}: ${rollout.phase} (${rollout.observationIds.length}/${rollout.minSamples})`,
+                    `${rollout.proposalId}: ${rollout.phase}/${rollout.stagePercent}% (${rollout.stageObservationIds.length}/${rollout.minSamples}) · ${rollout.timeline.at(-1)?.event ?? "unknown"}`,
                 )
                 .join("; ")}
             </p>

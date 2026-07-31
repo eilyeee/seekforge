@@ -82,6 +82,7 @@ import {
 } from "./loop-model-routing.js";
 import { readAppliedLoopRoutes } from "./orchestration-policy.js";
 import { selectWorkspaceContextualLoopRoutes } from "./orchestration-routing.js";
+import { fingerprintOrchestrationDecisionInput, recordOrchestrationDecision } from "./orchestration-decisions.js";
 import {
   loopVerificationIntelligenceScore,
   readLoopVerificationIntelligence,
@@ -819,6 +820,26 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
         ([category]) => !Object.hasOwn(explicitStatic, category) && !Object.hasOwn(explicitChains, category),
       ),
     );
+    if (Object.keys(inherited).length > 0) {
+      try {
+        recordOrchestrationDecision(opts.workspace, {
+          kind: "loop_route",
+          scope: "loop",
+          sourceId: loopId,
+          policyVersion: 2,
+          inputFingerprint: fingerprintOrchestrationDecisionInput({
+            task: opts.task,
+            verifyCommand: opts.verifyCommand,
+            inherited,
+          }),
+          status: "adopted",
+          reasons: ["Applied learned or reviewed workspace routes after explicit-route precedence checks"],
+          selected: Object.entries(inherited).map(([category, model]) => `${category}:${model}`),
+        });
+      } catch {
+        // Routing evidence is observational and cannot block an otherwise valid Loop.
+      }
+    }
     if (Object.keys(inherited).length > 0) {
       for (const model of Object.values(inherited)) routedModels.add(model);
       opts = { ...opts, modelByFailureCategory: { ...inherited, ...explicitStatic } };
