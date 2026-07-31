@@ -52,6 +52,18 @@ domain logic:
   the same workspace boundary checks.
 - Core `agent/loop.ts` owns the effectful model/tool orchestration. Deterministic
   argument, usage, and gate classification belongs in `agent/loop-logic.ts`.
+- Core `agent/graph-engineering.ts` owns only the effectful run: scheduling,
+  attempts, checkpoints, and node execution. Its boundaries are separate:
+  `graph-execution-contract.ts` (handler/executor contract and eligibility),
+  `graph-execution-errors.ts` (failure vocabulary, timeout, retry wait),
+  `graph-node-values.ts` (input bindings, schema assertions, output budgets),
+  `graph-node-artifacts.ts` (verified artifact capture), and
+  `graph-run-options.ts` (complete run validation before any side effect).
+  Advisory surfaces import the contract, never the runtime. The remaining run
+  function keeps its deep shared lifecycle state (leases, drain hooks,
+  checkpoints) in one place deliberately, for the same reason `createAgentCore`
+  is not split further; node execution stays with it because subgraph nodes
+  re-enter the runner.
 - Desktop views use `async-coordination.ts` and `use-workspace-async.ts` to bind
   asynchronous results to both request generation and workspace identity.
 - TUI `app.tsx` owns interaction orchestration. Agent runners, run identity,

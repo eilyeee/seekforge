@@ -46,6 +46,16 @@ flowchart TD
   并使用同一套工作区边界检查。
 - Core `agent/loop.ts` 负责带副作用的模型/工具编排。确定性的
   参数、用量与门禁分类逻辑属于 `agent/loop-logic.ts`。
+- Core `agent/graph-engineering.ts` 只负责带副作用的运行：调度、尝试、
+  检查点与节点执行。其边界拆为独立模块：`graph-execution-contract.ts`
+  （handler/executor 契约与准入判定）、`graph-execution-errors.ts`
+  （失败词汇表、超时、重试等待）、`graph-node-values.ts`（输入绑定、
+  schema 断言、输出预算）、`graph-node-artifacts.ts`（校验过的制品捕获）、
+  `graph-run-options.ts`（在产生任何副作用前完成的运行校验）。
+  顾问型（只读分析）表面只导入契约，不导入运行时。剩余的运行函数刻意保留
+  其深度共享的生命周期状态（租约、排空钩子、检查点）在同一处——与
+  `createAgentCore` 不再继续拆分同理；节点执行也留在其中，因为子图节点会
+  重新进入该运行函数。
 - 桌面端视图使用 `async-coordination.ts` 与 `use-workspace-async.ts`，
   将异步结果同时绑定到请求代次与工作区身份。
 - TUI `app.tsx` 负责交互编排。智能体 runner、运行身份、

@@ -1,8 +1,7 @@
-import { constants, lstatSync, realpathSync } from "node:fs";
-import { open } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { isAbsolute, relative, resolve, sep } from "node:path";
-import { abortablePromise, onAbortOnce } from "../util/abort.js";
+import { resolve } from "node:path";
+import { onAbortOnce } from "../util/abort.js";
 import { isRecord } from "../util/guards.js";
 import { checkpointWorktree, listGitWorktrees, mergeWorktree, removeWorktree } from "../worktree.js";
 import type { AgentCoreDeps } from "./loop.js";
@@ -12,15 +11,12 @@ import {
   type EngineeringGraphDefinition,
   ENGINEERING_GRAPH_FAN_IN_WORKTREE_ID,
   type GraphNode,
-  type GraphInputBinding,
-  type GraphValueSchema,
   graphConditionMatches,
   graphNodeIsEffectful,
   graphDefinitionFingerprint,
   graphDefinitionFingerprintMatches,
   engineeringSubgraphStateId,
   isValidEngineeringGraphNodePath,
-  MAX_GRAPH_NODES,
   parseEngineeringGraphDefinition,
 } from "./graph-contract.js";
 import {
@@ -32,18 +28,14 @@ import {
   engineeringGraphStateExists,
   MAX_GRAPH_EVENTS,
   MAX_GRAPH_EVENT_MESSAGE_CHARS,
-  MAX_GRAPH_OUTPUT_BYTES,
   MAX_GRAPH_OUTPUT_TOTAL_BYTES,
   loadEngineeringGraphState,
   saveEngineeringGraphState,
 } from "./graph-state.js";
 import { acquireSessionLeaseWithPreemption, type SessionLease } from "./session-lease.js";
-import { isValidLoopDagId } from "./loop-dag-validation.js";
-import { isSafeLoopDagRelativePath } from "./loop-dag-validation.js";
 import { acquireManagedOrchestrationWorktreeLease } from "./loop-managed-worktree.js";
 import { loadLoopState, loopStateExists } from "./loop-state.js";
 import { createEngineeringGraphLogWriter, type GraphLogWriter } from "./graph-history.js";
-import { MAX_GRAPH_ARTIFACT_BYTES, storeEngineeringGraphArtifact } from "./graph-artifact-store.js";
 import { acquireWorkspaceGraphExecutorCapacity, listWorkspaceGraphExecutorReservations } from "./graph-capacity.js";
 import { readGraphControlEntries } from "./graph-control-store.js";
 import { acknowledgeEngineeringGraphSignal, claimEngineeringGraphSignal } from "./graph-signal-store.js";
@@ -56,13 +48,7 @@ import {
 } from "./graph-scheduling-history.js";
 import { engineeringGraphCriticality } from "./graph-plan.js";
 import { DEFAULT_GRAPH_RETRY_POLICY, graphRetryDelayMs } from "./graph-retry-policy.js";
-import {
-  assertNonOverlappingOrchestrationPaths,
-  isDenseArray,
-  orchestrationDescendantClosure,
-  orchestrationDependsOn,
-  validateOrchestrationSelection,
-} from "./orchestration.js";
+import { orchestrationDescendantClosure } from "./orchestration.js";
 import { selectOrchestrationReadyNodes } from "./orchestration-scheduler.js";
 import { simulateEngineeringGraph } from "./graph-simulation.js";
 import {
@@ -77,237 +63,45 @@ import {
   prepareManagedOrchestrationWorktrees,
   type ManagedOrchestrationWorktree,
 } from "./orchestration-worktrees.js";
+import {
+  type GraphExecutionAdapter,
+  type GraphFunctionContext,
+  type GraphFunctionResult,
+  graphExecutor,
+  graphHandler,
+  type RunEngineeringGraphOptions,
+} from "./graph-execution-contract.js";
+import {
+  GraphNodeExecutionError,
+  GraphNodeNonRetryableError,
+  GraphSubgraphPausedError,
+  retryableError,
+  waitForGraphRetry,
+  withGraphTimeout,
+} from "./graph-execution-errors.js";
+import { assertGraphValue, bindingValue, boundedOutput, fitOutputBudget, graphInputs } from "./graph-node-values.js";
+import { captureGraphArtifacts } from "./graph-node-artifacts.js";
+import { resolveEngineeringGraphWorkspaces, validateEngineeringGraphRunOptions } from "./graph-run-options.js";
 
-export type GraphFunctionContext = {
-  node: GraphNode;
-  workspace: string;
-  dependencies: ReadonlyMap<string, GraphNodeResult>;
-  inputs: Readonly<Record<string, unknown>>;
-  /** Stable for one logical attempt, so effectful handlers can deduplicate retries. */
-  idempotencyKey: string;
-  item?: unknown;
-  itemIndex?: number;
-  costBudgetUsd?: number;
-  tokenBudget?: number;
-  signal: AbortSignal;
-  executorLease?: { fencingToken: string; expiresAt?: string };
-};
-
-export type GraphFunctionResult = {
-  output?: unknown;
-  costUsd?: number;
-  tokensUsed?: number;
-  artifacts?: Array<{ name: string; path: string; sha256?: string }>;
-};
-export type GraphFunctionHandler = (
-  context: GraphFunctionContext,
-) => GraphFunctionResult | Promise<GraphFunctionResult>;
-
-export type GraphExecutionAdapter = {
-  /** Untrusted adapters are rejected during preflight, before any node starts. */
-  trusted: boolean;
-  locality: "remote";
-  protocolVersion?: 1;
-  supportsCancellation?: boolean;
-  /** Scheduler-facing health and bounded load snapshot supplied by the trusted host. */
-  healthy?: boolean;
-  capacity?: number;
-  active?: number;
-  queueDepth?: number;
-  /** Opt-in capacity shared by all Graphs in this workspace, enforced cross-process. */
-  workspaceCapacity?: number;
-  region?: string;
-  dataLocality?: string[];
-  /** Reserves remote capacity and returns a fencing token for this exact attempt. */
-  reserve?: (
-    context: GraphFunctionContext,
-  ) =>
-    | { fencingToken: string; expiresAt?: string; release: () => void | Promise<void> }
-    | Promise<{ fencingToken: string; expiresAt?: string; release: () => void | Promise<void> }>;
-  /** Recovers a previously committed result for this stable idempotency key. */
-  recover?: (
-    context: GraphFunctionContext,
-  ) => GraphFunctionResult | undefined | Promise<GraphFunctionResult | undefined>;
-  /** Optional liveness probe. Failures during execution are advisory. */
-  heartbeat?: (context: GraphFunctionContext) => void | Promise<void>;
-  heartbeatIntervalMs?: number;
-  /** Cooperative cancellation notification for an already-dispatched attempt. */
-  cancel?: (context: GraphFunctionContext) => void | Promise<void>;
-  /** Verifies executor-owned provenance before the result becomes authoritative. */
-  verifyResult?: (result: GraphFunctionResult, context: GraphFunctionContext) => boolean | Promise<boolean>;
-  execute: GraphFunctionHandler;
-};
-
-export type GraphExecutionAdapterEligibility = {
-  status:
-    | "eligible"
-    | "missing"
-    | "untrusted"
-    | "protocol_mismatch"
-    | "cancellation_unsupported"
-    | "unhealthy"
-    | "capacity_exhausted"
-    | "invalid";
-  reasons: string[];
-};
-
-/** Owns runtime and advisory executor eligibility so both surfaces fail closed identically. */
-export function graphExecutionAdapterEligibility(
-  node: GraphNode,
-  adapter: GraphExecutionAdapter | undefined,
-): GraphExecutionAdapterEligibility {
-  if (!adapter) return { status: "missing", reasons: ["Executor is not registered"] };
-  if (adapter.trusted !== true) return { status: "untrusted", reasons: ["Executor is not trusted"] };
-  if (
-    adapter.locality !== "remote" ||
-    typeof adapter.execute !== "function" ||
-    (adapter.healthy !== undefined && typeof adapter.healthy !== "boolean") ||
-    (adapter.capacity !== undefined &&
-      (!Number.isSafeInteger(adapter.capacity) || adapter.capacity < 1 || adapter.capacity > 1_024)) ||
-    (adapter.active !== undefined &&
-      (!Number.isSafeInteger(adapter.active) || adapter.active < 0 || adapter.active > (adapter.capacity ?? 1_024))) ||
-    (adapter.queueDepth !== undefined &&
-      (!Number.isSafeInteger(adapter.queueDepth) || adapter.queueDepth < 0 || adapter.queueDepth > 1_000_000)) ||
-    (adapter.workspaceCapacity !== undefined &&
-      (!Number.isSafeInteger(adapter.workspaceCapacity) ||
-        adapter.workspaceCapacity < 1 ||
-        adapter.workspaceCapacity > 512)) ||
-    (adapter.region !== undefined &&
-      (typeof adapter.region !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(adapter.region))) ||
-    (adapter.dataLocality !== undefined &&
-      (!isDenseArray(adapter.dataLocality) ||
-        adapter.dataLocality.length > 32 ||
-        new Set(adapter.dataLocality).size !== adapter.dataLocality.length ||
-        adapter.dataLocality.some(
-          (item) => typeof item !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(item),
-        ))) ||
-    (adapter.reserve !== undefined && typeof adapter.reserve !== "function") ||
-    (adapter.recover !== undefined && typeof adapter.recover !== "function") ||
-    (adapter.heartbeat !== undefined && typeof adapter.heartbeat !== "function") ||
-    (adapter.cancel !== undefined && typeof adapter.cancel !== "function") ||
-    (adapter.verifyResult !== undefined && typeof adapter.verifyResult !== "function") ||
-    (adapter.heartbeatIntervalMs !== undefined &&
-      (!Number.isSafeInteger(adapter.heartbeatIntervalMs) ||
-        adapter.heartbeatIntervalMs < 1_000 ||
-        adapter.heartbeatIntervalMs > 60_000))
-  ) {
-    return { status: "invalid", reasons: ["Executor contract is invalid"] };
-  }
-  if ((node.executorProtocolVersion ?? 1) !== (adapter.protocolVersion ?? 1)) {
-    return { status: "protocol_mismatch", reasons: ["Protocol version does not match"] };
-  }
-  if (node.requiresCancellation && !adapter.supportsCancellation) {
-    return { status: "cancellation_unsupported", reasons: ["Cancellation is required"] };
-  }
-  if (adapter.healthy === false) return { status: "unhealthy", reasons: ["Executor reports unhealthy"] };
-  if (adapter.capacity !== undefined && (adapter.active ?? 0) >= adapter.capacity) {
-    return { status: "capacity_exhausted", reasons: ["Executor capacity is exhausted"] };
-  }
-  return { status: "eligible", reasons: [] };
-}
-
-export type RunEngineeringGraphOptions = {
-  workspace: string;
-  resume?: boolean;
-  restart?: boolean;
-  persist?: boolean;
-  rerunFrom?: string[];
-  approvedNodeIds?: string[];
-  /** Durable provenance for an internally managed child Graph checkpoint. */
-  parentGraph?: { graphId: string; nodeId: string };
-  /** Operational cap for this invocation; does not alter the durable definition fingerprint. */
-  costBudgetUsd?: number;
-  /** Operational token cap for this invocation; does not alter the durable definition fingerprint. */
-  tokenBudget?: number;
-  approveNode?: (
-    node: GraphNode,
-    completed: ReadonlyMap<string, GraphNodeResult>,
-    graphId: string,
-  ) => boolean | Promise<boolean>;
-  decideGate?: (
-    node: GraphNode,
-    completed: ReadonlyMap<string, GraphNodeResult>,
-    graphId: string,
-  ) =>
-    | { decision: "approve" | "reject" | "request_changes"; reason?: string; data?: unknown }
-    | Promise<{ decision: "approve" | "reject" | "request_changes"; reason?: string; data?: unknown }>;
-  handlers?: Readonly<Record<string, GraphFunctionHandler>>;
-  executors?: Readonly<Record<string, GraphExecutionAdapter>>;
-  signal?: AbortSignal;
-  onEvent?: (event: GraphEvent) => void;
-  /** Internal owner guard used by idle maintenance. */
-  workspaceGuard?: SessionLease;
-  /** Internal attempt identity used only to bind automatic-recovery bookkeeping. */
-  recoveryAttemptId?: string;
-};
+// The execution contract, its failure vocabulary, value plumbing, artifact
+// capture, and run-option validation now live in focused modules. They are
+// re-exported here so existing importers of this module keep working.
+export {
+  type GraphExecutionAdapter,
+  type GraphExecutionAdapterEligibility,
+  type GraphFunctionContext,
+  type GraphFunctionHandler,
+  type GraphFunctionResult,
+  graphExecutionAdapterEligibility,
+  type RunEngineeringGraphOptions,
+} from "./graph-execution-contract.js";
+export {
+  resolveEngineeringGraphWorkspaces,
+  validateEngineeringGraphRunOptions,
+  validateEngineeringGraphWorkspaces,
+} from "./graph-run-options.js";
 
 type ExecutionResult = Omit<GraphNodeResult, "id" | "kind" | "status" | "attempts" | "startedAt" | "completedAt">;
-
-class GraphNodeExecutionError extends Error {
-  constructor(
-    message: string,
-    readonly usage: { costUsd: number; tokensUsed: number; sessionId?: string },
-  ) {
-    super(message);
-    this.name = "GraphNodeExecutionError";
-  }
-}
-
-class GraphNodeTimeoutError extends Error {}
-class GraphNodeNonRetryableError extends Error {
-  constructor(
-    message: string,
-    readonly usage?: { costUsd: number; tokensUsed: number; sessionId?: string },
-  ) {
-    super(message);
-  }
-}
-
-class GraphSubgraphPausedError extends Error {
-  constructor(
-    readonly childGraphId: string,
-    readonly waitingFor: string[],
-    readonly usage: { costUsd: number; tokensUsed: number },
-  ) {
-    super(`Subgraph ${childGraphId} is waiting for approval: ${waitingFor.join(", ")}`);
-    this.name = "GraphSubgraphPausedError";
-  }
-}
-
-async function waitForGraphRetry(delayMs: number, signal: AbortSignal): Promise<void> {
-  if (delayMs <= 0) return;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    try {
-      await abortablePromise(
-        new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, delayMs);
-        }),
-        signal,
-        () => signal.reason ?? new Error("Graph retry wait cancelled"),
-      );
-    } catch (error) {
-      if (!signal.aborted) throw error;
-    }
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-function boundedOutput(value: unknown): unknown {
-  if (value === undefined) return undefined;
-  let serialized: string;
-  try {
-    serialized = JSON.stringify(value);
-  } catch {
-    return { truncated: true, preview: "[non-serializable Graph node output]" };
-  }
-  if (serialized === undefined) return { truncated: true, preview: "[unsupported Graph node output]" };
-  if (Buffer.byteLength(serialized) > MAX_GRAPH_OUTPUT_BYTES) {
-    return { truncated: true, preview: serialized.slice(0, 1024) };
-  }
-  return JSON.parse(serialized) as unknown;
-}
 
 async function acknowledgeCommittedWaitSignals(workspace: string, state: EngineeringGraphState): Promise<void> {
   const failures: string[] = [];
@@ -323,383 +117,6 @@ async function acknowledgeCommittedWaitSignals(workspace: string, state: Enginee
     }
   }
   if (failures.length > 0) throw new Error(failures[0]);
-}
-
-function fitOutputBudget(value: unknown, results: ReadonlyMap<string, GraphNodeResult>): unknown {
-  if (value === undefined) return undefined;
-  const used = [...results.values()].reduce(
-    (total, result) => total + (result.output === undefined ? 0 : Buffer.byteLength(JSON.stringify(result.output))),
-    0,
-  );
-  const serialized = JSON.stringify(value);
-  if (used + Buffer.byteLength(serialized) <= MAX_GRAPH_OUTPUT_TOTAL_BYTES) return value;
-  const marker = { truncated: true };
-  return used + Buffer.byteLength(JSON.stringify(marker)) <= MAX_GRAPH_OUTPUT_TOTAL_BYTES ? marker : undefined;
-}
-
-function graphHandler(options: RunEngineeringGraphOptions, id: string): GraphFunctionHandler | undefined {
-  const descriptor = options.handlers ? Object.getOwnPropertyDescriptor(options.handlers, id) : undefined;
-  return descriptor && "value" in descriptor && typeof descriptor.value === "function"
-    ? (descriptor.value as GraphFunctionHandler)
-    : undefined;
-}
-
-function graphExecutor(options: RunEngineeringGraphOptions, id: string): GraphExecutionAdapter | undefined {
-  const descriptor = options.executors ? Object.getOwnPropertyDescriptor(options.executors, id) : undefined;
-  return descriptor && "value" in descriptor && isRecord(descriptor.value)
-    ? (descriptor.value as unknown as GraphExecutionAdapter)
-    : undefined;
-}
-
-function bindingValue(binding: GraphInputBinding, completed: ReadonlyMap<string, GraphNodeResult>): unknown {
-  let value = completed.get(binding.nodeId)?.output;
-  if (!binding.pointer) return value;
-  for (const encoded of binding.pointer.slice(1).split("/")) {
-    const key = encoded.replaceAll("~1", "/").replaceAll("~0", "~");
-    if (key === "__proto__" || key === "prototype" || key === "constructor" || value === null) return undefined;
-    if (Array.isArray(value)) {
-      if (!/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= value.length) return undefined;
-      value = value[Number(key)];
-    } else if (isRecord(value)) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (!descriptor || !("value" in descriptor)) return undefined;
-      value = descriptor.value;
-    } else return undefined;
-  }
-  return value;
-}
-
-function graphInputs(node: GraphNode, completed: ReadonlyMap<string, GraphNodeResult>): Record<string, unknown> {
-  const inputs = Object.create(null) as Record<string, unknown>;
-  for (const [name, binding] of Object.entries(node.inputs ?? {})) {
-    const value = bindingValue(binding, completed);
-    assertGraphValue(value, binding.schema, `Graph node ${node.id} input ${name}`);
-    inputs[name] = value;
-  }
-  return inputs;
-}
-
-function assertGraphValue(value: unknown, schema: GraphValueSchema | undefined, label: string, depth = 0): void {
-  if (!schema) return;
-  const actual = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
-  if (actual !== schema.type) throw new GraphNodeNonRetryableError(`${label} must be ${schema.type}`);
-  if (schema.enum && !schema.enum.some((candidate) => Object.is(candidate, value))) {
-    throw new GraphNodeNonRetryableError(`${label} is outside its enum`);
-  }
-  if (schema.type === "object") {
-    if (!isRecord(value)) throw new GraphNodeNonRetryableError(`${label} must be an object`);
-    for (const name of schema.required ?? []) {
-      if (!Object.hasOwn(value, name)) throw new GraphNodeNonRetryableError(`${label} is missing ${name}`);
-    }
-    if (schema.additionalProperties === false) {
-      for (const name of Object.keys(value)) {
-        if (!Object.hasOwn(schema.properties ?? {}, name)) {
-          throw new GraphNodeNonRetryableError(`${label} contains unsupported property ${name}`);
-        }
-      }
-    }
-    for (const [name, child] of Object.entries(schema.properties ?? {})) {
-      if (Object.hasOwn(value, name)) assertGraphValue(value[name], child, `${label}.${name}`, depth + 1);
-    }
-  }
-  if (schema.type === "array") {
-    const items = value as unknown[];
-    if (schema.minItems !== undefined && items.length < schema.minItems)
-      throw new GraphNodeNonRetryableError(`${label} has fewer than ${schema.minItems} items`);
-    if (schema.maxItems !== undefined && items.length > schema.maxItems)
-      throw new GraphNodeNonRetryableError(`${label} has more than ${schema.maxItems} items`);
-    if (schema.items) {
-      for (const [index, item] of items.entries())
-        assertGraphValue(item, schema.items, `${label}[${index}]`, depth + 1);
-    }
-  }
-  if (depth > 8) throw new GraphNodeNonRetryableError(`${label} schema is too deeply nested`);
-}
-
-async function graphArtifacts(
-  value: GraphFunctionResult["artifacts"],
-  graphId: string,
-  graphFingerprint: string,
-  nodeId: string,
-  workspace: string,
-  verify: boolean,
-  artifactStoreWorkspace: string,
-): Promise<GraphArtifact[] | undefined> {
-  if (value === undefined) return undefined;
-  if (
-    !isDenseArray(value) ||
-    value.length > 32 ||
-    value.some(
-      (artifact) =>
-        !isRecord(artifact) ||
-        typeof artifact.name !== "string" ||
-        !/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(artifact.name) ||
-        !isSafeLoopDagRelativePath(artifact.path) ||
-        (artifact.sha256 !== undefined &&
-          (typeof artifact.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(artifact.sha256))),
-    )
-  ) {
-    throw new GraphNodeNonRetryableError(`Graph function ${nodeId} returned invalid artifacts`);
-  }
-  const root = realpathSync.native(workspace);
-  return Promise.all(
-    value.map(async (artifact): Promise<GraphArtifact> => {
-      const base: GraphArtifact = { ...artifact, producerNodeId: nodeId, verified: false };
-      if (!verify) return base;
-      const target = resolve(root, artifact.path);
-      const stat = lstatSync(target);
-      if (!stat.isFile() || stat.isSymbolicLink()) {
-        throw new GraphNodeNonRetryableError(`Graph artifact is not a physical file: ${artifact.path}`);
-      }
-      const physical = realpathSync.native(target);
-      if (physical !== root && !physical.startsWith(`${root}${sep}`)) {
-        throw new GraphNodeNonRetryableError(`Graph artifact escapes its workspace: ${artifact.path}`);
-      }
-      const hash = createHash("sha256");
-      let verifiedSize = 0;
-      const handle = await open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-      try {
-        const opened = await handle.stat();
-        const current = lstatSync(target);
-        if (
-          !opened.isFile() ||
-          opened.size > MAX_GRAPH_ARTIFACT_BYTES ||
-          opened.dev !== stat.dev ||
-          opened.ino !== stat.ino ||
-          current.dev !== opened.dev ||
-          current.ino !== opened.ino ||
-          realpathSync.native(target) !== physical
-        ) {
-          throw new GraphNodeNonRetryableError(`Graph artifact changed during verification: ${artifact.path}`);
-        }
-        const buffer = Buffer.allocUnsafe(64 * 1024);
-        let position = 0;
-        for (;;) {
-          const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
-          if (bytesRead === 0) break;
-          hash.update(buffer.subarray(0, bytesRead));
-          position += bytesRead;
-        }
-        const after = await handle.stat();
-        const finalPath = lstatSync(target);
-        if (
-          after.size !== opened.size ||
-          position !== opened.size ||
-          finalPath.dev !== opened.dev ||
-          finalPath.ino !== opened.ino ||
-          realpathSync.native(target) !== physical
-        ) {
-          throw new GraphNodeNonRetryableError(`Graph artifact changed during hashing: ${artifact.path}`);
-        }
-        verifiedSize = opened.size;
-      } finally {
-        await handle.close();
-      }
-      const sha256 = hash.digest("hex");
-      if (artifact.sha256 && artifact.sha256 !== sha256) {
-        throw new GraphNodeNonRetryableError(`Graph artifact hash mismatch: ${artifact.path}`);
-      }
-      storeEngineeringGraphArtifact(artifactStoreWorkspace, target, sha256, verifiedSize, {
-        graphId,
-        graphFingerprint,
-        producerNodeId: nodeId,
-        sourcePath: artifact.path,
-      });
-      return { ...base, sha256, sizeBytes: verifiedSize, verified: true };
-    }),
-  );
-}
-
-export function validateEngineeringGraphRunOptions(
-  definition: EngineeringGraphDefinition,
-  options: RunEngineeringGraphOptions,
-): void {
-  for (const [name, value] of [
-    ["resume", options.resume],
-    ["restart", options.restart],
-    ["persist", options.persist],
-  ] as const) {
-    if (value !== undefined && typeof value !== "boolean") throw new Error(`Graph ${name} must be boolean`);
-  }
-  if (options.resume && options.restart) throw new Error("Graph resume and restart cannot be combined");
-  if (
-    options.costBudgetUsd !== undefined &&
-    (typeof options.costBudgetUsd !== "number" || !Number.isFinite(options.costBudgetUsd) || options.costBudgetUsd <= 0)
-  ) {
-    throw new Error("Graph operational costBudgetUsd must be positive and finite");
-  }
-  if (
-    options.tokenBudget !== undefined &&
-    (typeof options.tokenBudget !== "number" || !Number.isSafeInteger(options.tokenBudget) || options.tokenBudget < 1)
-  ) {
-    throw new Error("Graph operational tokenBudget must be a positive safe integer");
-  }
-  if (
-    options.parentGraph !== undefined &&
-    (!isRecord(options.parentGraph) ||
-      !isValidLoopDagId(options.parentGraph.graphId) ||
-      !isValidLoopDagId(options.parentGraph.nodeId))
-  ) {
-    throw new Error("Graph parentGraph provenance is invalid");
-  }
-  if (options.recoveryAttemptId !== undefined && !isValidLoopDagId(options.recoveryAttemptId)) {
-    throw new Error("Graph recoveryAttemptId is invalid");
-  }
-  const declaredNodes = new Set<string>();
-  const gateIds = new Set<string>();
-  const collectPaths = (graph: EngineeringGraphDefinition, prefix = ""): void => {
-    for (const node of graph.nodes) {
-      const path = `${prefix}${node.id}`;
-      declaredNodes.add(path);
-      if (node.kind === "gate") gateIds.add(path);
-      if (node.graph) collectPaths(node.graph, `${path}/`);
-    }
-  };
-  collectPaths(definition);
-  const rerunFrom = validateOrchestrationSelection(options.rerunFrom, {
-    label: "Graph rerunFrom",
-    max: MAX_GRAPH_NODES,
-    knownIds: declaredNodes,
-    isValidId: isValidEngineeringGraphNodePath,
-    allowUndefined: true,
-    allowEmpty: true,
-  });
-  validateOrchestrationSelection(options.approvedNodeIds, {
-    label: "Graph approvedNodeIds",
-    max: MAX_GRAPH_NODES,
-    knownIds: gateIds,
-    isValidId: isValidEngineeringGraphNodePath,
-    allowUndefined: true,
-    allowEmpty: true,
-  });
-  if (rerunFrom.length && !options.resume) throw new Error("Graph rerunFrom requires resume");
-  if (options.persist === false && definition.nodes.some((node) => node.kind === "wait")) {
-    throw new Error("Graph wait nodes require persistence");
-  }
-  const validateHandlers = (graph: EngineeringGraphDefinition): void => {
-    for (const node of graph.nodes) {
-      if (
-        (node.kind === "function" ||
-          (node.kind === "map" && (node.mapKind ?? "handler") === "handler") ||
-          node.kind === "compensation") &&
-        !graphHandler(options, node.handler!)
-      ) {
-        throw new Error(`Graph function handler is not registered: ${node.handler}`);
-      }
-      if (node.kind === "remote") {
-        const adapter = graphExecutor(options, node.executor!);
-        const eligibility = graphExecutionAdapterEligibility(node, adapter);
-        if (eligibility.status !== "eligible") {
-          throw new Error(`Graph remote executor ${node.executor} is ineligible: ${eligibility.reasons.join("; ")}`);
-        }
-      }
-      if (node.graph) validateHandlers(node.graph);
-    }
-  };
-  validateHandlers(definition);
-}
-
-export function validateEngineeringGraphWorkspaces(definition: EngineeringGraphDefinition, workspace: string): void {
-  if (definition.managedWorktrees) {
-    realpathSync.native(resolve(workspace));
-    return;
-  }
-  resolveEngineeringGraphWorkspaces(workspace, definition);
-}
-
-/** Resolves the physical workspace identity used by Graph fingerprints. */
-export function resolveEngineeringGraphWorkspaces(
-  rootInput: string,
-  definition: EngineeringGraphDefinition,
-  overrides: ReadonlyMap<string, string> = new Map(),
-): Map<string, string> {
-  const root = realpathSync.native(resolve(rootInput));
-  const workspaces = new Map<string, string>();
-  const visit = (graph: EngineeringGraphDefinition, graphRoot: string, prefix: string): void => {
-    for (const node of graph.nodes) {
-      const key = `${prefix}${node.id}`;
-      const override = overrides.get(key);
-      const requested =
-        override ??
-        (node.workspace
-          ? isAbsolute(node.workspace)
-            ? node.workspace
-            : resolve(graphRoot, node.workspace)
-          : graphRoot);
-      const rel = relative(graphRoot, resolve(requested));
-      if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-        throw new Error(`Graph node ${key} workspace escapes the graph workspace`);
-      }
-      const stat = lstatSync(requested);
-      if (!stat.isDirectory() || stat.isSymbolicLink()) {
-        throw new Error(`Graph node ${key} workspace must be a physical directory`);
-      }
-      const physical = realpathSync.native(requested);
-      if (physical !== graphRoot && !physical.startsWith(`${graphRoot}${sep}`)) {
-        throw new Error(`Graph node ${key} workspace escapes the graph workspace`);
-      }
-      workspaces.set(key, physical);
-      if (node.graph) visit(node.graph, physical, `${key}/`);
-    }
-    if ((graph.maxConcurrency ?? 1) > 1) {
-      const effectful = graph.nodes.filter(graphNodeIsEffectful);
-      for (let leftIndex = 0; leftIndex < effectful.length; leftIndex++) {
-        for (let rightIndex = leftIndex + 1; rightIndex < effectful.length; rightIndex++) {
-          const left = effectful[leftIndex]!;
-          const right = effectful[rightIndex]!;
-          if (orchestrationDependsOn(graph.nodes, left.id, right.id)) continue;
-          if (orchestrationDependsOn(graph.nodes, right.id, left.id)) continue;
-          assertNonOverlappingOrchestrationPaths(
-            [workspaces.get(`${prefix}${left.id}`)!, workspaces.get(`${prefix}${right.id}`)!],
-            "Concurrent effectful Graph nodes must use non-overlapping physical workspaces",
-          );
-        }
-      }
-    }
-  };
-  visit(definition, root, "");
-  return workspaces;
-}
-
-async function withTimeout<T>(
-  operation: (signal: AbortSignal) => Promise<T>,
-  timeoutMs: number | undefined,
-  parentSignal: AbortSignal | undefined,
-): Promise<T> {
-  const controller = new AbortController();
-  const detach = onAbortOnce(parentSignal, () => controller.abort(parentSignal?.reason));
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    const running = operation(controller.signal);
-    const timeout =
-      timeoutMs === undefined
-        ? undefined
-        : new Promise<never>((_, reject) => {
-            timer = setTimeout(() => {
-              reject(new GraphNodeTimeoutError(`Graph node timed out after ${timeoutMs}ms`));
-            }, timeoutMs);
-            timer.unref?.();
-          });
-    if (!timeout) return await running;
-    try {
-      return await Promise.race([running, timeout]);
-    } catch (error) {
-      if (error instanceof GraphNodeTimeoutError) {
-        controller.abort(error);
-        await running.catch(() => undefined);
-      }
-      throw error;
-    }
-  } finally {
-    if (timer) clearTimeout(timer);
-    detach();
-  }
-}
-
-function retryableError(error: unknown): string {
-  return error instanceof Error
-    ? error.message.slice(0, MAX_GRAPH_EVENT_MESSAGE_CHARS)
-    : String(error).slice(0, MAX_GRAPH_EVENT_MESSAGE_CHARS);
 }
 
 function graphLoopId(graphId: string, nodeId: string, idempotencyKey: string, itemIndex?: number): string {
@@ -880,7 +297,7 @@ async function executeNode(
     if (result.tokensUsed !== undefined && (!Number.isSafeInteger(result.tokensUsed) || result.tokensUsed < 0)) {
       throw new GraphNodeNonRetryableError(`Graph function ${node.id} returned invalid tokensUsed`);
     }
-    const artifacts = await graphArtifacts(
+    const artifacts = await captureGraphArtifacts(
       result.artifacts,
       ownerGraphId,
       ownerGraphFingerprint,
@@ -1014,7 +431,7 @@ async function executeNode(
           }
           try {
             const itemArtifacts =
-              (await graphArtifacts(
+              (await captureGraphArtifacts(
                 result.artifacts,
                 ownerGraphId,
                 ownerGraphFingerprint,
@@ -1109,7 +526,7 @@ async function executeNode(
       if (result.tokensUsed !== undefined && (!Number.isSafeInteger(result.tokensUsed) || result.tokensUsed < 0)) {
         throw new GraphNodeNonRetryableError(`Graph remote ${node.id} returned invalid tokensUsed`);
       }
-      const artifacts = await graphArtifacts(
+      const artifacts = await captureGraphArtifacts(
         result.artifacts,
         ownerGraphId,
         ownerGraphFingerprint,
@@ -1983,7 +1400,7 @@ export async function runEngineeringGraph(
                 }
               }
             }
-            const execution = await withTimeout(
+            const execution = await withGraphTimeout(
               (signal) =>
                 executeNode(
                   deps,
