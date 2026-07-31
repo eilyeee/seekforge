@@ -537,6 +537,36 @@ export function resumeOrchestrationRollout(workspace: string, proposalId: string
   }
 }
 
+export function pauseOrchestrationRollout(
+  workspace: string,
+  proposalId: string,
+  reason = "Operator paused the current cohort",
+): OrchestrationRollout {
+  if (!PROPOSAL_RE.test(proposalId)) throw new Error(`Invalid orchestration proposal id: ${proposalId}`);
+  const normalizedReason = reason.trim();
+  if (normalizedReason.length === 0 || normalizedReason.length > 1_024) {
+    throw new Error("Orchestration rollout pause reason is invalid");
+  }
+  const lease = acquireSessionLease(workspace, `orchestration-rollout-${proposalId}`);
+  try {
+    const rollout = readUnlocked(workspace).find((item) => item.proposalId === proposalId);
+    if (!rollout) throw new Error(`Orchestration rollout not found: ${proposalId}`);
+    if (rollout.phase !== "canary") return rollout;
+    const pausedAt = nextOrchestrationVersion(rollout.updatedAt);
+    const paused = writeRollout(workspace, {
+      ...rollout,
+      phase: "paused",
+      pausedAt,
+      updatedAt: pausedAt,
+      timeline: appendTimeline(rollout.timeline, { at: pausedAt, event: "paused", reason: normalizedReason }),
+    });
+    recordRolloutGateDecision(workspace, rollout, "rejected", normalizedReason);
+    return paused;
+  } finally {
+    lease.release();
+  }
+}
+
 /** Observes canaries, records unique evidence, promotes healthy samples, and rolls regressions back. */
 export function reconcileOrchestrationRollouts(
   workspace: string,

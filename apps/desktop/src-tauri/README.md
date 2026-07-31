@@ -94,8 +94,14 @@ The server child's cwd is, in order:
 1. `SEEKFORGE_WORKSPACE` env var.
 2. The Tauri process's current working directory — so in dev, **launch the
    app from the project directory you want the agent to work on**.
-3. The user's home directory (the bundled app starts with cwd `/`, which is
-   skipped).
+3. An app-owned `bootstrap-workspace` under the Tauri app-data directory when a
+   bundled GUI launch has cwd `/`. It only gives the local server a safe cwd;
+   the React workbench hides it and opens a non-blocking project welcome screen
+   with recent projects and an explicit **Open folder** action.
+
+The native shell never opens a blocking folder picker during startup. After a
+project is open, chat groups each user task into a disclosure: older tasks
+collapse automatically while the newest stays expanded.
 
 ## Dev run
 

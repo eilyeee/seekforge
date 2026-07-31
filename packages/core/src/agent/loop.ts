@@ -355,6 +355,14 @@ function buildWrapupNudge(turnsLeft: number): string {
   );
 }
 
+function buildContinuationNudge(continuation: number, maxContinuations: number): string {
+  return (
+    `[harness] Continue the same task in execution slice ${continuation + 1}/${maxContinuations + 1}. ` +
+    "Preserve the user's objective and the evidence already gathered. Resume from the current plan and state; " +
+    "do not restart completed work. Finish, verify, and return a final answer."
+  );
+}
+
 /** Turns to wait before another reflection nudge can fire (avoid nagging). */
 const REFLECTION_COOLDOWN_TURNS = 3;
 
@@ -445,6 +453,15 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
 
   return {
     async *runTask(input: RunAgentTaskInput): AsyncIterable<AgentEvent> {
+      const maxAutoContinuations = input.maxAutoContinuations ?? 0;
+      if (!Number.isSafeInteger(maxAutoContinuations) || maxAutoContinuations < 0) {
+        throw new RangeError("maxAutoContinuations must be a non-negative safe integer");
+      }
+      const executionSlices = maxAutoContinuations + 1;
+      const totalTurnLimit = limits.maxAgentTurns * executionSlices;
+      if (!Number.isSafeInteger(executionSlices) || !Number.isSafeInteger(totalTurnLimit)) {
+        throw new RangeError("maxAutoContinuations produces an unsafe total turn limit");
+      }
       const resuming = input.resumeSessionId !== undefined;
       const sessionId = input.resumeSessionId ?? newSessionId();
       let sessionLease: Awaited<ReturnType<typeof acquireSessionLeaseWithPreemption>>;
@@ -948,8 +965,26 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           // only for changes that have not been linted.
           let lintRanSinceEdit = false;
 
-          for (let turn = 0; turn < limits.maxAgentTurns; turn++) {
-            turnsUsed = turn + 1;
+          for (let turnIndex = 0; turnIndex < totalTurnLimit; turnIndex++) {
+            const turn = turnIndex % limits.maxAgentTurns;
+            const continuation = Math.floor(turnIndex / limits.maxAgentTurns);
+            if (turn === 0) {
+              wrapupInjected.clear();
+              if (continuation > 0) {
+                yield emit({
+                  type: "session.continuing",
+                  continuation,
+                  maxContinuations: maxAutoContinuations,
+                });
+                // Transient harness guidance: keeping it out of messages.jsonl
+                // preserves the one-user-message-per-run trace invariant.
+                messages.push({
+                  role: "user",
+                  content: buildContinuationNudge(continuation, maxAutoContinuations),
+                });
+              }
+            }
+            turnsUsed++;
             throwIfCancelled();
             // Surface events from background dispatches between turns.
             for (const ev of queue.drainNow()) yield ev;
@@ -969,6 +1004,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             // traced — see WRAPUP_THRESHOLDS for why), before the provider
             // call so this turn's request already carries it.
             const turnsLeft = limits.maxAgentTurns - turn;
+            const hasFutureTurn = turnIndex + 1 < totalTurnLimit;
             if ((WRAPUP_THRESHOLDS as readonly number[]).includes(turnsLeft) && !wrapupInjected.has(turnsLeft)) {
               wrapupInjected.add(turnsLeft);
               messages.push({ role: "user", content: buildWrapupNudge(turnsLeft) });
@@ -1109,7 +1145,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
 
             if (res.toolCalls.length === 0) {
               if (res.finishReason === "length") {
-                if (turnsLeft <= 1) {
+                if (!hasFutureTurn) {
                   throw new AgentLimitError(
                     "max_output_tokens_exceeded",
                     "model output was truncated before a complete final answer",
@@ -1151,7 +1187,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               // otherwise the nudge would consume the model's last answer and the
               // run would end with finalContent undefined (a spurious
               // max_turns_exceeded failure instead of the work it just finished).
-              if (nudge && turnsLeft > 1) {
+              if (nudge && hasFutureTurn) {
                 finalizeFired.add(nudge.kind);
                 // The model's "done" turn joins the in-context history so the
                 // follow-up reads coherently, then the nudge/result. Both
@@ -1527,7 +1563,12 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           for (const ev of queue.drainNow()) yield ev;
 
           if (finalContent === undefined) {
-            throw new AgentLimitError("max_turns_exceeded", `no final answer within ${limits.maxAgentTurns} turns`);
+            throw new AgentLimitError(
+              "max_turns_exceeded",
+              executionSlices === 1
+                ? `no final answer within ${limits.maxAgentTurns} turns`
+                : `no final answer within ${limits.maxAgentTurns * executionSlices} turns across ${executionSlices} execution slices`,
+            );
           }
           throwIfCancelled();
 

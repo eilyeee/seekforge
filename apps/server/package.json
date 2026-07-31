@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@seekforge/core": "workspace:*",
+    "@seekforge/eval-harness": "workspace:*",
     "@seekforge/shared": "workspace:*",
     "ws": "^8.18.0"
   },

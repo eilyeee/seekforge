@@ -29,6 +29,7 @@ import { FileBrowseError, RawFileError, UploadError } from "./files.js";
 import { sendApiError, sendJson } from "./http.js";
 import type { GlobalRouteCtx, RestContext, RouteCtx } from "./routes/context.js";
 import * as filesRoutes from "./routes/files.js";
+import * as evalRoutes from "./routes/evals.js";
 import * as gitRoutes from "./routes/git.js";
 import * as memoryRoutes from "./routes/memory.js";
 import * as loopRoutes from "./routes/loops.js";
@@ -62,6 +63,7 @@ const ROUTE_GROUPS: ReadonlyArray<(ctx: RouteCtx) => Promise<boolean>> = [
   triggerRoutes.handle,
   sessionRoutes.handle,
   filesRoutes.handle,
+  evalRoutes.handle,
   gitRoutes.handle,
   skillsAgentsRoutes.handle,
   memoryRoutes.handle,
@@ -103,13 +105,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
 
     if (method === "GET" && path === "/api/metrics") {
       const metrics = ctx.runManager.metrics();
-      const loops = ctx.registry.summary.flatMap((workspace) => listLoopStates(workspace.path));
-      const graphWorkspaces = ctx.registry.summary.map((workspace) => ({
+      const loops = ctx.registry.projectSummary.flatMap((workspace) => listLoopStates(workspace.path));
+      const graphWorkspaces = ctx.registry.projectSummary.map((workspace) => ({
         workspace,
         states: listEngineeringGraphStates(workspace.path),
       }));
       const graphs = graphWorkspaces.flatMap(({ states }) => states);
-      const loopIntelligence = ctx.registry.summary.flatMap((workspace) =>
+      const loopIntelligence = ctx.registry.projectSummary.flatMap((workspace) =>
         readLoopVerificationIntelligence(workspace.path),
       );
       const loopIntelligenceFindings = analyzeLoopVerificationIntelligence(loopIntelligence);

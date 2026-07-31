@@ -197,8 +197,8 @@ pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
 /// `SEEKFORGE_WORKSPACE` env > the Tauri process cwd (dev: launch the app from
 /// your project dir). Returns `None` for a bundled app launched from Finder
 /// (cwd `/`): we must NOT silently fall back to the user's home folder — the
-/// caller asks the user to pick a folder instead (`home` is unused, kept for
-/// signature stability).
+/// caller starts in an app-owned bootstrap directory (`home` is unused, kept
+/// for signature stability).
 pub fn resolve_workspace(
     env_workspace: Option<&str>,
     cwd: Option<&Path>,
@@ -216,6 +216,11 @@ pub fn resolve_workspace(
         }
     }
     None
+}
+
+/** Stable app-owned cwd used only when a GUI launch has no real project. */
+pub fn desktop_bootstrap_workspace(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join("bootstrap-workspace")
 }
 
 // ---------------------------------------------------------------------------
@@ -748,6 +753,14 @@ mod tests {
             None
         );
         assert_eq!(resolve_workspace(None, None, None), None);
+    }
+
+    #[test]
+    fn bootstrap_workspace_stays_inside_app_data() {
+        assert_eq!(
+            desktop_bootstrap_workspace(Path::new("/app/data")),
+            PathBuf::from("/app/data/bootstrap-workspace")
+        );
     }
 
     // --- diagnostics_text ---

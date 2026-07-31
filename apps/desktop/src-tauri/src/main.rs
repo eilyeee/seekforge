@@ -157,31 +157,34 @@ fn boot_server(handle: &tauri::AppHandle) -> Result<String, String> {
     } else {
         None
     };
-    let extra_env: Vec<(&str, &std::path::Path)> = match static_dir.as_deref() {
+    let env_ws = std::env::var("SEEKFORGE_WORKSPACE").ok();
+    let cwd = std::env::current_dir().ok();
+    let (workspace, bootstrap_workspace) =
+        match serve::resolve_workspace(env_ws.as_deref(), cwd.as_deref(), home.as_deref()) {
+            Some(ws) => (ws, false),
+            None => {
+                // A GUI launch has no meaningful cwd. Start the server in an
+                // app-owned placeholder so the window can open immediately and
+                // let the web UI offer recents / Open Folder without a blocking
+                // native picker during startup.
+                let app_data_dir = handle
+                    .path()
+                    .app_data_dir()
+                    .map_err(|e| format!("could not resolve the app data directory: {e}"))?;
+                let dir = serve::desktop_bootstrap_workspace(&app_data_dir);
+                std::fs::create_dir_all(&dir).map_err(|e| {
+                    format!("could not create the desktop bootstrap workspace: {e}")
+                })?;
+                (dir, true)
+            }
+        };
+    let mut extra_env: Vec<(&str, &std::path::Path)> = match static_dir.as_deref() {
         Some(p) => vec![("SEEKFORGE_STATIC_DIR", p)],
         None => Vec::new(),
     };
-
-    let env_ws = std::env::var("SEEKFORGE_WORKSPACE").ok();
-    let cwd = std::env::current_dir().ok();
-    let workspace =
-        match serve::resolve_workspace(env_ws.as_deref(), cwd.as_deref(), home.as_deref()) {
-            Some(ws) => ws,
-            None => {
-                // Launched from Finder with no workspace: ask the user to choose a
-                // folder rather than silently defaulting to their home directory.
-                match handle.dialog().file().blocking_pick_folder() {
-                    Some(folder) => folder
-                        .into_path()
-                        .map_err(|e| format!("could not use the selected folder: {e}"))?,
-                    None => {
-                        return Err("No project folder was selected. Launch SeekForge again \
-                         and choose a folder for the agent to work on."
-                            .to_string());
-                    }
-                }
-            }
-        };
+    if bootstrap_workspace {
+        extra_env.push(("SEEKFORGE_DESKTOP_BOOTSTRAP_WORKSPACE", &workspace));
+    }
 
     let resolution = if from_sidecar {
         Resolution::Sidecar

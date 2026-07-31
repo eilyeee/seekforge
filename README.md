@@ -39,7 +39,8 @@ skills, reviewable project memory, optional Rust execution backend.
 ✅ **Step 2 — surfaces** (0.7.0): `seekforge-tui` is a full
 Claude-Code-parity terminal UI; `seekforge serve` ships a local web
 workbench (React) plus a Tauri desktop shell; subagents, self-evolution
-and an evaluation harness are in.
+and an evaluation harness are in. Desktop starts without a blocking folder
+dialog, restores recent projects, and folds long chats into per-task blocks.
 
 ✅ **Step 3 — unattended work** (1.0.0): autonomous Loop runs a task to green
 under budget and verification guardrails; Graph Engineering composes Agent,

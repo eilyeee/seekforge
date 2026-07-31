@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
 import { api } from "../../lib/api";
 import type { ChatItem } from "../../lib/events";
 import { teamLayers } from "../../lib/team";
 import { isImagePath, splitImageMarkers } from "../../lib/composer";
 import { formatTokens, formatUsd } from "../../lib/usage";
+import { groupChatTasks, taskGroupStatus, type ChatTaskGroup } from "../../lib/task-groups";
 import { Markdown } from "../Markdown";
 import { PlanCard } from "./PlanCard";
 import { ToolRow } from "./ToolRow";
@@ -406,6 +407,16 @@ function ItemView({
           {t("chat.microCompacted", { clearedResults: item.clearedResults })}
         </div>
       );
+    case "continuing":
+      return (
+        <div className="rounded-xl border border-accent/30 bg-accent-muted/40 px-3 py-2 text-xs text-secondary">
+          <span className="mr-1.5 inline-block animate-pulse text-accent">↻</span>
+          {t("chat.task.continuing", {
+            current: item.continuation + 1,
+            total: item.maxContinuations + 1,
+          })}
+        </div>
+      );
     case "notice":
       return (
         <div
@@ -459,6 +470,82 @@ function ItemView({
   }
 }
 
+function TaskBlock({
+  group,
+  latest,
+  fallbackStatus,
+  onBacktrack,
+  onSubagentSteer,
+  onSubagentCancel,
+}: {
+  group: ChatTaskGroup;
+  latest: boolean;
+  fallbackStatus?: "running" | "completed" | "failed";
+  onBacktrack?: (itemId: number) => void;
+  onSubagentSteer?: (dispatchId: string, message: string) => void;
+  onSubagentCancel?: (dispatchId: string) => void;
+}) {
+  const t = useT();
+  const [open, setOpen] = useState(latest);
+  const wasLatest = useRef(latest);
+  useEffect(() => {
+    if (wasLatest.current !== latest) setOpen(latest);
+    wasLatest.current = latest;
+  }, [latest]);
+
+  if (!group.user) {
+    return (
+      <>
+        {group.items.map((item) => (
+          <ItemView key={item.id} item={item} onSubagentSteer={onSubagentSteer} onSubagentCancel={onSubagentCancel} />
+        ))}
+      </>
+    );
+  }
+
+  const user = group.user;
+  const status = taskGroupStatus(group, fallbackStatus);
+  return (
+    <section className="rounded-2xl border border-transparent transition-colors hover:border-subtle/70">
+      <div className="group flex items-start justify-end gap-1.5">
+        {onBacktrack && (
+          <button
+            type="button"
+            onClick={() => onBacktrack(user.id)}
+            title={t("chat.rewindTitle")}
+            className="focus-ring mt-1 rounded-lg border border-subtle px-1.5 py-0.5 text-xs text-tertiary opacity-0 hover:bg-surface-overlay hover:text-primary group-hover:opacity-100"
+          >
+            ↺
+          </button>
+        )}
+        <div className="flex max-w-[85%] items-stretch overflow-hidden rounded-2xl bg-accent text-white shadow-sm">
+          <div className="min-w-0 flex-1 whitespace-pre-wrap px-4 py-2.5">
+            <TextWithImages text={user.text} />
+          </div>
+          <button
+            type="button"
+            onClick={() => setOpen((value) => !value)}
+            aria-expanded={open}
+            aria-label={t(open ? "chat.task.collapse" : "chat.task.expand")}
+            title={t(open ? "chat.task.collapse" : "chat.task.expand")}
+            className="focus-ring inline-flex shrink-0 items-center gap-1 border-l border-white/15 px-2.5 text-2xs text-white/80 hover:bg-white/10 hover:text-white"
+          >
+            {t(`chat.task.${status}`)}
+            <IconChevron size={13} className={open ? "rotate-90" : ""} />
+          </button>
+        </div>
+      </div>
+      {open && (
+        <div className="mt-4 space-y-4 pl-2">
+          {group.items.map((item) => (
+            <ItemView key={item.id} item={item} onSubagentSteer={onSubagentSteer} onSubagentCancel={onSubagentCancel} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 /**
  * Shared renderer for live chat and read-only session transcripts.
  * `onBacktrack` (live chat only) puts a ↺ rewind button on every user bubble
@@ -469,20 +556,26 @@ export function ChatItems({
   onBacktrack,
   onSubagentSteer,
   onSubagentCancel,
+  historicalStatus,
 }: {
   items: ChatItem[];
   onBacktrack?: (itemId: number) => void;
   onSubagentSteer?: (dispatchId: string, message: string) => void;
   onSubagentCancel?: (dispatchId: string) => void;
+  /** Session metadata supplies terminal state when a read-only transcript has no final report event. */
+  historicalStatus?: "completed" | "failed";
 }) {
   const firstUserId = items.find((i) => i.kind === "user")?.id;
+  const groups = groupChatTasks(items);
   return (
     <div className="space-y-4">
-      {items.map((item) => (
-        <ItemView
-          key={item.id}
-          item={item}
-          onBacktrack={item.kind === "user" && item.id !== firstUserId ? onBacktrack : undefined}
+      {groups.map((group, index) => (
+        <TaskBlock
+          key={group.key}
+          group={group}
+          latest={index === groups.length - 1}
+          fallbackStatus={index < groups.length - 1 ? "completed" : historicalStatus}
+          onBacktrack={group.user && group.user.id !== firstUserId ? onBacktrack : undefined}
           onSubagentSteer={onSubagentSteer}
           onSubagentCancel={onSubagentCancel}
         />

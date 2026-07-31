@@ -581,7 +581,7 @@ describe("plan flavor and mode override", () => {
     await rx.waitFor((f) => f.type === "idle");
 
     expect(inputs).toHaveLength(1);
-    expect(inputs[0]).toMatchObject({ task: "plan it", mode: "ask", plan: true });
+    expect(inputs[0]).toMatchObject({ task: "plan it", mode: "ask", plan: true, maxAutoContinuations: 0 });
   });
 
   it("start without plan leaves it unset", async () => {
@@ -591,7 +591,7 @@ describe("plan flavor and mode override", () => {
 
     sendFrame(ws, { type: "start", task: "no plan", mode: "ask", approvalMode: "confirm" });
     await rx.waitFor((f) => f.type === "idle");
-    expect(inputs[0]?.plan).toBeUndefined();
+    expect(inputs[0]).toMatchObject({ plan: undefined, maxAutoContinuations: 2 });
   });
 
   it("rejects a non-boolean plan", async () => {

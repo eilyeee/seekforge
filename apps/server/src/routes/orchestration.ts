@@ -1,5 +1,6 @@
 import {
   applyOrchestrationProposal,
+  buildWorkspaceOperationalDiagnostics,
   buildWorkspaceOrchestrationReport,
   graphExecutorsWithPlugins,
   listOrchestrationProposals,
@@ -17,10 +18,13 @@ import {
   advanceOrchestrationRollout,
   listOrchestrationRollouts,
   maintainWorkspaceOrchestration,
+  pauseOrchestrationRollout,
   planWorkspaceOrchestrationMaintenance,
   reconcileOrchestrationRollouts,
+  reconcileWorkspaceGraphExecutorCapacity,
   startOrchestrationRollout,
   resumeOrchestrationRollout,
+  resumeOrchestrationController,
 } from "@seekforge/core";
 import { isRecord } from "@seekforge/core";
 import { readJsonBody, sendApiError, sendJson } from "../http.js";
@@ -95,6 +99,61 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
     }
     return true;
   }
+  if (method === "GET" && segs.length === 3 && segs[2] === "diagnostics") {
+    try {
+      sendJson(res, 200, buildWorkspaceOperationalDiagnostics(workspace));
+    } catch (error) {
+      sendApiError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
+    }
+    return true;
+  }
+  if (method === "POST" && segs.length === 4 && segs[2] === "diagnostics" && segs[3] === "reconcile-capacity") {
+    const body = await readJsonBody(ctx.req, res, { emptyOk: true });
+    if (body === undefined) return true;
+    const ids = isRecord(body) ? body.orphanReservationIds : undefined;
+    if (
+      !isRecord(body) ||
+      Object.keys(body).some((key) => key !== "orphanReservationIds") ||
+      (ids !== undefined &&
+        (!Array.isArray(ids) ||
+          ids.length > 512 ||
+          ids.some((id) => typeof id !== "string") ||
+          new Set(ids).size !== ids.length))
+    ) {
+      sendApiError(res, 400, "bad_request", "capacity reconciliation body is invalid");
+      return true;
+    }
+    try {
+      sendJson(
+        res,
+        200,
+        reconcileWorkspaceGraphExecutorCapacity(workspace, {
+          ...(Array.isArray(ids) ? { orphanReservationIds: new Set(ids as string[]) } : {}),
+        }),
+      );
+    } catch (error) {
+      sendApiError(res, 409, "busy", error instanceof Error ? error.message : String(error));
+    }
+    return true;
+  }
+  if (method === "POST" && segs.length === 4 && segs[2] === "controller" && segs[3] === "resume") {
+    const body = await readJsonBody(ctx.req, res, { emptyOk: true });
+    if (body === undefined) return true;
+    if (
+      !isRecord(body) ||
+      Object.keys(body).some((key) => key !== "reason") ||
+      (body.reason !== undefined && typeof body.reason !== "string")
+    ) {
+      sendApiError(res, 400, "bad_request", "controller resume body is invalid");
+      return true;
+    }
+    try {
+      sendJson(res, 200, resumeOrchestrationController(workspace, body.reason as string | undefined));
+    } catch (error) {
+      sendApiError(res, 409, "busy", error instanceof Error ? error.message : String(error));
+    }
+    return true;
+  }
   if (method === "GET" && segs.length === 3 && segs[2] === "proposals") {
     sendJson(res, 200, {
       proposals: listOrchestrationProposals(workspace),
@@ -130,38 +189,48 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
     method === "POST" &&
     segs.length === 5 &&
     segs[2] === "rollouts" &&
-    (segs[4] === "start" || segs[4] === "advance" || segs[4] === "resume")
+    (segs[4] === "start" || segs[4] === "advance" || segs[4] === "pause" || segs[4] === "resume")
   ) {
     const body = await readJsonBody(ctx.req, res, { emptyOk: true });
     if (body === undefined) return true;
-    if (
-      !isRecord(body) ||
-      Object.keys(body).some((key) => key !== "expectedUpdatedAt" && key !== "minSamples") ||
-      (body.expectedUpdatedAt !== undefined && typeof body.expectedUpdatedAt !== "string") ||
-      (body.minSamples !== undefined &&
-        (!Number.isSafeInteger(body.minSamples) ||
-          (body.minSamples as number) < 1 ||
-          (body.minSamples as number) > 32)) ||
-      (segs[4] !== "start" && Object.keys(body).length > 0)
-    ) {
+    if (!isRecord(body)) {
+      sendApiError(res, 400, "bad_request", "rollout transition body is invalid");
+      return true;
+    }
+    const operation = segs[4]!;
+    const startBodyValid =
+      operation === "start" &&
+      Object.keys(body).every((key) => key === "expectedUpdatedAt" || key === "minSamples") &&
+      (body.expectedUpdatedAt === undefined || typeof body.expectedUpdatedAt === "string") &&
+      (body.minSamples === undefined ||
+        (Number.isSafeInteger(body.minSamples) &&
+          (body.minSamples as number) >= 1 &&
+          (body.minSamples as number) <= 32));
+    const pauseBodyValid =
+      operation === "pause" &&
+      Object.keys(body).every((key) => key === "reason") &&
+      (body.reason === undefined || typeof body.reason === "string");
+    if (!(startBodyValid || pauseBodyValid || Object.keys(body).length === 0)) {
       sendApiError(res, 400, "bad_request", "rollout transition body is invalid");
       return true;
     }
     try {
       const result =
-        segs[4] === "start"
+        operation === "start"
           ? startOrchestrationRollout(workspace, segs[3]!, {
               ...(typeof body.expectedUpdatedAt === "string" ? { expectedUpdatedAt: body.expectedUpdatedAt } : {}),
               ...(body.minSamples === undefined ? {} : { minSamples: body.minSamples as number }),
             })
-          : segs[4] === "advance"
+          : operation === "advance"
             ? advanceOrchestrationRollout(workspace, segs[3]!, {
                 executors: Object.freeze({
                   ...graphExecutorsWithPlugins(loadPluginContributions(workspace), ctx.rest.graphExecutors ?? {}),
                   ...(ctx.rest.graphExecutors ?? {}),
                 }),
               })
-            : resumeOrchestrationRollout(workspace, segs[3]!);
+            : operation === "pause"
+              ? pauseOrchestrationRollout(workspace, segs[3]!, body.reason as string | undefined)
+              : resumeOrchestrationRollout(workspace, segs[3]!);
       sendJson(res, 200, result);
     } catch (error) {
       sendApiError(res, 409, "busy", error instanceof Error ? error.message : String(error));

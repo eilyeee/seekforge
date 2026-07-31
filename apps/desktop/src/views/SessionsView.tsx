@@ -274,7 +274,16 @@ export function SessionsView() {
           </Button>
         </header>
         <div className="flex-1 overflow-y-auto px-6 py-5">
-          <ChatItems items={messagesToItems(detail.messages, detail.events)} />
+          <ChatItems
+            items={messagesToItems(detail.messages, detail.events)}
+            historicalStatus={
+              detail.meta.status === "completed"
+                ? "completed"
+                : detail.meta.status === "failed" || detail.meta.status === "cancelled"
+                  ? "failed"
+                  : undefined
+            }
+          />
         </div>
       </div>
     );

@@ -53,6 +53,8 @@ export const PERMISSION_TIMEOUT_MS = 120_000;
  */
 export const DELTA_FLUSH_MS = 25;
 export const SUBSCRIPTION_POLL_MS = 250;
+/** Normal chat gets three bounded execution slices; plan mode stays single-pass. */
+export const CHAT_MAX_AUTO_CONTINUATIONS = 2;
 
 /** Answer reported to the core when the user never answers an ask_user question. */
 export const DECLINED_ANSWER = "(the user declined to answer)";
@@ -402,6 +404,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         plan: input.plan,
         approvalMode: input.approvalMode,
         resumeSessionId: input.resumeSessionId,
+        maxAutoContinuations: input.plan ? 0 : CHAT_MAX_AUTO_CONTINUATIONS,
         ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
         signal: runController.signal,
       })) {

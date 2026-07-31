@@ -356,6 +356,11 @@ export type SubagentEvent =
 
 export type AgentEvent =
   | { type: "session.created"; sessionId: string }
+  /**
+   * The current task crossed one bounded execution slice and is continuing in
+   * the same session. This is progress-only, never a terminal state.
+   */
+  | { type: "session.continuing"; continuation: number; maxContinuations: number }
   | { type: "step.started"; title: string }
   | { type: "step.completed"; title: string }
   | { type: "model.message"; content: string }
@@ -433,6 +438,10 @@ export type Workspace = {
   id: string;
   name: string;
   path: string;
+  /** App-owned server bootstrap directory; never presented as a user project. */
+  placeholder?: boolean;
+  /** Whether DELETE /api/workspaces/:id may stop hosting this workspace. */
+  removable?: boolean;
 };
 
 /** A recently-opened workspace path (not necessarily hosted right now). */
@@ -1634,6 +1643,146 @@ export type EngineeringGraphResourceReport = {
   truncated: boolean;
   worktrees: Array<{ branch: string; path: string; bytes: number }>;
 };
+
+export type EngineeringGraphPlanSummary = {
+  graphId: string;
+  nodeCount: number;
+  maxConcurrency: number;
+  failurePolicy: "stop" | "continue";
+  requiresAgentRuntime: boolean;
+  waves: string[][];
+  compensationOrder: string[];
+  criticalPath: string[];
+  maxParallelWidth: number;
+  maxAttempts: number;
+  maxDynamicItems: number;
+  maxDurationMs?: number;
+  resourceCapacities: Record<string, number>;
+  adaptiveScheduling: boolean;
+};
+
+export type EngineeringGraphSimulationSummary = {
+  graphId: string;
+  makespanMs: number;
+  estimatedActiveDurationMs: number;
+  estimatedCostUsd: number;
+  estimatedTokens: number;
+  criticalPath: string[];
+  bottlenecks: string[];
+  contingencyNodes: string[];
+  risks: string[];
+  nodes: Array<{
+    id: string;
+    kind: string;
+    readyAtMs: number;
+    startMs: number;
+    endMs: number;
+    durationMs: number;
+    resourceWaitMs: number;
+    resources: string[];
+    costUsd: number;
+    tokens: number;
+  }>;
+};
+
+export type EngineeringGraphArtifactTrustKey = {
+  keyId: string;
+  algorithm: "ed25519";
+  publicKeyPem: string;
+  fingerprint: string;
+  status: "active" | "revoked";
+  createdAt: string;
+  revokedAt?: string;
+};
+
+export type EngineeringGraphArtifactAttestation = {
+  id: string;
+  sha256: string;
+  sizeBytes: number;
+  graphId: string;
+  graphFingerprint: string;
+  producerNodeId: string;
+  sourcePath: string;
+  verification: "sha256";
+  createdAt: string;
+};
+
+export type EngineeringGraphArtifactProvenance = {
+  attestationId: string;
+  keyId: string;
+  signature: string;
+  signedAt: string;
+  builderId: string;
+  environmentSha256: string;
+  toolchainSha256: string;
+  inputsSha256: string;
+  sbomSha256?: string;
+};
+
+export type EngineeringGraphArtifactTrustVerification = {
+  trusted: boolean;
+  reason: "verified" | "attestation_missing" | "signature_missing" | "key_missing" | "key_revoked" | "invalid";
+  provenance?: EngineeringGraphArtifactProvenance;
+};
+
+export type WorkspaceOperationalDiagnosticReport = {
+  kind: "loop" | "graph";
+  id: string;
+  healthy: boolean;
+  checkpointStatus: string;
+  observedEvents: number;
+  lastSequence: number;
+  issues: Array<{
+    severity: "warning" | "error";
+    code: string;
+    message: string;
+    sequence?: number;
+    nodeId?: string;
+  }>;
+};
+
+export type WorkspaceOperationalDiagnostics = {
+  generatedAt: string;
+  healthy: boolean;
+  controller: WorkspaceOrchestrationReport["controller"];
+  decisions: WorkspaceOrchestrationReport["decisions"];
+  rollouts: OrchestrationRollout[];
+  loops: WorkspaceOperationalDiagnosticReport[];
+  graphs: WorkspaceOperationalDiagnosticReport[];
+  reservations: Array<{
+    executor: string;
+    reservationId: string;
+    fencingToken: string;
+    acquiredAt: string;
+    expiresAt: string;
+  }>;
+  artifactStore: { blobs: number; bytes: number; referenced: number; attestations: number };
+};
+
+export type EvalTrendEntry = {
+  generatedAt: string;
+  report: string;
+  kind: "eval" | "ab";
+  label: string;
+  samples: number;
+  successes: number;
+  successRate: number;
+  successRateCi95: { lower: number; upper: number; confidence: 0.95 };
+  totalCostUsd: number;
+  costs: {
+    count: number;
+    min: number;
+    p25: number;
+    median: number;
+    p75: number;
+    p95: number;
+    max: number;
+    mean: number;
+    meanCi95: { lower: number; upper: number; confidence: 0.95 };
+  };
+};
+
+export type EvalTrendReport = { generatedAt: string; entries: EvalTrendEntry[] };
 
 export type LoopDagResourceReport = {
   dagId: string;

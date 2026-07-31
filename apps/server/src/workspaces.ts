@@ -17,6 +17,8 @@ export type Workspace = {
   path: string;
   /** Display name (basename of the path). */
   name: string;
+  /** App-owned bootstrap directory used only to start the local server. */
+  placeholder?: boolean;
 };
 
 /** Short, stable, filesystem/url-safe id for an absolute path. */
@@ -35,14 +37,20 @@ export function workspaceFor(path: string): Workspace {
  * resolved to absolute and de-duplicated (first occurrence wins). At least one
  * path must be provided.
  */
-export function createWorkspaceRegistry(paths: string[]): WorkspaceRegistry {
+export function createWorkspaceRegistry(paths: string[], placeholderPath?: string): WorkspaceRegistry {
   const seen = new Set<string>();
   const workspaces: Workspace[] = [];
+  const placeholder = placeholderPath === undefined ? undefined : resolve(placeholderPath);
   for (const p of paths) {
     const abs = resolve(p);
     if (seen.has(abs)) continue;
     seen.add(abs);
-    workspaces.push({ id: workspaceId(abs), path: abs, name: basename(abs) || abs });
+    workspaces.push({
+      id: workspaceId(abs),
+      path: abs,
+      name: basename(abs) || abs,
+      ...(abs === placeholder ? { placeholder: true } : {}),
+    });
   }
   if (workspaces.length === 0) {
     throw new Error("at least one workspace is required");
@@ -62,6 +70,11 @@ export class WorkspaceRegistry {
   /** Ordered workspaces; the first one is the default. */
   get list(): readonly Workspace[] {
     return this.workspaces;
+  }
+
+  /** User-owned projects; excludes the app shell's server bootstrap cwd. */
+  get projects(): readonly Workspace[] {
+    return this.workspaces.filter((workspace) => !workspace.placeholder);
   }
 
   /**
@@ -92,8 +105,19 @@ export class WorkspaceRegistry {
   }
 
   /** Public view for GET /api/workspaces and GET /api/health. */
-  get summary(): Array<{ id: string; name: string; path: string }> {
-    return this.list.map(({ id, name, path }) => ({ id, name, path }));
+  get summary(): Array<{ id: string; name: string; path: string; placeholder?: boolean; removable: boolean }> {
+    return this.list.map(({ id, name, path, placeholder }, index) => ({
+      id,
+      name,
+      path,
+      ...(placeholder ? { placeholder: true } : {}),
+      removable: index > 0,
+    }));
+  }
+
+  /** Public records for real projects only (maintenance/metrics targets). */
+  get projectSummary(): Array<{ id: string; name: string; path: string; removable: boolean }> {
+    return this.summary.filter((workspace) => !workspace.placeholder);
   }
 
   /**

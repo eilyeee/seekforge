@@ -70,6 +70,7 @@ export type ChatItem =
   | { kind: "file"; id: number; path: string }
   | { kind: "compacted"; id: number; droppedTurns: number; summaryTokens: number }
   | { kind: "microcompacted"; id: number; clearedResults: number }
+  | { kind: "continuing"; id: number; continuation: number; maxContinuations: number }
   /** A user-facing message from a hook (notice event / its systemMessage). */
   | { kind: "notice"; id: number; level: "info" | "warn"; message: string }
   | { kind: "report"; id: number; report: FinalReport }
@@ -251,6 +252,13 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
 
     case "session.created":
       return { ...state, sessionId: ev.sessionId };
+
+    case "session.continuing":
+      return push(state, {
+        kind: "continuing",
+        continuation: ev.continuation,
+        maxContinuations: ev.maxContinuations,
+      });
 
     case "step.started": {
       const m = SUBSTEP_RE.exec(ev.title);

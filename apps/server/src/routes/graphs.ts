@@ -21,6 +21,8 @@ import {
   graphHandlersWithPlugins,
   inspectEngineeringGraphResources,
   inspectEngineeringGraphArtifactStore,
+  listEngineeringGraphArtifactTrustKeys,
+  listEngineeringGraphArtifactTrustVerifications,
   isRecord,
   isSessionRunActive,
   isValidLoopDagId,
@@ -43,6 +45,8 @@ import {
   readEngineeringGraphHistory,
   readEngineeringGraphRunSnapshots,
   registerEngineeringGraphTemplate,
+  registerEngineeringGraphArtifactTrustKey,
+  revokeEngineeringGraphArtifactTrustKey,
   resolveEngineeringGraphTemplate,
   compareEngineeringGraphRuns,
   compareEngineeringGraphTemplates,
@@ -51,6 +55,7 @@ import {
   setEngineeringGraphPriority,
   SessionBusyError,
   simulateEngineeringGraph,
+  signEngineeringGraphArtifactAttestation,
   summarizeGraphSchedulingIntelligence,
   validateEngineeringGraphRunOptions,
   validateEngineeringGraphWorkspaces,
@@ -432,6 +437,95 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
   }
 
   if (segs[2] === "artifact-store") {
+    if (method === "GET" && segs.length === 4 && segs[3] === "trust") {
+      sendJson(res, 200, {
+        keys: listEngineeringGraphArtifactTrustKeys(workspace),
+        attestations: listEngineeringGraphArtifactTrustVerifications(workspace),
+      });
+      return true;
+    }
+    if (method === "POST" && segs.length === 5 && segs[3] === "trust" && segs[4] === "keys") {
+      const body = await readJsonBody(ctx.req, res);
+      if (body === undefined) return true;
+      if (
+        !isRecord(body) ||
+        Object.keys(body).some((key) => key !== "keyId" && key !== "publicKeyPem") ||
+        typeof body.keyId !== "string" ||
+        typeof body.publicKeyPem !== "string"
+      ) {
+        sendApiError(res, 400, "bad_request", "Graph artifact trust key body is invalid");
+        return true;
+      }
+      try {
+        sendJson(res, 201, registerEngineeringGraphArtifactTrustKey(workspace, body.keyId, body.publicKeyPem));
+      } catch (error) {
+        sendApiError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
+      }
+      return true;
+    }
+    if (method === "POST" && segs.length === 7 && segs[3] === "trust" && segs[4] === "keys" && segs[6] === "revoke") {
+      const body = await readJsonBody(ctx.req, res, { emptyOk: true });
+      if (body === undefined) return true;
+      if (!isRecord(body) || Object.keys(body).length > 0) {
+        sendApiError(res, 400, "bad_request", "Graph artifact trust revoke body must be empty");
+        return true;
+      }
+      try {
+        sendJson(res, 200, revokeEngineeringGraphArtifactTrustKey(workspace, segs[5]!));
+      } catch (error) {
+        sendApiError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
+      }
+      return true;
+    }
+    if (method === "POST" && segs.length === 5 && segs[3] === "trust" && segs[4] === "sign") {
+      const body = await readJsonBody(ctx.req, res);
+      if (body === undefined) return true;
+      const allowed = [
+        "attestationId",
+        "keyId",
+        "privateKeyPem",
+        "builderId",
+        "environmentSha256",
+        "toolchainSha256",
+        "inputsSha256",
+        "sbomSha256",
+      ];
+      if (
+        !isRecord(body) ||
+        Object.keys(body).some((key) => !allowed.includes(key)) ||
+        [
+          body.attestationId,
+          body.keyId,
+          body.privateKeyPem,
+          body.builderId,
+          body.environmentSha256,
+          body.toolchainSha256,
+          body.inputsSha256,
+        ].some((value) => typeof value !== "string") ||
+        (body.sbomSha256 !== undefined && typeof body.sbomSha256 !== "string")
+      ) {
+        sendApiError(res, 400, "bad_request", "Graph artifact trust signing body is invalid");
+        return true;
+      }
+      try {
+        sendJson(
+          res,
+          200,
+          signEngineeringGraphArtifactAttestation(workspace, body.attestationId as string, {
+            keyId: body.keyId as string,
+            privateKeyPem: body.privateKeyPem as string,
+            builderId: body.builderId as string,
+            environmentSha256: body.environmentSha256 as string,
+            toolchainSha256: body.toolchainSha256 as string,
+            inputsSha256: body.inputsSha256 as string,
+            ...(typeof body.sbomSha256 === "string" ? { sbomSha256: body.sbomSha256 } : {}),
+          }),
+        );
+      } catch (error) {
+        sendApiError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
+      }
+      return true;
+    }
     if (method === "GET" && segs.length === 3) {
       sendJson(res, 200, { artifacts: inspectEngineeringGraphArtifactStore(workspace) });
       return true;

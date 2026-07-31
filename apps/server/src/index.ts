@@ -93,6 +93,8 @@ export type StartServerOptions = {
   workspaces?: string[];
   /** Single-workspace shorthand (back-compat). Equivalent to `workspaces: [workspace]`. */
   workspace?: string;
+  /** App-owned bootstrap workspace that clients should not present as a project. */
+  placeholderWorkspace?: string;
   /** TCP port (127.0.0.1). 0 picks an ephemeral port. Default: 7373. */
   port?: number;
   /** Pre-set auth token (embedding/tests); random when omitted. */
@@ -220,7 +222,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   if (paths.length === 0) {
     throw new Error("startServer requires `workspaces` or `workspace`");
   }
-  const registry = createWorkspaceRegistry(paths);
+  const registry = createWorkspaceRegistry(paths, opts.placeholderWorkspace);
   const coordinator = new ServerCoordinator();
   const worktrees = new WorktreeManager(registry, coordinator);
   const token = opts.token ?? randomBytes(24).toString("base64url");
@@ -338,7 +340,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
 
   const memoryMaintenanceScheduler = createMemoryMaintenanceScheduler({
     targets: () =>
-      registry.list.map((workspace) => ({
+      registry.projects.map((workspace) => ({
         workspace: workspace.path,
         getConfig: () => loadConfig(workspace.path).memoryMaintenance,
       })),
@@ -369,7 +371,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       opts.loopAutoResume || opts.loopAutoPrune
         ? createLoopRecoveryScheduler({
             targets: () =>
-              registry.list.map((workspace) => ({
+              registry.projects.map((workspace) => ({
                 workspace: workspace.path,
                 recover: async (signal): Promise<LoopResult[] | undefined> => {
                   const attempt = await coordinator.tryWithIdleAgentMutation(
@@ -502,7 +504,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       opts.graphAutoResume || opts.graphAutoPrune
         ? createGraphMaintenanceScheduler({
             targets: () =>
-              registry.list.map((workspace) => ({
+              registry.projects.map((workspace) => ({
                 workspace: workspace.path,
                 maintain: async (signal) => {
                   const attempt = await coordinator.tryWithIdleAgentMutation(
@@ -626,7 +628,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     orchestrationMaintenanceScheduler = opts.orchestrationAutoMaintain
       ? createOrchestrationMaintenanceScheduler({
           targets: () =>
-            registry.list.map((workspace) => ({
+            registry.projects.map((workspace) => ({
               workspace: workspace.path,
               maintain: async (signal) => {
                 const attempt = await coordinator.tryWithIdleAgentMutation(

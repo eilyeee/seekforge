@@ -22,6 +22,15 @@ describe("reduceEvent", () => {
     expect(s.items).toHaveLength(0);
   });
 
+  it("keeps an automatic continuation as non-terminal task progress", () => {
+    const s = play([{ type: "session.continuing", continuation: 1, maxContinuations: 2 }], {
+      ...initialChatState(),
+      running: true,
+    });
+    expect(s.running).toBe(true);
+    expect(s.items[0]).toMatchObject({ kind: "continuing", continuation: 1, maxContinuations: 2 });
+  });
+
   it("accumulates model.delta chunks into one streaming assistant item", () => {
     const s = play([
       { type: "model.delta", chunk: "Hel" },

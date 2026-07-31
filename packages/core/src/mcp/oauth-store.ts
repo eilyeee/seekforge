@@ -1,8 +1,9 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { chmodSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { acquireSessionLease } from "../agent/session-lease.js";
 import { seekforgeHome } from "../memory/store.js";
-import { writeFileAtomic } from "../util/fs.js";
-import { isRecord } from "../util/guards.js";
+import { readFileIfExists, writeFileAtomic } from "../util/fs.js";
+import { hasOnlyKeys, isRecord } from "../util/guards.js";
 import type { McpOAuthTokens } from "./oauth.js";
 
 /**
@@ -32,6 +33,8 @@ export type McpOAuthCredential = {
 type CredentialFile = { version: 1; credentials: McpOAuthCredential[] };
 
 const MAX_CREDENTIALS = 64;
+const MAX_STORE_BYTES = 256 * 1024;
+const MAX_SECRET_CHARS = 16 * 1024;
 const FILE_MODE = 0o600;
 
 export function mcpOAuthStorePath(): string {
@@ -43,29 +46,70 @@ function credentialKey(serverName: string, serverUrl: string): string {
 }
 
 function parseCredential(value: unknown): McpOAuthCredential | null {
-  if (!isRecord(value)) return null;
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      "serverName",
+      "serverUrl",
+      "tokenEndpoint",
+      "clientId",
+      "clientSecret",
+      "refreshToken",
+      "accessToken",
+      "expiresAt",
+      "scope",
+      "updatedAt",
+    ])
+  )
+    return null;
   const required = ["serverName", "serverUrl", "tokenEndpoint", "clientId", "updatedAt"] as const;
   for (const key of required) {
-    if (typeof value[key] !== "string" || (value[key] as string).length === 0) return null;
+    if (
+      typeof value[key] !== "string" ||
+      (value[key] as string).length === 0 ||
+      (value[key] as string).length > MAX_SECRET_CHARS
+    )
+      return null;
   }
   const optional = ["clientSecret", "refreshToken", "accessToken", "expiresAt", "scope"] as const;
   for (const key of optional) {
-    if (value[key] !== undefined && typeof value[key] !== "string") return null;
+    if (
+      value[key] !== undefined &&
+      (typeof value[key] !== "string" || (value[key] as string).length > MAX_SECRET_CHARS)
+    )
+      return null;
+  }
+  if (!Number.isFinite(Date.parse(value.updatedAt as string))) return null;
+  if (value.expiresAt !== undefined && !Number.isFinite(Date.parse(value.expiresAt as string))) return null;
+  try {
+    for (const key of ["serverUrl", "tokenEndpoint"] as const) {
+      const url = new URL(value[key] as string);
+      if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    }
+  } catch {
+    return null;
   }
   return value as unknown as McpOAuthCredential;
 }
 
 function readStore(): CredentialFile {
   const path = mcpOAuthStorePath();
-  if (!existsSync(path)) return { version: 1, credentials: [] };
+  const raw = readFileIfExists(path, MAX_STORE_BYTES);
+  if (raw === undefined) return { version: 1, credentials: [] };
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    parsed = JSON.parse(raw) as unknown;
   } catch {
     // A corrupt store must not block a fresh login; it is replaced on write.
     return { version: 1, credentials: [] };
   }
-  if (!isRecord(parsed) || parsed.version !== 1 || !Array.isArray(parsed.credentials)) {
+  if (
+    !isRecord(parsed) ||
+    !hasOnlyKeys(parsed, ["version", "credentials"]) ||
+    parsed.version !== 1 ||
+    !Array.isArray(parsed.credentials) ||
+    parsed.credentials.length > MAX_CREDENTIALS
+  ) {
     return { version: 1, credentials: [] };
   }
   const credentials: McpOAuthCredential[] = [];
@@ -100,31 +144,37 @@ export function readMcpOAuthCredential(serverName: string, serverUrl: string): M
 export function saveMcpOAuthCredential(
   input: Omit<McpOAuthCredential, "updatedAt"> & { updatedAt?: string },
 ): McpOAuthCredential {
-  const file = readStore();
-  const key = credentialKey(input.serverName, input.serverUrl);
-  const index = file.credentials.findIndex(
-    (credential) => credentialKey(credential.serverName, credential.serverUrl) === key,
-  );
-  const previous = index >= 0 ? file.credentials[index] : undefined;
-  const next: McpOAuthCredential = {
-    ...input,
-    // Rotation is optional in OAuth: an omitted refresh_token means "keep using
-    // the one you have", so dropping it here would silently break renewal.
-    ...(input.refreshToken === undefined && previous?.refreshToken !== undefined
-      ? { refreshToken: previous.refreshToken }
-      : {}),
-    updatedAt: input.updatedAt ?? new Date().toISOString(),
-  };
-  if (index >= 0) file.credentials[index] = next;
-  else file.credentials.push(next);
-  if (file.credentials.length > MAX_CREDENTIALS) {
-    file.credentials = file.credentials
-      .slice()
-      .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
-      .slice(0, MAX_CREDENTIALS);
+  const lease = acquireSessionLease(seekforgeHome(), "mcp-oauth-credentials");
+  try {
+    const file = readStore();
+    const key = credentialKey(input.serverName, input.serverUrl);
+    const index = file.credentials.findIndex(
+      (credential) => credentialKey(credential.serverName, credential.serverUrl) === key,
+    );
+    const previous = index >= 0 ? file.credentials[index] : undefined;
+    const next: McpOAuthCredential = {
+      ...input,
+      // Rotation is optional in OAuth: an omitted refresh_token means "keep using
+      // the one you have", so dropping it here would silently break renewal.
+      ...(input.refreshToken === undefined && previous?.refreshToken !== undefined
+        ? { refreshToken: previous.refreshToken }
+        : {}),
+      updatedAt: input.updatedAt ?? new Date().toISOString(),
+    };
+    if (!parseCredential(next)) throw new Error("MCP OAuth credential is invalid");
+    if (index >= 0) file.credentials[index] = next;
+    else file.credentials.push(next);
+    if (file.credentials.length > MAX_CREDENTIALS) {
+      file.credentials = file.credentials
+        .slice()
+        .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+        .slice(0, MAX_CREDENTIALS);
+    }
+    writeStore(file);
+    return next;
+  } finally {
+    lease.release();
   }
-  writeStore(file);
-  return next;
 }
 
 /** Records the tokens from a login or refresh against an existing client. */
@@ -143,13 +193,18 @@ export function recordMcpOAuthTokens(
 
 /** Returns true when a credential was removed. */
 export function deleteMcpOAuthCredential(serverName: string, serverUrl?: string): boolean {
-  const file = readStore();
-  const remaining = file.credentials.filter((credential) =>
-    serverUrl === undefined
-      ? credential.serverName !== serverName
-      : credentialKey(credential.serverName, credential.serverUrl) !== credentialKey(serverName, serverUrl),
-  );
-  if (remaining.length === file.credentials.length) return false;
-  writeStore({ version: 1, credentials: remaining });
-  return true;
+  const lease = acquireSessionLease(seekforgeHome(), "mcp-oauth-credentials");
+  try {
+    const file = readStore();
+    const remaining = file.credentials.filter((credential) =>
+      serverUrl === undefined
+        ? credential.serverName !== serverName
+        : credentialKey(credential.serverName, credential.serverUrl) !== credentialKey(serverName, serverUrl),
+    );
+    if (remaining.length === file.credentials.length) return false;
+    writeStore({ version: 1, credentials: remaining });
+    return true;
+  } finally {
+    lease.release();
+  }
 }

@@ -85,6 +85,27 @@ describe("workspace registry", () => {
     expect(list[0]!.id).not.toBe(list[1]!.id);
   });
 
+  it("marks an app bootstrap workspace as a non-removable placeholder", async () => {
+    const bootstrap = makeWorkspace();
+    const project = makeWorkspace();
+    server = await startServer({
+      workspaces: [bootstrap, project],
+      placeholderWorkspace: bootstrap,
+      port: 0,
+      token: TOKEN,
+      createAgent: unusedAgentFactory,
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+
+    const body = (await (await authed(base, "/api/workspaces")).json()) as {
+      workspaces: Array<{ path: string; placeholder?: boolean; removable: boolean }>;
+    };
+    expect(body.workspaces).toEqual([
+      expect.objectContaining({ path: bootstrap, placeholder: true, removable: false }),
+      expect.objectContaining({ path: project, removable: true }),
+    ]);
+  });
+
   it("GET /api/health includes the workspaces list and the default workspace", async () => {
     const a = makeWorkspace();
     const b = makeWorkspace();

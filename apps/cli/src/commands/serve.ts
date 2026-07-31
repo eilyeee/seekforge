@@ -51,10 +51,13 @@ export async function serveCommand(opts: ServeOptions): Promise<void> {
   // a real on-disk dist from inside a compiled binary's virtual FS.
   const envStatic = process.env.SEEKFORGE_STATIC_DIR;
   const staticDir = envStatic && envStatic.length > 0 ? resolve(envStatic) : undefined;
+  const envPlaceholder = process.env.SEEKFORGE_DESKTOP_BOOTSTRAP_WORKSPACE;
+  const placeholderWorkspace = envPlaceholder && envPlaceholder.length > 0 ? resolve(envPlaceholder) : undefined;
   const { port, token, close } = await startServer({
     workspaces,
     port: opts.port,
     staticDir,
+    placeholderWorkspace,
     loopAutoResume: opts.loopAutoResume,
     loopAutoPrune: opts.loopAutoPrune,
     graphAutoResume: opts.graphAutoResume,

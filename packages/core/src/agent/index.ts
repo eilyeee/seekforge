@@ -14,6 +14,12 @@ export type RunAgentTaskInput = {
   approvalMode: ApprovalMode;
   /** Continue an existing session: replays its messages, appends `task`. */
   resumeSessionId?: string;
+  /**
+   * Extra bounded execution slices after `maxAgentTurns` is reached. Each
+   * slice continues in-memory in the same session without adding a user turn.
+   * Default 0 preserves CLI/SDK limit semantics.
+   */
+  maxAutoContinuations?: number;
   /** Cooperative cancellation (Ctrl+C). Checked between turns and tool calls. */
   signal?: AbortSignal;
   /**
@@ -218,6 +224,7 @@ export {
 } from "./graph-artifact-store.js";
 export {
   listEngineeringGraphArtifactTrustKeys,
+  listEngineeringGraphArtifactTrustVerifications,
   registerEngineeringGraphArtifactTrustKey,
   revokeEngineeringGraphArtifactTrustKey,
   signEngineeringGraphArtifactAttestation,
@@ -387,8 +394,13 @@ export {
   type WorkspaceContextualLoopRoutingProfile,
 } from "./orchestration-routing.js";
 export {
+  buildWorkspaceOperationalDiagnostics,
+  type WorkspaceOperationalDiagnostics,
+} from "./orchestration-operations.js";
+export {
   advanceOrchestrationRollout,
   listOrchestrationRollouts,
+  pauseOrchestrationRollout,
   recordOrchestrationRolloutSample,
   reconcileOrchestrationRollouts,
   resumeOrchestrationRollout,

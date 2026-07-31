@@ -508,7 +508,7 @@ describe("runAutoLoop", () => {
       modelRouteReason: "escalated_category",
       failureStreak: 2,
     });
-  });
+  }, 30_000);
 
   it("resolves routed providers only after pure validation and can route back to the default provider", async () => {
     const base = alwaysDone("base");

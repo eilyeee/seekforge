@@ -9,6 +9,7 @@ import {
 } from "../../src/agent/graph-artifact-store.js";
 import {
   registerEngineeringGraphArtifactTrustKey,
+  listEngineeringGraphArtifactTrustVerifications,
   revokeEngineeringGraphArtifactTrustKey,
   signEngineeringGraphArtifactAttestation,
   verifyEngineeringGraphArtifactAttestationTrust,
@@ -52,6 +53,9 @@ describe("Graph artifact trust", () => {
       trusted: true,
       reason: "verified",
     });
+    expect(listEngineeringGraphArtifactTrustVerifications(root)).toMatchObject([
+      { attestation: { id: attestationId }, verification: { trusted: true, reason: "verified" } },
+    ]);
     const rotated = generateKeyPairSync("ed25519");
     registerEngineeringGraphArtifactTrustKey(
       root,

@@ -8,6 +8,7 @@ import { QuestionModal } from "./components/chat/QuestionModal";
 import { Onboarding } from "./components/Onboarding";
 import { Sidebar } from "./components/Sidebar";
 import { TodosPanel } from "./components/TodosPanel";
+import { WorkspaceWelcome } from "./components/WorkspaceWelcome";
 // ChatView is the default landing view, so it stays eager. The remaining,
 // lower-frequency views are split into on-demand chunks via React.lazy to
 // shrink the initial bundle (they load the first time their nav is opened).
@@ -71,6 +72,9 @@ export function App() {
   const bootError = useStore((s) => s.bootError);
   const retryBoot = useStore((s) => s.retryBoot);
   const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
+  const workspaces = useStore((s) => s.workspaces);
+  const workspacesLoaded = useStore((s) => s.workspacesLoaded);
+  const needsWorkspace = workspacesLoaded && workspaces.length === 0;
 
   // First-run welcome ahead of the workbench when no API key is configured.
   if (onboarding === "needed") {
@@ -79,7 +83,7 @@ export function App() {
 
   return (
     <div className="flex h-full">
-      <Sidebar />
+      {!needsWorkspace && <Sidebar />}
       <main className="flex min-w-0 flex-1 flex-col">
         {IS_MAC && <div data-tauri-drag-region className="h-9 shrink-0" />}
         {bootError && (
@@ -96,26 +100,32 @@ export function App() {
               <div className="flex h-full items-center justify-center text-sm text-tertiary">{t("common.loading")}</div>
             }
           >
-            {view === "chat" && <ChatView />}
-            {view === "sessions" && <SessionsView key={activeWorkspaceId} />}
-            {view === "diff" && <DiffView key={activeWorkspaceId} />}
-            {view === "files" && <FilesView key={activeWorkspaceId} />}
-            {view === "git" && <GitView key={activeWorkspaceId} />}
-            {view === "skills" && <SkillsView key={activeWorkspaceId} />}
-            {view === "plugins" && <PluginsView key={activeWorkspaceId} />}
-            {view === "agents" && <AgentsView key={activeWorkspaceId} />}
-            {view === "memory" && <MemoryView key={activeWorkspaceId} />}
-            {view === "evolution" && <EvolutionView key={activeWorkspaceId} />}
-            {view === "hooks" && <HooksView key={activeWorkspaceId} />}
-            {view === "security" && <SecurityView key={activeWorkspaceId} />}
-            {view === "settings" && <SettingsView key={activeWorkspaceId} />}
-            {view === "diagnostics" && <DiagnosticsView key={activeWorkspaceId} />}
+            {needsWorkspace ? (
+              <WorkspaceWelcome />
+            ) : (
+              <>
+                {view === "chat" && <ChatView />}
+                {view === "sessions" && <SessionsView key={activeWorkspaceId} />}
+                {view === "diff" && <DiffView key={activeWorkspaceId} />}
+                {view === "files" && <FilesView key={activeWorkspaceId} />}
+                {view === "git" && <GitView key={activeWorkspaceId} />}
+                {view === "skills" && <SkillsView key={activeWorkspaceId} />}
+                {view === "plugins" && <PluginsView key={activeWorkspaceId} />}
+                {view === "agents" && <AgentsView key={activeWorkspaceId} />}
+                {view === "memory" && <MemoryView key={activeWorkspaceId} />}
+                {view === "evolution" && <EvolutionView key={activeWorkspaceId} />}
+                {view === "hooks" && <HooksView key={activeWorkspaceId} />}
+                {view === "security" && <SecurityView key={activeWorkspaceId} />}
+                {view === "settings" && <SettingsView key={activeWorkspaceId} />}
+                {view === "diagnostics" && <DiagnosticsView key={activeWorkspaceId} />}
+              </>
+            )}
           </Suspense>
         </div>
       </main>
-      {todosOpen && <TodosPanel key={activeWorkspaceId} />}
-      <CommandPalette />
-      <PendingModals />
+      {!needsWorkspace && todosOpen && <TodosPanel key={activeWorkspaceId} />}
+      {!needsWorkspace && <CommandPalette />}
+      {!needsWorkspace && <PendingModals />}
     </div>
   );
 }

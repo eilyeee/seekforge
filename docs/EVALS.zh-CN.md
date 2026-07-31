@@ -68,6 +68,10 @@ Git SHA、数据集 SHA-256、Node 版本和平台。这样既不破坏旧的报
 `evals/reports/trends.json` 和 `evals/reports/trends.md`。格式错误或不兼容的
 历史文件会被跳过，而不会污染当前运行。
 
+Desktop 的 **Eval 趋势** 面板通过 `GET /api/evals/trends?limit=<1..200>`
+读取同一份有界数据源，绘制成功率和总成本历史，并列出最新报告/变体数据点。
+格式错误或不兼容的文件仍由 eval harness 解析器负责，UI 不会自行解释。
+
 ### Runner 模式
 
 没有 `runner` 字段的任务保持历史的单会话 `agent` 行为。支持三种 runner 值：

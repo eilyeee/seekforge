@@ -1,4 +1,5 @@
 import { formatCostUsd } from "@seekforge/shared/format";
+import { useState } from "react";
 import { useT } from "../../lib/i18n";
 import type { OrchestrationProposal, WorkspaceOrchestrationReport } from "../../types";
 import { Badge, Button } from "../ui";
@@ -10,13 +11,17 @@ export function OrchestrationIntelligenceSection(props: {
   onProposalReview: (proposal: OrchestrationProposal, status: "approve" | "dismiss") => void;
   onProposalApply: (proposal: OrchestrationProposal) => void;
   onProposalRollback: (proposal: OrchestrationProposal) => void;
-  onRolloutStart: (proposal: OrchestrationProposal) => void;
+  onRolloutStart: (proposal: OrchestrationProposal, minSamples: number) => void;
   onRolloutAdvance: (proposal: OrchestrationProposal) => void;
+  onRolloutPause: (proposal: OrchestrationProposal, reason?: string) => void;
   onRolloutResume: (proposal: OrchestrationProposal) => void;
-  onObserve: () => void;
+  onObserve: (autoRollback: boolean) => void;
+  onControllerResume: (reason?: string) => void;
 }) {
   const t = useT();
   const report = props.report;
+  const [minSamples, setMinSamples] = useState(3);
+  const [autoRollback, setAutoRollback] = useState(false);
   return (
     <section className="mt-3 rounded border border-subtle p-2 text-xs text-secondary">
       <div className="flex items-center justify-between gap-2">
@@ -53,6 +58,20 @@ export function OrchestrationIntelligenceSection(props: {
           <p className="mt-1 text-tertiary">
             {t("chat.loop.orchestration.controller")}: {report.controller.mode} · {report.controller.reason}
             {` · ${report.decisions.length} ${t("chat.loop.orchestration.decisions")}`}
+            {report.controller.mode === "frozen" && (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={props.busy}
+                onClick={() =>
+                  props.onControllerResume(
+                    window.prompt(t("chat.loop.orchestration.resumeReason"))?.trim() || undefined,
+                  )
+                }
+              >
+                {t("chat.loop.orchestration.resumeController")}
+              </Button>
+            )}
           </p>
           <p className="mt-1 text-tertiary">
             {t("chat.loop.orchestration.control")}:{" "}
@@ -142,6 +161,17 @@ export function OrchestrationIntelligenceSection(props: {
           )}
           {report.reviewedProposals.length > 0 && (
             <div className="mt-2 space-y-1">
+              <label className="text-tertiary">
+                {t("chat.loop.orchestration.minSamples")}{" "}
+                <input
+                  className="w-16 rounded border border-subtle bg-surface px-1"
+                  type="number"
+                  min={1}
+                  max={32}
+                  value={minSamples}
+                  onChange={(event) => setMinSamples(Math.max(1, Math.min(32, Number(event.target.value) || 1)))}
+                />
+              </label>
               {report.reviewedProposals.map((proposal) => (
                 <div key={proposal.id} className="flex flex-wrap items-center gap-1 rounded border border-subtle p-1">
                   <Badge
@@ -187,7 +217,7 @@ export function OrchestrationIntelligenceSection(props: {
                         size="sm"
                         variant="ghost"
                         disabled={props.busy}
-                        onClick={() => props.onRolloutStart(proposal)}
+                        onClick={() => props.onRolloutStart(proposal, minSamples)}
                       >
                         {t("chat.loop.orchestration.startRollout")}
                       </Button>
@@ -217,6 +247,23 @@ export function OrchestrationIntelligenceSection(props: {
                       onClick={() => props.onRolloutAdvance(proposal)}
                     >
                       {t("chat.loop.orchestration.advanceRollout")}
+                    </Button>
+                  )}
+                  {report.rollouts.some(
+                    (rollout) => rollout.proposalId === proposal.id && rollout.phase === "canary",
+                  ) && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={props.busy}
+                      onClick={() =>
+                        props.onRolloutPause(
+                          proposal,
+                          window.prompt(t("chat.loop.orchestration.pauseReason"))?.trim() || undefined,
+                        )
+                      }
+                    >
+                      {t("chat.loop.orchestration.pauseRollout")}
                     </Button>
                   )}
                   {report.rollouts.some(
@@ -262,10 +309,18 @@ export function OrchestrationIntelligenceSection(props: {
             </div>
           )}
           {report.deployments.length > 0 && (
-            <div className="mt-2 flex items-center gap-2">
-              <Button size="sm" variant="ghost" disabled={props.busy} onClick={props.onObserve}>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="ghost" disabled={props.busy} onClick={() => props.onObserve(autoRollback)}>
                 {t("chat.loop.orchestration.observe")}
               </Button>
+              <label className="text-tertiary">
+                <input
+                  type="checkbox"
+                  checked={autoRollback}
+                  onChange={(event) => setAutoRollback(event.target.checked)}
+                />{" "}
+                {t("chat.loop.orchestration.autoRollback")}
+              </label>
               <span className="text-tertiary">
                 {report.deployments
                   .map((deployment) => `${deployment.proposalId}: ${deployment.status}/${deployment.verdict}`)
@@ -274,15 +329,28 @@ export function OrchestrationIntelligenceSection(props: {
             </div>
           )}
           {report.rollouts.length > 0 && (
-            <p className="mt-1 text-tertiary">
-              {t("chat.loop.orchestration.rollouts")}:{" "}
-              {report.rollouts
-                .map(
-                  (rollout) =>
-                    `${rollout.proposalId}: ${rollout.phase}/${rollout.stagePercent}% (${rollout.stageObservationIds.length}/${rollout.minSamples}) · ${rollout.timeline.at(-1)?.event ?? "unknown"}`,
-                )
-                .join("; ")}
-            </p>
+            <details className="mt-1 text-tertiary">
+              <summary className="cursor-pointer">{t("chat.loop.orchestration.rollouts")}</summary>
+              <p>
+                {t("chat.loop.orchestration.rollouts")}:{" "}
+                {report.rollouts
+                  .map(
+                    (rollout) =>
+                      `${rollout.proposalId}: ${rollout.phase}/${rollout.stagePercent}% (${rollout.stageObservationIds.length}/${rollout.minSamples}) · ${rollout.timeline.at(-1)?.event ?? "unknown"}`,
+                  )
+                  .join("; ")}
+              </p>
+              {report.rollouts.map((rollout) => (
+                <div key={rollout.proposalId} className="mt-1 rounded border border-subtle p-1">
+                  {rollout.timeline.slice(-5).map((item, index) => (
+                    <p key={`${item.at}-${index}`} className="break-words text-2xs">
+                      {item.at}: {item.event}
+                      {item.reason ? ` · ${item.reason}` : ""}
+                    </p>
+                  ))}
+                </div>
+              ))}
+            </details>
           )}
           <p className="mt-1 text-tertiary">{t("chat.loop.orchestration.advisory")}</p>
         </>

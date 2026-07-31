@@ -7,7 +7,7 @@ const sent: ClientFrame[] = [];
 let lastHandlers: (WsClientHandlers & { getToken: () => string }) | undefined;
 let acceptSend = true;
 type WorkspaceListResponse = {
-  workspaces: { id: string; name: string; path: string }[];
+  workspaces: { id: string; name: string; path: string; placeholder?: boolean; removable?: boolean }[];
   recents: { path: string; name: string }[];
 };
 const openWorkspaceMock = vi.hoisted(() => vi.fn());
@@ -70,6 +70,9 @@ function resetStore(): void {
   worktreesMock.mockReset().mockResolvedValue([]);
   // Fresh single-tab state for each test.
   useStore.setState((s) => ({
+    workspaces: [],
+    workspacesLoaded: false,
+    activeWorkspaceId: "",
     graphEventVersion: 0,
     tabs: {
       ...s.tabs,
@@ -126,6 +129,25 @@ describe("store: workspace selection", () => {
     expect(useStore.getState().activeWorkspaceId).toBe("workspace-b");
     expect(useStore.getState().tabs.tabs[0]!.ws).toBe("workspace-a");
     expect(useStore.getState().tabs.tabs[0]!.chat.sessionId).toBe("session-a");
+  });
+
+  it("never exposes the desktop bootstrap directory as a project", async () => {
+    workspacesMock.mockResolvedValueOnce({
+      workspaces: [
+        { id: "bootstrap", name: "bootstrap-workspace", path: "/app/bootstrap", placeholder: true },
+        { id: "workspace-a", name: "A", path: "/a", removable: true },
+      ],
+      recents: [],
+    });
+    useStore.setState({ tabs: initialTabsState(), activeWorkspaceId: "", workspaces: [], workspacesLoaded: false });
+
+    useStore.getState().loadWorkspaces();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useStore.getState().workspaces.map((workspace) => workspace.id)).toEqual(["workspace-a"]);
+    expect(useStore.getState().activeWorkspaceId).toBe("workspace-a");
+    expect(useStore.getState().workspacesLoaded).toBe(true);
   });
 
   it("lets the last concurrent openWorkspace request win", async () => {

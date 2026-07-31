@@ -280,14 +280,11 @@ export function signEngineeringGraphArtifactAttestation(
   }
 }
 
-export function verifyEngineeringGraphArtifactAttestationTrust(
-  workspace: string,
-  attestationId: string,
+function verifyAttestation(
+  document: Document,
+  attestation: EngineeringGraphArtifactAttestation,
 ): EngineeringGraphArtifactTrustVerification {
-  if (!HASH_RE.test(attestationId)) throw new Error("Graph artifact attestation id is invalid");
-  const document = readDocument(workspace);
-  const attestation = listEngineeringGraphArtifactAttestations(workspace).find((item) => item.id === attestationId);
-  if (!attestation) return { trusted: false, reason: "attestation_missing" };
+  const attestationId = attestation.id;
   const provenance = document.provenance
     .filter((item) => item.attestationId === attestationId)
     .sort((left, right) => Date.parse(right.signedAt) - Date.parse(left.signedAt));
@@ -323,6 +320,28 @@ export function verifyEngineeringGraphArtifactAttestationTrust(
   if (revoked && !missingKey) return { trusted: false, reason: "key_revoked", provenance: latest };
   if (missingKey) return { trusted: false, reason: "key_missing", provenance: latest };
   return { trusted: false, reason: "invalid", provenance: latest };
+}
+
+export function verifyEngineeringGraphArtifactAttestationTrust(
+  workspace: string,
+  attestationId: string,
+): EngineeringGraphArtifactTrustVerification {
+  if (!HASH_RE.test(attestationId)) throw new Error("Graph artifact attestation id is invalid");
+  const attestation = listEngineeringGraphArtifactAttestations(workspace).find((item) => item.id === attestationId);
+  if (!attestation) return { trusted: false, reason: "attestation_missing" };
+  return verifyAttestation(readDocument(workspace), attestation);
+}
+
+/** Verifies the bounded attestation catalog with one trust-store and one catalog read. */
+export function listEngineeringGraphArtifactTrustVerifications(workspace: string): Array<{
+  attestation: EngineeringGraphArtifactAttestation;
+  verification: EngineeringGraphArtifactTrustVerification;
+}> {
+  const document = readDocument(workspace);
+  return listEngineeringGraphArtifactAttestations(workspace).map((attestation) => ({
+    attestation,
+    verification: verifyAttestation(document, attestation),
+  }));
 }
 
 export function listEngineeringGraphArtifactTrustKeys(workspace: string): EngineeringGraphArtifactTrustKey[] {

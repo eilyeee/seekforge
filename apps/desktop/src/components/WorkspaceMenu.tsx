@@ -48,7 +48,6 @@ export function WorkspaceMenu({ compact = false }: { compact?: boolean } = {}) {
   }, [manual]);
 
   const active = workspaces.find((w) => w.id === activeWorkspaceId) ?? workspaces[0];
-  const defaultId = workspaces[0]?.id;
 
   const doOpen = useCallback(
     async (path: string) => {
@@ -127,7 +126,7 @@ export function WorkspaceMenu({ compact = false }: { compact?: boolean } = {}) {
                 </button>
                 {/* Worktrees (wt-*) own a git checkout — they are removed via
                     the worktree merge/discard flow, not "stop hosting". */}
-                {w.id !== defaultId && !w.id.startsWith("wt-") && (
+                {w.removable === true && !w.id.startsWith("wt-") && (
                   <button
                     type="button"
                     onClick={() => void removeWorkspace(w.id)}

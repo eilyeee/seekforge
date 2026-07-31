@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import { existsSync, readFileSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -547,6 +548,15 @@ describe("loop management API", () => {
     ).toMatchObject({ proposalId: proposal.id, phase: "canary" });
     expect(
       await jsonOf(
+        await authed(`/api/orchestration/rollouts/${proposal.id}/pause`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ reason: "operator hold" }),
+        }),
+      ),
+    ).toMatchObject({ proposalId: proposal.id, phase: "paused" });
+    expect(
+      await jsonOf(
         await authed(`/api/orchestration/rollouts/${proposal.id}/resume`, {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -554,6 +564,57 @@ describe("loop management API", () => {
         }),
       ),
     ).toMatchObject({ proposalId: proposal.id, phase: "canary", stagePercent: 5 });
+    expect(
+      await jsonOf(
+        await authed("/api/orchestration/diagnostics/reconcile-capacity", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        }),
+      ),
+    ).toEqual({ active: 0, removed: [] });
+    expect(await jsonOf(await authed("/api/orchestration/diagnostics"))).toMatchObject({
+      healthy: expect.any(Boolean),
+      graphs: [expect.objectContaining({ id: "rest-graph", kind: "graph" })],
+      artifactStore: { blobs: 0, attestations: 0 },
+    });
+    expect(
+      await jsonOf(
+        await authed("/api/orchestration/controller/resume", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ reason: "operator review completed" }),
+        }),
+      ),
+    ).toMatchObject({ mode: "active", reason: "operator review completed" });
+    expect(await jsonOf(await authed("/api/evals/trends?limit=40"))).toMatchObject({ entries: [] });
+    expect((await authed("/api/evals/trends?limit=0")).status).toBe(400);
+    const { publicKey } = generateKeyPairSync("ed25519");
+    expect(
+      await jsonOf(
+        await authed("/api/graphs/artifact-store/trust/keys", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            keyId: "rest-release-key",
+            publicKeyPem: publicKey.export({ type: "spki", format: "pem" }).toString(),
+          }),
+        }),
+      ),
+    ).toMatchObject({ keyId: "rest-release-key", status: "active" });
+    expect(await jsonOf(await authed("/api/graphs/artifact-store/trust"))).toMatchObject({
+      keys: [expect.objectContaining({ keyId: "rest-release-key" })],
+      attestations: [],
+    });
+    expect(
+      await jsonOf(
+        await authed("/api/graphs/artifact-store/trust/keys/rest-release-key/revoke", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        }),
+      ),
+    ).toMatchObject({ keyId: "rest-release-key", status: "revoked" });
     expect(
       await jsonOf(
         await authed("/api/orchestration/rollouts/reconcile", {

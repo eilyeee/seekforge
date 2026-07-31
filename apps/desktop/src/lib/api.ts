@@ -283,6 +283,20 @@ export const api = {
     ),
   graphs: (ws?: string) =>
     request<import("../types").EngineeringGraphSummary[]>("GET", withWorkspace("/api/graphs", ws)),
+  graphTemplates: (ws?: string) => request<unknown[]>("GET", withWorkspace("/api/graphs/templates", ws)),
+  graphValidate: (definition: unknown, parameters: Record<string, unknown> = {}, ws?: string) =>
+    request<{ valid: true; definition: unknown; plan: import("../types").EngineeringGraphPlanSummary }>(
+      "POST",
+      withWorkspace("/api/graphs/validate", ws),
+      { definition, parameters },
+    ),
+  graphSimulate: (definition: unknown, parameters: Record<string, unknown> = {}, ws?: string) =>
+    request<import("../types").EngineeringGraphSimulationSummary>("POST", withWorkspace("/api/graphs/simulate", ws), {
+      definition,
+      parameters,
+    }),
+  graphStart: (definition: unknown, parameters: Record<string, unknown> = {}, ws?: string) =>
+    request<{ runId: string }>("POST", withWorkspace("/api/graphs", ws), { definition, parameters }),
   graph: (id: string, ws?: string) =>
     request<import("../types").EngineeringGraphDetail>(
       "GET",
@@ -305,6 +319,23 @@ export const api = {
     ),
   orchestrationReport: (ws?: string) =>
     request<import("../types").WorkspaceOrchestrationReport>("GET", withWorkspace("/api/orchestration/report", ws)),
+  orchestrationDiagnostics: (ws?: string) =>
+    request<import("../types").WorkspaceOperationalDiagnostics>(
+      "GET",
+      withWorkspace("/api/orchestration/diagnostics", ws),
+    ),
+  orchestrationReconcileCapacity: (orphanReservationIds: string[] = [], ws?: string) =>
+    request<{ active: number; removed: string[] }>(
+      "POST",
+      withWorkspace("/api/orchestration/diagnostics/reconcile-capacity", ws),
+      { orphanReservationIds },
+    ),
+  orchestrationControllerResume: (reason?: string, ws?: string) =>
+    request<import("../types").WorkspaceOrchestrationReport["controller"]>(
+      "POST",
+      withWorkspace("/api/orchestration/controller/resume", ws),
+      reason ? { reason } : {},
+    ),
   orchestrationProposalRefresh: (ws?: string) =>
     request<{ proposals: import("../types").OrchestrationProposal[] }>(
       "POST",
@@ -355,6 +386,12 @@ export const api = {
       withWorkspace(`/api/orchestration/rollouts/${encodeURIComponent(id)}/resume`, ws),
       {},
     ),
+  orchestrationRolloutPause: (id: string, reason?: string, ws?: string) =>
+    request<import("../types").OrchestrationRollout>(
+      "POST",
+      withWorkspace(`/api/orchestration/rollouts/${encodeURIComponent(id)}/pause`, ws),
+      reason ? { reason } : {},
+    ),
   orchestrationRolloutReconcile: (autoRollback = false, ws?: string) =>
     request<{ rollouts: import("../types").OrchestrationRollout[] }>(
       "POST",
@@ -400,6 +437,49 @@ export const api = {
   ) => request<unknown>("POST", withWorkspace(`/api/graphs/${encodeURIComponent(id)}/control`, ws), input),
   graphDelete: (id: string, ws?: string) =>
     request<{ removed: true; graphId: string }>("DELETE", withWorkspace(`/api/graphs/${encodeURIComponent(id)}`, ws)),
+  graphArtifactTrust: (ws?: string) =>
+    request<{
+      keys: import("../types").EngineeringGraphArtifactTrustKey[];
+      attestations: Array<{
+        attestation: import("../types").EngineeringGraphArtifactAttestation;
+        verification: import("../types").EngineeringGraphArtifactTrustVerification;
+      }>;
+    }>("GET", withWorkspace("/api/graphs/artifact-store/trust", ws)),
+  graphArtifactTrustRegister: (keyId: string, publicKeyPem: string, ws?: string) =>
+    request<import("../types").EngineeringGraphArtifactTrustKey>(
+      "POST",
+      withWorkspace("/api/graphs/artifact-store/trust/keys", ws),
+      { keyId, publicKeyPem },
+    ),
+  graphArtifactTrustRevoke: (keyId: string, ws?: string) =>
+    request<import("../types").EngineeringGraphArtifactTrustKey>(
+      "POST",
+      withWorkspace(`/api/graphs/artifact-store/trust/keys/${encodeURIComponent(keyId)}/revoke`, ws),
+      {},
+    ),
+  graphArtifactTrustSign: (
+    input: {
+      attestationId: string;
+      keyId: string;
+      privateKeyPem: string;
+      builderId: string;
+      environmentSha256: string;
+      toolchainSha256: string;
+      inputsSha256: string;
+      sbomSha256?: string;
+    },
+    ws?: string,
+  ) =>
+    request<import("../types").EngineeringGraphArtifactProvenance>(
+      "POST",
+      withWorkspace("/api/graphs/artifact-store/trust/sign", ws),
+      input,
+    ),
+  evalTrends: (limit = 40, ws?: string) =>
+    request<import("../types").EvalTrendReport>(
+      "GET",
+      withWorkspace(`/api/evals/trends?limit=${encodeURIComponent(String(limit))}`, ws),
+    ),
   loopDelete: (id: string, ws?: string) =>
     request<{ removed: true; loopId: string }>("DELETE", withWorkspace(`/api/loops/${encodeURIComponent(id)}`, ws)),
   diff: (staged?: boolean, ws?: string) =>

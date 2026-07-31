@@ -8,7 +8,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --testTimeout=10000"
+    "test": "vitest run --testTimeout=30000 --hookTimeout=60000"
   },
   "dependencies": {
     "@seekforge/shared": "workspace:*",

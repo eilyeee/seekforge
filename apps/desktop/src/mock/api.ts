@@ -228,7 +228,35 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
 
   if (method === "GET" && path === "/api/worktrees") return mockWorktrees.map((w) => ({ ...w }));
   if (method === "GET" && path === "/api/loops") return mockLoops.map((loop) => ({ ...loop }));
+  if (method === "GET" && path === "/api/loop-dags") return [];
+  if (method === "GET" && path === "/api/loop-speculations") return [];
   if (method === "GET" && path === "/api/graphs") return [];
+  if (method === "GET" && path === "/api/graphs/templates") return [];
+  if (method === "POST" && path === "/api/graphs/validate") {
+    const definition = (body as { definition?: { graphId?: string } } | undefined)?.definition;
+    return {
+      valid: true,
+      definition,
+      plan: { graphId: definition?.graphId ?? "mock-graph", nodeCount: 1, maxConcurrency: 1, waves: [["start"]] },
+    };
+  }
+  if (method === "POST" && path === "/api/graphs/simulate") {
+    return {
+      makespanMs: 1,
+      estimatedCostUsd: 0,
+      estimatedTokens: 0,
+      criticalPath: ["start"],
+      bottlenecks: [],
+      contingencyNodes: [],
+      risks: [],
+      nodes: [],
+    };
+  }
+  if (method === "POST" && path === "/api/graphs") return { runId: "mock-graph-run" };
+  if (method === "GET" && path === "/api/graphs/artifact-store/trust") return { keys: [], attestations: [] };
+  if (method === "POST" && path === "/api/graphs/artifact-store/trust/keys") return {};
+  if (method === "POST" && /^\/api\/graphs\/artifact-store\/trust\/keys\/[^/]+\/revoke$/.test(path)) return {};
+  if (method === "POST" && path === "/api/graphs/artifact-store/trust/sign") return {};
   if (method === "POST" && path === "/api/orchestration/proposals/refresh") return { proposals: [] };
   if (method === "POST" && /^\/api\/orchestration\/proposals\/[^/]+\/(?:approve|dismiss|apply|rollback)$/.test(path)) {
     return {};
@@ -236,7 +264,28 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   if (method === "POST" && path === "/api/orchestration/deployments/observe") return { deployments: [] };
   if (method === "POST" && path === "/api/orchestration/maintain") return {};
   if (method === "POST" && path === "/api/orchestration/rollouts/reconcile") return { rollouts: [] };
-  if (method === "POST" && /^\/api\/orchestration\/rollouts\/[^/]+\/(?:start|advance|resume)$/.test(path)) return {};
+  if (method === "POST" && /^\/api\/orchestration\/rollouts\/[^/]+\/(?:start|advance|pause|resume)$/.test(path))
+    return {};
+  if (method === "POST" && path === "/api/orchestration/controller/resume") return { mode: "advisory" };
+  if (method === "POST" && path === "/api/orchestration/diagnostics/reconcile-capacity") {
+    return { active: 0, removed: [] };
+  }
+  if (method === "GET" && path === "/api/orchestration/diagnostics") {
+    return {
+      generatedAt: new Date().toISOString(),
+      healthy: true,
+      controller: { mode: "advisory", reason: "mock", updatedAt: new Date().toISOString() },
+      decisions: [],
+      rollouts: [],
+      loops: [],
+      graphs: [],
+      reservations: [],
+      artifactStore: { blobs: 0, bytes: 0, referenced: 0, attestations: 0 },
+    };
+  }
+  if (method === "GET" && path === "/api/evals/trends") {
+    return { generatedAt: new Date().toISOString(), entries: [] };
+  }
   if (method === "GET" && path === "/api/orchestration/report") {
     return {
       portfolio: {

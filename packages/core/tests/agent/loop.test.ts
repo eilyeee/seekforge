@@ -80,6 +80,94 @@ describe("agent loop", () => {
     expect(sessions[0]!.usage?.costUsd).toBeCloseTo(0.001);
   });
 
+  it("continues a bounded execution slice in the same session without adding a user turn", async () => {
+    const provider = fakeProvider([
+      response({
+        toolCalls: [{ id: "read-1", name: "read_file", argumentsJson: '{"path":"a.ts"}' }],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "## Summary\ndone after continuing" }),
+    ]);
+    const agent = createAgentCore({
+      provider,
+      dispatcher: fakeDispatcher({ ok: true, data: { content: "x" } }),
+      confirm: async () => true,
+      limits: { maxAgentTurns: 1 },
+    });
+
+    const events = await collect(
+      agent.runTask({ ...baseInput, mode: "ask", projectPath: workspace, maxAutoContinuations: 1 }),
+    );
+
+    expect(events.filter((event) => event.type === "session.continuing")).toEqual([
+      { type: "session.continuing", continuation: 1, maxContinuations: 1 },
+    ]);
+    expect(events.some((event) => event.type === "session.completed")).toBe(true);
+    expect(events.some((event) => event.type === "session.failed")).toBe(false);
+    expect(provider.requests[1]!.messages.some((message) => message.content.includes("execution slice 2/2"))).toBe(
+      true,
+    );
+    expect(
+      loadSessionMessages(workspace, listSessions(workspace)[0]!.id).filter((message) => message.role === "user"),
+    ).toHaveLength(1);
+  });
+
+  it("uses a remaining execution slice to recover a last-turn truncated answer", async () => {
+    const provider = fakeProvider([
+      response({ content: "partial", finishReason: "length" }),
+      response({ content: "complete" }),
+    ]);
+    const agent = createAgentCore({
+      provider,
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+      limits: { maxAgentTurns: 1 },
+    });
+
+    const events = await collect(
+      agent.runTask({ ...baseInput, mode: "ask", projectPath: workspace, maxAutoContinuations: 1 }),
+    );
+    expect(events.some((event) => event.type === "session.continuing")).toBe(true);
+    expect(events.find((event) => event.type === "session.completed")).toMatchObject({
+      report: { summary: "complete" },
+    });
+  });
+
+  it("fails normally after the bounded continuation budget is exhausted", async () => {
+    const toolTurn = (id: string) =>
+      response({
+        toolCalls: [{ id, name: "read_file", argumentsJson: '{"path":"a.ts"}' }],
+        finishReason: "tool_calls",
+      });
+    const agent = createAgentCore({
+      provider: fakeProvider([toolTurn("read-1"), toolTurn("read-2")]),
+      dispatcher: fakeDispatcher({ ok: true, data: { content: "x" } }),
+      confirm: async () => true,
+      limits: { maxAgentTurns: 1 },
+    });
+
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace, maxAutoContinuations: 1 }));
+    expect(events.filter((event) => event.type === "session.continuing")).toHaveLength(1);
+    expect(events.find((event) => event.type === "session.failed")).toMatchObject({
+      error: { code: "max_turns_exceeded", message: expect.stringContaining("2 execution slices") },
+    });
+  });
+
+  it("validates the continuation limit before acquiring a session lease", async () => {
+    const agent = createAgentCore({
+      provider: fakeProvider([]),
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+    });
+    await expect(
+      collect(agent.runTask({ ...baseInput, projectPath: workspace, maxAutoContinuations: -1 })),
+    ).rejects.toThrow(/maxAutoContinuations/);
+    await expect(
+      collect(agent.runTask({ ...baseInput, projectPath: workspace, maxAutoContinuations: Number.MAX_SAFE_INTEGER })),
+    ).rejects.toThrow(/unsafe total turn limit/);
+    expect(listSessions(workspace)).toHaveLength(0);
+  });
+
   it("continues instead of accepting an output-truncated response as complete", async () => {
     const provider = fakeProvider([
       response({ content: "## Summary\npartial", finishReason: "length" }),

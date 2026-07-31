@@ -73,6 +73,11 @@ After every standard or A/B run the harness rebuilds
 timestamped report JSON. Malformed or incompatible history files are skipped
 rather than poisoning the current run.
 
+The desktop **Eval trends** panel reads the same bounded source through `GET
+/api/evals/trends?limit=<1..200>`. It plots success-rate and total-cost history
+and lists the newest report/variant points; malformed or incompatible files
+remain owned by the eval harness parser rather than being interpreted by the UI.
+
 ### Runner modes
 
 Tasks without `runner` retain the historical single-session `agent` behavior.

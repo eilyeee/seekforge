@@ -21,12 +21,16 @@ import type {
   WorkspaceOrchestrationReport,
 } from "../../types";
 import { Button } from "../ui";
+import { ArtifactTrustSection } from "./ArtifactTrustSection";
+import { EvalTrendsSection } from "./EvalTrendsSection";
+import { GraphCreationSection } from "./GraphCreationSection";
 import { LoopDagSection } from "./LoopDagSection";
 import { GraphEngineeringSection } from "./GraphEngineeringSection";
 import { LoopDetailsSection } from "./LoopDetailsSection";
 import { LoopListSection } from "./LoopListSection";
 import { LoopSpeculationSection } from "./LoopSpeculationSection";
 import { OrchestrationIntelligenceSection } from "./OrchestrationIntelligenceSection";
+import { OperationalDiagnosticsSection } from "./OperationalDiagnosticsSection";
 
 type Props = { running: boolean; onResume: (opts: { loopId: string }) => void };
 
@@ -498,15 +502,17 @@ export function LoopManager({ running, onResume }: Props) {
 
   const transitionOrchestrationRollout = async (
     proposal: OrchestrationProposal,
-    operation: "start" | "advance" | "resume",
+    operation: "start" | "advance" | "pause" | "resume",
+    options: { minSamples?: number; reason?: string } = {},
   ) => {
     const request = orchestrationRequests.beginLatest(workspaceId);
     if (!request) return;
     setOrchestrationBusy(true);
     try {
       if (operation === "start") {
-        await api.orchestrationRolloutStart(proposal.id, proposal.updatedAt, 3, workspaceId);
+        await api.orchestrationRolloutStart(proposal.id, proposal.updatedAt, options.minSamples ?? 3, workspaceId);
       } else if (operation === "advance") await api.orchestrationRolloutAdvance(proposal.id, workspaceId);
+      else if (operation === "pause") await api.orchestrationRolloutPause(proposal.id, options.reason, workspaceId);
       else await api.orchestrationRolloutResume(proposal.id, workspaceId);
       const report = await api.orchestrationReport(workspaceId);
       if (orchestrationRequests.isCurrent(request)) setOrchestration(report);
@@ -549,12 +555,27 @@ export function LoopManager({ running, onResume }: Props) {
     }
   };
 
-  const observeOrchestration = async () => {
+  const observeOrchestration = async (autoRollback: boolean) => {
     const request = orchestrationRequests.beginLatest(workspaceId);
     if (!request) return;
     setOrchestrationBusy(true);
     try {
-      await api.orchestrationRolloutReconcile(false, workspaceId);
+      await api.orchestrationRolloutReconcile(autoRollback, workspaceId);
+      const report = await api.orchestrationReport(workspaceId);
+      if (orchestrationRequests.isCurrent(request)) setOrchestration(report);
+    } catch (caught) {
+      if (orchestrationRequests.isCurrent(request)) setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      if (orchestrationRequests.isCurrent(request)) setOrchestrationBusy(false);
+    }
+  };
+
+  const resumeOrchestrationController = async (reason?: string) => {
+    const request = orchestrationRequests.beginLatest(workspaceId);
+    if (!request) return;
+    setOrchestrationBusy(true);
+    try {
+      await api.orchestrationControllerResume(reason, workspaceId);
       const report = await api.orchestrationReport(workspaceId);
       if (orchestrationRequests.isCurrent(request)) setOrchestration(report);
     } catch (caught) {
@@ -621,11 +642,17 @@ export function LoopManager({ running, onResume }: Props) {
         onProposalReview={(proposal, decision) => void reviewOrchestrationProposal(proposal, decision)}
         onProposalApply={(proposal) => void deployOrchestrationProposal(proposal, "apply")}
         onProposalRollback={(proposal) => void deployOrchestrationProposal(proposal, "rollback")}
-        onRolloutStart={(proposal) => void transitionOrchestrationRollout(proposal, "start")}
+        onRolloutStart={(proposal, minSamples) =>
+          void transitionOrchestrationRollout(proposal, "start", { minSamples })
+        }
         onRolloutAdvance={(proposal) => void transitionOrchestrationRollout(proposal, "advance")}
+        onRolloutPause={(proposal, reason) => void transitionOrchestrationRollout(proposal, "pause", { reason })}
         onRolloutResume={(proposal) => void transitionOrchestrationRollout(proposal, "resume")}
-        onObserve={() => void observeOrchestration()}
+        onObserve={(autoRollback) => void observeOrchestration(autoRollback)}
+        onControllerResume={(reason) => void resumeOrchestrationController(reason)}
       />
+      <OperationalDiagnosticsSection workspaceId={workspaceId} />
+      <EvalTrendsSection workspaceId={workspaceId} />
       <LoopDagSection
         dags={dags}
         resources={dagResources}
@@ -648,6 +675,14 @@ export function LoopManager({ running, onResume }: Props) {
         onRecoveryPriority={(graph, delta) => void graphRecoveryPriority(graph, delta)}
         onRemove={(graphId) => void removeGraph(graphId)}
       />
+      <GraphCreationSection
+        workspaceId={workspaceId}
+        onStarted={(runId) => {
+          subscribeGraphRun(runId);
+          void refresh();
+        }}
+      />
+      <ArtifactTrustSection workspaceId={workspaceId} />
       <LoopSpeculationSection
         speculations={speculations}
         busy={resourceBusy}

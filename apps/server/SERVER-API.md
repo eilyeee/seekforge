@@ -7,11 +7,16 @@ are warned about and skipped; when none are given it defaults to the cwd.
 
 ## Workspaces
 
-The server holds an ordered registry of workspaces, each `{id, name, path}`
+The server holds an ordered registry of workspaces, each
+`{id, name, path, placeholder?, removable?}`
 where `id` is a short stable slug of the absolute path and `name` is the
 basename. The **first** workspace is the default.
 
-- `GET /api/workspaces` → `[{id, name, path}]` (ordered; first is the default).
+- `GET /api/workspaces` → `[{id, name, path, placeholder?, removable}]`
+  (ordered; first is the default).
+- A Tauri GUI launch without a project uses an app-owned default marked
+  `placeholder:true`; Desktop filters it from project UI and shows its welcome
+  chooser. `removable` is the authoritative stop-hosting capability.
 - Every workspace-scoped REST route accepts a `?ws=<id>` query param selecting
   the workspace. When `?ws=` is omitted it resolves to the **first** workspace
   (preserving single-workspace clients). An unknown id is `404 not_found`.
@@ -151,7 +156,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/loop-speculations | persisted speculative runs and winners |
 | GET /api/loop-speculations/:id | one persisted speculative run |
 | POST /api/loop-speculations/:id/promote | explicitly merge the passing winner |
-| GET /api/workspaces | `[{id, name, path}]` (global; ordered, first is the default; includes registered worktrees `wt-<slug>`) |
+| GET /api/workspaces | `[{id, name, path, placeholder?, removable}]` (global; ordered, first is the default; includes registered worktrees `wt-<slug>`) |
 | POST /api/worktrees | body `{name?}` → `{id, path, branch}` — create a worktree session (see "Worktrees"); 400 `not_a_git_repo` |
 | GET /api/worktrees | `[{id, branch, path, dirty, ahead}]` — worktrees of the `?ws=` base workspace |
 | POST /api/worktrees/:id/merge | `{merged: true}` \| `{conflict: true, files}` — dirty worktree auto-committed; conflicts abort cleanly |
@@ -336,6 +341,14 @@ return `bad_frame`.
 {"type": "idle"}                                              // sent when a run/loop finishes and a new start/send/loop is accepted
 ```
 
+Normal interactive chat automatically continues through at most two extra
+`maxAgentTurns` execution slices in the same session. Each boundary emits the
+non-terminal progress event
+`{"type":"session.continuing","continuation":1,"maxContinuations":2}`;
+there is no intermediate `session.failed`, synthetic user turn, or lease
+release. Plan runs remain single-slice. Exhausting all three slices still emits
+the ordinary terminal `max_turns_exceeded` failure.
+
 Run snapshots are append-only JSONL at `.seekforge/runs.jsonl`; replay frames
 are stored under `.seekforge/run-events/<runId>.jsonl`. Ledger appends and
 compaction share a cross-process lease. `GET /api/runs/:id/events` streams the
@@ -442,7 +455,8 @@ Rules:
   an approved exact proposal with an optional `minSamples` from 1 to 32.
   `.../:id/advance` applies it to 5%, then advances evidence-complete cohorts to
   25% and 100%; `.../:id/resume` restarts a paused cohort with a fresh evidence
-  window. `POST /api/orchestration/rollouts/reconcile` records exact-generation
+  window, while `.../:id/pause` records an operator reason and blocks promotion
+  until resumed. `POST /api/orchestration/rollouts/reconcile` records exact-generation
   terminal evidence and advances stable/improved cohorts. `{autoRollback:true}`
   is explicit.
 - `POST /api/orchestration/maintain` runs one bounded safe maintenance tick:
@@ -450,6 +464,12 @@ Rules:
   reconciliation, index refresh, and adaptive-controller reconciliation. It
   does not approve or start deployments. `{dryRun:true}` returns a read-only
   impact plan without creating workspace state.
+- `GET /api/orchestration/diagnostics` returns one bounded support snapshot of
+  Loop/Graph checkpoint findings, controller state and recent decisions,
+  rollouts, active executor reservations, and CAS counts. `POST
+  /api/orchestration/diagnostics/reconcile-capacity` removes expired reservations
+  and optional exact orphan ids; `POST /api/orchestration/controller/resume`
+  explicitly re-enables a frozen controller with an optional operator reason.
 - `POST /api/graphs/:id/migration-plan` preserves the existing flat migration
   fields and adds `tree`. The tree section resolves child identities and reports
   coordinated participants; `migration-apply` commits a journaled child-first,
@@ -462,6 +482,16 @@ Rules:
   dry-run or removal. `GET /api/graphs/artifact-store/attestations` lists bounded
   historical producer/fingerprint/SHA-256 provenance and accepts an optional
   exact `sha256` filter.
+- `GET /api/graphs/artifact-store/trust` returns registered Ed25519 keys and the
+  current verification result for each attestation. `POST
+  /api/graphs/artifact-store/trust/keys` registers a public key, `POST
+  /api/graphs/artifact-store/trust/keys/:id/revoke` revokes it, and `POST
+  /api/graphs/artifact-store/trust/sign` signs one attestation with exact builder,
+  environment, toolchain, input, and optional SBOM provenance. Private key PEM
+  is request-only and is never persisted.
+- `GET /api/evals/trends?limit=<1..200>` reads valid bounded reports from
+  `evals/reports`, returning normalized success-rate confidence intervals and
+  cost distributions for Desktop visualization.
 
 ## Implementation notes (binding)
 

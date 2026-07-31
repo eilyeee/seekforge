@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -283,5 +283,29 @@ describe("MCP OAuth credential store", () => {
     expect(deleteMcpOAuthCredential("docs")).toBe(true);
     expect(listMcpOAuthCredentials()).toEqual([]);
     expect(deleteMcpOAuthCredential("docs")).toBe(false);
+  });
+
+  it("ignores oversized and structurally invalid credential stores", () => {
+    const path = mcpOAuthStorePath();
+    mkdirSync(join(home, ".seekforge"), { recursive: true });
+    writeFileSync(path, "x".repeat(256 * 1024 + 1));
+    expect(listMcpOAuthCredentials()).toEqual([]);
+
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 1,
+        credentials: [
+          { ...identity, updatedAt: new Date().toISOString(), unexpected: "field" },
+          { ...identity, serverUrl: "file:///tmp/token", updatedAt: new Date().toISOString() },
+        ],
+      }),
+    );
+    expect(listMcpOAuthCredentials()).toEqual([]);
+  });
+
+  it("rejects invalid credentials before persisting them", () => {
+    expect(() => saveMcpOAuthCredential({ ...identity, accessToken: "x".repeat(16 * 1024 + 1) })).toThrow(/invalid/);
+    expect(listMcpOAuthCredentials()).toEqual([]);
   });
 });

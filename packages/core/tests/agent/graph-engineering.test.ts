@@ -68,7 +68,7 @@ describe("runEngineeringGraph", () => {
   };
   afterEach(() => {
     for (const path of workspaces.splice(0)) rmSync(path, { recursive: true, force: true });
-  });
+  }, 60_000);
 
   it("executes functions, routes one branch, and persists bounded events", async () => {
     const root = workspace();

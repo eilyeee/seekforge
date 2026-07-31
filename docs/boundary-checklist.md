@@ -4252,6 +4252,32 @@ boundaries.
 - **Caught:** a Graph started while the adaptive controller was frozen could not
   resume learned scheduling after the controller recovered during that run.
 
+## 392. Execution-slice limits are not task-terminal limits
+
+A bounded provider/tool slice may end while the user's task still has valid
+progress and budget. Turning that boundary into a failed session strands large
+interactive tasks; starting a second run invents a user turn and drops run-local
+state.
+
+- **Do:** continue only through an explicit finite slice budget, inside the same
+  run, lease, context, usage counters, and cancellation scope; keep harness
+  guidance out of the durable user-turn trace and emit a non-terminal progress
+  event.
+- **Caught:** Desktop chat treated the 50-turn inner loop cap as a terminal
+  `max_turns_exceeded` for the whole user task.
+
+## 393. Bootstrap filesystem roots are not user projects
+
+A desktop shell may need a safe cwd before the user chooses a project. If that
+operational directory enters normal workspace selection or idle maintenance, it
+becomes a surprising editable project and can accumulate domain state.
+
+- **Do:** tag bootstrap roots at the server boundary, exclude them from project
+  UI and project maintenance targets, and keep their default-workspace role only
+  for backward-compatible server routing.
+- **Caught:** removing the startup folder dialog otherwise required exposing an
+  app-data directory as Desktop's active workspace.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

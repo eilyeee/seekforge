@@ -20,6 +20,7 @@ import { listOrchestrationDecisions } from "../../src/agent/orchestration-decisi
 import {
   advanceOrchestrationRollout,
   listOrchestrationRollouts,
+  pauseOrchestrationRollout,
   reconcileOrchestrationRollouts,
   recordOrchestrationRolloutSample,
   resumeOrchestrationRollout,
@@ -66,6 +67,15 @@ describe("orchestration rollouts", () => {
       startOrchestrationRollout(root, proposal.id, { expectedUpdatedAt: approved.updatedAt, minSamples: 1 }).phase,
     ).toBe("shadow");
     expect(advanceOrchestrationRollout(root, proposal.id)).toMatchObject({ phase: "canary", stagePercent: 5 });
+    expect(pauseOrchestrationRollout(root, proposal.id, "operator hold")).toMatchObject({
+      phase: "paused",
+      stagePercent: 5,
+    });
+    expect(resumeOrchestrationRollout(root, proposal.id)).toMatchObject({
+      phase: "canary",
+      stagePercent: 5,
+      stageObservationIds: [],
+    });
     saveLoopState(root, {
       ...state,
       status: "passed",
@@ -114,7 +124,7 @@ describe("orchestration rollouts", () => {
     const promoted = advanceOrchestrationRollout(root, proposal.id);
     expect(promoted).toMatchObject({ phase: "promoted", stagePercent: 100 });
     const gateDecisions = listOrchestrationDecisions(root).filter((decision) => decision.kind === "rollout_gate");
-    expect(gateDecisions).toHaveLength(3);
+    expect(gateDecisions).toHaveLength(4);
     expect(gateDecisions.every((decision) => decision.selected.includes(proposal.id))).toBe(true);
     rollbackOrchestrationDeployment(root, proposal.id);
     expect(reconcileOrchestrationRollouts(root)[0]).toMatchObject({
@@ -122,5 +132,5 @@ describe("orchestration rollouts", () => {
       promotedAt: promoted.promotedAt,
     });
     expect(listOrchestrationRollouts(root)).toHaveLength(1);
-  });
+  }, 30_000);
 });

@@ -46,6 +46,9 @@ export const common = {
     "workspace.forget": "Remove from recent",
     "workspace.openAction": "Open",
     "workspace.pathPlaceholder": "/absolute/path/to/project",
+    "workspace.welcomeTitle": "Choose a project when you're ready",
+    "workspace.welcomeDescription":
+      "SeekForge is ready. Open a folder or continue a recent project; startup will no longer interrupt you with a folder dialog.",
     "status.connected": "connected",
     "status.connecting": "connecting",
     "status.disconnected": "disconnected",
@@ -138,6 +141,8 @@ export const common = {
     "workspace.forget": "从最近移除",
     "workspace.openAction": "打开",
     "workspace.pathPlaceholder": "/项目的绝对路径",
+    "workspace.welcomeTitle": "准备好后再选择项目",
+    "workspace.welcomeDescription": "SeekForge 已就绪。你可以打开文件夹或继续最近项目，启动时不会再被选目录弹窗打断。",
     "status.connected": "已连接",
     "status.connecting": "连接中",
     "status.disconnected": "未连接",
