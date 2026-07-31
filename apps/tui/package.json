@@ -1,6 +1,6 @@
 {
   "name": "@seekforge/tui",
-  "version": "0.7.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Polished terminal UI for SeekForge, built with Ink.",
   "license": "MIT",

@@ -39,9 +39,13 @@ skills, reviewable project memory, optional Rust execution backend.
 ✅ **Step 2 — surfaces** (0.7.0): `seekforge-tui` is a full
 Claude-Code-parity terminal UI; `seekforge serve` ships a local web
 workbench (React) plus a Tauri desktop shell; subagents, self-evolution
-and an evaluation harness are in. Current focus: real-world polish
-(dogfooding, eval expansion). See
-[docs/roadmap.md](docs/roadmap.md) for the next-phase gaps and priorities.
+and an evaluation harness are in.
+
+✅ **Step 3 — unattended work** (1.0.0): autonomous Loop runs a task to green
+under budget and verification guardrails; Graph Engineering composes Agent,
+Loop, function, router and gate nodes with durable checkpoints and evidence;
+a VS Code client joins the CLI, TUI, web, and desktop surfaces. See
+[docs/roadmap.md](docs/roadmap.md) for capability maturity and priorities.
 
 ## Install & setup
 

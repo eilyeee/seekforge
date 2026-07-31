@@ -20,8 +20,12 @@ so an end user installs only the DMG — no system `seekforge`.
    The package smoke builds on the existing CLI `dist`, packs the exact npm
    artifact, installs it under a clean temporary prefix, and runs both published
    entry points. It needs registry access to install runtime dependencies.
-2. **Version bump** — set the release version in `apps/cli/package.json` and
-   `apps/desktop/src-tauri/tauri.conf.json` (`version`); update `CHANGELOG.md`.
+2. **Version bump** — run `node scripts/release.mjs <version>`, which sets every
+   versioned file (CLI, TUI, desktop, `tauri.conf.json`, the Tauri crate, the
+   VS Code extension, and Core's `SEEKFORGE_VERSION`) and checks that the top
+   CHANGELOG heading matches. `node scripts/release.mjs --check` reports drift
+   without changing anything. Do not edit those versions by hand: the release
+   workflows refuse a tag that disagrees with them.
 3. **Build the sidecar** for the target triple (required by Tauri):
    ```sh
    pnpm --filter seekforge build:sidecar

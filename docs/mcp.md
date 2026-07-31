@@ -190,7 +190,7 @@ a `2024-11-05` server.
 Client info sent in `initialize`:
 
 ```json
-{ "name": "seekforge", "version": "0.3.0" }
+{ "name": "seekforge", "version": "1.0.0" }
 ```
 
 ### 1.6 Capabilities
@@ -311,7 +311,7 @@ seekforge mcp-serve: FULL ACCESS (trusted callers only) on /path/to/workspace
 The server speaks protocol version `2025-06-18`. Server info:
 
 ```json
-{ "name": "seekforge", "version": "0.7.0" }
+{ "name": "seekforge", "version": "1.0.0" }
 ```
 
 **Supported methods:**

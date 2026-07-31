@@ -37,8 +37,11 @@ Tokens: 38.7K prompt (33.2K cache hit) / 6.1K completion   Cost: $0.0124
 
 ✅ **第二步 — 多形态**（0.7.0）：`seekforge-tui` 是对齐 Claude Code 的完整
 终端 UI；`seekforge serve` 提供本地 Web 工作台（React）及 Tauri 桌面壳；
-子代理（subagents）、自我进化与评测系统均已就绪。当前重点：真实场景打磨
-（dogfooding、评测扩容）。下一阶段的缺口与优先级见
+子代理（subagents）、自我进化与评测系统均已就绪。
+
+✅ **第三步 — 无人值守（1.0.0）**：自治 Loop 在预算与验证护栏下把任务跑到通过；
+Graph Engineering 以 Agent、Loop、函数、路由与审批门节点编排执行，带持久检查点
+与证据链；VS Code 客户端加入 CLI、TUI、Web 与桌面端行列。能力成熟度与优先级见
 [docs/roadmap.zh-CN.md](docs/roadmap.zh-CN.md)。
 
 ## 安装与配置

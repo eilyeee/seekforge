@@ -20,8 +20,8 @@ SeekForge 已经具备了较为完整的本地优先编码智能体能力面。�
 | 自主 Loop 与 Graph 工程 | 已实现，走向成熟 | 安全边界自适应调度、版本化决策证据、消耗率冻结控制、带衰减/熔断的上下文路由、可续租执行器 fencing、5/25/100 灰度和签名 CAS 血缘已交付；继续扩大真实 provider 与真实项目覆盖。 |
 | 桌面端与本地网页工作台 | 已实现，走向成熟 | macOS、Linux 与 Windows 原生安装包构建已交付；updater/平台签名及干净安装冒烟仍需发布凭据。 |
 | DeepSeek provider 与成本统计 | 生产就绪的基础 | 主调用、压缩调用与记忆提取调用共享统计；保留 provider 特有的 token/缓存语义。 |
-| Provider 预设 / OpenAI 兼容端点 | 已实现，走向成熟 | 为各 provider 增加兼容性 fixture；不宣称工具/思考行为完全一致。 |
-| 记忆、技能、hook、MCP、子智能体 | 已实现，走向成熟 | 曝光/检索指标、OAuth token 刷新与长连接 HTTP 通知/请求流已交付；首次交互式 OAuth 授权仍由前端负责。 |
+| Provider 预设 / OpenAI 兼容端点 | 已实现，走向成熟 | 各家兼容端点的线上方言差异（`reasoning` 拼写、`function_call`、无 index 的工具分片、`prompt_tokens_details`）已归一化并由 fixture 矩阵锁定；仍不宣称工具/思考行为完全一致。 |
+| 记忆、技能、hook、MCP、子智能体 | 已实现，走向成熟 | 曝光/检索指标、长连接 HTTP 通知/请求流，以及首次交互式 OAuth 授权（`seekforge mcp login`，PKCE，凭据存放在配置文件之外）均已交付。 |
 | Worktree 与隔离执行 | 已实现 | Git 仓库中的可写后台与 webhook 作业默认使用 worktree 隔离，并支持显式原工作区/强制 worktree 模式。 |
 | `seekforge resolve` issue 到 draft PR | 已实现，走向成熟 | 已有分支续用与有界 CI 日志修复已交付；Loop PR 交付现已提供相同的有界检查与修复闭环。继续扩大 provider/托管平台兼容性 fixture。 |
 | 定时任务、webhook 与后台运行 | 已实现，安全敏感 | 持久化运行台账、取消、重放游标与按数量/天数保留已交付；继续强化外部投递操作。 |
@@ -29,7 +29,7 @@ SeekForge 已经具备了较为完整的本地优先编码智能体能力面。�
 | Rust runtime 与 Docker runner | 已实现，可选 | 每周真实二进制/容器门禁已交付；扩大平台矩阵与发布冒烟覆盖。 |
 | Eval 框架 | 已实现 | 真实 Loop/恢复/记忆场景、成对多样本 A/B、CI 历史恢复、趋势报告、带来源标记的 dogfood 回归，以及携带来源并支持 CI 漂移门禁的生态/执行/故障编排矩阵已交付。 |
 | `@seekforge/core` 嵌入 API | 按策略保持内部使用 | 0.x 包继续私有；[公开发布条件](core-package-policy.zh-CN.md)明确了编译产物、导出、semver、消费者测试、示例与安全文档。 |
-| VS Code / JetBrains 集成 | VS Code 桥接已实现；JetBrains 待实现 | 基于 REST/WS 契约的轻量 VS Code 客户端已支持聊天、diff、原始权限审阅、会话续接、问题回答与 `@file` 上下文。 |
+| VS Code / JetBrains 集成 | VS Code 客户端已交付；JetBrains 待实现 | 轻量 VS Code 客户端以带版本号的 .vsix 随发布提供：工具活动流、以 diff 文档呈现并支持逐 hunk 批准的权限审阅、成本/缓存读数、会话续接、问题回答与 `@file` 上下文。Marketplace 发布仍需手动（发布者令牌）。 |
 | 远程/团队执行服务 | 设计阶段 | 在不削弱本地优先默认设置的前提下，稳定一套自托管 runner 契约。 |
 
 ## 近期优先级
@@ -38,11 +38,11 @@ SeekForge 已经具备了较为完整的本地优先编码智能体能力面。�
    冒烟任务；CI 已能构建各平台原生安装包。
 2. 扩充真实项目生命周期的 eval fixture，并保留足够的 CI 趋势历史，
    以便发现跨版本的缓慢成本/质量漂移。
-3. 完成远程 MCP server 的首次交互式 OAuth 授权；refresh-token 运转与长连接
-   Streamable HTTP 处理已交付。
+3. 扩大 Loop/Graph 控制面的真实 provider 覆盖；OpenAI 兼容端点的线上方言
+   差异已归一化并有 fixture 锁定。
 4. 改进 provider 兼容性 fixture，同时把 DeepSeek 特有的成本与 cache-hit
    报告保持在一等公民地位。
-5. 加固并打包 VS Code 桥接，然后评估基于同一契约的 JetBrains 客户端。
+5. 评估基于同一契约的 JetBrains 客户端；VS Code 客户端现已作为带版本号的 .vsix 发布产物交付。
 6. 仅在文档规定的退出条件全部满足后，重新评估 `@seekforge/core` 的公开发布。
 
 ## 文档优先级

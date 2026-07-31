@@ -24,7 +24,7 @@ not a promise of API stability.
 | Desktop and local web workbench | Implemented, maturing | Native macOS, Linux, and Windows package builds ship; updater/platform signing and clean-install smoke tests still require release credentials. |
 | DeepSeek provider and cost accounting | Production-ready foundation | Main, compaction, and memory-extraction calls share accounting; preserve provider-specific token/cache semantics. |
 | Provider presets / OpenAI-compatible endpoints | Implemented, maturing | Add compatibility fixtures per provider; do not claim identical tool/thinking behavior. |
-| Memory, skills, hooks, MCP, subagents | Implemented, maturing | Exposure/retrieval metrics, OAuth token refresh, and long-lived HTTP notification/request streams ship; interactive initial OAuth authorization remains frontend-owned. |
+| Memory, skills, hooks, MCP, subagents | Implemented, maturing | Exposure/retrieval metrics, long-lived HTTP notification/request streams, and interactive initial OAuth authorization (`seekforge mcp login`, PKCE, credentials stored outside config) all ship. |
 | Worktrees and isolated execution | Implemented | Writable background and webhook jobs default to worktree isolation in git repositories, with explicit workspace/required-worktree modes. |
 | `seekforge resolve` issue-to-draft-PR | Implemented, maturing | Existing-branch resume and bounded CI-log repair ship; Loop PR delivery now offers the same bounded check-and-repair closure. Expand provider/host compatibility fixtures. |
 | Scheduled jobs, webhooks, and background runs | Implemented, security-sensitive | Persistent run ledger, cancellation, replay cursors, and configurable count/age retention ship; keep hardening external delivery operations. |
@@ -32,7 +32,7 @@ not a promise of API stability.
 | Rust runtime and Docker runner | Implemented, optional | Weekly real-binary/container gates ship; expand the platform matrix and release smoke coverage. |
 | Eval harness | Implemented | Real Loop/resume/memory scenarios, paired multi-sample A/B, CI history restoration, trend reports, source-tagged dogfood regressions, and provenance-bearing ecosystem/execution/fault matrices with CI drift gates ship. |
 | `@seekforge/core` embedding API | Internal by policy | The 0.x package stays private; [publication exit criteria](core-package-policy.md) define compiled artifacts, exports, semver, consumer tests, examples, and security docs. |
-| VS Code / JetBrains integration | VS Code bridge implemented; JetBrains pending | Thin VS Code client ships over the REST/WS contract with chat, diff, raw permission review, session resume, questions, and `@file` context. |
+| VS Code / JetBrains integration | VS Code client shipped; JetBrains pending | Thin VS Code client ships as a versioned .vsix release asset: chat with tool activity, diff-document permission review with per-hunk approval, cost/cache readout, session resume, questions, and `@file` context. Marketplace publishing stays manual (publisher token). |
 | Remote/team execution service | Design-stage | Stabilize a self-hosted runner contract without weakening local-first defaults. |
 
 ## Near-term priorities
@@ -41,11 +41,11 @@ not a promise of API stability.
    smoke jobs once platform signing credentials are available; native packages already build in CI.
 2. Expand real-project lifecycle eval fixtures and preserve enough CI trend
    history to detect slow cost/quality drift across releases.
-3. Complete interactive initial OAuth authorization for remote MCP servers;
-   refresh-token operation and long-lived Streamable HTTP handling already ship.
+3. Expand real-provider coverage for the Loop/Graph control plane; the wire
+   dialects of OpenAI-compatible endpoints are normalized and fixture-pinned.
 4. Improve provider compatibility fixtures while keeping DeepSeek-specific cost
    and cache-hit reporting first class.
-5. Harden and package the VS Code bridge, then evaluate a JetBrains client over the same contract.
+5. Evaluate a JetBrains client over the same contract; the VS Code client now ships as a versioned .vsix release asset.
 6. Revisit `@seekforge/core` publication only after its documented exit criteria are met.
 
 ## Documentation priorities

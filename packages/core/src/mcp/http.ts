@@ -4,13 +4,14 @@ import { readMcpOAuthCredential, recordMcpOAuthTokens } from "./oauth-store.js";
 import { isRecord } from "../util/guards.js";
 import { abortablePromise, onAbortOnce } from "../util/abort.js";
 import { pathToFileURL } from "node:url";
+import { SEEKFORGE_VERSION } from "../version.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const MAX_SSE_EVENT_CHARS = 1_048_576;
 const MAX_JSON_RESPONSE_BYTES = 1_048_576;
 // Latest stable MCP spec revision; servers version-fallback to their own.
 const PROTOCOL_VERSION = "2025-06-18";
-const CLIENT_INFO = { name: "seekforge", version: "0.3.0" };
+const CLIENT_INFO = { name: "seekforge", version: SEEKFORGE_VERSION };
 const CLIENT_CAPABILITIES = { roots: { listChanged: true } } as const;
 
 type JsonRpcResponse = {

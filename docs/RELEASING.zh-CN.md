@@ -18,8 +18,11 @@
    包冒烟测试基于现有的 CLI `dist` 构建，打包出与 npm 完全一致的产物，
    安装到一个干净的临时 prefix 下，并运行两个已发布的入口点。
    它需要访问 registry 以安装运行时依赖。
-2. **版本号提升** — 在 `apps/cli/package.json` 与
-   `apps/desktop/src-tauri/tauri.conf.json`（`version`）中设置发布版本；更新 `CHANGELOG.md`。
+2. **版本号提升** — 运行 `node scripts/release.mjs <version>`，它会设置全部带版本号的
+   文件（CLI、TUI、桌面端、`tauri.conf.json`、Tauri crate、VS Code 扩展，以及 Core 的
+   `SEEKFORGE_VERSION`），并校验 CHANGELOG 顶部标题是否匹配。
+   `node scripts/release.mjs --check` 只报告漂移、不做修改。不要手工改这些版本号：
+   发布工作流会拒绝与之不一致的 tag。
 3. **为目标 triple 构建 sidecar**（Tauri 要求）：
    ```sh
    pnpm --filter seekforge build:sidecar

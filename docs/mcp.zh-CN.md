@@ -178,7 +178,7 @@ mcp__<server>__<tool>
 `initialize` 中发送的客户端信息：
 
 ```json
-{ "name": "seekforge", "version": "0.3.0" }
+{ "name": "seekforge", "version": "1.0.0" }
 ```
 
 ### 1.6 能力（Capabilities）
@@ -282,7 +282,7 @@ seekforge mcp-serve: FULL ACCESS (trusted callers only) on /path/to/workspace
 服务器使用协议版本 `2025-06-18`。服务器信息：
 
 ```json
-{ "name": "seekforge", "version": "0.7.0" }
+{ "name": "seekforge", "version": "1.0.0" }
 ```
 
 **支持的方法：**

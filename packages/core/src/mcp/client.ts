@@ -5,6 +5,7 @@ import { abortablePromise, onAbortOnce } from "../util/abort.js";
 import { createMcpHttpTransport } from "./http.js";
 import { createBoundedLineReader, MAX_MCP_MESSAGE_BYTES } from "./framing.js";
 import type { McpPrompt, McpResource, McpServerConfig, McpTool } from "./types.js";
+import { SEEKFORGE_VERSION } from "../version.js";
 
 export { McpError };
 
@@ -72,7 +73,7 @@ const HANDSHAKE_TIMEOUT_MS = 120_000;
 // version-fallback: they reply to initialize with their own protocolVersion,
 // which we accept (we do not enforce an exact match).
 const PROTOCOL_VERSION = "2025-06-18";
-const CLIENT_INFO = { name: "seekforge", version: "0.3.0" };
+const CLIENT_INFO = { name: "seekforge", version: SEEKFORGE_VERSION };
 const MAX_LIST_PAGES = 100;
 const MAX_LIST_ITEMS = 10_000;
 

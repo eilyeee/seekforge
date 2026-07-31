@@ -22,10 +22,11 @@
 import type { Readable, Writable } from "node:stream";
 import { createDefaultDispatcher, type ToolContext } from "../tools/index.js";
 import { createBoundedLineReader, MAX_MCP_MESSAGE_BYTES } from "./framing.js";
+import { SEEKFORGE_VERSION } from "../version.js";
 
 /** Must match what our own client sends (client.ts PROTOCOL_VERSION). */
 const PROTOCOL_VERSION = "2025-06-18";
-const SERVER_INFO = { name: "seekforge", version: "0.7.0" };
+const SERVER_INFO = { name: "seekforge", version: SEEKFORGE_VERSION };
 const WORKSPACE_OVERVIEW_URI = "seekforge://workspace/overview";
 const WORKSPACE_STATUS_URI = "seekforge://workspace/status";
 

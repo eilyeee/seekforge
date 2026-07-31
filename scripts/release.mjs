@@ -25,7 +25,12 @@ const TARGETS = [
   // The VS Code client ships as a release asset from the same tag, and
   // release-npm.yml refuses to package it when this version disagrees.
   { path: "apps/vscode/package.json", kind: "json" },
+  // Core is unpublished but still announces a version on the MCP wire.
+  { path: "packages/core/src/version.ts", kind: "ts" },
 ];
+
+/** `export const SEEKFORGE_VERSION = "x.y.z";` — the Core version literal. */
+const TS_VERSION_RE = /(export const SEEKFORGE_VERSION = ")([^"]*)(";)/;
 
 const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/;
 
@@ -70,6 +75,9 @@ function readVersion(target) {
   if (target.kind === "json") {
     return JSON.parse(text).version ?? null;
   }
+  if (target.kind === "ts") {
+    return TS_VERSION_RE.exec(text)?.[2] ?? null;
+  }
   // cargo: only the [package] version, and only if it's a literal (not inherited).
   return readCargoPackageVersion(text);
 }
@@ -105,6 +113,11 @@ function writeVersion(target, version) {
       fail(`cannot update ${target.path}: ${error instanceof Error ? error.message : String(error)}`);
     }
     if (replaced !== text) writeFileSync(file, replaced);
+    return;
+  }
+  if (target.kind === "ts") {
+    if (!TS_VERSION_RE.test(text)) fail(`could not find SEEKFORGE_VERSION in ${target.path}`);
+    writeFileSync(file, text.replace(TS_VERSION_RE, `$1${version}$3`));
     return;
   }
   // cargo: replace the [package] version line only.

@@ -76,6 +76,20 @@ test("every config key is documented in both configuration guides", () => {
   }
 });
 
+test("the version SeekForge announces on the MCP wire is the released one", () => {
+  const cliVersion = JSON.parse(read("apps", "cli", "package.json")).version;
+  const core = read("packages", "core", "src", "version.ts");
+  const declared = /export const SEEKFORGE_VERSION = "([^"]*)";/.exec(core)?.[1];
+  assert.equal(declared, cliVersion, "packages/core/src/version.ts disagrees with the published CLI version");
+  for (const file of ["client.ts", "http.ts", "server.ts"]) {
+    const source = read("packages", "core", "src", "mcp", file);
+    assert.ok(
+      !/version: "\d+\.\d+\.\d+"/.test(source),
+      `mcp/${file} hard-codes a version literal; use SEEKFORGE_VERSION so releases bump it`,
+    );
+  }
+});
+
 test("every REST route path is described in SERVER-API.md", () => {
   const dir = join(root, "apps", "server", "src", "routes");
   const documented = read("apps", "server", "SERVER-API.md");
