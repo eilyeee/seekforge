@@ -90,6 +90,12 @@ backend in `crates/runtime`.
   original error) from a clean non-zero exit.
 - Do not modify `packages/shared/src/index.ts` types without explicit instruction —
   other work streams build against them.
+- A capability is not done when the code works: `scripts/surface-drift.test.mjs`
+  (runs in CI) fails the build when a top-level CLI command is missing from either
+  README command table, a `CliConfig` key is undocumented in either configuration
+  guide, a REST route is absent from `apps/server/SERVER-API.md`, a doc lacks its
+  `.zh-CN.md` counterpart or cross-link, or an i18n table's locales disagree.
+  Run it with `node --test scripts/surface-drift.test.mjs`.
 - Run `pnpm typecheck` and `pnpm test` after changes.
 - When Rust code or tests change, also run the relevant Rust tests; prefer
   `cargo test --workspace` before delivery.

@@ -69,10 +69,13 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge run "<task>"` | run a development task; `-y` auto-approves safe writes/commands, `-m` overrides the model, `--json` emits JSONL events for CI, `--plan` plans read-only first and executes after your confirmation. More flags: [`--permission-mode`, `--output-style`, `--fallback-model`, `--settings`, `--system-prompt`, `--append-system-prompt`, `--allowedTools`, `--disallowedTools`, `--add-dir`, `--verbose`](docs/cli-reference.md) |
 | `seekforge ask "<question>"` | read-only Q&A (writes and commands disabled); supports `--add-dir`, `--settings`, `--verbose` and [most run flags](docs/cli-reference.md) |
 | `seekforge models` | list available DeepSeek models, their pricing (cache miss/hit, output per 1M tokens), default (`deepseek-v4-flash`), and deprecated entries |
+| `seekforge chat` | interactive session — the default when no command is given (`-p` for headless print mode) |
 | `seekforge resume <session-id> [task]` | continue a session with its full history (keeps its ask/edit mode) |
 | `seekforge sessions` | list sessions with status and cost (subagent runs hidden) |
 | `seekforge sessions prune [--older-than <days>] [--keep-last <n>] [--dry-run]` | delete old session traces to keep `.seekforge/sessions/` bounded |
 | `seekforge rewind [session-id] [--dry-run]` | undo all file changes a session made (pre-write checkpoints) |
+| `seekforge replay <session-id>` | re-render a stored session to the terminal (deterministic, no model calls) |
+| `seekforge audit <session-id> [--json] [-o <file>]` | export a reviewable report of what an agent did in a stored session |
 | `seekforge memory add "<fact>" [--type] [--pending]` / `remove <n\|id\|text>` | tell the agent something directly (REPL: `/remember <fact>`) |
 | `seekforge status` | project / config / last-session overview |
 | `seekforge update` | check npm for a newer seekforge version and print the install command |

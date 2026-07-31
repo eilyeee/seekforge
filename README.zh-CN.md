@@ -67,10 +67,13 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge run "<task>"` | 执行一个开发任务；`-y` 自动批准安全的写入/命令，`-m` 覆盖模型，`--json` 输出 JSONL 事件供 CI 使用，`--plan` 先只读规划、确认后执行。更多 flag：[`--permission-mode`、`--output-style`、`--fallback-model`、`--settings`、`--system-prompt`、`--append-system-prompt`、`--allowedTools`、`--disallowedTools`、`--add-dir`、`--verbose`](docs/cli-reference.zh-CN.md) |
 | `seekforge ask "<question>"` | 只读问答（禁用写入与命令）；支持 `--add-dir`、`--settings`、`--verbose` 及[大部分 run flag](docs/cli-reference.zh-CN.md) |
 | `seekforge models` | 列出可用的 DeepSeek 模型、定价（缓存未命中/命中、每 1M token 输出）、默认模型（`deepseek-v4-flash`）与已弃用条目 |
+| `seekforge chat` | 交互式会话——不带子命令时的默认行为（`-p` 为无头打印模式） |
 | `seekforge resume <session-id> [task]` | 携带完整历史继续一个会话（保持其 ask/edit 模式） |
 | `seekforge sessions` | 列出会话及其状态与费用（子代理运行不显示） |
 | `seekforge sessions prune [--older-than <days>] [--keep-last <n>] [--dry-run]` | 删除旧会话 trace，控制 `.seekforge/sessions/` 体积 |
 | `seekforge rewind [session-id] [--dry-run]` | 撤销某会话的全部文件改动（写前检查点） |
+| `seekforge replay <session-id>` | 把已存储的会话确定性地重新渲染到终端（不调用模型） |
+| `seekforge audit <session-id> [--json] [-o <file>]` | 导出一份可复核的报告，说明智能体在该会话里做了什么 |
 | `seekforge memory add "<fact>" [--type] [--pending]` / `remove <n\|id\|text>` | 直接告诉 agent 一条事实（REPL：`/remember <fact>`） |
 | `seekforge status` | 项目 / 配置 / 最近会话概览 |
 | `seekforge update` | 检查 npm 上的新版本并打印安装命令 |

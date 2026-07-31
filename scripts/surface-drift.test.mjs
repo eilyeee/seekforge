@@ -1,0 +1,148 @@
+// Drift checks across the surfaces that must agree but are edited separately:
+// CLI commands, config keys, REST routes, the two documentation languages, and
+// the i18n tables.
+//
+// Every capability in this repository is wired through Core, then a CLI
+// command, a REST route, a Desktop view, and two languages of documentation.
+// Nothing mechanical connected those, so a capability could ship with a command
+// nobody documented or a translation nobody added — which has happened before.
+// These tests fail the build instead of leaving the gap for a later audit.
+
+import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const read = (...parts) => readFileSync(join(root, ...parts), "utf8");
+
+/** Top-level CLI commands, i.e. `program.command("name")` anywhere in the CLI. */
+function cliCommands() {
+  const dir = join(root, "apps", "cli", "src", "commands");
+  const sources = [read("apps", "cli", "src", "index.ts")];
+  for (const name of readdirSync(dir)) {
+    if (name.endsWith(".ts") && !name.includes(".test.")) sources.push(readFileSync(join(dir, name), "utf8"));
+  }
+  const names = new Set();
+  for (const source of sources) {
+    for (const match of source.matchAll(/program\s*\n?\s*\.command\(\s*"([a-z][a-z-]*)"/g)) names.add(match[1]);
+  }
+  return names;
+}
+
+test("every top-level CLI command appears in both README command tables", () => {
+  const commands = cliCommands();
+  assert.ok(commands.size > 10, `expected the CLI to register many commands, found ${commands.size}`);
+  for (const [file, label] of [
+    ["README.md", "English README"],
+    ["README.zh-CN.md", "Chinese README"],
+  ]) {
+    const source = read(file);
+    for (const command of commands) {
+      assert.ok(
+        new RegExp(`\`seekforge [^\`]*\\b${command}\\b`).test(source),
+        `${label} has no row for \`seekforge ${command}\` — document it or the command is undiscoverable`,
+      );
+    }
+  }
+});
+
+/** Config keys declared by the CLI's CliConfig type. */
+function configKeys() {
+  const source = read("apps", "cli", "src", "config.ts");
+  const body = source.slice(source.indexOf("export type CliConfig = {"));
+  const end = body.indexOf("\n};");
+  assert.ok(end > 0, "could not find the end of CliConfig");
+  const keys = new Set();
+  for (const match of body.slice(0, end).matchAll(/^ {2}([a-zA-Z][a-zA-Z0-9]*)\??:/gm)) keys.add(match[1]);
+  return keys;
+}
+
+test("every config key is documented in both configuration guides", () => {
+  const keys = configKeys();
+  assert.ok(keys.size > 10, `expected many config keys, found ${keys.size}`);
+  for (const [file, label] of [
+    ["docs/configuration.md", "English configuration guide"],
+    ["docs/configuration.zh-CN.md", "Chinese configuration guide"],
+  ]) {
+    const source = read(file);
+    for (const key of keys) {
+      assert.ok(
+        source.includes(`\`${key}\``),
+        `${label} never mentions the \`${key}\` config key — an undocumented key is an unusable one`,
+      );
+    }
+  }
+});
+
+test("every REST route path is described in SERVER-API.md", () => {
+  const dir = join(root, "apps", "server", "src", "routes");
+  const documented = read("apps", "server", "SERVER-API.md");
+  const missing = [];
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith(".ts") || name.includes(".test.")) continue;
+    const source = readFileSync(join(dir, name), "utf8");
+    for (const match of source.matchAll(/\.(get|post|put|patch|delete)\(\s*"(\/api\/[^"]*)"/g)) {
+      // Path parameters are named freely in docs (:id vs :sessionId), so compare
+      // on the static prefix before the first parameter.
+      const path = match[2];
+      const prefix = path.split("/:")[0];
+      if (!documented.includes(prefix)) missing.push(`${name}: ${match[1].toUpperCase()} ${path}`);
+    }
+  }
+  assert.deepEqual(missing, [], "REST routes missing from apps/server/SERVER-API.md");
+});
+
+test("every English doc has a Chinese counterpart, and vice versa", () => {
+  const docs = readdirSync(join(root, "docs")).filter((name) => name.endsWith(".md"));
+  const english = docs.filter((name) => !name.endsWith(".zh-CN.md"));
+  const chinese = new Set(docs.filter((name) => name.endsWith(".zh-CN.md")));
+  const missingChinese = english.filter((name) => !chinese.has(name.replace(/\.md$/, ".zh-CN.md")));
+  const orphanChinese = [...chinese].filter((name) => !english.includes(name.replace(/\.zh-CN\.md$/, ".md")));
+  assert.deepEqual(missingChinese, [], "English docs without a zh-CN counterpart");
+  assert.deepEqual(orphanChinese, [], "zh-CN docs whose English original is gone");
+});
+
+test("bilingual docs cross-link each other", () => {
+  for (const name of readdirSync(join(root, "docs"))) {
+    if (!name.endsWith(".md") || name.endsWith(".zh-CN.md")) continue;
+    const english = read("docs", name);
+    const chinese = read("docs", name.replace(/\.md$/, ".zh-CN.md"));
+    assert.ok(english.includes(name.replace(/\.md$/, ".zh-CN.md")), `docs/${name} does not link its translation`);
+    assert.ok(chinese.includes(`(${name})`), `docs/${name.replace(/\.md$/, ".zh-CN.md")} does not link the original`);
+  }
+});
+
+/** Flat i18n tables keyed by locale, as used by the CLI, TUI, and Desktop. */
+function localeTables(source) {
+  const tables = {};
+  for (const match of source.matchAll(/^ {2}(en|"zh-CN"|zh):\s*\{$/gm)) {
+    const locale = match[1].replaceAll('"', "");
+    const body = source.slice(match.index + match[0].length);
+    const end = body.indexOf("\n  },");
+    tables[locale] = new Set([...body.slice(0, end).matchAll(/^\s{4}"([^"]+)":/gm)].map((entry) => entry[1]));
+  }
+  return tables;
+}
+
+test("i18n tables define the same keys in every locale", () => {
+  const files = [
+    ["apps", "cli", "src", "i18n", "common.ts"],
+    ["apps", "cli", "src", "i18n", "commands.ts"],
+    ["apps", "cli", "src", "i18n", "repl.ts"],
+  ];
+  for (const parts of files) {
+    const tables = localeTables(read(...parts));
+    const locales = Object.keys(tables);
+    assert.ok(locales.includes("en"), `${parts.join("/")} has no English table`);
+    assert.ok(locales.length > 1, `${parts.join("/")} has no translation table`);
+    for (const locale of locales) {
+      if (locale === "en") continue;
+      const missing = [...tables.en].filter((key) => !tables[locale].has(key));
+      const extra = [...tables[locale]].filter((key) => !tables.en.has(key));
+      assert.deepEqual(missing, [], `${parts.join("/")}: ${locale} is missing keys`);
+      assert.deepEqual(extra, [], `${parts.join("/")}: ${locale} has keys English does not`);
+    }
+  }
+});
