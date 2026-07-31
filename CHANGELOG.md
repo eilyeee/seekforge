@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### round 78: adaptive Loop and Graph control plane
+- Added contextual Loop route learning, unfinished-node Graph runtime replanning, workspace-wide remote executor capacity fencing, and verified artifact attestations.
+- Added durable SLO burn rates and forecast calibration, explicit shadow/canary/promotion rollouts, safe idle orchestration maintenance, and opt-in regression rollback.
+- Exposed the control plane through Core, CLI, REST, and Desktop, with a real-project ecosystem/execution/fault eval matrix, strict shared contracts, bilingual documentation, and focused lifecycle/boundary regression coverage.
+
 ### round 77: recoverable orchestration deployment and Graph transactions
 - Added crash-recoverable Graph tree migration and append-only expansion apply, remote executor capacity fencing and placement alternatives, Monte Carlo scheduling distributions, and verified SHA-256 artifact CAS materialization plus reference-aware collection.
 - Added persistent SLO policy, bounded full-generation orchestration indexing and pagination, multi-objective Loop routing, and a proposal deployment/observation/rollback lifecycle across Core, CLI, REST, and Desktop.

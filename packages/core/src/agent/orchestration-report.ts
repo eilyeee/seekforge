@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import type { GraphExecutionAdapter } from "./graph-engineering.js";
 import { buildEngineeringGraphHealthReport } from "./graph-health.js";
 import { readEngineeringGraphHistory } from "./graph-history.js";
@@ -22,6 +23,11 @@ import {
 import { listOrchestrationProposals } from "./orchestration-proposals.js";
 import { listOrchestrationDeployments } from "./orchestration-deployments.js";
 import { readWorkspaceOrchestrationSloPolicy } from "./orchestration-policy.js";
+import { buildWorkspaceOrchestrationControlAnalytics } from "./orchestration-control.js";
+import { buildWorkspaceContextualLoopRoutingProfile } from "./orchestration-routing.js";
+import { buildEngineeringGraphRuntimeReplan, buildWorkspaceExecutorCapacityReport } from "./graph-runtime-plan.js";
+import { listOrchestrationRollouts } from "./orchestration-rollouts.js";
+import { listEngineeringGraphArtifactAttestations } from "./graph-artifact-store.js";
 
 export type WorkspaceOrchestrationReportOptions = {
   policy?: OrchestrationSloPolicy;
@@ -55,12 +61,24 @@ export function buildWorkspaceOrchestrationReport(
   const allLoops = listLoopStates(workspace);
   const allGraphCheckpoints = listWorkspaceEngineeringGraphTreeCheckpoints(workspace);
   const allGraphs = allGraphCheckpoints.map((checkpoint) => checkpoint.state);
+  const physicalWorkspace = realpathSync.native(workspace);
+  const workspaceGraphs = allGraphCheckpoints
+    .filter((checkpoint) => checkpoint.workspace === physicalWorkspace)
+    .map((checkpoint) => checkpoint.state);
   const loops = allLoops.slice(loopOffset, loopOffset + Math.min(limit, MAX_REPORT_LOOPS));
   const graphCheckpoints = allGraphCheckpoints.slice(graphOffset, graphOffset + Math.min(limit, MAX_REPORT_GRAPHS));
   const graphs = graphCheckpoints.map((checkpoint) => checkpoint.state);
   const verification = readLoopVerificationIntelligence(workspace);
   const persistedPolicy = readWorkspaceOrchestrationSloPolicy(workspace);
   const policy = { ...(persistedPolicy?.policy ?? {}), ...(options.policy ?? {}) };
+  const contextualRouting = buildWorkspaceContextualLoopRoutingProfile(workspace);
+  const attestationCounts = new Map<string, number>();
+  for (const attestationWorkspace of new Set(allGraphCheckpoints.map((checkpoint) => checkpoint.workspace))) {
+    for (const attestation of listEngineeringGraphArtifactAttestations(attestationWorkspace)) {
+      const key = `${attestationWorkspace}\0${attestation.sha256}`;
+      attestationCounts.set(key, (attestationCounts.get(key) ?? 0) + 1);
+    }
+  }
   const completePortfolio = buildOrchestrationPortfolioReport(allLoops, allGraphs);
   const visiblePortfolio = buildOrchestrationPortfolioReport(loops, graphs);
   const loopReports = loops.map((state) => {
@@ -106,11 +124,15 @@ export function buildWorkspaceOrchestrationReport(
         policy,
       ),
       replay: replayEngineeringGraphHistory(state.graphId, replayHistory),
+      runtimeReplan: buildEngineeringGraphRuntimeReplan(stateWorkspace, state, options.executors ?? {}),
       artifactReuse: planEngineeringGraphArtifactReuse(
         state,
         readEngineeringGraphRunSnapshots(stateWorkspace, state.graphId),
         stateWorkspace,
-      ),
+      ).map((artifact) => ({
+        ...artifact,
+        attestationCount: attestationCounts.get(`${stateWorkspace}\0${artifact.sha256}`) ?? 0,
+      })),
     };
   });
   const evaluationWindow = persistedPolicy?.evaluationWindow ?? 100;
@@ -125,6 +147,11 @@ export function buildWorkspaceOrchestrationReport(
     portfolio: { ...completePortfolio, items: visiblePortfolio.items },
     policy,
     policyState: persistedPolicy,
+    controlAnalytics: buildWorkspaceOrchestrationControlAnalytics(workspace, {
+      maxBreachRate: persistedPolicy?.maxBreachRate,
+    }),
+    contextualRouting,
+    executorCapacity: buildWorkspaceExecutorCapacityReport(workspace, workspaceGraphs, options.executors ?? {}),
     sloSummary: {
       scope: "page" as const,
       evaluations: evaluations.length,
@@ -154,6 +181,7 @@ export function buildWorkspaceOrchestrationReport(
     graphs: graphReports,
     reviewedProposals: listOrchestrationProposals(workspace),
     deployments: listOrchestrationDeployments(workspace),
+    rollouts: listOrchestrationRollouts(workspace),
   };
 }
 

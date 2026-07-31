@@ -373,6 +373,102 @@ describe("runAutoLoop", () => {
     expect(routed.chats).toBe(1);
   });
 
+  it("uses contextual workspace evidence below explicit and applied routes", async () => {
+    const prior = createLoopState({
+      loopId: "prior-route",
+      task: "make it green",
+      workspace,
+      verifyCommand: "echo test",
+      maxIterations: 4,
+    });
+    saveLoopState(workspace, {
+      ...prior,
+      snapshots: [
+        {
+          iteration: 0,
+          ts: prior.createdAt,
+          diagnosticsFingerprint: "a".repeat(64),
+          workspaceFingerprint: null,
+          failedTests: 3,
+          stageResults: [],
+          failureCategory: "unknown",
+        },
+        ...[1, 2, 3].map((iteration) => ({
+          iteration,
+          ts: prior.createdAt,
+          diagnosticsFingerprint: "a".repeat(64),
+          workspaceFingerprint: null,
+          failedTests: 3 - iteration,
+          stageResults: [],
+          failureCategory: iteration === 3 ? ("none" as const) : ("unknown" as const),
+          editModel: "context-specialist",
+        })),
+      ],
+    });
+    const base = alwaysDone("base");
+    const contextual = alwaysDone("context-specialist");
+    const result = await runAutoLoop(
+      {
+        provider: base,
+        providerForModel: (model) => (model === contextual.model ? contextual : base),
+        dispatcher: noopDispatcher,
+        confirm: async () => true,
+      },
+      baseOpts(workspace, failNTimes(1)),
+    );
+    expect(result.status).toBe("passed");
+    expect(contextual.chats).toBe(1);
+    expect(base.chats).toBe(0);
+  });
+
+  it("ignores contextual advice when its historical provider is unavailable", async () => {
+    const prior = createLoopState({
+      loopId: "prior-unavailable-route",
+      task: "make it green",
+      workspace,
+      verifyCommand: "echo test",
+      maxIterations: 4,
+    });
+    saveLoopState(workspace, {
+      ...prior,
+      snapshots: [
+        {
+          iteration: 0,
+          ts: prior.createdAt,
+          diagnosticsFingerprint: "a".repeat(64),
+          workspaceFingerprint: null,
+          failedTests: 3,
+          stageResults: [],
+          failureCategory: "unknown",
+        },
+        ...[1, 2, 3].map((iteration) => ({
+          iteration,
+          ts: prior.createdAt,
+          diagnosticsFingerprint: "a".repeat(64),
+          workspaceFingerprint: null,
+          failedTests: 3 - iteration,
+          stageResults: [],
+          failureCategory: iteration === 3 ? ("none" as const) : ("unknown" as const),
+          editModel: "retired-model",
+        })),
+      ],
+    });
+    const base = alwaysDone("base");
+    const result = await runAutoLoop(
+      {
+        provider: base,
+        providerForModel: () => {
+          throw new Error("provider was removed");
+        },
+        dispatcher: noopDispatcher,
+        confirm: async () => true,
+      },
+      { ...baseOpts(workspace, failNTimes(1)), loopId: "unavailable-route-target" },
+    );
+    expect(result.status).toBe("passed");
+    expect(base.chats).toBe(1);
+  });
+
   it("escalates through an explicit model chain and checkpoints the routing decision", async () => {
     const base = alwaysDone("base");
     const fast = alwaysDone("fast");

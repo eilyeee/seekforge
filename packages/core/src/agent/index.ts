@@ -206,13 +206,29 @@ export {
 export {
   engineeringGraphArtifactAvailable,
   inspectEngineeringGraphArtifactStore,
+  listEngineeringGraphArtifactAttestations,
   materializeEngineeringGraphArtifact,
   pruneEngineeringGraphArtifactStore,
   storeEngineeringGraphArtifact,
   MAX_GRAPH_ARTIFACT_BYTES,
   type EngineeringGraphArtifactPruneResult,
+  type EngineeringGraphArtifactAttestation,
+  type EngineeringGraphArtifactAttestationInput,
   type EngineeringGraphArtifactStoreEntry,
 } from "./graph-artifact-store.js";
+export {
+  acquireWorkspaceGraphExecutorCapacity,
+  listWorkspaceGraphExecutorReservations,
+  type WorkspaceGraphExecutorCapacityLease,
+  type WorkspaceGraphExecutorReservation,
+} from "./graph-capacity.js";
+export {
+  buildEngineeringGraphRuntimeReplan,
+  buildWorkspaceExecutorCapacityReport,
+  type EngineeringGraphRuntimeReplan,
+  type EngineeringGraphRuntimeReplanEntry,
+  type WorkspaceExecutorCapacityEntry,
+} from "./graph-runtime-plan.js";
 export { BUILTIN_GRAPH_HANDLERS, graphExecutorsWithPlugins, graphHandlersWithPlugins } from "./graph-handlers.js";
 export {
   engineeringGraphCriticality,
@@ -328,6 +344,45 @@ export {
   type WorkspaceOrchestrationIndex,
   type WorkspaceOrchestrationIndexItem,
 } from "./orchestration-index.js";
+export {
+  buildWorkspaceOrchestrationControlAnalytics,
+  listOrchestrationControlObservations,
+  recordEngineeringGraphForecastObservation,
+  recordOrchestrationDeploymentObservation,
+  type OrchestrationBurnRateWindow,
+  type OrchestrationCalibrationReport,
+  type OrchestrationControlObservation,
+  type OrchestrationForecastObservation,
+  type WorkspaceOrchestrationControlAnalytics,
+} from "./orchestration-control.js";
+export {
+  buildWorkspaceContextualLoopRoutingProfile,
+  loopRoutingContext,
+  selectWorkspaceContextualLoopRoutes,
+  type LoopRoutingContext,
+  type WorkspaceContextualLoopRoute,
+  type WorkspaceContextualLoopRoutingProfile,
+} from "./orchestration-routing.js";
+export {
+  advanceOrchestrationRollout,
+  listOrchestrationRollouts,
+  reconcileOrchestrationRollouts,
+  startOrchestrationRollout,
+  type OrchestrationRollout,
+  type OrchestrationRolloutPhase,
+} from "./orchestration-rollouts.js";
+export {
+  maintainWorkspaceOrchestration,
+  type WorkspaceOrchestrationMaintenanceResult,
+} from "./orchestration-maintenance.js";
+export {
+  createOrchestrationMaintenanceScheduler,
+  DEFAULT_ORCHESTRATION_IDLE_CHECK_INTERVAL_MS,
+  DEFAULT_ORCHESTRATION_IDLE_INITIAL_DELAY_MS,
+  type IdleOrchestrationMaintenanceResult,
+  type IdleOrchestrationMaintenanceTarget,
+  type OrchestrationMaintenanceScheduler,
+} from "./orchestration-idle.js";
 export {
   explainEngineeringGraphNode,
   simulateEngineeringGraph,

@@ -10,6 +10,8 @@ export function OrchestrationIntelligenceSection(props: {
   onProposalReview: (proposal: OrchestrationProposal, status: "approve" | "dismiss") => void;
   onProposalApply: (proposal: OrchestrationProposal) => void;
   onProposalRollback: (proposal: OrchestrationProposal) => void;
+  onRolloutStart: (proposal: OrchestrationProposal) => void;
+  onRolloutAdvance: (proposal: OrchestrationProposal) => void;
   onObserve: () => void;
 }) {
   const t = useT();
@@ -47,6 +49,31 @@ export function OrchestrationIntelligenceSection(props: {
             {(report.sloSummary.breachRate * 100).toFixed(1)}%
             {` · ${report.sloSummary.evaluations} ${t("chat.loop.orchestration.evaluations")}`}
           </p>
+          <p className="mt-1 text-tertiary">
+            {t("chat.loop.orchestration.control")}:{" "}
+            {report.controlAnalytics.burnRates
+              .map((window) => `${window.hours}h ${window.burnRate.toFixed(2)}x/${window.status}`)
+              .join(" · ")}{" "}
+            · {t("chat.loop.orchestration.calibration")} {report.controlAnalytics.calibration.samples}/
+            {(report.controlAnalytics.calibration.p95Coverage * 100).toFixed(1)}%
+          </p>
+          {report.contextualRouting.routes.length > 0 && (
+            <p className="mt-1 text-tertiary">
+              {t("chat.loop.orchestration.contextual")}:{" "}
+              {report.contextualRouting.routes
+                .slice(0, 4)
+                .map((route) => `${route.context}/${route.failureCategory} → ${route.model}`)
+                .join("; ")}
+            </p>
+          )}
+          {report.executorCapacity.length > 0 && (
+            <p className="mt-1 text-tertiary">
+              {t("chat.loop.orchestration.capacity")}:{" "}
+              {report.executorCapacity
+                .map((item) => `${item.executor} ${item.active}/${item.capacity} (+${item.queueDepth})`)
+                .join("; ")}
+            </p>
+          )}
           {report.loops.some((loop) => loop.strategy.recommendedRoutes.length > 0) && (
             <p className="mt-1 text-tertiary">
               {t("chat.loop.orchestration.routes")}:{" "}
@@ -79,7 +106,22 @@ export function OrchestrationIntelligenceSection(props: {
               {report.graphs.reduce(
                 (sum, graph) => sum + graph.artifactReuse.filter((artifact) => artifact.casAvailable).length,
                 0,
+              )}{" "}
+              · {t("chat.loop.orchestration.attestations")}{" "}
+              {report.graphs.reduce(
+                (sum, graph) =>
+                  sum + graph.artifactReuse.reduce((count, artifact) => count + artifact.attestationCount, 0),
+                0,
               )}
+            </p>
+          )}
+          {report.graphs.some((graph) => graph.runtimeReplan.recommendedOrder.length > 0) && (
+            <p className="mt-1 text-tertiary">
+              {t("chat.loop.orchestration.replan")}:{" "}
+              {report.graphs
+                .filter((graph) => graph.runtimeReplan.recommendedOrder.length > 0)
+                .map((graph) => `${graph.graphId} → ${graph.runtimeReplan.recommendedOrder.join(", ")}`)
+                .join("; ")}
             </p>
           )}
           {report.graphs.some((graph) => graph.optimization.uncertainty.sensitivity.length > 0) && (
@@ -133,6 +175,32 @@ export function OrchestrationIntelligenceSection(props: {
                   )}
                   {proposal.status === "approved" &&
                     proposal.action.kind !== "budget_review" &&
+                    !report.rollouts.some(
+                      (rollout) => rollout.proposalId === proposal.id && rollout.phase !== "failed",
+                    ) && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={props.busy}
+                        onClick={() => props.onRolloutStart(proposal)}
+                      >
+                        {t("chat.loop.orchestration.startRollout")}
+                      </Button>
+                    )}
+                  {report.rollouts.some(
+                    (rollout) => rollout.proposalId === proposal.id && rollout.phase === "shadow",
+                  ) && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={props.busy}
+                      onClick={() => props.onRolloutAdvance(proposal)}
+                    >
+                      {t("chat.loop.orchestration.startCanary")}
+                    </Button>
+                  )}
+                  {proposal.status === "approved" &&
+                    proposal.action.kind !== "budget_review" &&
                     !report.deployments.some(
                       (deployment) => deployment.proposalId === proposal.id && deployment.status === "applied",
                     ) && (
@@ -172,6 +240,17 @@ export function OrchestrationIntelligenceSection(props: {
                   .join("; ")}
               </span>
             </div>
+          )}
+          {report.rollouts.length > 0 && (
+            <p className="mt-1 text-tertiary">
+              {t("chat.loop.orchestration.rollouts")}:{" "}
+              {report.rollouts
+                .map(
+                  (rollout) =>
+                    `${rollout.proposalId}: ${rollout.phase} (${rollout.observationIds.length}/${rollout.minSamples})`,
+                )
+                .join("; ")}
+            </p>
           )}
           <p className="mt-1 text-tertiary">{t("chat.loop.orchestration.advisory")}</p>
         </>

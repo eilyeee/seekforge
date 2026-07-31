@@ -4037,6 +4037,166 @@ and its derived audit trail inconsistent.
 - **Caught:** Graph tree recovery skipped history repair for a child checkpoint
   already committed at the injected crash boundary.
 
+## 372. Text classifiers need lexical boundaries around every alternative
+
+A bounded alternative beside an unbounded phrase does not protect the whole
+regular expression. For example, `go test` can match the tail of `cargo test`
+and misclassify a Rust workspace as mixed-language.
+
+- **Do:** put every toolchain keyword inside one explicit word-boundary group
+  and test overlapping suffixes and prefixes.
+- **Caught:** contextual Loop routing initially classified `cargo test` as both
+  Rust and Go.
+
+## 373. One capacity decision must use one persisted snapshot
+
+Re-reading a reservation document during one lease-held decision adds needless
+I/O and, for stores whose locks are not the read owner, can compare values from
+different generations.
+
+- **Do:** read once after acquiring the owner, derive active/expired entries
+  from that immutable snapshot, and publish one replacement.
+- **Caught:** workspace Graph executor capacity initially re-read its document
+  while deciding whether expired entries required publication.
+
+## 374. Bounded history eviction must preserve active lifecycles
+
+A newest-first slice treats terminal audit records and active state machines as
+equivalent. Enough recent completed records can evict a still-running rollout,
+making its deployed effect unmanageable.
+
+- **Do:** retain every active lifecycle first, reject impossible active overflow,
+  then fill the remaining bound with terminal history.
+- **Caught:** orchestration rollout retention initially sliced shadow, canary,
+  and terminal records together.
+
+## 375. Cross-tree joins need the complete generation identity
+
+A logical ID alone may be reused in another physical workspace or generation.
+Joining an optimization report to a checkpoint by ID can therefore attach an
+actual outcome to the wrong prediction.
+
+- **Do:** join durable graph evidence on graph ID plus exact fingerprint (and
+  physical owner whenever it is available).
+- **Caught:** orchestration forecast maintenance initially indexed discovered
+  Graph states only by graph ID.
+
+## 376. Dependent options must be validated before effects start
+
+An option can be valid in isolation but meaningless or unsafe without its
+enabling option. Discovering that dependency only when a background scheduler
+is constructed may leave earlier services and timers running.
+
+- **Do:** validate option implications and timer ranges at the public entry
+  point before registries, servers, or schedulers are created.
+- **Caught:** idle orchestration auto-rollback initially did not require idle
+  orchestration maintenance during server preflight.
+
+## 377. Provenance deduplication keys must include every distinct origin
+
+A content digest identifies bytes, not the path or producer claim that created
+them. Two outputs may intentionally contain identical bytes while carrying
+different lineage.
+
+- **Do:** include the exact generation, producer, source path, and digest in an
+  attestation identity; use the digest alone only for blob storage.
+- **Caught:** Graph artifact attestations initially collapsed two same-content
+  paths from one producer into one record.
+
+## 378. Observation identities must include the lifecycle generation and attempt
+
+An action can be retried, or a proposal can be revised without changing its
+logical ID or final metric values. Deduplicating only on the ID and outcome then
+silently drops a real control-plane sample.
+
+- **Do:** include the exact proposal revision and deployment attempt in durable
+  observation identities; include the run generation for execution forecasts.
+- **Caught:** deployment evidence initially collapsed identical outcomes from
+  distinct attempts, while Graph forecasts initially collapsed reruns.
+
+## 379. Capacity reporting and enforcement must read the same owner state
+
+An adapter-local active counter cannot describe reservations held by other
+processes. Reporting it while enforcement uses a workspace reservation store
+produces contradictory availability and rollout decisions.
+
+- **Do:** derive workspace-capacity telemetry from the same durable reservation
+  snapshot used by admission control, while retaining adapter-local counters for
+  adapters without a workspace limit.
+- **Caught:** the first executor-capacity report ignored cross-process Graph
+  reservations.
+
+## 380. Derived lifecycles must reconcile authoritative manual transitions
+
+An automation record may say promoted while the underlying deployment has been
+manually rolled back through another surface. Treating terminal automation state
+as immutable leaves management views stale.
+
+- **Do:** reconcile derived rollout state against authoritative deployment
+  transitions, including transitions initiated outside the rollout surface.
+- **Caught:** promoted rollouts initially remained promoted after direct rollback.
+
+## 381. Learned advice must stay optional and cover generated identities
+
+Historical routing may name a provider that has since been removed, and a new
+run may not have a caller-supplied ID yet. Neither condition should disable or
+break workspace learning.
+
+- **Do:** select advice for every persistent generated or explicit run, probe
+  advisory providers safely, and fall back without weakening explicit policies.
+- **Caught:** contextual Loop routing initially required an explicit Loop ID and
+  could make retired historical providers a run prerequisite.
+
+## 382. Per-key capacity bounds do not bound the shared collection
+
+Several executors can each remain below their own limit while their combined
+reservations overflow the durable document's maximum.
+
+- **Do:** enforce both the per-executor capacity and the total store admission
+  bound before appending; keep public capacity maxima compatible with that bound.
+- **Caught:** Graph workspace reservations allowed multiple executors to publish
+  more entries than their parser would later accept.
+
+## 383. Derived telemetry must retain its physical owner
+
+Nested Graphs can persist artifacts and reservations in external or managed
+workspaces. Aggregating only the root store either drops their evidence or
+attributes same-content evidence from another workspace to them.
+
+- **Do:** read every discovered physical owner once and key derived joins by
+  owner plus the domain identity.
+- **Caught:** orchestration artifact-attestation counts initially read only the
+  root workspace and joined solely by digest.
+
+## 384. Idempotent evidence must preserve its original timestamp
+
+Re-recording the same claim during retry is not a new observation. Replacing it
+with a fresh timestamp mutates audit history and can postpone bounded eviction.
+
+- **Do:** return the existing exact-identity record unchanged; create a new
+  record only when the complete provenance identity differs.
+- **Caught:** repeated Graph artifact attestation refreshed `createdAt`.
+
+## 385. Temporal analytics must exclude future and identity-less samples
+
+Clock-skewed future records contaminate a current calibration window, while a
+legacy execution without a run generation cannot be safely deduplicated.
+
+- **Do:** bound every current-window metric at `now` and skip legacy samples
+  that lack the identity required by the observation key.
+- **Caught:** forecast calibration admitted future timestamps and maintenance
+  failed on old Graph checkpoints with an empty control-run ID.
+
+## 386. Bounded lifecycle stores need byte-aware terminal eviction
+
+A record-count limit is insufficient when terminal errors carry bounded but
+variable-size text. A valid near-full file can otherwise reject every later
+transition.
+
+- **Do:** preserve all active records, then evict the oldest terminal records
+  until both count and serialized-byte bounds hold.
+- **Caught:** rollout persistence enforced bytes only after its count-based slice.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

@@ -335,6 +335,26 @@ export const api = {
       withWorkspace("/api/orchestration/deployments/observe", ws),
       { autoRollback },
     ),
+  orchestrationMaintain: (autoRollback = false, ws?: string) =>
+    request<unknown>("POST", withWorkspace("/api/orchestration/maintain", ws), { autoRollback }),
+  orchestrationRolloutStart: (id: string, expectedUpdatedAt?: string, minSamples = 1, ws?: string) =>
+    request<import("../types").OrchestrationRollout>(
+      "POST",
+      withWorkspace(`/api/orchestration/rollouts/${encodeURIComponent(id)}/start`, ws),
+      { ...(expectedUpdatedAt ? { expectedUpdatedAt } : {}), minSamples },
+    ),
+  orchestrationRolloutAdvance: (id: string, ws?: string) =>
+    request<import("../types").OrchestrationRollout>(
+      "POST",
+      withWorkspace(`/api/orchestration/rollouts/${encodeURIComponent(id)}/advance`, ws),
+      {},
+    ),
+  orchestrationRolloutReconcile: (autoRollback = false, ws?: string) =>
+    request<{ rollouts: import("../types").OrchestrationRollout[] }>(
+      "POST",
+      withWorkspace("/api/orchestration/rollouts/reconcile", ws),
+      { autoRollback },
+    ),
   graphPriority: (id: string, priority: number, ws?: string) =>
     request<import("../types").EngineeringGraphSummary>(
       "POST",

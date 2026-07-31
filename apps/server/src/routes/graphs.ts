@@ -25,6 +25,7 @@ import {
   isSessionRunActive,
   isValidLoopDagId,
   listEngineeringGraphStates,
+  listEngineeringGraphArtifactAttestations,
   listEngineeringGraphTemplates,
   loadPluginContributions,
   loadEngineeringGraphState,
@@ -433,6 +434,17 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
   if (segs[2] === "artifact-store") {
     if (method === "GET" && segs.length === 3) {
       sendJson(res, 200, { artifacts: inspectEngineeringGraphArtifactStore(workspace) });
+      return true;
+    }
+    if (method === "GET" && segs.length === 4 && segs[3] === "attestations") {
+      const sha256 = url.searchParams.get("sha256");
+      if (sha256 !== null && !/^[a-f0-9]{64}$/.test(sha256)) {
+        sendApiError(res, 400, "bad_request", "Graph artifact sha256 is invalid");
+        return true;
+      }
+      sendJson(res, 200, {
+        attestations: listEngineeringGraphArtifactAttestations(workspace, sha256 ?? undefined),
+      });
       return true;
     }
     if (method === "POST" && segs.length === 4 && segs[3] === "prune") {

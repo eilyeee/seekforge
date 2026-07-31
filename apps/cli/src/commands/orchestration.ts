@@ -14,6 +14,11 @@ import {
   setOrchestrationProposalStatus,
   setWorkspaceOrchestrationSloPolicy,
   type OrchestrationSloPolicy,
+  advanceOrchestrationRollout,
+  listOrchestrationRollouts,
+  maintainWorkspaceOrchestration,
+  reconcileOrchestrationRollouts,
+  startOrchestrationRollout,
 } from "@seekforge/core";
 import { fail } from "../colors.js";
 
@@ -152,6 +157,50 @@ export function orchestrationIndexCommand(operation: "show" | "refresh"): void {
         operation === "show"
           ? (readWorkspaceOrchestrationIndex(workspace) ?? null)
           : refreshWorkspaceOrchestrationIndex(workspace),
+        null,
+        2,
+      ),
+    );
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+export function orchestrationRolloutCommand(
+  operation: "list" | "start" | "advance" | "reconcile",
+  id?: string,
+  options: { expectedUpdatedAt?: string; minSamples?: number; autoRollback?: boolean } = {},
+): void {
+  try {
+    const workspace = process.cwd();
+    if ((operation === "start" || operation === "advance") && !id) {
+      throw new Error(`orchestration rollout ${operation} requires a proposal id`);
+    }
+    const result =
+      operation === "list"
+        ? listOrchestrationRollouts(workspace)
+        : operation === "reconcile"
+          ? reconcileOrchestrationRollouts(workspace, { autoRollback: options.autoRollback === true })
+          : operation === "start"
+            ? startOrchestrationRollout(workspace, id!, {
+                expectedUpdatedAt: options.expectedUpdatedAt,
+                minSamples: options.minSamples,
+              })
+            : advanceOrchestrationRollout(workspace, id!, { executors: executors(workspace) });
+    console.log(JSON.stringify(result, null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+export function orchestrationMaintenanceCommand(autoRollback = false): void {
+  try {
+    const workspace = process.cwd();
+    console.log(
+      JSON.stringify(
+        maintainWorkspaceOrchestration(workspace, { executors: executors(workspace), autoRollback }),
         null,
         2,
       ),

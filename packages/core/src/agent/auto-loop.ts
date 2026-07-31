@@ -81,6 +81,7 @@ import {
   type LoopModelRouteReason,
 } from "./loop-model-routing.js";
 import { readAppliedLoopRoutes } from "./orchestration-policy.js";
+import { selectWorkspaceContextualLoopRoutes } from "./orchestration-routing.js";
 import {
   loopVerificationIntelligenceScore,
   readLoopVerificationIntelligence,
@@ -105,6 +106,17 @@ export type LoopStatus =
   | "agent_error" // the edit agent failed before verification could be meaningful
   | "interrupted" // a previous owner disappeared and the durable loop can be resumed
   | "requirements_pending"; // analyzed requirements await explicit approval
+
+function isUsableLoopProvider(provider: AgentCoreDeps["provider"] | undefined): provider is AgentCoreDeps["provider"] {
+  return (
+    provider !== undefined &&
+    typeof provider.model === "string" &&
+    provider.model.trim().length > 0 &&
+    provider.model.length <= 256 &&
+    typeof provider.chat === "function" &&
+    typeof provider.chatStream === "function"
+  );
+}
 
 export type LoopBudgetReason = "cost" | "tokens" | "duration" | "verify_runs";
 
@@ -588,6 +600,7 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
     throw new Error("Loop recoveryAttemptId requires a resumed Loop and a safe id");
   }
   const routedModels = new Set<string>();
+  const contextualProviders = new Map<string, AgentCoreDeps["provider"]>();
   if (opts.modelByFailureCategory !== undefined) {
     if (!isRecord(opts.modelByFailureCategory)) throw new Error("Loop modelByFailureCategory must be an object");
     for (const [category, model] of Object.entries(opts.modelByFailureCategory)) {
@@ -774,13 +787,35 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
   if (opts.model !== undefined && (!opts.model.trim() || opts.model.length > 256)) {
     throw new Error("Loop model must be a non-empty bounded string");
   }
+  const loopId = opts.resumeState?.loopId ?? opts.loopId ?? `loop-${randomUUID()}`;
   const policyLoopId = opts.resumeState?.loopId ?? opts.loopId;
-  if (opts.persist !== false && policyLoopId) {
-    const applied = readAppliedLoopRoutes(opts.workspace, policyLoopId);
+  if (opts.persist !== false) {
+    const selectedContextual = deps.providerForModel
+      ? selectWorkspaceContextualLoopRoutes(opts.workspace, {
+          loopId,
+          task: opts.task,
+          verifyCommand: opts.verifyCommand,
+        })
+      : {};
+    const contextual = Object.fromEntries(
+      Object.entries(selectedContextual).filter(([, model]) => {
+        if (model === deps.provider.model) return true;
+        try {
+          const provider = deps.providerForModel?.(model);
+          if (!isUsableLoopProvider(provider)) return false;
+          contextualProviders.set(model, provider);
+          return true;
+        } catch {
+          // Historical advice is optional when its provider is no longer configured.
+          return false;
+        }
+      }),
+    );
+    const applied = policyLoopId ? readAppliedLoopRoutes(opts.workspace, policyLoopId) : {};
     const explicitStatic = opts.modelByFailureCategory ?? {};
     const explicitChains = opts.modelRoutesByFailureCategory ?? {};
     const inherited = Object.fromEntries(
-      Object.entries(applied).filter(
+      Object.entries({ ...contextual, ...applied }).filter(
         ([category]) => !Object.hasOwn(explicitStatic, category) && !Object.hasOwn(explicitChains, category),
       ),
     );
@@ -803,23 +838,16 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
   }
   const resolvedProviders = new Map<string, AgentCoreDeps["provider"]>();
   if (defaultModel) resolvedProviders.set(defaultModel, deps.provider);
+  for (const [model, provider] of contextualProviders) resolvedProviders.set(model, provider);
   for (const model of requestedModels) {
     if (resolvedProviders.has(model)) continue;
     const provider = deps.providerForModel?.(model);
-    if (
-      !provider ||
-      typeof provider.model !== "string" ||
-      !provider.model.trim() ||
-      provider.model.length > 256 ||
-      typeof provider.chat !== "function" ||
-      typeof provider.chatStream !== "function"
-    ) {
+    if (!isUsableLoopProvider(provider)) {
       throw new Error(`Loop provider is invalid: ${model}`);
     }
     resolvedProviders.set(model, provider);
   }
   const persistenceEnabled = opts.persist !== false;
-  const loopId = opts.resumeState?.loopId ?? opts.loopId ?? `loop-${randomUUID()}`;
   // Mirror the event stream into an append-only `.seekforge/loops/<id>.log`
   // (JSONL) so the run has a durable record, not just ephemeral terminal output.
   // Logging is best-effort and must never break the loop; a persistently broken

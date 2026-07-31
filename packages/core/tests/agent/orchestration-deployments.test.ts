@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runEngineeringGraph } from "../../src/agent/graph-engineering.js";
+import { listEngineeringGraphArtifactAttestations } from "../../src/agent/graph-artifact-store.js";
 import { engineeringSubgraphStateId } from "../../src/agent/graph-contract.js";
+import { archiveEngineeringGraphRun } from "../../src/agent/graph-run-history.js";
 import { loadEngineeringGraphState, saveEngineeringGraphState } from "../../src/agent/graph-state.js";
 import type { AgentCoreDeps } from "../../src/agent/loop.js";
 import { acquireLoopLifecycleLease, createLoopState, saveLoopState } from "../../src/agent/loop-state.js";
@@ -88,18 +90,44 @@ describe("orchestration deployment and policy", () => {
             id: "child",
             kind: "subgraph",
             workspace: "child",
-            graph: { graphId: "child-definition", nodes: [{ id: "work", kind: "function", handler: "work" }] },
+            graph: {
+              graphId: "child-definition",
+              nodes: [{ id: "work", kind: "function", handler: "work", verifyArtifacts: true }],
+            },
           },
         ],
       },
-      { workspace: root, handlers: { work: () => ({}) } },
+      {
+        workspace: root,
+        handlers: {
+          work: (context) => {
+            mkdirSync(join(context.workspace, "dist"), { recursive: true });
+            writeFileSync(join(context.workspace, "dist", "child.txt"), "child artifact\n");
+            return { artifacts: [{ name: "child", path: "dist/child.txt" }] };
+          },
+        },
+      },
     );
     const childId = engineeringSubgraphStateId("portfolio-root", "child", "child-definition");
+    const childWorkspace = join(root, "child");
+    const childState = loadEngineeringGraphState(childWorkspace, childId)!;
+    archiveEngineeringGraphRun(childWorkspace, childState);
+    const { completedAt: _completedAt, ...unfinished } = childState;
+    saveEngineeringGraphState(childWorkspace, {
+      ...unfinished,
+      status: "running",
+      results: [],
+      events: [],
+      updatedAt: new Date(Date.parse(childState.updatedAt) + 1).toISOString(),
+    });
     const index = refreshWorkspaceOrchestrationIndex(root);
     expect(index.totals.graphs).toBe(2);
     expect(index.items.map((item) => item.id)).toEqual(expect.arrayContaining(["portfolio-root", childId]));
     const childReport = buildWorkspaceOrchestrationReport(root).graphs.find((graph) => graph.graphId === childId);
     expect(childReport?.replay.events).toBeGreaterThan(0);
+    expect(listEngineeringGraphArtifactAttestations(root)).toEqual([]);
+    expect(listEngineeringGraphArtifactAttestations(childWorkspace)).toHaveLength(1);
+    expect(childReport?.artifactReuse).toContainEqual(expect.objectContaining({ attestationCount: 1 }));
   });
 
   it("applies, observes, and rolls back an exact-generation Loop route", () => {

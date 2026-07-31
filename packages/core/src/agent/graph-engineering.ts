@@ -44,6 +44,7 @@ import { acquireManagedOrchestrationWorktreeLease } from "./loop-managed-worktre
 import { loadLoopState, loopStateExists } from "./loop-state.js";
 import { createEngineeringGraphLogWriter, type GraphLogWriter } from "./graph-history.js";
 import { MAX_GRAPH_ARTIFACT_BYTES, storeEngineeringGraphArtifact } from "./graph-artifact-store.js";
+import { acquireWorkspaceGraphExecutorCapacity } from "./graph-capacity.js";
 import { readGraphControlEntries } from "./graph-control-store.js";
 import { acknowledgeEngineeringGraphSignal, claimEngineeringGraphSignal } from "./graph-signal-store.js";
 import { archiveEngineeringGraphRun } from "./graph-run-history.js";
@@ -105,6 +106,8 @@ export type GraphExecutionAdapter = {
   capacity?: number;
   active?: number;
   queueDepth?: number;
+  /** Opt-in capacity shared by all Graphs in this workspace, enforced cross-process. */
+  workspaceCapacity?: number;
   region?: string;
   dataLocality?: string[];
   /** Reserves remote capacity and returns a fencing token for this exact attempt. */
@@ -157,6 +160,10 @@ export function graphExecutionAdapterEligibility(
       (!Number.isSafeInteger(adapter.active) || adapter.active < 0 || adapter.active > (adapter.capacity ?? 1_024))) ||
     (adapter.queueDepth !== undefined &&
       (!Number.isSafeInteger(adapter.queueDepth) || adapter.queueDepth < 0 || adapter.queueDepth > 1_000_000)) ||
+    (adapter.workspaceCapacity !== undefined &&
+      (!Number.isSafeInteger(adapter.workspaceCapacity) ||
+        adapter.workspaceCapacity < 1 ||
+        adapter.workspaceCapacity > 512)) ||
     (adapter.region !== undefined &&
       (typeof adapter.region !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(adapter.region))) ||
     (adapter.dataLocality !== undefined &&
@@ -403,6 +410,8 @@ function assertGraphValue(value: unknown, schema: GraphValueSchema | undefined, 
 
 async function graphArtifacts(
   value: GraphFunctionResult["artifacts"],
+  graphId: string,
+  graphFingerprint: string,
   nodeId: string,
   workspace: string,
   verify: boolean,
@@ -482,7 +491,12 @@ async function graphArtifacts(
       if (artifact.sha256 && artifact.sha256 !== sha256) {
         throw new GraphNodeNonRetryableError(`Graph artifact hash mismatch: ${artifact.path}`);
       }
-      storeEngineeringGraphArtifact(artifactStoreWorkspace, target, sha256, verifiedSize);
+      storeEngineeringGraphArtifact(artifactStoreWorkspace, target, sha256, verifiedSize, {
+        graphId,
+        graphFingerprint,
+        producerNodeId: nodeId,
+        sourcePath: artifact.path,
+      });
       return { ...base, sha256, sizeBytes: verifiedSize, verified: true };
     }),
   );
@@ -791,6 +805,7 @@ async function executeAgent(
 async function executeNode(
   deps: AgentCoreDeps,
   ownerGraphId: string,
+  ownerGraphFingerprint: string,
   node: GraphNode,
   workspace: string,
   completed: ReadonlyMap<string, GraphNodeResult>,
@@ -859,6 +874,8 @@ async function executeNode(
     }
     const artifacts = await graphArtifacts(
       result.artifacts,
+      ownerGraphId,
+      ownerGraphFingerprint,
       node.id,
       workspace,
       node.verifyArtifacts === true,
@@ -991,6 +1008,8 @@ async function executeNode(
             const itemArtifacts =
               (await graphArtifacts(
                 result.artifacts,
+                ownerGraphId,
+                ownerGraphFingerprint,
                 node.id,
                 workspace,
                 node.verifyArtifacts === true,
@@ -1084,6 +1103,8 @@ async function executeNode(
       }
       const artifacts = await graphArtifacts(
         result.artifacts,
+        ownerGraphId,
+        ownerGraphFingerprint,
         node.id,
         workspace,
         node.verifyArtifacts === true,
@@ -1100,7 +1121,26 @@ async function executeNode(
     if (recovered !== undefined) {
       return finalizeRemoteResult(recovered);
     }
-    const reservation = adapter.reserve ? await adapter.reserve(context) : undefined;
+    const workspaceReservation =
+      adapter.workspaceCapacity === undefined
+        ? undefined
+        : acquireWorkspaceGraphExecutorCapacity(
+            options.workspace,
+            node.executor!,
+            idempotencyKey,
+            adapter.workspaceCapacity,
+            { ttlMs: Math.min(24 * 60 * 60_000, Math.max(1_000, node.timeoutMs ?? 60 * 60_000)) },
+          );
+    if (adapter.workspaceCapacity !== undefined && !workspaceReservation) {
+      throw new Error(`Graph remote ${node.id} workspace capacity is exhausted`);
+    }
+    let reservation: Awaited<ReturnType<NonNullable<GraphExecutionAdapter["reserve"]>>> | undefined;
+    try {
+      reservation = adapter.reserve ? await adapter.reserve(context) : undefined;
+    } catch (error) {
+      workspaceReservation?.release();
+      throw error;
+    }
     if (
       reservation !== undefined &&
       (reservation === null ||
@@ -1122,6 +1162,7 @@ async function executeNode(
       ) {
         await Promise.resolve(reservation.release()).catch(() => undefined);
       }
+      workspaceReservation?.release();
       throw new GraphNodeNonRetryableError(`Graph remote ${node.id} returned an invalid capacity reservation`);
     }
     if (reservation) {
@@ -1170,6 +1211,7 @@ async function executeNode(
       offAbort();
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       if (reservation) await Promise.resolve(reservation.release()).catch(() => undefined);
+      workspaceReservation?.release();
     }
   }
   if (node.kind === "join") {
@@ -1867,6 +1909,7 @@ export async function runEngineeringGraph(
                 executeNode(
                   deps,
                   definition.graphId,
+                  fingerprint,
                   executionNode,
                   workspaces.get(node.id)!,
                   dependencySnapshot,

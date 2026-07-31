@@ -1303,6 +1303,22 @@ export type OrchestrationDeployment = {
   observed?: OrchestrationDeploymentMetric;
   verdict: "pending" | "improved" | "stable" | "regressed";
 };
+export type OrchestrationRollout = {
+  proposalId: string;
+  proposalUpdatedAt: string;
+  scope: "loop" | "graph";
+  sourceId: string;
+  phase: "shadow" | "canary" | "promoted" | "rolled_back" | "failed";
+  minSamples: number;
+  observationIds: string[];
+  startedAt: string;
+  updatedAt: string;
+  canaryAt?: string;
+  promotedAt?: string;
+  rolledBackAt?: string;
+  lastVerdict?: "improved" | "stable" | "regressed";
+  error?: string;
+};
 export type OrchestrationSloEvaluation = {
   status: "unknown" | "met" | "at_risk" | "breached";
   objectives: Array<{
@@ -1363,6 +1379,59 @@ export type WorkspaceOrchestrationReport = {
     maxBreachRate: number;
     updatedAt: string;
   };
+  controlAnalytics: {
+    generatedAt: string;
+    observations: number;
+    burnRates: Array<{
+      hours: 1 | 6 | 24;
+      samples: number;
+      breaches: number;
+      breachRate: number;
+      burnRate: number;
+      status: "unknown" | "healthy" | "warning" | "critical";
+    }>;
+    calibration: {
+      samples: number;
+      meanAbsoluteErrorMs: number;
+      p95Coverage: number;
+      brierScore: number;
+      confidence: "none" | "low" | "medium" | "high";
+    };
+  };
+  contextualRouting: {
+    generatedAt: string;
+    loops: number;
+    samples: number;
+    routes: Array<{
+      context: "node" | "rust" | "python" | "go" | "mixed" | "generic";
+      failureCategory: string;
+      model: string;
+      attempts: number;
+      improvements: number;
+      regressions: number;
+      meanUtility: number;
+      explorationScore: number;
+      confidence: "none" | "low" | "medium" | "high";
+    }>;
+  };
+  executorCapacity: Array<{
+    executor: string;
+    status:
+      | "eligible"
+      | "missing"
+      | "untrusted"
+      | "protocol_mismatch"
+      | "cancellation_unsupported"
+      | "unhealthy"
+      | "capacity_exhausted"
+      | "invalid";
+    capacity: number;
+    active: number;
+    available: number;
+    queueDepth: number;
+    utilization: number;
+    assignedNodes: number;
+  }>;
   sloSummary: {
     scope: "page";
     evaluations: number;
@@ -1463,6 +1532,20 @@ export type WorkspaceOrchestrationReport = {
     };
     slo: OrchestrationSloEvaluation;
     replay: OrchestrationReplayReport;
+    runtimeReplan: {
+      graphId: string;
+      fingerprint: string;
+      generatedAt: string;
+      pending: number;
+      recommendedOrder: string[];
+      entries: Array<{
+        nodeId: string;
+        status: "ready" | "blocked" | "in_flight" | "deferred";
+        score: number;
+        reasons: string[];
+        executor?: string;
+      }>;
+    };
     artifactReuse: Array<{
       name: string;
       path: string;
@@ -1475,10 +1558,12 @@ export type WorkspaceOrchestrationReport = {
       sourceRunNumber: number;
       sourceCompletedAt: string;
       casAvailable: boolean;
+      attestationCount: number;
     }>;
   }>;
   reviewedProposals: OrchestrationProposal[];
   deployments: OrchestrationDeployment[];
+  rollouts: OrchestrationRollout[];
 };
 export type EngineeringGraphEvidenceReport = {
   schemaVersion: 1;

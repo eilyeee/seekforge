@@ -14,6 +14,7 @@ import {
   createLoopRecoveryScheduler,
   createGraphMaintenanceScheduler,
   createMemoryMaintenanceScheduler,
+  createOrchestrationMaintenanceScheduler,
   graphExecutorsWithPlugins,
   clearEngineeringGraphRecovery,
   clearLoopRecovery,
@@ -25,10 +26,12 @@ import {
   pruneLoopStates,
   pruneEngineeringGraphStates,
   recoverableEngineeringGraphStates,
+  maintainWorkspaceOrchestration,
   type GraphMaintenanceScheduler,
   type GraphExecutionAdapter,
   type LoopRecoveryScheduler,
   type LoopResult,
+  type OrchestrationMaintenanceScheduler,
 } from "@seekforge/core";
 import { MAX_WS_PAYLOAD_BYTES } from "@seekforge/shared/protocol-limits";
 import {
@@ -135,6 +138,12 @@ export type StartServerOptions = {
   graphRecoveryMaxPerTick?: number;
   graphRetentionMaxAgeDays?: number;
   graphRetentionMaxCount?: number;
+  /** Refresh proposals, observe deployments, calibrate forecasts, and rebuild the index while idle. */
+  orchestrationAutoMaintain?: boolean;
+  /** Roll back regressed deployments during automatic orchestration maintenance. */
+  orchestrationAutoRollback?: boolean;
+  orchestrationMaintenanceInitialDelayMs?: number;
+  orchestrationMaintenanceIntervalMs?: number;
 };
 
 export type RunningServer = {
@@ -147,6 +156,26 @@ export type RunningServer = {
 export { MAX_WS_PAYLOAD_BYTES } from "@seekforge/shared/protocol-limits";
 
 export async function startServer(opts: StartServerOptions): Promise<RunningServer> {
+  if (opts.orchestrationAutoRollback && !opts.orchestrationAutoMaintain) {
+    throw new Error("orchestrationAutoRollback requires orchestrationAutoMaintain");
+  }
+  const maximumTimerDelayMs = 2_147_483_647;
+  if (
+    opts.orchestrationMaintenanceInitialDelayMs !== undefined &&
+    (!Number.isSafeInteger(opts.orchestrationMaintenanceInitialDelayMs) ||
+      opts.orchestrationMaintenanceInitialDelayMs < 0 ||
+      opts.orchestrationMaintenanceInitialDelayMs > maximumTimerDelayMs)
+  ) {
+    throw new RangeError("orchestrationMaintenanceInitialDelayMs must be a non-negative safe timer delay");
+  }
+  if (
+    opts.orchestrationMaintenanceIntervalMs !== undefined &&
+    (!Number.isSafeInteger(opts.orchestrationMaintenanceIntervalMs) ||
+      opts.orchestrationMaintenanceIntervalMs <= 0 ||
+      opts.orchestrationMaintenanceIntervalMs > maximumTimerDelayMs)
+  ) {
+    throw new RangeError("orchestrationMaintenanceIntervalMs must be a positive safe timer delay");
+  }
   if (
     opts.loopRecoveryMaxPerTick !== undefined &&
     (!Number.isSafeInteger(opts.loopRecoveryMaxPerTick) || opts.loopRecoveryMaxPerTick <= 0)
@@ -592,6 +621,60 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     throw error;
   }
 
+  let orchestrationMaintenanceScheduler: OrchestrationMaintenanceScheduler | undefined;
+  try {
+    orchestrationMaintenanceScheduler = opts.orchestrationAutoMaintain
+      ? createOrchestrationMaintenanceScheduler({
+          targets: () =>
+            registry.list.map((workspace) => ({
+              workspace: workspace.path,
+              maintain: async (signal) => {
+                const attempt = await coordinator.tryWithIdleAgentMutation(
+                  workspace.path,
+                  signal,
+                  async (_idleGuard, maintenanceSignal) => {
+                    maintenanceSignal.throwIfAborted();
+                    return maintainWorkspaceOrchestration(workspace.path, {
+                      executors: graphExecutorsFor(workspace.path),
+                      autoRollback: opts.orchestrationAutoRollback === true,
+                    });
+                  },
+                );
+                return attempt.acquired ? attempt.value : undefined;
+              },
+            })),
+          onResults: (results) => {
+            for (const result of results) {
+              if (result.outcome.status === "completed") {
+                logger.log("info", "orchestration.maintenance.completed", {
+                  workspace: result.workspace,
+                  proposals: result.outcome.result.proposals.length,
+                  rollouts: result.outcome.result.rollouts.length,
+                  observations: result.outcome.result.analytics.observations,
+                });
+              } else if (result.outcome.status === "failed") {
+                logger.log("error", "orchestration.maintenance.failed", {
+                  workspace: result.workspace,
+                  error: result.outcome.error,
+                });
+              }
+            }
+          },
+          ...(opts.orchestrationMaintenanceInitialDelayMs !== undefined
+            ? { initialDelayMs: opts.orchestrationMaintenanceInitialDelayMs }
+            : {}),
+          ...(opts.orchestrationMaintenanceIntervalMs !== undefined
+            ? { intervalMs: opts.orchestrationMaintenanceIntervalMs }
+            : {}),
+        })
+      : undefined;
+  } catch (error) {
+    memoryMaintenanceScheduler.dispose();
+    loopRecoveryScheduler?.dispose();
+    graphMaintenanceScheduler?.dispose();
+    throw error;
+  }
+
   try {
     await new Promise<void>((resolveListen, rejectListen) => {
       server.once("error", rejectListen);
@@ -604,6 +687,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     memoryMaintenanceScheduler.dispose();
     loopRecoveryScheduler?.dispose();
     graphMaintenanceScheduler?.dispose();
+    orchestrationMaintenanceScheduler?.dispose();
     throw error;
   }
   const address = server.address();
@@ -611,6 +695,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     memoryMaintenanceScheduler.dispose();
     loopRecoveryScheduler?.dispose();
     graphMaintenanceScheduler?.dispose();
+    orchestrationMaintenanceScheduler?.dispose();
     server.close();
     throw new Error("could not determine the listen port");
   }
@@ -623,6 +708,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       memoryMaintenanceScheduler.dispose();
       loopRecoveryScheduler?.dispose();
       graphMaintenanceScheduler?.dispose();
+      orchestrationMaintenanceScheduler?.dispose();
       for (const run of triggerRuns) run.abort();
       const closing = new Promise<void>((resolveClose, rejectClose) => {
         // Terminating sockets triggers their close handlers, which abort active

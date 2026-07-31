@@ -14,6 +14,11 @@ import {
   setOrchestrationProposalStatus,
   setWorkspaceOrchestrationSloPolicy,
   type OrchestrationSloPolicy,
+  advanceOrchestrationRollout,
+  listOrchestrationRollouts,
+  maintainWorkspaceOrchestration,
+  reconcileOrchestrationRollouts,
+  startOrchestrationRollout,
 } from "@seekforge/core";
 import { isRecord } from "@seekforge/core";
 import { readJsonBody, sendApiError, sendJson } from "../http.js";
@@ -93,6 +98,95 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
       proposals: listOrchestrationProposals(workspace),
       deployments: listOrchestrationDeployments(workspace),
     });
+    return true;
+  }
+  if (method === "GET" && segs.length === 3 && segs[2] === "rollouts") {
+    sendJson(res, 200, { rollouts: listOrchestrationRollouts(workspace) });
+    return true;
+  }
+  if (method === "POST" && segs.length === 4 && segs[2] === "rollouts" && segs[3] === "reconcile") {
+    const body = await readJsonBody(ctx.req, res, { emptyOk: true });
+    if (body === undefined) return true;
+    if (
+      !isRecord(body) ||
+      Object.keys(body).some((key) => key !== "autoRollback") ||
+      (body.autoRollback !== undefined && typeof body.autoRollback !== "boolean")
+    ) {
+      sendApiError(res, 400, "bad_request", "rollout reconciliation body is invalid");
+      return true;
+    }
+    try {
+      sendJson(res, 200, {
+        rollouts: reconcileOrchestrationRollouts(workspace, { autoRollback: body.autoRollback === true }),
+      });
+    } catch (error) {
+      sendApiError(res, 409, "busy", error instanceof Error ? error.message : String(error));
+    }
+    return true;
+  }
+  if (
+    method === "POST" &&
+    segs.length === 5 &&
+    segs[2] === "rollouts" &&
+    (segs[4] === "start" || segs[4] === "advance")
+  ) {
+    const body = await readJsonBody(ctx.req, res, { emptyOk: true });
+    if (body === undefined) return true;
+    if (
+      !isRecord(body) ||
+      Object.keys(body).some((key) => key !== "expectedUpdatedAt" && key !== "minSamples") ||
+      (body.expectedUpdatedAt !== undefined && typeof body.expectedUpdatedAt !== "string") ||
+      (body.minSamples !== undefined && (!Number.isSafeInteger(body.minSamples) || body.minSamples !== 1)) ||
+      (segs[4] === "advance" && Object.keys(body).length > 0)
+    ) {
+      sendApiError(res, 400, "bad_request", "rollout transition body is invalid");
+      return true;
+    }
+    try {
+      const result =
+        segs[4] === "start"
+          ? startOrchestrationRollout(workspace, segs[3]!, {
+              ...(typeof body.expectedUpdatedAt === "string" ? { expectedUpdatedAt: body.expectedUpdatedAt } : {}),
+              ...(body.minSamples === undefined ? {} : { minSamples: body.minSamples as number }),
+            })
+          : advanceOrchestrationRollout(workspace, segs[3]!, {
+              executors: Object.freeze({
+                ...graphExecutorsWithPlugins(loadPluginContributions(workspace), ctx.rest.graphExecutors ?? {}),
+                ...(ctx.rest.graphExecutors ?? {}),
+              }),
+            });
+      sendJson(res, 200, result);
+    } catch (error) {
+      sendApiError(res, 409, "busy", error instanceof Error ? error.message : String(error));
+    }
+    return true;
+  }
+  if (method === "POST" && segs.length === 3 && segs[2] === "maintain") {
+    const body = await readJsonBody(ctx.req, res, { emptyOk: true });
+    if (body === undefined) return true;
+    if (
+      !isRecord(body) ||
+      Object.keys(body).some((key) => key !== "autoRollback") ||
+      (body.autoRollback !== undefined && typeof body.autoRollback !== "boolean")
+    ) {
+      sendApiError(res, 400, "bad_request", "orchestration maintenance body is invalid");
+      return true;
+    }
+    try {
+      sendJson(
+        res,
+        200,
+        maintainWorkspaceOrchestration(workspace, {
+          executors: Object.freeze({
+            ...graphExecutorsWithPlugins(loadPluginContributions(workspace), ctx.rest.graphExecutors ?? {}),
+            ...(ctx.rest.graphExecutors ?? {}),
+          }),
+          autoRollback: body.autoRollback === true,
+        }),
+      );
+    } catch (error) {
+      sendApiError(res, 409, "busy", error instanceof Error ? error.message : String(error));
+    }
     return true;
   }
   if (method === "GET" && segs.length === 3 && segs[2] === "policy") {

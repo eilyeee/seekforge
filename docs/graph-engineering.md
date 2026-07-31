@@ -108,6 +108,16 @@ Resume refuses a changed definition, physical workspace mapping, managed branch 
 
 Managed branches remain after completion for inspection or promotion. The resource API reports physically rebound paths and bounded disk measurements. Archive a terminal graph before pruning; pruning skips dirty worktrees, supports dry-run, and runs under the graph lease plus the shared managed-worktree lease. A passed node branch or the passed `fan-in` branch can be promoted to the repository worktree. A managed Graph must be pruned before `restart`, preventing an old retained branch from being silently rebound to a new definition.
 
+## Adaptive control plane
+
+The orchestration report re-evaluates only unfinished nodes and exposes a ranked runtime replan with dependency, deadline, and executor-load reasons. Remote adapters may opt into `workspaceCapacity` from 1 to 512; a cross-process durable reservation store then enforces the executor-wide limit with attempt idempotency keys, expiring leases, and fencing tokens in addition to the adapter's own live reservation. Replanning and capacity telemetry read that same physical-workspace reservation state.
+
+Every verified artifact copied into CAS records a bounded, deduplicated attestation containing its digest, size, exact Graph fingerprint, producer node, source path, and SHA-256 verification method. Attestations are historical provenance and can outlive a garbage-collected blob. Inspect them with `GET /api/graphs/artifact-store/attestations` and optionally filter by `sha256`.
+
+Approved proposals can use an explicit `shadow → canary → promoted` rollout. Starting shadow is side-effect free; advancing to canary performs the exact-generation apply transaction; reconciliation records one terminal canary observation and promotes stable/improved outcomes. Regression rollback remains opt-in. Durable control history derives 1/6/24-hour SLO burn rates and Graph forecast calibration (P50 absolute error, P95 coverage, and Brier score).
+
+`seekforge orchestration maintain` runs one safe control tick: it refreshes proposals, records terminal observations/calibration, reconciles existing rollouts, and rebuilds the materialized index. It never approves proposals or starts deployments. `seekforge serve --orchestration-auto-maintain` runs that tick only while each workspace is idle; add `--orchestration-auto-rollback` to opt into rollback of observed regressions.
+
 ## CLI and API
 
 ```sh

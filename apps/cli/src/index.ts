@@ -671,6 +671,8 @@ program
   .option("--loop-auto-prune", "prune old terminal Loop records while their workspace is idle")
   .option("--graph-auto-resume", "resume interrupted durable Graphs while their workspace is idle")
   .option("--graph-auto-prune", "prune old terminal Graph records and resources while their workspace is idle")
+  .option("--orchestration-auto-maintain", "refresh and observe orchestration state while the workspace is idle")
+  .option("--orchestration-auto-rollback", "roll back observed regressions during idle orchestration maintenance")
   .description("serve the web UI and agent API for one or more workspaces (127.0.0.1 only)")
   .action(
     async (
@@ -682,11 +684,17 @@ program
         loopAutoPrune?: boolean;
         graphAutoResume?: boolean;
         graphAutoPrune?: boolean;
+        orchestrationAutoMaintain?: boolean;
+        orchestrationAutoRollback?: boolean;
       },
     ) => {
       const port = /^\d+$/.test(opts.port) ? Number(opts.port) : Number.NaN;
       if (!Number.isSafeInteger(port) || port < 0 || port > 65535) {
         fail(`invalid --port "${opts.port}" (expected 0-65535)`);
+        return;
+      }
+      if (opts.orchestrationAutoRollback && !opts.orchestrationAutoMaintain) {
+        fail("--orchestration-auto-rollback requires --orchestration-auto-maintain");
         return;
       }
       await serveCommand({
@@ -696,6 +704,8 @@ program
         loopAutoPrune: opts.loopAutoPrune,
         graphAutoResume: opts.graphAutoResume,
         graphAutoPrune: opts.graphAutoPrune,
+        orchestrationAutoMaintain: opts.orchestrationAutoMaintain,
+        orchestrationAutoRollback: opts.orchestrationAutoRollback,
       });
     },
   );

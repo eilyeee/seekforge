@@ -15,6 +15,10 @@ export type ServeOptions = {
   graphAutoResume?: boolean;
   /** Prune old terminal Graph records/resources while a workspace is idle. */
   graphAutoPrune?: boolean;
+  /** Refresh proposals, deployment observations, calibration, and indexes while idle. */
+  orchestrationAutoMaintain?: boolean;
+  /** Roll back terminal regressions during idle orchestration maintenance. */
+  orchestrationAutoRollback?: boolean;
 };
 
 /**
@@ -55,6 +59,8 @@ export async function serveCommand(opts: ServeOptions): Promise<void> {
     loopAutoPrune: opts.loopAutoPrune,
     graphAutoResume: opts.graphAutoResume,
     graphAutoPrune: opts.graphAutoPrune,
+    orchestrationAutoMaintain: opts.orchestrationAutoMaintain,
+    orchestrationAutoRollback: opts.orchestrationAutoRollback,
   });
 
   console.log(t("cmd.serve.url", { port: String(port), token }));

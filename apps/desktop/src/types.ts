@@ -83,6 +83,7 @@ export type {
   OrchestrationProposalAction,
   OrchestrationDeployment,
   OrchestrationDeploymentMetric,
+  OrchestrationRollout,
   OrchestrationReplayReport,
   OrchestrationSloEvaluation,
   WorkspaceOrchestrationReport,

@@ -19,14 +19,125 @@ import {
 import type { Dirent } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { resolveForWrite } from "../tools/sandbox.js";
+import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 import { isSafeLoopDagRelativePath } from "./loop-dag-validation.js";
 import { readEngineeringGraphRunSnapshots } from "./graph-run-history.js";
 import { listEngineeringGraphStates } from "./graph-state.js";
 import { acquireSessionLease } from "./session-lease.js";
+import { hasOnlyKeys, isRecord } from "../util/guards.js";
+import { isDenseArray } from "./orchestration.js";
 
 export const MAX_GRAPH_ARTIFACT_BYTES = 256 * 1024 * 1024;
 const DIGEST_RE = /^[a-f0-9]{64}$/;
 const PUBLICATION_GRACE_MS = 5 * 60_000;
+const ATTESTATIONS_PATH = ".seekforge/artifacts/attestations.json";
+const MAX_ATTESTATIONS = 1_024;
+const MAX_ATTESTATIONS_BYTES = 512 * 1024;
+
+export type EngineeringGraphArtifactAttestation = {
+  id: string;
+  sha256: string;
+  sizeBytes: number;
+  graphId: string;
+  graphFingerprint: string;
+  producerNodeId: string;
+  sourcePath: string;
+  verification: "sha256";
+  createdAt: string;
+};
+
+export type EngineeringGraphArtifactAttestationInput = Pick<
+  EngineeringGraphArtifactAttestation,
+  "graphId" | "graphFingerprint" | "producerNodeId" | "sourcePath"
+>;
+
+function validAttestation(value: unknown): value is EngineeringGraphArtifactAttestation {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, [
+      "id",
+      "sha256",
+      "sizeBytes",
+      "graphId",
+      "graphFingerprint",
+      "producerNodeId",
+      "sourcePath",
+      "verification",
+      "createdAt",
+    ]) &&
+    typeof value.id === "string" &&
+    DIGEST_RE.test(value.id) &&
+    typeof value.sha256 === "string" &&
+    DIGEST_RE.test(value.sha256) &&
+    Number.isSafeInteger(value.sizeBytes) &&
+    (value.sizeBytes as number) >= 0 &&
+    typeof value.graphId === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value.graphId) &&
+    typeof value.graphFingerprint === "string" &&
+    DIGEST_RE.test(value.graphFingerprint) &&
+    typeof value.producerNodeId === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value.producerNodeId) &&
+    typeof value.sourcePath === "string" &&
+    isSafeLoopDagRelativePath(value.sourcePath) &&
+    value.verification === "sha256" &&
+    typeof value.createdAt === "string" &&
+    Number.isFinite(Date.parse(value.createdAt))
+  );
+}
+
+function readAttestations(workspace: string): EngineeringGraphArtifactAttestation[] {
+  const raw = readWorkspaceStateFile(workspace, ATTESTATIONS_PATH, MAX_ATTESTATIONS_BYTES);
+  if (raw === undefined) return [];
+  const value = JSON.parse(raw) as unknown;
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["version", "attestations"]) ||
+    value.version !== 1 ||
+    !isDenseArray(value.attestations) ||
+    value.attestations.length > MAX_ATTESTATIONS ||
+    !value.attestations.every(validAttestation) ||
+    new Set(value.attestations.map((item) => item.id)).size !== value.attestations.length
+  ) {
+    throw new Error("Persisted Graph artifact attestations are invalid");
+  }
+  return value.attestations;
+}
+
+function recordAttestationUnlocked(
+  workspace: string,
+  sha256: string,
+  sizeBytes: number,
+  input: EngineeringGraphArtifactAttestationInput,
+): EngineeringGraphArtifactAttestation {
+  const id = createHash("sha256")
+    .update(`${input.graphId}\0${input.graphFingerprint}\0${input.producerNodeId}\0${input.sourcePath}\0${sha256}`)
+    .digest("hex");
+  const current = readAttestations(workspace);
+  const existing = current.find((item) => item.id === id);
+  if (existing) return existing;
+  const attestation: EngineeringGraphArtifactAttestation = {
+    id,
+    sha256,
+    sizeBytes,
+    ...input,
+    verification: "sha256",
+    createdAt: new Date().toISOString(),
+  };
+  if (!validAttestation(attestation)) throw new Error("Graph artifact attestation is invalid");
+  let attestations = [...current, attestation]
+    .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.id.localeCompare(right.id))
+    .slice(-MAX_ATTESTATIONS);
+  let serialized = `${JSON.stringify({ version: 1, attestations })}\n`;
+  while (Buffer.byteLength(serialized) > MAX_ATTESTATIONS_BYTES && attestations.length > 1) {
+    attestations = attestations.slice(1);
+    serialized = `${JSON.stringify({ version: 1, attestations })}\n`;
+  }
+  if (Buffer.byteLength(serialized) > MAX_ATTESTATIONS_BYTES) {
+    throw new Error("Graph artifact attestations exceed limit");
+  }
+  writeWorkspaceStateFileAtomic(workspace, ATTESTATIONS_PATH, serialized);
+  return attestation;
+}
 
 function assertDigestAndSize(sha256: string, sizeBytes: number): void {
   if (!DIGEST_RE.test(sha256)) throw new Error("Graph artifact digest is invalid");
@@ -226,13 +337,26 @@ export function storeEngineeringGraphArtifact(
   sourcePath: string,
   sha256: string,
   sizeBytes: number,
+  attestation?: EngineeringGraphArtifactAttestationInput,
 ): string {
   const lease = acquireSessionLease(workspace, "graph-artifact-store");
   try {
-    return storeEngineeringGraphArtifactUnlocked(workspace, sourcePath, sha256, sizeBytes);
+    const stored = storeEngineeringGraphArtifactUnlocked(workspace, sourcePath, sha256, sizeBytes);
+    if (attestation) recordAttestationUnlocked(workspace, sha256, sizeBytes, attestation);
+    return stored;
   } finally {
     lease.release();
   }
+}
+
+export function listEngineeringGraphArtifactAttestations(
+  workspace: string,
+  sha256?: string,
+): EngineeringGraphArtifactAttestation[] {
+  if (sha256 !== undefined && !DIGEST_RE.test(sha256)) throw new Error("Graph artifact digest is invalid");
+  return readAttestations(workspace)
+    .filter((attestation) => sha256 === undefined || attestation.sha256 === sha256)
+    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt) || left.id.localeCompare(right.id));
 }
 
 export function engineeringGraphArtifactAvailable(workspace: string, sha256: string, sizeBytes: number): boolean {

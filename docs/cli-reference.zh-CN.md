@@ -123,6 +123,8 @@
 | `--loop-auto-prune` | 显式开启空闲期终态 Loop 清理。默认清理超过 30 天或排在最新 100 条之外的合格记录；可恢复状态和未完成交付永不参与清理。 |
 | `--graph-auto-resume` | 显式开启：物理工作区空闲时恢复失去 owner 的运行中 Graph，或定时器/信号已就绪的 wait 暂停 Graph。人工控制与审批暂停保持暂停；候选使用可变优先级和持久指数退避。 |
 | `--graph-auto-prune` | 显式开启空闲期终态 Graph 保留清理。合格托管资源会先归档和清理；脏 worktree 与可恢复 Graph 会保留。 |
+| `--orchestration-auto-maintain` | 在各工作区空闲时刷新提案、观测、预测校准、灰度与物化索引；不会自动批准或启动部署。 |
+| `--orchestration-auto-rollback` | 与 `--orchestration-auto-maintain` 配合，显式开启终态 canary 回归回滚。 |
 
 自动 Loop 恢复默认关闭，因为恢复后可能调用模型并编辑工作区。恢复沿用 Loop
 持久化的额度和 `acceptEdits`；没有用户连接时，超出该模式的权限请求会被拒绝。
@@ -215,7 +217,7 @@
 `loop-speculate <file> --budget <usd>` 持久运行两到三个隔离策略；`loop-speculation-list` 与
 `loop-speculation-promote` 用于查看并显式合并胜出结果。
 `loop-evidence <id> --format json|sarif|junit [--compare <id>]` 可导出完整性证据或比较运行。
-`graph validate|run|resume|list|show|history|diagnose|health|priority|delete` 管理异构工程图；`graph intelligence [graph-id]` 报告有界自适应调度证据，`graph health <graph-id>` 汇总精确指纹预测、瓶颈、血缘与反事实。`graph migration-plan <file>` 预览根与子级失效，`graph expansion-plan <file>` 校验只追加演化，`graph migrate <file>` 应用可恢复树事务，`graph expand <file>` 应用只追加演化。`graph artifact-materialize <sha256> <size> <target>` 恢复一个已验证 CAS blob；`graph artifact-store inspect|prune` 检查或引用安全地回收 blob。`graph simulate <file> [--worst-case]` 无状态预测，`graph explain` 报告阻塞。`orchestration report [--loop-offset N --graph-offset N --limit N]` 增加持久 SLO、分页错误预算、重放、多目标策略学习、执行器放置、Monte Carlo 不确定性、部署和 CAS 复用。`orchestration policy show|set`、`orchestration index show|refresh` 以及 `orchestration proposals list|refresh|approve|dismiss|apply|rollback|observe` 管理持久生命周期；`--expected-updated-at` 拒绝过期决策，`--auto-rollback` 需显式开启。定义可组合 Agent、Loop、函数、路由、审批门和嵌套图。详见[图工程](graph-engineering.zh-CN.md)。
+`graph validate|run|resume|list|show|history|diagnose|health|priority|delete` 管理异构工程图；`graph intelligence [graph-id]` 报告有界自适应调度证据，`graph health <graph-id>` 汇总精确指纹预测、瓶颈、血缘与反事实。`graph migration-plan <file>` 预览根与子级失效，`graph expansion-plan <file>` 校验只追加演化，`graph migrate <file>` 应用可恢复树事务，`graph expand <file>` 应用只追加演化。`graph artifact-materialize <sha256> <size> <target>` 恢复一个已验证 CAS blob；`graph artifact-store inspect|prune` 检查或引用安全地回收 blob。`graph simulate <file> [--worst-case]` 无状态预测，`graph explain` 报告阻塞。`orchestration report [--loop-offset N --graph-offset N --limit N]` 增加持久 SLO、全局消耗率、预测校准、上下文路由、运行时重规划、执行器容量、部署、灰度、证明和 CAS 复用。`orchestration policy show|set`、`orchestration index show|refresh`、`orchestration proposals list|refresh|approve|dismiss|apply|rollback|observe`、`orchestration rollout list|start|advance|reconcile` 与 `orchestration maintain` 管理持久生命周期；`--expected-updated-at` 拒绝过期决策，所有自动回滚均需显式开启。定义可组合 Agent、Loop、函数、路由、审批门和嵌套图。详见[图工程](graph-engineering.zh-CN.md)。
 TUI 与 Desktop/WebSocket Loop 还支持在安全边界暂停、继续、设置优先级和引导。
 `seekforge loop-cleanup <name>` 删除一个保留的 `seekforge/loop-*` worktree；有未提交改动的
 worktree 因其改动会被丢弃，需要显式加 `--force`。清理会拒绝仍活跃的 Loop 生命周期操作，并保留

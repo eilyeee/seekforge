@@ -106,6 +106,16 @@ flowchart LR
 
 托管分支会在完成后保留，用于检查或提升。资源 API 会返回重新绑定后的物理路径与有界磁盘占用。终态 Graph 必须先归档再清理；清理会跳过脏 worktree、支持 dry-run，并同时持有 Graph 租约和共享托管 worktree 租约。已通过节点分支或已通过的 `fan-in` 分支都可以提升到仓库工作树。托管 Graph 必须先清理资源才能 `restart`，避免旧保留分支被静默绑定到新定义。
 
+## 自适应控制面
+
+编排报告只重新评估未完成节点，并提供带依赖、截止时间和执行器负载原因的运行时重规划排序。远程适配器可以把 `workspaceCapacity` 显式设置为 1 到 512；跨进程持久 reservation 存储会用 attempt 幂等键、过期 lease 与 fencing token，在适配器自身实时 reservation 之外强制执行工作区级执行器上限。重规划和容量遥测会读取同一份物理工作区 reservation 状态。
+
+每个复制进 CAS 的已验证产物都会记录有界、去重的证明，包含摘要、大小、精确 Graph fingerprint、生产节点、源路径与 SHA-256 校验方式。证明属于历史血缘，可能比已被垃圾回收的 blob 保留更久。可通过 `GET /api/graphs/artifact-store/attestations` 检查，并可按 `sha256` 过滤。
+
+已批准提案可以走显式的 `shadow → canary → promoted` 灰度流程。启动 shadow 没有副作用；推进到 canary 时执行精确代际 apply 事务；reconcile 记录一个终态 canary 观测，并提升 stable/improved 结果。回归自动回滚仍需显式开启。持久控制历史会计算 1/6/24 小时 SLO 消耗率，以及 Graph 预测校准（P50 绝对误差、P95 覆盖率和 Brier 分数）。
+
+`seekforge orchestration maintain` 执行一次安全控制 tick：刷新提案、记录终态观测与校准、协调已有灰度，并重建物化索引；它不会批准提案或启动部署。`seekforge serve --orchestration-auto-maintain` 只在各工作区空闲时运行该 tick；额外添加 `--orchestration-auto-rollback` 才会对观测到的回归执行回滚。
+
 ## CLI 与 API
 
 ```sh

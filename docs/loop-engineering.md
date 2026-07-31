@@ -568,6 +568,10 @@ stdout/stderr is streamed through `verify.output` events while the command runs;
 each verification caps event count and chunk size, while the final `verify` event
 retains the normal output tail.
 
+## Contextual route learning
+
+Workspace orchestration aggregates durable post-edit outcomes by toolchain context (`node`, `rust`, `python`, `go`, `mixed`, or `generic`), failure category, and model. It reports mean utility plus a bounded UCB-style exploration score and can deterministically select an explore/exploit arm from available models. Explicit caller routes remain authoritative; learned routes are evidence and do not grant model or execution permissions.
+
 ## Desktop
 
 A collapsible **Loop panel** at the top of the chat window (`LoopPanel`):

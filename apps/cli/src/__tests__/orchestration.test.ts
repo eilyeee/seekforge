@@ -12,6 +12,8 @@ describe("orchestration CLI", () => {
       "proposals",
       "policy",
       "index",
+      "rollout",
+      "maintain",
     ]);
     expect(
       orchestration?.commands.find((command) => command.name() === "report")?.options.map((item) => item.long),
@@ -49,6 +51,12 @@ describe("orchestration CLI", () => {
     ).toThrow(/only for observe/);
     expect(() => program.parse(["node", "seekforge", "orchestration", "policy", "show", "--max-cost", "1"])).toThrow(
       /does not accept update options/,
+    );
+    expect(() =>
+      program.parse(["node", "seekforge", "orchestration", "rollout", "start", "opt-123", "--min-samples", "2"]),
+    ).toThrow(/single exact-generation canary/);
+    expect(() => program.parse(["node", "seekforge", "orchestration", "rollout", "list", "--auto-rollback"])).toThrow(
+      /only for reconcile/,
     );
   });
 });

@@ -234,6 +234,9 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     return {};
   }
   if (method === "POST" && path === "/api/orchestration/deployments/observe") return { deployments: [] };
+  if (method === "POST" && path === "/api/orchestration/maintain") return {};
+  if (method === "POST" && path === "/api/orchestration/rollouts/reconcile") return { rollouts: [] };
+  if (method === "POST" && /^\/api\/orchestration\/rollouts\/[^/]+\/(?:start|advance)$/.test(path)) return {};
   if (method === "GET" && path === "/api/orchestration/report") {
     return {
       portfolio: {
@@ -259,6 +262,27 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
         })),
       },
       policy: {},
+      controlAnalytics: {
+        generatedAt: new Date().toISOString(),
+        observations: 0,
+        burnRates: ([1, 6, 24] as const).map((hours) => ({
+          hours,
+          samples: 0,
+          breaches: 0,
+          breachRate: 0,
+          burnRate: 0,
+          status: "unknown" as const,
+        })),
+        calibration: {
+          samples: 0,
+          meanAbsoluteErrorMs: 0,
+          p95Coverage: 0,
+          brierScore: 0,
+          confidence: "none",
+        },
+      },
+      contextualRouting: { generatedAt: new Date().toISOString(), loops: mockLoops.length, samples: 0, routes: [] },
+      executorCapacity: [],
       sloSummary: {
         scope: "page",
         evaluations: 0,
@@ -279,6 +303,7 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
       graphs: [],
       reviewedProposals: [],
       deployments: [],
+      rollouts: [],
     } satisfies WorkspaceOrchestrationReport;
   }
   if (method === "GET" && path === "/api/loops/verification-plan") {

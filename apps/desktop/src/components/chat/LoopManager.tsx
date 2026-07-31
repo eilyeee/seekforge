@@ -483,12 +483,29 @@ export function LoopManager({ running, onResume }: Props) {
     if (!request) return;
     setOrchestrationBusy(true);
     try {
-      await api.orchestrationProposalRefresh(workspaceId);
+      await api.orchestrationMaintain(false, workspaceId);
       const report = await api.orchestrationReport(workspaceId);
       if (orchestrationRequests.isCurrent(request)) {
         setOrchestration(report);
         setError("");
       }
+    } catch (caught) {
+      if (orchestrationRequests.isCurrent(request)) setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      if (orchestrationRequests.isCurrent(request)) setOrchestrationBusy(false);
+    }
+  };
+
+  const transitionOrchestrationRollout = async (proposal: OrchestrationProposal, operation: "start" | "advance") => {
+    const request = orchestrationRequests.beginLatest(workspaceId);
+    if (!request) return;
+    setOrchestrationBusy(true);
+    try {
+      if (operation === "start") {
+        await api.orchestrationRolloutStart(proposal.id, proposal.updatedAt, 1, workspaceId);
+      } else await api.orchestrationRolloutAdvance(proposal.id, workspaceId);
+      const report = await api.orchestrationReport(workspaceId);
+      if (orchestrationRequests.isCurrent(request)) setOrchestration(report);
     } catch (caught) {
       if (orchestrationRequests.isCurrent(request)) setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -533,7 +550,7 @@ export function LoopManager({ running, onResume }: Props) {
     if (!request) return;
     setOrchestrationBusy(true);
     try {
-      await api.orchestrationDeploymentObserve(false, workspaceId);
+      await api.orchestrationRolloutReconcile(false, workspaceId);
       const report = await api.orchestrationReport(workspaceId);
       if (orchestrationRequests.isCurrent(request)) setOrchestration(report);
     } catch (caught) {
@@ -600,6 +617,8 @@ export function LoopManager({ running, onResume }: Props) {
         onProposalReview={(proposal, decision) => void reviewOrchestrationProposal(proposal, decision)}
         onProposalApply={(proposal) => void deployOrchestrationProposal(proposal, "apply")}
         onProposalRollback={(proposal) => void deployOrchestrationProposal(proposal, "rollback")}
+        onRolloutStart={(proposal) => void transitionOrchestrationRollout(proposal, "start")}
+        onRolloutAdvance={(proposal) => void transitionOrchestrationRollout(proposal, "advance")}
         onObserve={() => void observeOrchestration()}
       />
       <LoopDagSection

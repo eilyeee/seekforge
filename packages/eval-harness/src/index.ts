@@ -78,3 +78,15 @@ export {
   type SkillStats,
 } from "./skill-ranking.js";
 export { evalsDir, fixturesDir, reportsDir, repoRoot, tasksDir } from "./paths.js";
+export {
+  buildOrchestrationEvaluationMatrix,
+  compareOrchestrationEvaluationMatrices,
+  type OrchestrationEvalCell,
+  type OrchestrationEvalCellKey,
+  type OrchestrationEvalDrift,
+  type OrchestrationEvalEcosystem,
+  type OrchestrationEvalExecution,
+  type OrchestrationEvalFault,
+  type OrchestrationEvalMatrix,
+  type OrchestrationEvalObservation,
+} from "./orchestration-matrix.js";

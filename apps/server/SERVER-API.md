@@ -408,7 +408,10 @@ Rules:
 
 - `GET /api/orchestration/report` returns the workspace portfolio, per-Loop
   health/strategy/SLO/replay/proposal drafts, and per-Graph
-  health/optimization/SLO/replay/artifact-reuse plans. Optional finite query
+  health/optimization/SLO/replay/artifact-reuse plans. It also includes durable
+  multi-window burn rates, forecast calibration, contextual route evidence,
+  runtime replans, executor capacity, artifact attestation counts, and rollouts.
+  Optional finite query
   targets are `maxP95DurationMs`, `maxCostUsd`, `maxFailureRate`, and
   `minForecastCoverage`; inputs use plain decimal syntax and rate values are in
   `[0,1]`. `loopOffset`, `graphOffset`, and `limit` paginate the two detail
@@ -434,6 +437,14 @@ Rules:
   generation is still current. `POST /api/orchestration/deployments/observe` accepts
   optional `{autoRollback}` and compares normalized outcome metrics. Budget
   authorization changes cannot be auto-applied.
+- `GET /api/orchestration/rollouts` lists durable rollout state. `POST
+  /api/orchestration/rollouts/:id/start` creates a side-effect-free shadow from
+  an approved exact proposal, `.../:id/advance` applies it as a canary, and
+  `POST /api/orchestration/rollouts/reconcile` records terminal evidence and
+  promotes stable/improved canaries. `{autoRollback:true}` is explicit.
+- `POST /api/orchestration/maintain` runs one bounded safe maintenance tick:
+  proposal refresh, observation/calibration collection, existing-rollout
+  reconciliation, and index refresh. It does not approve or start deployments.
 - `POST /api/graphs/:id/migration-plan` preserves the existing flat migration
   fields and adds `tree`. The tree section resolves child identities and reports
   coordinated participants; `migration-apply` commits a journaled child-first,
@@ -443,7 +454,9 @@ Rules:
   be an exact-generation reuse candidate for that Graph. `GET
   /api/graphs/artifact-store` inspects verified blobs and `POST
   /api/graphs/artifact-store/prune` performs lease-coordinated, reference-aware
-  dry-run or removal.
+  dry-run or removal. `GET /api/graphs/artifact-store/attestations` lists bounded
+  historical producer/fingerprint/SHA-256 provenance and accepts an optional
+  exact `sha256` filter.
 
 ## Implementation notes (binding)
 

@@ -20,7 +20,7 @@ not a promise of API stability.
 | Capability | Status | Current boundary / next step |
 | --- | --- | --- |
 | Core agent loop, CLI, TUI, session traces, permissions | Production-ready foundation | Continue boundary regression testing and real-project dogfooding. |
-| Autonomous Loop engineering | Implemented, maturing | Multi-ecosystem verification, context-weighted recovery, predictive DAG budgets/resource lifecycle, resumable speculation, attestable evidence, GitHub/GitLab CI adapters, and lifecycle fault metrics ship; expand real-provider and real-project coverage. |
+| Autonomous Loop and Graph engineering | Implemented, maturing | Contextual model-route evidence, runtime replanning, workspace-wide executor capacity, CAS attestations, calibrated forecasts, SLO burn rates, and staged rollouts ship; expand real-provider and real-project coverage. |
 | Desktop and local web workbench | Implemented, maturing | Native macOS, Linux, and Windows package builds ship; updater/platform signing and clean-install smoke tests still require release credentials. |
 | DeepSeek provider and cost accounting | Production-ready foundation | Main, compaction, and memory-extraction calls share accounting; preserve provider-specific token/cache semantics. |
 | Provider presets / OpenAI-compatible endpoints | Implemented, maturing | Add compatibility fixtures per provider; do not claim identical tool/thinking behavior. |
@@ -30,7 +30,7 @@ not a promise of API stability.
 | Scheduled jobs, webhooks, and background runs | Implemented, security-sensitive | Persistent run ledger, cancellation, replay cursors, and configurable count/age retention ship; keep hardening external delivery operations. |
 | Browser / visual verification | Implemented, optional | Real Chromium integration CI ships; expand browser/platform coverage while preserving private-network restrictions. |
 | Rust runtime and Docker runner | Implemented, optional | Weekly real-binary/container gates ship; expand the platform matrix and release smoke coverage. |
-| Eval harness | Implemented | Real Loop/resume/memory scenarios, paired multi-sample A/B, CI history restoration, trend reports, and source-tagged dogfood regressions ship. |
+| Eval harness | Implemented | Real Loop/resume/memory scenarios, paired multi-sample A/B, CI history restoration, trend reports, source-tagged dogfood regressions, and ecosystem/execution/fault orchestration matrices with calibration drift ship. |
 | `@seekforge/core` embedding API | Internal by policy | The 0.x package stays private; [publication exit criteria](core-package-policy.md) define compiled artifacts, exports, semver, consumer tests, examples, and security docs. |
 | VS Code / JetBrains integration | VS Code bridge implemented; JetBrains pending | Thin VS Code client ships over the REST/WS contract with chat, diff, raw permission review, session resume, questions, and `@file` context. |
 | Remote/team execution service | Design-stage | Stabilize a self-hosted runner contract without weakening local-first defaults. |

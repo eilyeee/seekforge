@@ -516,23 +516,44 @@ describe("loop management API", () => {
       ).status,
     ).toBe(400);
     expect(
-      await jsonOf(
-        await authed(`/api/orchestration/proposals/${proposal.id}/apply`, {
+      (
+        await authed(`/api/orchestration/rollouts/${proposal.id}/start`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ expectedUpdatedAt: approvedProposal.updatedAt }),
-        }),
-      ),
-    ).toMatchObject({ proposalId: proposal.id, status: "applied" });
+          body: JSON.stringify({ minSamples: 2 }),
+        })
+      ).status,
+    ).toBe(400);
     expect(
       await jsonOf(
-        await authed("/api/orchestration/deployments/observe", {
+        await authed(`/api/orchestration/rollouts/${proposal.id}/start`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ expectedUpdatedAt: approvedProposal.updatedAt, minSamples: 1 }),
+        }),
+      ),
+    ).toMatchObject({ proposalId: proposal.id, phase: "shadow" });
+    expect(await jsonOf(await authed("/api/orchestration/rollouts"))).toMatchObject({
+      rollouts: [expect.objectContaining({ proposalId: proposal.id, phase: "shadow" })],
+    });
+    expect(
+      await jsonOf(
+        await authed(`/api/orchestration/rollouts/${proposal.id}/advance`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        }),
+      ),
+    ).toMatchObject({ proposalId: proposal.id, phase: "canary" });
+    expect(
+      await jsonOf(
+        await authed("/api/orchestration/rollouts/reconcile", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ autoRollback: false }),
         }),
       ),
-    ).toMatchObject({ deployments: [expect.objectContaining({ proposalId: proposal.id })] });
+    ).toMatchObject({ rollouts: [expect.objectContaining({ proposalId: proposal.id, phase: "canary" })] });
     expect(
       await jsonOf(
         await authed(`/api/orchestration/proposals/${proposal.id}/rollback`, {
@@ -542,6 +563,8 @@ describe("loop management API", () => {
         }),
       ),
     ).toMatchObject({ proposalId: proposal.id, status: "rolled_back" });
+    expect((await authed(`/api/graphs/artifact-store/attestations?sha256=${"z".repeat(64)}`)).status).toBe(400);
+    expect(await jsonOf(await authed("/api/graphs/artifact-store/attestations"))).toEqual({ attestations: [] });
     expect((await authed("/api/graphs/scheduling-intelligence")).status).toBe(404);
     expect(
       await jsonOf(

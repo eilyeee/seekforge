@@ -2,9 +2,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { planEngineeringGraphArtifactReuse } from "../../src/agent/graph-artifact-catalog.js";
 import {
+  listEngineeringGraphArtifactAttestations,
   materializeEngineeringGraphArtifact,
   pruneEngineeringGraphArtifactStore,
   storeEngineeringGraphArtifact,
@@ -156,7 +157,45 @@ describe("Engineering Graph artifact reuse", () => {
     workspaces.push(dirname(external));
     writeFileSync(external, content);
     expect(() => storeEngineeringGraphArtifact(workspace, external, digest, content.length)).toThrow(/escapes/);
-    storeEngineeringGraphArtifact(workspace, source, digest, content.length);
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+      storeEngineeringGraphArtifact(workspace, source, digest, content.length, {
+        graphId: state.graphId,
+        graphFingerprint: state.fingerprint,
+        producerNodeId: "build",
+        sourcePath: "dist/bundle.js",
+      });
+      const original = listEngineeringGraphArtifactAttestations(workspace, digest)[0];
+      vi.setSystemTime(new Date("2027-01-01T00:00:00.000Z"));
+      storeEngineeringGraphArtifact(workspace, source, digest, content.length, {
+        graphId: state.graphId,
+        graphFingerprint: state.fingerprint,
+        producerNodeId: "build",
+        sourcePath: "dist/bundle.js",
+      });
+      expect(listEngineeringGraphArtifactAttestations(workspace, digest)[0]).toEqual(original);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(listEngineeringGraphArtifactAttestations(workspace, digest)).toEqual([
+      expect.objectContaining({
+        sha256: digest,
+        graphId: state.graphId,
+        graphFingerprint: state.fingerprint,
+        producerNodeId: "build",
+        verification: "sha256",
+      }),
+    ]);
+    const copy = join(workspace, "dist", "bundle-copy.js");
+    writeFileSync(copy, content);
+    storeEngineeringGraphArtifact(workspace, copy, digest, content.length, {
+      graphId: state.graphId,
+      graphFingerprint: state.fingerprint,
+      producerNodeId: "build",
+      sourcePath: "dist/bundle-copy.js",
+    });
+    expect(listEngineeringGraphArtifactAttestations(workspace, digest)).toHaveLength(2);
     const archived = run();
     archived.results[0]!.artifacts = [
       {
