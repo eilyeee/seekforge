@@ -1,8 +1,21 @@
 export type DesktopGraphTemplate = {
   key: string;
   label: string;
+  templateId: string;
+  version: string;
   template: Record<string, unknown>;
+  registeredAt: string;
   deprecated: boolean;
+};
+
+export type GraphTemplateReference = { templateId: string; version: string; key: string };
+
+export type GraphTemplateCompatibility = {
+  templateId: string;
+  fromVersion: string;
+  toVersion: string;
+  classification: "identical" | "compatible" | "breaking";
+  reasons: string[];
 };
 
 export type GraphTemplateParameterField = {
@@ -61,11 +74,83 @@ export function decodeDesktopGraphTemplates(value: unknown): { templates: Deskto
     templates.push({
       key,
       label: key,
+      templateId: template.templateId,
+      version: template.version,
       template,
+      registeredAt: entry.registeredAt,
       deprecated: entry.deprecatedAt !== undefined,
     });
   }
   return { templates, skipped };
+}
+
+/** Extracts route identity only; Core remains the semantic template validator. */
+export function graphTemplateReference(value: unknown): GraphTemplateReference | null {
+  if (
+    !record(value) ||
+    value.schemaVersion !== 2 ||
+    value.kind !== "engineering-graph-template" ||
+    typeof value.templateId !== "string" ||
+    value.templateId.length < 1 ||
+    value.templateId.length > 128 ||
+    typeof value.version !== "string" ||
+    value.version.length < 1 ||
+    value.version.length > 64
+  ) {
+    return null;
+  }
+  return { templateId: value.templateId, version: value.version, key: `${value.templateId}@${value.version}` };
+}
+
+export function decodeGraphTemplateCompatibility(
+  value: unknown,
+  expected: Pick<GraphTemplateCompatibility, "templateId" | "fromVersion" | "toVersion">,
+): GraphTemplateCompatibility {
+  if (
+    !record(value) ||
+    Object.keys(value).some(
+      (key) => !["templateId", "fromVersion", "toVersion", "classification", "reasons"].includes(key),
+    ) ||
+    typeof value.templateId !== "string" ||
+    value.templateId.length < 1 ||
+    value.templateId.length > 128 ||
+    typeof value.fromVersion !== "string" ||
+    value.fromVersion.length < 1 ||
+    value.fromVersion.length > 64 ||
+    typeof value.toVersion !== "string" ||
+    value.toVersion.length < 1 ||
+    value.toVersion.length > 64 ||
+    (value.classification !== "identical" &&
+      value.classification !== "compatible" &&
+      value.classification !== "breaking") ||
+    !Array.isArray(value.reasons) ||
+    value.reasons.length > 64
+  ) {
+    throw new Error("Graph template compatibility response is malformed");
+  }
+  if (
+    value.templateId !== expected.templateId ||
+    value.fromVersion !== expected.fromVersion ||
+    value.toVersion !== expected.toVersion
+  ) {
+    throw new Error("Graph template compatibility response does not match the request");
+  }
+  for (let index = 0; index < value.reasons.length; index++) {
+    if (
+      !Object.hasOwn(value.reasons, index) ||
+      typeof value.reasons[index] !== "string" ||
+      value.reasons[index].length > 1024
+    ) {
+      throw new Error("Graph template compatibility response is malformed");
+    }
+  }
+  return {
+    templateId: value.templateId,
+    fromVersion: value.fromVersion,
+    toVersion: value.toVersion,
+    classification: value.classification,
+    reasons: [...value.reasons] as string[],
+  };
 }
 
 export function graphTemplateVisualDefinition(value: unknown): unknown {

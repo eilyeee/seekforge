@@ -297,6 +297,26 @@ export const api = {
   graphs: (ws?: string) =>
     request<import("../types").EngineeringGraphSummary[]>("GET", withWorkspace("/api/graphs", ws)),
   graphTemplates: (ws?: string) => request<unknown[]>("GET", withWorkspace("/api/graphs/templates", ws)),
+  graphTemplateRegister: (template: unknown, ws?: string) =>
+    request<unknown>("POST", withWorkspace("/api/graphs/templates", ws), template),
+  graphTemplateCompare: (templateId: string, version: string, candidate: unknown, ws?: string) =>
+    request<unknown>(
+      "POST",
+      withWorkspace(
+        `/api/graphs/templates/${encodeURIComponent(templateId)}/${encodeURIComponent(version)}/compare`,
+        ws,
+      ),
+      candidate,
+    ),
+  graphTemplateDeprecate: (templateId: string, version: string, ws?: string) =>
+    request<unknown>(
+      "POST",
+      withWorkspace(
+        `/api/graphs/templates/${encodeURIComponent(templateId)}/${encodeURIComponent(version)}/deprecate`,
+        ws,
+      ),
+      {},
+    ),
   graphValidate: (definition: unknown, parameters: Record<string, unknown> = {}, ws?: string) =>
     request<{ valid: true; definition: unknown; plan: import("../types").EngineeringGraphPlanSummary }>(
       "POST",

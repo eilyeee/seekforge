@@ -188,6 +188,32 @@ const mockLoops: LoopStateSummary[] = [
     updatedAt: new Date().toISOString(),
   },
 ];
+const mockGraphTemplates: Array<{
+  template: Record<string, unknown>;
+  registeredAt: string;
+  deprecatedAt?: string;
+}> = [
+  {
+    template: {
+      schemaVersion: 2,
+      kind: "engineering-graph-template",
+      templateId: "mock-release",
+      version: "1.0.0",
+      parameters: { channel: { type: "string", default: "stable" } },
+      definition: {
+        graphId: "mock-release-${{channel}}",
+        adaptiveScheduling: true,
+        maxConcurrency: 2,
+        nodes: [{ id: "start", kind: "function", handler: "noop" }],
+      },
+    },
+    registeredAt: new Date().toISOString(),
+  },
+];
+
+function mockRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 export async function mockRequest(method: string, fullPath: string, body?: unknown): Promise<unknown> {
   await delay();
@@ -231,7 +257,58 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   if (method === "GET" && path === "/api/loop-dags") return [];
   if (method === "GET" && path === "/api/loop-speculations") return [];
   if (method === "GET" && path === "/api/graphs") return [];
-  if (method === "GET" && path === "/api/graphs/templates") return [];
+  if (method === "GET" && path === "/api/graphs/templates") return structuredClone(mockGraphTemplates);
+  if (method === "POST" && path === "/api/graphs/templates") {
+    if (
+      !mockRecord(body) ||
+      typeof body.templateId !== "string" ||
+      typeof body.version !== "string" ||
+      body.schemaVersion !== 2
+    ) {
+      throw mockError(400, "bad_request", "Registered Graph templates require schemaVersion 2 and a version");
+    }
+    const index = mockGraphTemplates.findIndex(
+      (entry) => entry.template.templateId === body.templateId && entry.template.version === body.version,
+    );
+    const entry = {
+      template: structuredClone(body),
+      registeredAt: new Date().toISOString(),
+      ...(index >= 0 && mockGraphTemplates[index]!.deprecatedAt
+        ? { deprecatedAt: mockGraphTemplates[index]!.deprecatedAt }
+        : {}),
+    };
+    if (index >= 0) mockGraphTemplates[index] = entry;
+    else mockGraphTemplates.push(entry);
+    return structuredClone(entry);
+  }
+  {
+    const match = /^\/api\/graphs\/templates\/([^/]+)\/([^/]+)\/(compare|deprecate)$/.exec(path);
+    if (method === "POST" && match) {
+      const templateId = decodeURIComponent(match[1]!);
+      const version = decodeURIComponent(match[2]!);
+      const index = mockGraphTemplates.findIndex(
+        (entry) => entry.template.templateId === templateId && entry.template.version === version,
+      );
+      if (index < 0) throw mockError(404, "not_found", `unknown Graph template: ${templateId}@${version}`);
+      if (match[3] === "deprecate") {
+        mockGraphTemplates[index] = { ...mockGraphTemplates[index]!, deprecatedAt: new Date().toISOString() };
+        return structuredClone(mockGraphTemplates[index]);
+      }
+      if (!mockRecord(body) || body.templateId !== templateId || typeof body.version !== "string") {
+        throw mockError(400, "bad_request", "Graph template comparison requires matching ids and versions");
+      }
+      const before = mockGraphTemplates[index]!.template;
+      const sameContent =
+        JSON.stringify({ ...before, version: undefined }) === JSON.stringify({ ...body, version: undefined });
+      return {
+        templateId,
+        fromVersion: version,
+        toVersion: body.version,
+        classification: sameContent ? "identical" : "compatible",
+        reasons: [],
+      };
+    }
+  }
   if (method === "POST" && path === "/api/graphs/validate") {
     const definition = (body as { definition?: { graphId?: string } } | undefined)?.definition;
     return {

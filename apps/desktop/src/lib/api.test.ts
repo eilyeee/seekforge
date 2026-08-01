@@ -92,6 +92,9 @@ describe("captured workspace routing", () => {
     await api.hooks(ws);
     await api.saveHooks({}, ws);
     await api.setConfig("model", "deepseek-v4-flash", false, ws);
+    await api.graphTemplateRegister({}, ws);
+    await api.graphTemplateCompare("template/id", "1.0.0-beta/1", {}, ws);
+    await api.graphTemplateDeprecate("template/id", "1.0.0-beta/1", ws);
 
     expect(calls).toEqual([
       { url: "/api/diff?staged=1&ws=captured-workspace", method: "GET" },
@@ -117,6 +120,15 @@ describe("captured workspace routing", () => {
       { url: "/api/hooks?ws=captured-workspace", method: "GET" },
       { url: "/api/hooks?ws=captured-workspace", method: "PUT" },
       { url: "/api/config?ws=captured-workspace", method: "PUT" },
+      { url: "/api/graphs/templates?ws=captured-workspace", method: "POST" },
+      {
+        url: "/api/graphs/templates/template%2Fid/1.0.0-beta%2F1/compare?ws=captured-workspace",
+        method: "POST",
+      },
+      {
+        url: "/api/graphs/templates/template%2Fid/1.0.0-beta%2F1/deprecate?ws=captured-workspace",
+        method: "POST",
+      },
     ]);
   });
 });

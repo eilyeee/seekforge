@@ -8,9 +8,11 @@ The Desktop creation workbench renders a deterministic dependency canvas from
 the same JSON definition and supports structured node/dependency insertion. A
 graph can start only after server validation and simulation succeed.
 Versioned registry entries are decoded as `{template, registeredAt}` records;
-selecting one edits and submits the nested semantic template, preserves its
-parameter envelope, pre-fills declared defaults, and supports dependency editing plus reference-safe leaf
-deletion before another validation/simulation pass.
+selecting one establishes an exact comparison baseline without changing the
+current draft. An explicit, confirmed load copies the nested semantic template
+into the editor, preserves its parameter envelope, pre-fills declared defaults,
+and supports dependency editing plus reference-safe leaf deletion before another
+validation/simulation pass.
 The workbench also exposes declared string/number/boolean parameters as typed
 controls while retaining the raw JSON editor. Draft definition and parameter
 text are autosaved locally by exact workspace identity after a short debounce;
@@ -18,6 +20,16 @@ the bounded versioned cache rejects malformed, duplicate, oversized, or
 future-dated records, flushes pending edits at lifecycle boundaries, and can be
 reset without changing server state. The workbench reports unavailable browser
 storage and failed writes or deletes instead of claiming persistence succeeded.
+For schema-v2 templates, the same panel completes the local registry lifecycle:
+register the current exact version, compare the current draft against a selected
+registered version, inspect identical/compatible/breaking reasons, and explicitly
+deprecate a selected version. Replacing an existing exact version and deprecation
+both require confirmation; compatibility responses are decoded as bounded exact
+transport records and must match the requested template/from/to identity before
+rendering. Editing keeps the selected comparison baseline, while a separate
+load action deliberately replaces the editor with that registered payload and
+its parameter defaults; changing or clearing the baseline invalidates an
+in-flight comparison.
 
 ## Execution model
 

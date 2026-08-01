@@ -237,6 +237,43 @@ describe("mockRequest — commands + session compact", () => {
   });
 });
 
+describe("mockRequest — Graph template registry lifecycle", () => {
+  it("registers, lists, compares, and deprecates an exact version", async () => {
+    const baseline = {
+      schemaVersion: 2,
+      kind: "engineering-graph-template",
+      templateId: "desktop-lifecycle",
+      version: "1.0.0",
+      parameters: {},
+      definition: { graphId: "desktop-lifecycle", nodes: [{ id: "start", kind: "function", handler: "noop" }] },
+    };
+    await mockRequest("POST", "/api/graphs/templates", baseline);
+    const listed = (await mockRequest("GET", "/api/graphs/templates")) as Array<{
+      template: { templateId: string; version: string };
+      deprecatedAt?: string;
+    }>;
+    expect(listed.some((entry) => entry.template.templateId === "desktop-lifecycle")).toBe(true);
+
+    const comparison = (await mockRequest("POST", "/api/graphs/templates/desktop-lifecycle/1.0.0/compare", {
+      ...baseline,
+      version: "1.1.0",
+      definition: { ...baseline.definition, maxConcurrency: 2 },
+    })) as { fromVersion: string; toVersion: string; classification: string };
+    expect(comparison).toMatchObject({ fromVersion: "1.0.0", toVersion: "1.1.0", classification: "compatible" });
+
+    await mockRequest("POST", "/api/graphs/templates/desktop-lifecycle/1.0.0/deprecate", {});
+    const deprecated = (await mockRequest("GET", "/api/graphs/templates")) as Array<{
+      template: { templateId: string; version: string };
+      deprecatedAt?: string;
+    }>;
+    expect(
+      deprecated.find(
+        (entry) => entry.template.templateId === "desktop-lifecycle" && entry.template.version === "1.0.0",
+      )?.deprecatedAt,
+    ).toBeTruthy();
+  });
+});
+
 describe("mockRequest — config new keys", () => {
   it("accepts planModel / escalation / memory settings", async () => {
     await mockRequest("PUT", "/api/config", { key: "planModel", value: "deepseek-v4-pro" });

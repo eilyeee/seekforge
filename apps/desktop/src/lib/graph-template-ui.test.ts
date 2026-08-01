@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  decodeGraphTemplateCompatibility,
   decodeDesktopGraphTemplates,
   graphTemplateDefaultParameters,
   graphTemplateParameterFields,
+  graphTemplateReference,
   graphTemplateVisualDefinition,
   setGraphTemplateParameter,
 } from "./graph-template-ui";
@@ -19,8 +21,49 @@ const template = {
 describe("desktop Graph template adapter", () => {
   it("unwraps registry records and retains the semantic template payload", () => {
     const decoded = decodeDesktopGraphTemplates([{ template, registeredAt: "2026-07-31T00:00:00.000Z" }]);
-    expect(decoded).toMatchObject({ templates: [{ key: "release@1.0.0", template }], skipped: 0 });
+    expect(decoded).toMatchObject({
+      templates: [
+        {
+          key: "release@1.0.0",
+          templateId: "release",
+          version: "1.0.0",
+          registeredAt: "2026-07-31T00:00:00.000Z",
+          template,
+        },
+      ],
+      skipped: 0,
+    });
     expect(graphTemplateVisualDefinition(decoded.templates[0]!.template)).toEqual(template.definition);
+  });
+
+  it("extracts candidate route identity without claiming semantic validation", () => {
+    expect(graphTemplateReference(template)).toEqual({
+      templateId: "release",
+      version: "1.0.0",
+      key: "release@1.0.0",
+    });
+    expect(graphTemplateReference({ ...template, schemaVersion: 1 })).toBeNull();
+    expect(graphTemplateReference({ ...template, version: "" })).toBeNull();
+  });
+
+  it("decodes compatibility reports exactly and rejects sparse or extended payloads", () => {
+    const report = {
+      templateId: "release",
+      fromVersion: "1.0.0",
+      toVersion: "2.0.0",
+      classification: "breaking",
+      reasons: ["removed parameter: channel"],
+    };
+    const expected = { templateId: "release", fromVersion: "1.0.0", toVersion: "2.0.0" };
+    expect(decodeGraphTemplateCompatibility(report, expected)).toEqual(report);
+    expect(() => decodeGraphTemplateCompatibility({ ...report, unexpected: true }, expected)).toThrow(/malformed/);
+    expect(() => decodeGraphTemplateCompatibility({ ...report, reasons: new Array(1) }, expected)).toThrow(/malformed/);
+    expect(() => decodeGraphTemplateCompatibility({ ...report, classification: "safe" }, expected)).toThrow(
+      /malformed/,
+    );
+    expect(() => decodeGraphTemplateCompatibility({ ...report, fromVersion: "0.9.0" }, expected)).toThrow(
+      /does not match/,
+    );
   });
 
   it("skips malformed and sparse registry records", () => {
