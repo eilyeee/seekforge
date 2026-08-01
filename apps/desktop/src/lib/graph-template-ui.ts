@@ -5,6 +5,13 @@ export type DesktopGraphTemplate = {
   deprecated: boolean;
 };
 
+export type GraphTemplateParameterField = {
+  name: string;
+  type: "string" | "number" | "boolean";
+  description?: string;
+  defaultValue?: string | number | boolean;
+};
+
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -82,4 +89,49 @@ export function graphTemplateDefaultParameters(value: unknown): Record<string, s
     }
   }
   return defaults;
+}
+
+export function graphTemplateParameterFields(value: unknown): GraphTemplateParameterField[] {
+  if (!record(value) || value.kind !== "engineering-graph-template" || !record(value.parameters)) return [];
+  return Object.entries(value.parameters).flatMap(([name, parameter]): GraphTemplateParameterField[] => {
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(name) ||
+      !record(parameter) ||
+      (parameter.type !== "string" && parameter.type !== "number" && parameter.type !== "boolean")
+    ) {
+      return [];
+    }
+    const defaultValue = parameter.default;
+    const validDefault =
+      typeof defaultValue === parameter.type && (typeof defaultValue !== "number" || Number.isFinite(defaultValue));
+    return [
+      {
+        name,
+        type: parameter.type,
+        ...(typeof parameter.description === "string" && parameter.description.length <= 1024
+          ? { description: parameter.description }
+          : {}),
+        ...(validDefault ? { defaultValue: defaultValue as string | number | boolean } : {}),
+      },
+    ];
+  });
+}
+
+export function setGraphTemplateParameter(
+  parameters: Readonly<Record<string, unknown>>,
+  field: GraphTemplateParameterField,
+  value: string | number | boolean | undefined,
+): Record<string, unknown> {
+  if (
+    !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(field.name) ||
+    (field.type !== "string" && field.type !== "number" && field.type !== "boolean") ||
+    (value !== undefined && (typeof value !== field.type || (typeof value === "number" && !Number.isFinite(value))))
+  ) {
+    throw new Error(`Graph template parameter ${field.name} has an invalid value`);
+  }
+  const next = Object.create(null) as Record<string, unknown>;
+  for (const [name, current] of Object.entries(parameters)) next[name] = current;
+  if (value === undefined) delete next[field.name];
+  else next[field.name] = value;
+  return next;
 }

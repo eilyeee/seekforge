@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api";
+import { clearGraphDraft, DebouncedGraphDraftWriter, loadGraphDraft } from "../../lib/graph-draft-storage";
 import {
   decodeDesktopGraphTemplates,
   graphTemplateDefaultParameters,
+  graphTemplateParameterFields,
   graphTemplateVisualDefinition,
+  type GraphTemplateParameterField,
+  setGraphTemplateParameter,
   type DesktopGraphTemplate,
 } from "../../lib/graph-template-ui";
 import { useT } from "../../lib/i18n";
@@ -22,6 +26,14 @@ const INITIAL_DEFINITION = JSON.stringify(
   2,
 );
 
+function browserStorage(): Storage | undefined {
+  try {
+    return typeof window === "undefined" ? undefined : window.localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
 export function GraphCreationSection(props: { workspaceId?: string; onStarted: (runId: string) => void }) {
   const t = useT();
   const [definitionText, setDefinitionText] = useState(INITIAL_DEFINITION);
@@ -38,16 +50,32 @@ export function GraphCreationSection(props: { workspaceId?: string; onStarted: (
   const [dependencies, setDependencies] = useState("");
   const [selectedNodeId, setSelectedNodeId] = useState("");
   const [selectedTemplateKey, setSelectedTemplateKey] = useState("");
+  const [draftPersistenceError, setDraftPersistenceError] = useState(false);
+  const [draftStorageAvailable, setDraftStorageAvailable] = useState(false);
   const actionGeneration = useRef(0);
   const templateGeneration = useRef(0);
+  const draftWriter = useRef<{
+    storage: Storage;
+    writer: DebouncedGraphDraftWriter;
+  }>();
+  const workspaceRef = useRef(props.workspaceId ?? "");
+  workspaceRef.current = props.workspaceId ?? "";
   const source = `${definitionText}\0${parametersText}`;
   const previewCurrent = validatedSource === source;
 
+  const flushDraftSave = (reportFailure: boolean) => {
+    draftWriter.current?.writer.flush(reportFailure);
+  };
+
   useEffect(() => {
+    flushDraftSave(false);
     actionGeneration.current += 1;
     const current = ++templateGeneration.current;
-    setDefinitionText(INITIAL_DEFINITION);
-    setParametersText("{}");
+    const storage = browserStorage();
+    setDraftStorageAvailable(Boolean(storage && props.workspaceId));
+    const draft = storage ? loadGraphDraft(storage, props.workspaceId ?? "") : null;
+    setDefinitionText(draft?.definitionText ?? INITIAL_DEFINITION);
+    setParametersText(draft?.parametersText ?? "{}");
     setTemplates([]);
     setPlan(undefined);
     setSimulation(undefined);
@@ -57,6 +85,7 @@ export function GraphCreationSection(props: { workspaceId?: string; onStarted: (
     setSkippedTemplates(0);
     setSelectedNodeId("");
     setSelectedTemplateKey("");
+    setDraftPersistenceError(false);
     void api
       .graphTemplates(props.workspaceId)
       .then((items) => {
@@ -70,6 +99,7 @@ export function GraphCreationSection(props: { workspaceId?: string; onStarted: (
         if (templateGeneration.current === current) setError(caught instanceof Error ? caught.message : String(caught));
       });
     return () => {
+      flushDraftSave(false);
       actionGeneration.current += 1;
       templateGeneration.current += 1;
     };
@@ -92,37 +122,79 @@ export function GraphCreationSection(props: { workspaceId?: string; onStarted: (
     [parsed],
   );
   const selectedNode = visual.nodes.find((node) => node.id === selectedNodeId);
+  const parameterFields = useMemo(
+    () => ("error" in parsed ? [] : graphTemplateParameterFields(parsed.definition)),
+    [parsed],
+  );
 
-  const commitDefinition = (next: unknown) => {
-    actionGeneration.current += 1;
-    setDefinitionText(JSON.stringify(next, null, 2));
-    setSelectedTemplateKey("");
-    setValidatedSource(undefined);
-    setPlan(undefined);
-    setSimulation(undefined);
-    setBusy(false);
-    setError("");
+  const queueDraftSave = (nextDefinitionText: string, nextParametersText: string) => {
+    const storage = browserStorage();
+    const workspaceId = props.workspaceId ?? "";
+    setDraftStorageAvailable(Boolean(storage && workspaceId));
+    if (!storage || !workspaceId) return;
+    if (draftWriter.current?.storage !== storage) {
+      draftWriter.current?.writer.flush(false);
+      draftWriter.current = { storage, writer: new DebouncedGraphDraftWriter(storage) };
+    }
+    draftWriter.current.writer.schedule(
+      { workspaceId, definitionText: nextDefinitionText, parametersText: nextParametersText },
+      (saved) => {
+        if (workspaceRef.current === workspaceId) setDraftPersistenceError(!saved);
+      },
+    );
   };
 
-  const changeDefinitionText = (next: string) => {
+  const replaceDraft = (nextDefinitionText: string, nextParametersText: string) => {
     actionGeneration.current += 1;
-    setDefinitionText(next);
+    setDefinitionText(nextDefinitionText);
+    setParametersText(nextParametersText);
     setSelectedTemplateKey("");
     setValidatedSource(undefined);
     setPlan(undefined);
     setSimulation(undefined);
     setBusy(false);
     setError("");
+    queueDraftSave(nextDefinitionText, nextParametersText);
+  };
+
+  const commitDefinition = (next: unknown) => replaceDraft(JSON.stringify(next, null, 2), parametersText);
+
+  const changeDefinitionText = (next: string) => {
+    replaceDraft(next, parametersText);
   };
 
   const changeParametersText = (next: string) => {
+    replaceDraft(definitionText, next);
+  };
+
+  const changeTemplateParameter = (
+    field: GraphTemplateParameterField,
+    value: string | number | boolean | undefined,
+  ) => {
+    if ("error" in parsed) return;
+    const next = setGraphTemplateParameter(parsed.parameters, field, value);
+    replaceDraft(definitionText, JSON.stringify(next, null, 2));
+  };
+
+  const resetDraft = () => {
+    if (typeof window !== "undefined" && !window.confirm(t("chat.loop.graph.resetDraftConfirm"))) return;
+    draftWriter.current?.writer.cancel();
     actionGeneration.current += 1;
-    setParametersText(next);
+    setDefinitionText(INITIAL_DEFINITION);
+    setParametersText("{}");
+    setSelectedTemplateKey("");
+    setSelectedNodeId("");
     setValidatedSource(undefined);
     setPlan(undefined);
     setSimulation(undefined);
     setBusy(false);
     setError("");
+    setDraftPersistenceError(false);
+    const storage = browserStorage();
+    setDraftStorageAvailable(Boolean(storage && props.workspaceId));
+    if (storage && props.workspaceId) {
+      setDraftPersistenceError(!clearGraphDraft(storage, props.workspaceId));
+    }
   };
 
   const preview = async () => {
@@ -179,8 +251,10 @@ export function GraphCreationSection(props: { workspaceId?: string; onStarted: (
           onChange={(event) => {
             const selected = templates.find((template) => template.key === event.target.value);
             if (selected) {
-              commitDefinition(selected.template);
-              changeParametersText(JSON.stringify(graphTemplateDefaultParameters(selected.template), null, 2));
+              replaceDraft(
+                JSON.stringify(selected.template, null, 2),
+                JSON.stringify(graphTemplateDefaultParameters(selected.template), null, 2),
+              );
               setSelectedTemplateKey(selected.key);
               setSelectedNodeId("");
             } else {
@@ -200,12 +274,105 @@ export function GraphCreationSection(props: { workspaceId?: string; onStarted: (
       {skippedTemplates > 0 && (
         <p className="mt-1 text-warn">{t("chat.loop.graph.templateSkipped", { count: skippedTemplates })}</p>
       )}
+      <div className="mt-2 flex items-center justify-between gap-2 text-tertiary">
+        <span>{t(draftStorageAvailable ? "chat.loop.graph.draftAutosave" : "chat.loop.graph.draftUnavailable")}</span>
+        <Button size="sm" variant="ghost" onClick={resetDraft}>
+          {t("chat.loop.graph.resetDraft")}
+        </Button>
+      </div>
+      {draftPersistenceError && <p className="mt-1 text-warn">{t("chat.loop.graph.draftSaveFailed")}</p>}
       <textarea
         className="mt-2 h-48 w-full rounded border border-subtle bg-surface p-2 font-mono text-2xs"
         value={definitionText}
         aria-label={t("chat.loop.graph.definition")}
         onChange={(event) => changeDefinitionText(event.target.value)}
       />
+      {parameterFields.length > 0 && !("error" in parsed) && (
+        <fieldset className="mt-2 rounded border border-subtle p-2">
+          <legend className="px-1 font-medium">{t("chat.loop.graph.parameterEditor")}</legend>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {parameterFields.map((field) => {
+              const included = Object.hasOwn(parsed.parameters, field.name);
+              const value = parsed.parameters[field.name];
+              const validValue =
+                !included || (typeof value === field.type && (typeof value !== "number" || Number.isFinite(value)));
+              const controlId = `graph-template-parameter-${field.name}`;
+              return (
+                <div key={field.name} className="rounded bg-surface-overlay p-2">
+                  <label htmlFor={controlId} className="flex items-center gap-2 font-medium">
+                    <input
+                      id={controlId}
+                      type="checkbox"
+                      checked={included}
+                      onChange={(event) =>
+                        changeTemplateParameter(
+                          field,
+                          event.target.checked
+                            ? (field.defaultValue ??
+                                (field.type === "string" ? "" : field.type === "number" ? 0 : false))
+                            : undefined,
+                        )
+                      }
+                    />
+                    {field.name} · {field.type}
+                  </label>
+                  {field.description && <span className="mt-1 block text-tertiary">{field.description}</span>}
+                  {!validValue && <span className="mt-1 block text-warn">{t("chat.loop.graph.parameterInvalid")}</span>}
+                  {field.type === "boolean" ? (
+                    <select
+                      className="mt-1 w-full rounded border border-subtle bg-surface px-2 py-1"
+                      aria-label={`${field.name} · ${field.type}`}
+                      value={!included ? "unset" : !validValue ? "invalid" : value === true ? "true" : "false"}
+                      onChange={(event) =>
+                        changeTemplateParameter(
+                          field,
+                          event.target.value === "unset" ? undefined : event.target.value === "true",
+                        )
+                      }
+                    >
+                      <option value="unset">{t("chat.loop.graph.parameterUnset")}</option>
+                      {!validValue && (
+                        <option value="invalid" disabled>
+                          {t("chat.loop.graph.parameterInvalid")}
+                        </option>
+                      )}
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </select>
+                  ) : (
+                    <input
+                      className="mt-1 w-full rounded border border-subtle bg-surface px-2 py-1"
+                      aria-label={`${field.name} · ${field.type}`}
+                      type={field.type === "number" ? "number" : "text"}
+                      disabled={!included}
+                      value={
+                        included &&
+                        ((field.type === "string" && typeof value === "string") ||
+                          (field.type === "number" && typeof value === "number"))
+                          ? String(value)
+                          : ""
+                      }
+                      placeholder={
+                        field.defaultValue === undefined
+                          ? t("chat.loop.graph.parameterUnset")
+                          : t("chat.loop.graph.parameterDefault", { value: String(field.defaultValue) })
+                      }
+                      onChange={(event) => {
+                        if (field.type === "string") changeTemplateParameter(field, event.target.value);
+                        else if (event.target.value === "") changeTemplateParameter(field, undefined);
+                        else {
+                          const number = Number(event.target.value);
+                          if (Number.isFinite(number)) changeTemplateParameter(field, number);
+                        }
+                      }}
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </fieldset>
+      )}
       {visual.nodes.length > 0 && (
         <div className="mt-2 overflow-auto rounded border border-subtle bg-surface-overlay/40 p-1">
           <svg

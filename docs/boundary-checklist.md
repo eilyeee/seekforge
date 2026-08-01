@@ -4318,6 +4318,31 @@ binding, route, compensation target, or another domain-specific field.
 - **Caught:** Desktop Graph editing initially omitted router `routes[].when`
   conditions from its reference guard.
 
+## 397. Debounced persistence must flush or cancel deliberately
+
+A debounce timer is part of the persistence lifecycle. Clearing it during
+navigation or unmount without first settling its captured value loses the most
+recent edit exactly when the user leaves the surface.
+
+- **Do:** retain the bounded pending payload with its exact owner identity;
+  flush it at normal lifecycle boundaries, explicitly cancel it for reset, and
+  isolate quota or unavailable-storage failures from the live editor.
+- **Caught:** workspace-local Desktop Graph draft autosave initially cancelled
+  the newest 300 ms window during workspace changes and unmount.
+
+## 398. Apply must consume the exact preview controls and owner
+
+A dry-run result describes one control snapshot even when authoritative state is
+recomputed at apply time. Re-reading mutable controls can execute a policy the
+user never reviewed; a late result can also cross resource boundaries when the
+surface is reused.
+
+- **Do:** retain the validated options beside the preview, invalidate the preview
+  on any input edit, capture the resource generation, and guard success, error,
+  side-effect follow-up, and busy cleanup.
+- **Caught:** Desktop memory compaction previewed one prune threshold but applied
+  the current field value, with callbacks not bound to a workspace generation.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

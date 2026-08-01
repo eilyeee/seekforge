@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api";
-import { parseControlPlaneScenarioInput } from "../../lib/control-plane-input";
+import { CONTROL_PLANE_SCENARIO_EXAMPLE, parseControlPlaneScenarioInput } from "../../lib/control-plane-input";
 import { useT } from "../../lib/i18n";
 import type { ControlPlaneEvalReport, EvalTrendEntry } from "../../types";
 import { Button } from "../ui";
@@ -118,14 +118,35 @@ export function EvalTrendsSection(props: { workspaceId?: string }) {
               onChange={(event) => setScenarioText(event.target.value)}
               placeholder={t("chat.loop.eval.customScenarioPlaceholder")}
             />
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={busy || !scenarioText.trim()}
-              onClick={() => void evaluateCustom()}
-            >
-              {t("chat.loop.eval.evaluateScenario")}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy || !scenarioText.trim()}
+                onClick={() => void evaluateCustom()}
+              >
+                {t("chat.loop.eval.evaluateScenario")}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                onClick={() => setScenarioText(CONTROL_PLANE_SCENARIO_EXAMPLE)}
+              >
+                {t("chat.loop.eval.loadExample")}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                onClick={() => {
+                  setScenarioText("");
+                  void refresh();
+                }}
+              >
+                {t("chat.loop.eval.restoreDefault")}
+              </Button>
+            </div>
           </details>
         </div>
       )}

@@ -86,6 +86,8 @@ source as `simulation`; callers may POST bounded custom scenarios to the same
 endpoint. The Desktop panel accepts either a scenario array or a `{scenarios}`
 JSON envelope and renders baseline-to-controlled recovery rate, recovery-time,
 cost, and localized verdicts from the server-validated report.
+It includes a complete two-day fault example that can be loaded into the editor,
+and can restore the server-provided default simulation after a custom run.
 
 ### Runner modes
 

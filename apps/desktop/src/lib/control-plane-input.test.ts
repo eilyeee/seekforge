@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseControlPlaneScenarioInput } from "./control-plane-input";
+import { CONTROL_PLANE_SCENARIO_EXAMPLE, parseControlPlaneScenarioInput } from "./control-plane-input";
 
 describe("control-plane scenario input", () => {
   it("accepts an array or a scenarios envelope", () => {
@@ -11,5 +11,11 @@ describe("control-plane scenario input", () => {
     expect(() => parseControlPlaneScenarioInput("null")).toThrow(/1-32/);
     expect(() => parseControlPlaneScenarioInput("[]")).toThrow(/1-32/);
     expect(() => parseControlPlaneScenarioInput(" ".repeat(256 * 1024 + 1))).toThrow(/too large/);
+  });
+
+  it("ships a structurally complete longitudinal example for server validation", () => {
+    expect(parseControlPlaneScenarioInput(CONTROL_PLANE_SCENARIO_EXAMPLE)).toMatchObject([
+      { id: "provider-recovery-week", observations: [{ day: 1 }, { day: 2 }] },
+    ]);
   });
 });

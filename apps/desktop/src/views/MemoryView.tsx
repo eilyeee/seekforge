@@ -3,6 +3,7 @@ import { api } from "../lib/api";
 import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
 import { useT } from "../lib/i18n";
+import { memoryCompactOptions } from "../lib/memory-compact-ui";
 import {
   Badge,
   Button,
@@ -24,7 +25,7 @@ import type {
   MemoryStats,
   MemoryGovernanceReport,
 } from "../types";
-import { createSerialQueue } from "./async-coordination";
+import { createSerialQueue, LatestRequest } from "./async-coordination";
 import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 
 const TYPE_TONE: Record<MemoryCandidate["type"], BadgeTone> = {
@@ -606,46 +607,82 @@ function CompactControl({
 }) {
   const t = useT();
   const [pruneDays, setPruneDays] = useState("");
-  const [preview, setPreview] = useState<CompactResult | null>(null);
+  const [preview, setPreview] = useState<{
+    result: CompactResult;
+    options: { pruneUnusedDays?: number };
+  } | null>(null);
   const [busy, setBusy] = useState<"preview" | "apply" | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const requests = useRef(new LatestRequest()).current;
 
-  const optsOf = (dryRun: boolean) => {
-    const days = pruneDays.trim();
-    return {
-      dryRun,
-      ...(days !== "" && Number.isFinite(Number(days)) ? { pruneUnusedDays: Number(days) } : {}),
-    };
-  };
+  useEffect(() => {
+    requests.invalidate();
+    setPruneDays("");
+    setPreview(null);
+    setBusy(null);
+    setNote(null);
+    setError(null);
+    return () => requests.invalidate();
+  }, [requests, workspaceId]);
 
   const runPreview = () => {
+    let options: { dryRun: boolean; pruneUnusedDays?: number };
+    try {
+      options = memoryCompactOptions(pruneDays, true);
+    } catch (caught) {
+      setError(t("memory.compact.error", { error: caught instanceof Error ? caught.message : String(caught) }));
+      return;
+    }
+    const request = requests.begin();
+    const requestWorkspace = workspaceId;
     setBusy("preview");
     setError(null);
     setNote(null);
     api
-      .memoryCompact(optsOf(true), workspaceId)
-      .then(setPreview)
-      .catch((e: unknown) => setError(t("memory.compact.error", { error: String(e) })))
-      .finally(() => setBusy(null));
+      .memoryCompact(options, requestWorkspace)
+      .then((result) => {
+        if (requests.isCurrent(request)) {
+          setPreview({
+            result,
+            options: options.pruneUnusedDays === undefined ? {} : { pruneUnusedDays: options.pruneUnusedDays },
+          });
+        }
+      })
+      .catch((cause: unknown) => {
+        if (requests.isCurrent(request)) setError(t("memory.compact.error", { error: String(cause) }));
+      })
+      .finally(() => {
+        if (requests.isCurrent(request)) setBusy(null);
+      });
   };
 
   const apply = () => {
+    if (!preview) return;
+    const request = requests.begin();
+    const requestWorkspace = workspaceId;
+    const options = { dryRun: false, ...preview.options };
     setBusy("apply");
     setError(null);
     api
-      .memoryCompact(optsOf(false), workspaceId)
+      .memoryCompact(options, requestWorkspace)
       .then((r) => {
+        if (!requests.isCurrent(request)) return;
         setPreview(null);
         setNote(t("memory.compact.done", { before: r.before, after: r.after }));
         onApplied();
       })
-      .catch((e: unknown) => setError(t("memory.compact.error", { error: String(e) })))
-      .finally(() => setBusy(null));
+      .catch((cause: unknown) => {
+        if (requests.isCurrent(request)) setError(t("memory.compact.error", { error: String(cause) }));
+      })
+      .finally(() => {
+        if (requests.isCurrent(request)) setBusy(null);
+      });
   };
 
   const hasChanges =
-    preview !== null && (preview.removed.length > 0 || preview.merged.length > 0 || preview.archived.length > 0);
+    preview !== null &&
+    (preview.result.removed.length > 0 || preview.result.merged.length > 0 || preview.result.archived.length > 0);
 
   return (
     <section>
@@ -671,7 +708,12 @@ function CompactControl({
         <Input
           id="memory-prune-days"
           value={pruneDays}
-          onChange={(e) => setPruneDays(e.target.value.replace(/[^0-9]/g, ""))}
+          onChange={(e) => {
+            setPruneDays(e.target.value);
+            setPreview(null);
+            setNote(null);
+            setError(null);
+          }}
           inputMode="numeric"
           placeholder={t("memory.compact.prunePlaceholder")}
           className="mt-1.5"
@@ -685,16 +727,16 @@ function CompactControl({
         ) : (
           <div className="mt-3 space-y-2 border-t border-subtle pt-3 text-xs">
             <p className="font-mono text-sm text-primary">
-              {t("memory.compact.summary", { before: preview.before, after: preview.after })}
+              {t("memory.compact.summary", { before: preview.result.before, after: preview.result.after })}
             </p>
             {!hasChanges && <p className="text-tertiary">{t("memory.compact.noChanges")}</p>}
-            <CompactList title={t("memory.compact.removed")} items={preview.removed} tone="text-danger" />
+            <CompactList title={t("memory.compact.removed")} items={preview.result.removed} tone="text-danger" />
             <CompactList
               title={t("memory.compact.merged")}
-              items={preview.merged.map((m) => m.dropped)}
+              items={preview.result.merged.map((m) => m.dropped)}
               tone="text-warn"
             />
-            <CompactList title={t("memory.compact.archived")} items={preview.archived} tone="text-tertiary" />
+            <CompactList title={t("memory.compact.archived")} items={preview.result.archived} tone="text-tertiary" />
             <div className="flex gap-2 pt-1">
               <Button variant="primary" size="sm" onClick={apply} disabled={busy !== null || !hasChanges}>
                 {busy === "apply" ? t("memory.compact.applying") : t("memory.compact.applyBtn")}

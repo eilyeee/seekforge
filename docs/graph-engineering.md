@@ -11,6 +11,13 @@ Versioned registry entries are decoded as `{template, registeredAt}` records;
 selecting one edits and submits the nested semantic template, preserves its
 parameter envelope, pre-fills declared defaults, and supports dependency editing plus reference-safe leaf
 deletion before another validation/simulation pass.
+The workbench also exposes declared string/number/boolean parameters as typed
+controls while retaining the raw JSON editor. Draft definition and parameter
+text are autosaved locally by exact workspace identity after a short debounce;
+the bounded versioned cache rejects malformed, duplicate, oversized, or
+future-dated records, flushes pending edits at lifecycle boundaries, and can be
+reset without changing server state. The workbench reports unavailable browser
+storage and failed writes or deletes instead of claiming persistence succeeded.
 
 ## Execution model
 

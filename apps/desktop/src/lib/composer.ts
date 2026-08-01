@@ -7,6 +7,9 @@
  */
 
 import { MAX_UPLOAD_BYTES } from "@seekforge/shared/protocol-limits";
+import type { KVStorage } from "./storage";
+
+export type { KVStorage } from "./storage";
 
 /** A web-relevant slash command; the registry is built by ChatView. */
 export type ComposerCommand = {
@@ -214,12 +217,6 @@ export function insertImageMarker(
 
 // ---------------------------------------------------------------------------
 // History (per-workspace, localStorage-backed, readline ↑/↓ semantics).
-
-/** The subset of Storage the history helpers need (injectable for tests). */
-export type KVStorage = {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
-};
 
 export const HISTORY_LIMIT = 100;
 

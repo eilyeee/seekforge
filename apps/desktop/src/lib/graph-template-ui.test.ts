@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   decodeDesktopGraphTemplates,
   graphTemplateDefaultParameters,
+  graphTemplateParameterFields,
   graphTemplateVisualDefinition,
+  setGraphTemplateParameter,
 } from "./graph-template-ui";
 
 const template = {
@@ -49,5 +51,26 @@ describe("desktop Graph template adapter", () => {
     });
     expect(defaults).toEqual({ channel: "stable", retries: 2 });
     expect(Object.getPrototypeOf(defaults)).toBeNull();
+  });
+
+  it("builds typed parameter fields and updates values without prototype inheritance", () => {
+    const fields = graphTemplateParameterFields({
+      kind: "engineering-graph-template",
+      parameters: {
+        channel: { type: "string", description: "Release channel", default: "stable" },
+        enabled: { type: "boolean" },
+        invalid: { type: "object" },
+      },
+    });
+    expect(fields).toEqual([
+      { name: "channel", type: "string", description: "Release channel", defaultValue: "stable" },
+      { name: "enabled", type: "boolean" },
+    ]);
+    const changed = setGraphTemplateParameter({ channel: "stable" }, fields[1]!, true);
+    expect(changed).toEqual({ channel: "stable", enabled: true });
+    expect(Object.getPrototypeOf(changed)).toBeNull();
+    expect(setGraphTemplateParameter(changed, fields[0]!, undefined)).toEqual({ enabled: true });
+    expect(() => setGraphTemplateParameter({}, fields[1]!, "true")).toThrow(/invalid value/);
+    expect(() => setGraphTemplateParameter({}, { name: "__proto__", type: "string" }, "bad")).toThrow(/invalid value/);
   });
 });

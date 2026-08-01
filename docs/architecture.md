@@ -174,6 +174,11 @@ status/source/text filters and aggregate outcomes; memory governance expands
 duplicate, contradiction, provenance, decay, and use evidence without mutating
 facts. Optional newer endpoints degrade independently so older servers retain
 their base pages.
+Memory compaction binds an apply action to the exact dry-run pruning options and
+workspace generation that produced its preview. Editing the threshold invalidates
+that preview, and late preview/apply callbacks cannot repaint another workspace.
+The preview is advisory rather than a state lock: apply recomputes compaction
+against current server memory under the normal memory transaction.
 
 Continuous eval scenarios choose an explicit runner (`agent`, `loop`, or
 `session_scenario`). Loop, resume, and memory behavior therefore execute the

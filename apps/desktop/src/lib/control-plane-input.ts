@@ -2,6 +2,30 @@ function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+export const CONTROL_PLANE_SCENARIO_EXAMPLE = JSON.stringify(
+  [
+    {
+      id: "provider-recovery-week",
+      observations: [
+        {
+          day: 1,
+          fault: "provider-timeout",
+          baseline: { recovered: false, recoveryMs: 180_000, costUsd: 0.18 },
+          controlled: { recovered: true, recoveryMs: 72_000, costUsd: 0.12 },
+        },
+        {
+          day: 2,
+          fault: "stale-route",
+          baseline: { recovered: true, recoveryMs: 240_000, costUsd: 0.24 },
+          controlled: { recovered: true, recoveryMs: 95_000, costUsd: 0.15 },
+        },
+      ],
+    },
+  ],
+  null,
+  2,
+);
+
 /** Decodes the Desktop text field; Eval Harness remains the semantic validator. */
 export function parseControlPlaneScenarioInput(text: string): unknown[] {
   if (text.length > 256 * 1024) throw new Error("Control-plane scenario JSON is too large");
