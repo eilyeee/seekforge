@@ -49,6 +49,7 @@ export type View =
   | "agents"
   | "memory"
   | "evolution"
+  | "orchestration"
   | "hooks"
   | "security"
   | "settings"

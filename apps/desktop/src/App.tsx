@@ -27,6 +27,9 @@ const HooksView = lazy(() => import("./views/HooksView").then((m) => ({ default:
 const SecurityView = lazy(() => import("./views/SecurityView").then((m) => ({ default: m.SecurityView })));
 const SettingsView = lazy(() => import("./views/SettingsView").then((m) => ({ default: m.SettingsView })));
 const DiagnosticsView = lazy(() => import("./views/DiagnosticsView").then((m) => ({ default: m.DiagnosticsView })));
+const OrchestrationView = lazy(() =>
+  import("./views/OrchestrationView").then((m) => ({ default: m.OrchestrationView })),
+);
 
 /** macOS uses an overlay title bar over the whole window top. The sidebar
  *  reserves its corner with pt-9; the content column reserves a matching
@@ -115,6 +118,7 @@ export function App() {
                 {view === "agents" && <AgentsView key={activeWorkspaceId} />}
                 {view === "memory" && <MemoryView key={activeWorkspaceId} />}
                 {view === "evolution" && <EvolutionView key={activeWorkspaceId} />}
+                {view === "orchestration" && <OrchestrationView key={activeWorkspaceId} />}
                 {view === "hooks" && <HooksView key={activeWorkspaceId} />}
                 {view === "security" && <SecurityView key={activeWorkspaceId} />}
                 {view === "settings" && <SettingsView key={activeWorkspaceId} />}

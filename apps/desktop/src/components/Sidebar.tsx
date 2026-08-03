@@ -10,6 +10,7 @@ import {
   IconFiles,
   IconGit,
   IconMemory,
+  IconOrchestration,
   IconPlugins,
   IconSessions,
   IconSettings,
@@ -40,7 +41,7 @@ type NavItem = { view: View; key: string; Icon: ComponentType<{ size?: number; c
  * Grouped navigation (Codex-style calm sidebar). The first group has no header
  * (the primary conversation surface); the rest carry a quiet section label.
  */
-const NAV_GROUPS: { titleKey?: string; items: NavItem[] }[] = [
+export const NAV_GROUPS: { titleKey?: string; items: NavItem[] }[] = [
   {
     items: [
       { view: "chat", key: "nav.chat", Icon: IconChat },
@@ -63,6 +64,7 @@ const NAV_GROUPS: { titleKey?: string; items: NavItem[] }[] = [
       { view: "agents", key: "nav.agents", Icon: IconAgents },
       { view: "memory", key: "nav.memory", Icon: IconMemory },
       { view: "evolution", key: "nav.evolution", Icon: IconEvolution },
+      { view: "orchestration", key: "nav.orchestration", Icon: IconOrchestration },
     ],
   },
   {

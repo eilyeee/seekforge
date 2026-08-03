@@ -112,6 +112,20 @@ export function IconEvolution(props: IconProps) {
   );
 }
 
+/** Three linked nodes — the orchestration workbench (Loop / Graph). */
+export function IconOrchestration(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="3.5" cy="3.5" r="2" />
+      <circle cx="12.5" cy="3.5" r="2" />
+      <circle cx="8" cy="12.5" r="2" />
+      <path d="M5.5 3.5h5" />
+      <path d="M4.4 5.2l2.6 5.6" />
+      <path d="M11.6 5.2L9 10.8" />
+    </Svg>
+  );
+}
+
 /** Sliders — Settings. */
 export function IconSettings(props: IconProps) {
   return (

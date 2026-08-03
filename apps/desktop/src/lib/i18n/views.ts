@@ -510,6 +510,12 @@ export const views = {
     "settings.mcpRemoveConfirm": "Remove",
 
     // ── DiagnosticsView ───────────────────────────────────────────
+    "orchestration.title": "Orchestration",
+    "orchestration.subtitle":
+      "Autonomous Loop runs and execution Graphs for this workspace: what is running, what it has spent, what it verified, and the evidence it kept.",
+    "orchestration.runsInChat":
+      "Starting or resuming a run happens on the active chat tab, where its permission prompts and questions appear.",
+    "orchestration.openChat": "Open chat",
     "diagnostics.title": "Diagnostics",
     "diagnostics.subtitle": "Environment checks for the SeekForge server and runtime.",
     "diagnostics.loading": "Running checks…",
@@ -1161,6 +1167,11 @@ export const views = {
     "settings.mcpRemoveConfirm": "移除",
 
     // ── DiagnosticsView ───────────────────────────────────────────
+    "orchestration.title": "编排",
+    "orchestration.subtitle":
+      "本工作区的自主 Loop 运行与执行 Graph：正在跑什么、花了多少、验证了什么，以及留下的证据。",
+    "orchestration.runsInChat": "启动或恢复一次运行发生在当前聊天标签页上——它的权限确认与提问会出现在那里。",
+    "orchestration.openChat": "打开聊天",
     "diagnostics.title": "诊断",
     "diagnostics.subtitle": "对 SeekForge 服务器与运行环境的检查。",
     "diagnostics.loading": "正在运行检查…",

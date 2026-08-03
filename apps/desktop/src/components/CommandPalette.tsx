@@ -6,7 +6,7 @@ import { pickDirectory } from "../lib/pickDirectory";
 import { IconSearch } from "./ui/icons";
 
 /** Views surfaced in the palette, in sidebar order. */
-const VIEW_ITEMS: { view: View; navKey: string }[] = [
+export const VIEW_ITEMS: { view: View; navKey: string }[] = [
   { view: "chat", navKey: "nav.chat" },
   { view: "sessions", navKey: "nav.sessions" },
   { view: "diff", navKey: "nav.diff" },
@@ -16,6 +16,7 @@ const VIEW_ITEMS: { view: View; navKey: string }[] = [
   { view: "agents", navKey: "nav.agents" },
   { view: "memory", navKey: "nav.memory" },
   { view: "evolution", navKey: "nav.evolution" },
+  { view: "orchestration", navKey: "nav.orchestration" },
   { view: "hooks", navKey: "nav.hooks" },
   { view: "diagnostics", navKey: "nav.diagnostics" },
   { view: "settings", navKey: "nav.settings" },
