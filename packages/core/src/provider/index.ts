@@ -32,7 +32,7 @@ export {
   resolveProviderConfig,
   type ProviderPreset,
 } from "./presets.js";
-export { estimateCostUsd, type UsageTokens } from "./cost.js";
+export { estimateCostUsd, pricingSourceFor, type PricingSource, type UsageTokens } from "./cost.js";
 export { MODEL_PRICING, DEFAULT_BASE_URL, DEFAULT_MODEL, DEPRECATED_MODELS, type ModelPricing } from "./constants.js";
 export { parseFallbackToolCalls, buildFallbackToolPrompt } from "./fallback.js";
 export { DeepSeekApiError } from "./http.js";

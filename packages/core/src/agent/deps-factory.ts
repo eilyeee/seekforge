@@ -42,7 +42,7 @@
 
 import type { ChatProvider, ModelPricing, RetryInfo } from "../provider/index.js";
 import { resolveMemoryMaintenanceConfig, type MemoryMaintenanceConfig } from "../memory/index.js";
-import { createDeepSeekProvider, resolveProviderConfig } from "../provider/index.js";
+import { createDeepSeekProvider, pricingSourceFor, resolveProviderConfig } from "../provider/index.js";
 import { createRetryBus, type AgentCoreDeps, type RetryBus } from "./loop.js";
 
 /**
@@ -120,6 +120,13 @@ export type BuildAgentCoreDepsExtras = {
    * provider (the CLI prints a stderr warning; other frontends stay silent).
    */
   onReasonerFallback?: () => void;
+  /**
+   * Fired once when no price is known for the main model, so cost and every
+   * cost budget will report 0. Reporting a spend of zero that is really
+   * "unknown" is the failure mode this exists to prevent; a frontend that
+   * shows cost should say so rather than showing $0.0000.
+   */
+  onPricingUnavailable?: (info: { provider?: string; model: string }) => void;
 };
 
 /** The slice of AgentCoreDeps this factory owns; apps spread their deltas on top. */
@@ -164,6 +171,19 @@ export function buildAgentCoreDeps(
   const retryBus = createRetryBus();
   const providerInput: ProviderBuildInput = { ...input, onRetry: retryBus.onRetry };
   const baseProvider = buildProvider(providerInput, input.model);
+  if (extras.onPricingUnavailable) {
+    const resolved = resolveProviderConfig({ provider: input.provider, apiKey: "", model: input.model });
+    const source = pricingSourceFor(baseProvider.model, {
+      ...(input.modelPricing ? { pricing: input.modelPricing } : {}),
+      ...(resolved.capabilities ? { costAccounting: resolved.capabilities.costAccounting } : {}),
+    });
+    if (source === "unavailable") {
+      extras.onPricingUnavailable({
+        ...(input.provider ? { provider: input.provider } : {}),
+        model: baseProvider.model,
+      });
+    }
+  }
   const provider = extras.wrapProvider ? extras.wrapProvider(baseProvider) : baseProvider;
 
   return {

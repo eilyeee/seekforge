@@ -122,6 +122,11 @@ export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
           console.error(
             'warning: subagent model "deepseek-reasoner" does not support tool calls; using the default model',
           ),
+        onPricingUnavailable: ({ provider, model }) =>
+          console.error(
+            `warning: no price is known for ${model}${provider ? ` on provider "${provider}"` : ""} — ` +
+              "cost and cost budgets will report 0; set modelPricing in config to track spend",
+          ),
       },
     ),
     dispatcher: createDefaultDispatcher(opts.mcpToolSpecs ?? []),

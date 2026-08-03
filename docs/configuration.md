@@ -345,6 +345,12 @@ the `maxCostUsd` budget work out of the box. Other providers (`ark`, `openai`,
 there and `maxCostUsd` never triggers. Set `modelPricing` to supply your own
 per-model rates and turn cost/budget tracking on for those providers.
 
+SeekForge deliberately ships **no** price table for those providers rather than
+a guessed one: a wrong rate quietly mis-bills every budget built on it, which is
+worse than reporting nothing. Until you set `modelPricing`, the CLI warns once
+per session that cost will report 0 for the configured model — a spend of zero
+that is really "unknown" should not be mistaken for a call that was free.
+
 It is a map of **model id → per-1M-token prices** in USD:
 
 ```json
