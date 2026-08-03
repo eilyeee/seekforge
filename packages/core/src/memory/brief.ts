@@ -4,11 +4,24 @@
  *
  * Relevance scoring (no LLM call):
  *   +1 per task unigram / CJK bigram found in the fact,
+ *   +1 more when that unigram is RARE in the corpus (see below),
  *   +2 per adjacent-word (latin) bigram phrase found in the fact,
  *   +4 per path/filename token shared between task and fact.
+ * A unigram matches the fact literally, or through its stem — "importing"
+ * finds "imports", "approves" finds "approved" — since a fact and the task
+ * that needs it rarely inflect the same word the same way.
  * Facts below the relevance floor are dropped entirely — when nothing in
  * memory clears the floor, NO brief is injected (silence beats noise).
  * Ties are broken by recency: later project.md lines (newer facts) win.
+ *
+ * WHY RARITY. The floor exists because one generic word in common ("tool",
+ * "file", "run") says nothing. But one *specific* word in common — "keepNames",
+ * "symlinked", "desktop" — is the whole signal, and under a flat +1 it scored
+ * the same as the generic one and was dropped. Weighting a unigram by how few
+ * facts contain it separates the two without an extra query term: measured on
+ * tests/memory/retrieval-quality.test.ts, that plus stemming took recall from
+ * 48% to 91%. The two cases still missed are a Chinese task needing an English
+ * fact and the reverse — the one thing no lexical scorer reaches.
  */
 
 import { readGlobalMemory, readProjectMemory, readSubdirMemories } from "./store.js";
@@ -105,6 +118,8 @@ const SOURCE_RANK: Record<FactSource, number> = { project: 2, subdir: 1, global:
 type ScoredBullet = {
   line: string;
   type: string;
+  /** Lowercased text the score is computed from (may carry a subdir's path). */
+  haystack: string;
   score: number;
   /** Position within its source file; higher = appended later = newer. */
   index: number;
@@ -120,18 +135,85 @@ function parseBullet(line: string): { type: string; text: string } | undefined {
   return { type: match[1], text: match[2] };
 }
 
-function scoreBullet(haystack: string, keywords: string[], bigrams: string[], pathTokens: string[]): number {
-  let score = 0;
-  for (const kw of keywords) {
-    if (haystack.includes(kw)) score += 1;
+/**
+ * A unigram found in at most this many facts is specific enough to be a signal
+ * on its own; anything more common is the vocabulary every fact shares.
+ */
+const RARE_DOCUMENT_FREQUENCY = 2;
+
+/** Shortest stem worth matching — below this a prefix matches half the corpus. */
+const MIN_STEM_LENGTH = 4;
+const INFLECTIONS = ["ing", "ed", "es", "s"] as const;
+
+/**
+ * The token minus one English inflection, or undefined when there is nothing
+ * safe to strip. Deliberately not a real stemmer: this only has to survive the
+ * difference between how a task phrases a word and how the fact that answers it
+ * does.
+ */
+function stem(keyword: string): string | undefined {
+  if (HAS_CJK.test(keyword)) return undefined;
+  for (const suffix of INFLECTIONS) {
+    if (!keyword.endsWith(suffix)) continue;
+    const stemmed = keyword.slice(0, -suffix.length);
+    if (stemmed.length >= MIN_STEM_LENGTH) return stemmed;
+    return undefined;
   }
-  for (const bg of bigrams) {
-    if (haystack.includes(bg)) score += 2;
+  return undefined;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * One query, compiled once against the corpus it will be scored over.
+ *
+ * The corpus is needed up front because rarity is relative to it — a term is
+ * only specific compared to the other facts on offer. Both callers already have
+ * the full candidate set before they score anything.
+ */
+export function createRelevanceScorer(query: string, corpus: string[]): (haystack: string) => number {
+  const bigrams = taskBigrams(query);
+  const pathTokens = taskPathTokens(query);
+  // A stem matches only at a word start: "clas" should find "classes", not
+  // "subclass". A whole keyword keeps the looser substring match it has always
+  // had, which is what lets "name" find "keepNames".
+  const terms = taskKeywords(query).map((keyword) => {
+    const stemmed = stem(keyword);
+    return {
+      keyword,
+      ...(stemmed !== undefined ? { stemPattern: new RegExp(`\\b${escapeRegExp(stemmed)}`) } : {}),
+      rare: false,
+    };
+  });
+  const hits = (haystack: string, term: (typeof terms)[number]): boolean =>
+    haystack.includes(term.keyword) || (term.stemPattern?.test(haystack) ?? false);
+
+  const documents = corpus.map((c) => c.toLowerCase());
+  for (const term of terms) {
+    let frequency = 0;
+    for (const document of documents) {
+      if (hits(document, term)) frequency += 1;
+    }
+    // Frequency 0 stays unrare: a term nothing contains never scores anyway,
+    // and calling it rare would be a promise about a match that cannot happen.
+    term.rare = frequency > 0 && frequency <= RARE_DOCUMENT_FREQUENCY;
   }
-  for (const pt of pathTokens) {
-    if (haystack.includes(pt)) score += 4;
-  }
-  return score;
+
+  return (haystack: string): number => {
+    let score = 0;
+    for (const term of terms) {
+      if (hits(haystack, term)) score += term.rare ? 2 : 1;
+    }
+    for (const bg of bigrams) {
+      if (haystack.includes(bg)) score += 2;
+    }
+    for (const pt of pathTokens) {
+      if (haystack.includes(pt)) score += 4;
+    }
+    return score;
+  };
 }
 
 /** Re-export so consumers (the search_memory tool) can also tag matches. */
@@ -167,13 +249,9 @@ export function rankMemoryBullets<T extends MemoryCandidateBullet>(
   query: string,
   candidates: T[],
 ): Array<T & { score: number }> {
-  const keywords = taskKeywords(query);
-  const bigrams = taskBigrams(query);
-  const pathTokens = taskPathTokens(query);
-  const scored = candidates.map((c) => {
-    const haystack = c.pathContext ? `${c.pathContext} ${c.line}` : c.line;
-    return { ...c, score: scoreBullet(haystack.toLowerCase(), keywords, bigrams, pathTokens) };
-  });
+  const haystacks = candidates.map((c) => (c.pathContext ? `${c.pathContext} ${c.line}` : c.line).toLowerCase());
+  const score = createRelevanceScorer(query, haystacks);
+  const scored = candidates.map((c, i) => ({ ...c, score: score(haystacks[i]!) }));
   // Stable sort by score (highest first); ties keep input order.
   return scored
     .map((c, i) => ({ c, i }))
@@ -205,12 +283,6 @@ export function buildMemoryBrief(workspace: string, task: string): string | unde
     return undefined;
   }
 
-  const keywords = taskKeywords(task);
-  const bigrams = taskBigrams(task);
-  const pathTokens = taskPathTokens(task);
-
-  const scoreOf = (haystack: string): number => scoreBullet(haystack.toLowerCase(), keywords, bigrams, pathTokens);
-
   // Build the candidate bullet set from ALL sources, deduping identical bullets.
   // Sources are collected in precedence order (root project, then subdir, then
   // global) so the first copy of an identical line wins (project > subdir >
@@ -239,7 +311,10 @@ export function buildMemoryBrief(workspace: string, task: string): string | unde
       all.push({
         line,
         type: bullet.type,
-        score: scoreOf(haystack),
+        haystack: haystack.toLowerCase(),
+        // Filled in once every source has been collected: relevance is scored
+        // against the whole corpus, which is not known until then.
+        score: 0,
         index,
         source,
         isProject,
@@ -254,6 +329,12 @@ export function buildMemoryBrief(workspace: string, task: string): string | unde
   }
   collect(globalMemory, "global");
   if (all.length === 0) return undefined;
+
+  const score = createRelevanceScorer(
+    task,
+    all.map((b) => b.haystack),
+  );
+  for (const bullet of all) bullet.score = score(bullet.haystack);
 
   // Small corpus: include everything (recall > filtering). Larger corpus: apply
   // the relevance floor so weak matches are dropped, not just ranked last.
