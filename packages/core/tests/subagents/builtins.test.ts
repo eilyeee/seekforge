@@ -6,21 +6,57 @@ import { BUILTIN_AGENTS } from "../../src/subagents/builtins.js";
 import { loadAgentDefinitions, loadAgentDefinitionsFromDirs, withBuiltinAgents } from "../../src/subagents/load.js";
 
 describe("builtin agents", () => {
-  it("ships explorer and reviewer as read-only builtins", () => {
-    expect(BUILTIN_AGENTS.map((d) => d.id)).toEqual(["explorer", "reviewer"]);
+  it("ships the specialists a coding run dispatches", () => {
+    expect(BUILTIN_AGENTS.map((d) => d.id)).toEqual(["explorer", "reviewer", "planner", "test-writer", "debugger"]);
     for (const def of BUILTIN_AGENTS) {
       expect(def.scope).toBe("builtin");
-      expect(def.mode).toBe("ask");
-      expect(def.maxTurns).toBe(12);
       expect(def.description.length).toBeGreaterThan(0);
       expect(def.own).toBeDefined();
       expect(def.boundary).toBeDefined();
+      expect(def.doNotTouch).toBeDefined();
+      expect(def.maxTurns).toBeGreaterThan(0);
       expect(def.body!.length).toBeGreaterThan(200); // real procedure, not a stub
+      // Every builtin is bounded to named tools: an unrestricted specialist is
+      // just the parent agent with a different prompt.
+      expect(def.tools?.length).toBeGreaterThan(0);
     }
     const explorer = BUILTIN_AGENTS.find((d) => d.id === "explorer")!;
     expect(explorer.tools).toEqual(["list_files", "read_file", "search_text", "detect_project", "list_scripts"]);
     const reviewer = BUILTIN_AGENTS.find((d) => d.id === "reviewer")!;
     expect(reviewer.tools).toEqual(["list_files", "read_file", "search_text", "git_diff", "git_status"]);
+  });
+
+  it("only the specialists that must act are allowed to", () => {
+    const modes = Object.fromEntries(BUILTIN_AGENTS.map((d) => [d.id, d.mode]));
+    // Investigating and reporting needs nothing but reads.
+    expect(modes).toMatchObject({ explorer: "ask", reviewer: "ask", planner: "ask" });
+    // Writing a test means writing a file; reproducing a failure means running
+    // the thing that fails. Neither is possible in ask mode.
+    expect(modes).toMatchObject({ "test-writer": "edit", debugger: "edit" });
+  });
+
+  it("the editing specialists cannot reach beyond their job", () => {
+    const testWriter = BUILTIN_AGENTS.find((d) => d.id === "test-writer")!;
+    // It writes tests and runs them; it does not get a shell.
+    expect(testWriter.tools).toContain("apply_patch");
+    expect(testWriter.tools).toContain("run_tests");
+    expect(testWriter.tools).not.toContain("run_command");
+    expect(testWriter.doNotTouch).toContain("implementation");
+
+    const debuggerAgent = BUILTIN_AGENTS.find((d) => d.id === "debugger")!;
+    // It runs things to reproduce a failure; it does not edit anything.
+    expect(debuggerAgent.tools).toContain("run_command");
+    expect(debuggerAgent.tools).not.toContain("write_file");
+    expect(debuggerAgent.tools).not.toContain("apply_patch");
+  });
+
+  it("planner plans and does not execute", () => {
+    const planner = BUILTIN_AGENTS.find((d) => d.id === "planner")!;
+    expect(planner.tools).not.toContain("run_command");
+    expect(planner.tools).not.toContain("write_file");
+    expect(planner.body).toContain("Report contract");
+    expect(planner.body).toContain("Risks");
+    expect(planner.body).toContain("someone else executes it");
   });
 
   it("explorer body enforces the context-frugal report contract", () => {
@@ -46,7 +82,8 @@ describe("builtin agents", () => {
   });
 
   it("withBuiltinAgents merges builtins at the lowest priority", () => {
-    expect(withBuiltinAgents([]).map((d) => d.scope)).toEqual(["builtin", "builtin"]);
+    expect(withBuiltinAgents([]).every((d) => d.scope === "builtin")).toBe(true);
+    expect(withBuiltinAgents([])).toHaveLength(BUILTIN_AGENTS.length);
 
     const projectExplorer = {
       ...BUILTIN_AGENTS[0]!,

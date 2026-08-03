@@ -195,7 +195,8 @@ Markdown/JSON/JUnit 报告。每周的 workflow 用 nightly 套件对照已提�
   永远不可用，因此不会阻塞）。
 - **技能（skills）**是流程简报（绝非权限），按规则匹配为每个任务选择；
   在 `.seekforge/skills/<id>/` 放置你自己的技能。
-- **子代理**（内置 `explorer`/`reviewer`，加上 `.seekforge/agents/<id>/`
+- **子代理**（五个内置：`explorer`、`reviewer`、`planner`、`test-writer`、
+  `debugger`，加上 `.seekforge/agents/<id>/`
   中的 `AGENT.md` 或导入的 Claude/Meta_Kim 风格定义）让主 agent 通过
   `dispatch_agent` 委派有边界的子任务——同一轮内可并行、可后台
   （`agent_result` 轮询）、事后可续（`agent_send`）。每个子代理有自己的

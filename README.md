@@ -208,7 +208,8 @@ baseline; see [Evals and the regression gate](docs/EVALS.md).
   (never available to subagents or backgrounded runs, so they can't block).
 - **Skills** are procedure briefs (never permissions) selected per task by
   rule matching; ship your own in `.seekforge/skills/<id>/`.
-- **Subagents** (builtin `explorer`/`reviewer`, plus `AGENT.md` in
+- **Subagents** (five builtins — `explorer`, `reviewer`, `planner`,
+  `test-writer`, `debugger` — plus `AGENT.md` in
   `.seekforge/agents/<id>/` or imported Claude/Meta_Kim-style definitions)
   let the main agent delegate bounded sub-tasks via `dispatch_agent` —
   in parallel within a turn, in the background (`agent_result` to poll),
