@@ -21,6 +21,8 @@ import {
   type PluginContributions,
   type RuntimeClient,
   type ToolSpec,
+  type McpServerRequestHandlers,
+  type UsageBus,
 } from "@seekforge/core";
 import type { ConfirmResult, PermissionRequest } from "@seekforge/shared";
 import type { TuiConfig } from "../config.js";
@@ -47,6 +49,8 @@ export type TuiAgentOptions = {
   askUser?: (q: { question: string; options: string[]; freeText?: boolean }) => Promise<string>;
   /** Run-bound controls for observing and steering dispatched subagents. */
   dispatchManager?: DispatchManager;
+  /** Session usage bus: tokens an MCP server spent through sampling. */
+  usageBus?: UsageBus;
 };
 
 export type TuiAgent = {
@@ -116,6 +120,7 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
     permissionRules: config.permissionRules,
     subagents: opts.subagents,
     ...(opts.dispatchManager ? { dispatchManager: opts.dispatchManager } : {}),
+    ...(opts.usageBus ? { usageBus: opts.usageBus } : {}),
     hooks: mergePluginHooks(workspace, config.hooks, pluginContributions),
     pluginContributions,
     skillSnapshot: loadSkills(workspace, pluginContributions),
@@ -144,6 +149,7 @@ export function createTuiAgent(opts: TuiAgentOptions): TuiAgent {
 export async function prepareMcp(
   config: TuiConfig,
   workspacePath?: string,
+  serverRequestHandlers?: McpServerRequestHandlers,
 ): Promise<{
   specs: ToolSpec[];
   entries: McpClientEntry[];
@@ -156,6 +162,11 @@ export async function prepareMcp(
   if (Object.keys(servers).length === 0) {
     return { specs: [], entries: [], pluginContributions, dispose: () => {} };
   }
-  const loaded = await loadMcpToolSpecs(servers, workspacePath ? [workspacePath] : undefined);
+  const loaded = await loadMcpToolSpecs(
+    servers,
+    workspacePath ? [workspacePath] : undefined,
+    undefined,
+    serverRequestHandlers,
+  );
   return { ...loaded, pluginContributions };
 }

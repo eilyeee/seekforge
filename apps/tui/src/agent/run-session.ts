@@ -11,6 +11,7 @@ import type { ApprovalMode, ConfirmResult, PermissionRequest } from "@seekforge/
 import type { TuiConfig } from "../config.js";
 import { expandFileRefs } from "@seekforge/shared/file-refs";
 import { createTuiAgent } from "./factory.js";
+import type { UsageBus } from "@seekforge/core";
 import { createDiffCapture } from "../diff-capture.js";
 import { createBufferedDispatch } from "../delta-buffer.js";
 import type { ChatAction } from "../model.js";
@@ -42,6 +43,8 @@ export type RunSessionDeps = {
   getSessionId: () => string | undefined;
   /** Binds controls to this exact run; undefined clears them during cleanup. */
   onDispatchManager?: (manager: DispatchManager | undefined) => void;
+  /** Session usage bus: tokens an MCP server spent through sampling. */
+  usageBus?: UsageBus;
 };
 
 /**
@@ -70,6 +73,7 @@ export async function runSession(task: string, signal: AbortSignal, deps: RunSes
     background: deps.background,
     askUser: deps.askUser,
     dispatchManager,
+    ...(deps.usageBus ? { usageBus: deps.usageBus } : {}),
   });
 
   // One capture per run: snapshots files around write tools to render diffs.

@@ -223,8 +223,10 @@ refresh token 或静态 header。
 照做什么，填一半的表比不填更糟。请求的 schema 必须如规范要求那样是一层扁平的原始
 类型对象，任何嵌套都会被拒绝。
 
-目前接上的是：CLI（`seekforge run`、REPL）与本地 server（桌面端与 Web 工作台，
-经 WebSocket 的确认/提问通道）。TUI 目前两者都不声明。
+所有有用户可问的形态都接上了：CLI（`seekforge run`、REPL）、本地 server（桌面端与
+Web 工作台，经 WebSocket 的确认/提问通道），以及 TUI。TUI 在应用渲染之前就启动了 MCP
+服务器，因此它的 handler 会路由到当前占据屏幕的那次运行；如果请求到达时没有任何运行
+在进行，它会被拒绝，而不是被错投到别处。
 
 `tools/list`、`resources/list` 和 `prompts/list` 会逐页消费每个不透明的
 `nextCursor`。重复出现的 cursor 会被拒绝，发现过程上限为 100 页和 10,000 条，

@@ -249,9 +249,11 @@ whatever it is told, so a half-answered form is worse than no answer. The
 requested schema must be a flat object of primitives, as the specification
 requires; anything nested is rejected.
 
-Wired today in: the CLI (`seekforge run`, the REPL) and the local server (the
-desktop and web workbenches, over the WebSocket confirm/question channels). The
-TUI advertises neither yet.
+Wired in every surface that has a user to ask: the CLI (`seekforge run`, the
+REPL), the local server (the desktop and web workbenches, over the WebSocket
+confirm/question channels), and the TUI. The TUI starts its MCP servers before
+the app renders, so its handlers reach whichever run currently owns the screen;
+a request arriving with no run active is refused rather than misrouted.
 
 `tools/list`, `resources/list`, and `prompts/list` consume every opaque
 `nextCursor`. Repeated cursors are rejected and discovery is capped at 100 pages

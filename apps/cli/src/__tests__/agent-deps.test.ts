@@ -1,3 +1,4 @@
+import { createUsageBus } from "@seekforge/core";
 // Contract test: CLI config -> AgentCoreDeps passthrough. Guards the cross-entry
 // parameters (sandbox, permission, planModel, compaction, hooks, limits) that
 // have silently dropped before.
@@ -64,4 +65,12 @@ test("maxTurns opt becomes limits.maxAgentTurns (and only when > 0)", () => {
   assert.equal(deps(base, { maxTurns: 12 }).limits?.maxAgentTurns, 12);
   assert.equal(deps(base, { maxTurns: 0 }).limits, undefined);
   assert.equal(deps(base).limits, undefined);
+});
+
+test("usageBus reaches the agent, so an MCP server's sampling is counted", () => {
+  // Passing it through a conditional spread means TypeScript's excess-property
+  // check cannot catch a dropped key; assert the object actually arrives.
+  const usageBus = createUsageBus();
+  assert.equal(deps(base, { usageBus }).usageBus, usageBus);
+  assert.equal(deps(base).usageBus, undefined);
 });

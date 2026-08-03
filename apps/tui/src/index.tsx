@@ -1,10 +1,18 @@
 import type React from "react";
 import { createRequire } from "node:module";
 import { render } from "ink";
-import { configureVision, listSessions } from "@seekforge/core";
+import {
+  buildProvider,
+  configureVision,
+  createMcpElicitationHandler,
+  createMcpSamplingHandler,
+  createUsageBus,
+  listSessions,
+} from "@seekforge/core";
 import { App } from "./app.js";
 import { loadConfig, type TuiConfig } from "./config.js";
 import { prepareMcp } from "./agent/factory.js";
+import { createInteractiveChannelHolder } from "./agent/interactive-channels.js";
 import { loadTheme } from "./theme.js";
 import { detectLocale, setLocale } from "./strings.js";
 import { setAccent } from "./components/Header.js";
@@ -84,7 +92,32 @@ async function main(): Promise<void> {
   }
 
   const model = config.model ?? "deepseek-v4-flash";
-  const mcp = await prepareMcp(config, projectPath); // MCP servers live for the whole session
+  // MCP servers live for the whole session, so they are started before the app
+  // renders. A server may still ask to run a model call or put a question to
+  // the user; both go through the run that is active when it asks.
+  const channels = createInteractiveChannelHolder();
+  const usageBus = createUsageBus();
+  const mcp = await prepareMcp(config, projectPath, {
+    ...(config.apiKey
+      ? {
+          sampling: createMcpSamplingHandler({
+            provider: () =>
+              buildProvider(
+                {
+                  provider: config.provider,
+                  apiKey: config.apiKey,
+                  baseUrl: config.baseUrl,
+                  modelPricing: config.modelPricing,
+                },
+                config.model,
+              ),
+            confirm: (request) => channels.confirm(request),
+            onUsage: (usage) => usageBus.record(usage),
+          }),
+        }
+      : {}),
+    elicitation: createMcpElicitationHandler({ askUser: (question) => channels.askUser(question) }),
+  });
   const continueSessionId = args.continueLast ? listSessions(projectPath)[0]?.id : undefined;
 
   let version: string | undefined;
@@ -102,6 +135,8 @@ async function main(): Promise<void> {
       initialModel={model}
       mcpToolSpecs={mcp.specs}
       mcpEntries={mcp.entries}
+      channels={channels}
+      usageBus={usageBus}
       pluginContributions={mcp.pluginContributions}
       {...(continueSessionId ? { initialSessionId: continueSessionId } : {})}
       {...(version ? { version } : {})}

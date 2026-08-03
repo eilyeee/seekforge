@@ -54,6 +54,7 @@ import {
   type LoopControl,
   type PluginContributions,
   type ToolSpec,
+  type UsageBus,
 } from "@seekforge/core";
 import type { ConfirmResult, PermissionRequest } from "@seekforge/shared";
 import { clipLine } from "@seekforge/shared/format";
@@ -188,6 +189,7 @@ import { FilePicker } from "./components/FilePicker.js";
 import { ContextInspector } from "./components/ContextInspector.js";
 import { ListOverlay } from "./components/ListOverlay.js";
 import { QuestionPanel } from "./components/QuestionPanel.js";
+import type { InteractiveChannelHolder } from "./agent/interactive-channels.js";
 import { useStatusLine } from "./use-statusline.js";
 import { runShellCommand } from "./shell-command.js";
 import { useTerminalLifecycle } from "./use-terminal-lifecycle.js";
@@ -206,6 +208,13 @@ export type AppProps = {
   version?: string;
   /** One dim line shown once on startup when a newer npm version exists. */
   updateNotice?: string;
+  /**
+   * Where the MCP clients — created before this component existed — reach the
+   * user. Each run binds its own confirm/ask channels for as long as it runs.
+   */
+  channels?: InteractiveChannelHolder;
+  /** Tokens spent outside the loop (an MCP server's sampling call). */
+  usageBus?: UsageBus;
 };
 
 type PendingPermission = {
@@ -237,6 +246,8 @@ export function App({
   initialSessionId,
   version,
   updateNotice,
+  channels,
+  usageBus,
 }: AppProps): React.ReactElement {
   const { exit } = useApp();
   const { setRawMode } = useStdin();
@@ -666,61 +677,73 @@ export function App({
             }
           }
         }
-        await runSession(task, controller.signal, {
-          config: runConfigRef.current,
-          model: runModel,
-          projectPath,
-          mcpToolSpecs,
-          pluginContributions,
-          mode: opts?.mode ?? "edit",
-          plan: opts?.plan ?? false,
-          approvalMode: approvalModeFor(runApproval),
-          background: bgRef.current as BackgroundTasks,
-          dispatch: (a: ChatAction) => {
-            if (a.type === "event" && a.event.type === "session.created") ownSessionId.current = a.event.sessionId;
-            dispatchRun(a);
-          },
-          getSessionId: () => ownSessionId.current,
-          onDispatchManager: (manager) => {
-            if (!ownsRun(runsByTabRef.current, reservation)) return;
-            if (manager) reservation.dispatchManager = manager;
-            else delete reservation.dispatchManager;
-          },
-          confirm: (req) =>
-            new Promise<ConfirmResult>((resolve) => {
-              if (detached()) {
-                dispatchTab({
-                  type: "notice",
-                  tone: "error",
-                  text: `⚒ background task asked permission for ${req.toolName} — denied (foreground only)`,
-                });
-                resolve(false);
-                return;
-              }
-              pendingPermissionByTabRef.current.set(runTabId, { runId, request: req, resolve });
-              dispatchTab({ type: "permission", request: req });
-              ring(`Permission needed: ${req.toolName}${req.command ? ` — ${clipLine(req.command, 60)}` : ""}`);
-            }),
-          askUser: (q) =>
-            new Promise<string>((resolve) => {
-              if (detached()) {
-                resolve("(no answer — the session was moved to the background)");
-                return;
-              }
-              pendingQuestionByTabRef.current.set(runTabId, { runId, resolve });
+        // Named so the MCP clients — built before this component existed — can
+        // reach the same prompts through the channel holder while this run owns
+        // the screen.
+        const sessionConfirm = (req: PermissionRequest): Promise<ConfirmResult> =>
+          new Promise<ConfirmResult>((resolve) => {
+            if (detached()) {
               dispatchTab({
-                type: "overlay",
-                overlay: {
-                  kind: "question",
-                  question: q.question,
-                  options: [...q.options],
-                  index: 0,
-                  ...(q.freeText ? { freeText: true, typed: "" } : {}),
-                },
+                type: "notice",
+                tone: "error",
+                text: `⚒ background task asked permission for ${req.toolName} — denied (foreground only)`,
               });
-              ring(`Question: ${clipLine(q.question, 60)}`);
-            }),
-        });
+              resolve(false);
+              return;
+            }
+            pendingPermissionByTabRef.current.set(runTabId, { runId, request: req, resolve });
+            dispatchTab({ type: "permission", request: req });
+            ring(`Permission needed: ${req.toolName}${req.command ? ` — ${clipLine(req.command, 60)}` : ""}`);
+          });
+        const sessionAskUser = (q: { question: string; options: string[]; freeText?: boolean }): Promise<string> =>
+          new Promise<string>((resolve) => {
+            if (detached()) {
+              resolve("(no answer — the session was moved to the background)");
+              return;
+            }
+            pendingQuestionByTabRef.current.set(runTabId, { runId, resolve });
+            dispatchTab({
+              type: "overlay",
+              overlay: {
+                kind: "question",
+                question: q.question,
+                options: [...q.options],
+                index: 0,
+                ...(q.freeText ? { freeText: true, typed: "" } : {}),
+              },
+            });
+            ring(`Question: ${clipLine(q.question, 60)}`);
+          });
+        const runChannels = { confirm: sessionConfirm, askUser: sessionAskUser };
+        channels?.bind(runChannels);
+        try {
+          await runSession(task, controller.signal, {
+            config: runConfigRef.current,
+            model: runModel,
+            projectPath,
+            mcpToolSpecs,
+            pluginContributions,
+            mode: opts?.mode ?? "edit",
+            plan: opts?.plan ?? false,
+            approvalMode: approvalModeFor(runApproval),
+            background: bgRef.current as BackgroundTasks,
+            dispatch: (a: ChatAction) => {
+              if (a.type === "event" && a.event.type === "session.created") ownSessionId.current = a.event.sessionId;
+              dispatchRun(a);
+            },
+            getSessionId: () => ownSessionId.current,
+            onDispatchManager: (manager) => {
+              if (!ownsRun(runsByTabRef.current, reservation)) return;
+              if (manager) reservation.dispatchManager = manager;
+              else delete reservation.dispatchManager;
+            },
+            ...(usageBus ? { usageBus } : {}),
+            confirm: sessionConfirm,
+            askUser: sessionAskUser,
+          });
+        } finally {
+          channels?.release(runChannels);
+        }
         if (opts?.plan && !controller.signal.aborted && !detached()) {
           dispatchTab({ type: "plan-pending", pending: true });
           dispatchTab({ type: "notice", text: "Execute this plan? press y to run it, any other key to keep planning" });

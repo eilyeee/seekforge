@@ -4418,6 +4418,20 @@ approves believing nothing is being replaced.
   new file. The async read now happens in `prepare`; the sync path renders
   nothing when it cannot read.
 
+## 404. A conditional spread is where an optional field goes to die
+
+`...(x ? { key: x } : {})` is the house idiom for "add this only when set", and
+it is also the one place TypeScript's excess-property check does not look. Spread
+a key the destination type does not declare and it is silently dropped: the
+feature is wired end to end, compiles, and does nothing.
+
+- **Do:** assert the passthrough for every option that travels this way, in the
+  contract test that already exists for that entry point. Types cannot cover it,
+  so a test must.
+- **Caught:** the session usage bus was spread into the TUI's runSession
+  options, which did not declare it — an MCP server's sampling would have gone
+  uncounted in exactly the surface the feature was being added for.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

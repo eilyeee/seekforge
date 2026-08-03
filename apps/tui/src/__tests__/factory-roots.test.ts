@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 // prepareMcp must thread the workspace path to core's loadMcpToolSpecs as the
 // roots argument ([workspacePath]) so MCP servers answer roots/list with the
-// real workspace. We mock core to capture the call rather than spawn servers.
+// real workspace, and pass the server-request handlers through in the slot
+// after it. We mock core to capture the call rather than spawn servers.
 const loadMcpToolSpecs = vi.fn(async () => ({ specs: [], entries: [], dispose: () => {} }));
 
 vi.mock("@seekforge/core", async () => {
@@ -19,12 +20,33 @@ describe("prepareMcp workspace roots passthrough", () => {
 
   it("forwards the workspace path as the roots argument", async () => {
     await prepareMcp(config, "/abs/workspace");
-    expect(loadMcpToolSpecs).toHaveBeenCalledWith({ fake: { command: "node", args: ["x.js"] } }, ["/abs/workspace"]);
+    expect(loadMcpToolSpecs).toHaveBeenCalledWith(
+      { fake: { command: "node", args: ["x.js"] } },
+      ["/abs/workspace"],
+      undefined,
+      undefined,
+    );
   });
 
   it("passes undefined roots when no workspace path is given", async () => {
     await prepareMcp(config);
-    expect(loadMcpToolSpecs).toHaveBeenCalledWith({ fake: { command: "node", args: ["x.js"] } }, undefined);
+    expect(loadMcpToolSpecs).toHaveBeenCalledWith(
+      { fake: { command: "node", args: ["x.js"] } },
+      undefined,
+      undefined,
+      undefined,
+    );
+  });
+
+  it("hands the server-request handlers to core", async () => {
+    const handlers = { elicitation: async () => ({ action: "decline" as const }) };
+    await prepareMcp(config, "/abs/workspace", handlers);
+    expect(loadMcpToolSpecs).toHaveBeenCalledWith(
+      { fake: { command: "node", args: ["x.js"] } },
+      ["/abs/workspace"],
+      undefined,
+      handlers,
+    );
   });
 
   it("is a no-op (never calls core) when no servers are configured", async () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createUsageBus } from "@seekforge/core";
 import { buildTuiDeps } from "../agent/factory.js";
 import type { TuiConfig } from "../config.js";
 
@@ -36,5 +37,14 @@ describe("buildTuiDeps (config -> deps contract)", () => {
     expect(d.commandAllowlist).toEqual(["pnpm"]);
     expect(d.hooks).toEqual(hooks);
     expect(d.permissionRules).toEqual(rules);
+  });
+
+  it("forwards the usage bus, so an MCP server's sampling is counted", () => {
+    // It travels through a conditional spread, where TypeScript's
+    // excess-property check cannot catch a dropped key.
+    const usageBus = createUsageBus();
+    const withBus = buildTuiDeps({ config: base, confirm: async () => true, extractMemory: false, usageBus }).deps;
+    expect(withBus.usageBus).toBe(usageBus);
+    expect(deps(base).usageBus).toBeUndefined();
   });
 });
