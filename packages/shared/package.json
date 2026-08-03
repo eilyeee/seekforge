@@ -11,6 +11,7 @@
     "./config-manifest": "./src/config-manifest.ts",
     "./features": "./src/features.ts",
     "./doctor": "./src/doctor.ts",
+    "./provider-env": "./src/provider-env.ts",
     "./workspace-dirs": "./src/workspace-dirs.ts",
     "./format": "./src/format.ts",
     "./ws-protocol": "./src/ws-protocol.ts",

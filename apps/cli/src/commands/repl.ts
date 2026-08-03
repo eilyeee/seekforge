@@ -21,6 +21,7 @@ import { loadConfig } from "../config.js";
 import { ensureWorkspaceAuthorized } from "./run.js";
 import { expandFileRefs } from "@seekforge/shared/file-refs";
 import { t } from "../i18n.js";
+import { apiKeyEnvVar } from "@seekforge/shared/provider-env";
 import { statusCommand } from "./sessions.js";
 import { createRenderer, formatContextSuffix, formatUsage } from "../render.js";
 import { parseNumberedChoice } from "../input-selection.js";
@@ -91,7 +92,7 @@ export async function replCommand(opts: {
   }
   if (!config.apiKey) {
     fail(t("err.noApiKey"), {
-      hint: t("err.noApiKeyHint"),
+      hint: t("err.noApiKeyHint", { keyEnv: apiKeyEnvVar(config.provider) }),
     });
     return;
   }

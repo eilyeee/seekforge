@@ -44,8 +44,15 @@ afterAll(async () => {
   });
 });
 
+/**
+ * The matrix covers the presets that speak the OpenAI-compatible protocol —
+ * which is what these assertions are about. A preset on another wire protocol
+ * is not a gap here; it has its own equivalent (anthropic-protocol.test.ts).
+ */
+const OPENAI_PRESETS = Object.entries(PROVIDER_PRESETS).filter(([, preset]) => preset.protocol === undefined);
+
 describe("provider compatibility matrix", () => {
-  it.each(Object.entries(PROVIDER_PRESETS))("keeps %s request and accounting semantics explicit", (name, preset) => {
+  it.each(OPENAI_PRESETS)("keeps %s request and accounting semantics explicit", (name, preset) => {
     const model = preset.models[0]!;
     const body = buildRequestBody(
       model,
@@ -77,8 +84,7 @@ describe("provider compatibility matrix", () => {
     }
   });
 
-  it.each(Object.keys(PROVIDER_PRESETS))("maps OpenAI-compatible tool calls for %s", (name) => {
-    const preset = PROVIDER_PRESETS[name]!;
+  it.each(OPENAI_PRESETS)("maps OpenAI-compatible tool calls for %s", (_name, preset) => {
     const response = mapChatResponse(
       {
         choices: [
@@ -99,8 +105,7 @@ describe("provider compatibility matrix", () => {
     expect(response.finishReason).toBe("tool_calls");
   });
 
-  it.each(Object.keys(PROVIDER_PRESETS))("completes a real HTTP/SSE request for %s", async (name) => {
-    const preset = PROVIDER_PRESETS[name]!;
+  it.each(OPENAI_PRESETS)("completes a real HTTP/SSE request for %s", async (name, preset) => {
     const provider = createDeepSeekProvider(
       resolveProviderConfig({
         provider: name,

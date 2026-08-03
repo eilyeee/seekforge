@@ -81,11 +81,12 @@ DeepSeek API key。优先使用 `DEEPSEEK_API_KEY` 环境变量，让密钥不�
 
 ### `provider`
 
-命名的 provider 预设。一次切换即同时选定 API 基础 URL **和**一套能力集。
+命名的 provider 预设。一次切换即同时选定 API 基础 URL、**线路协议**和一套能力集。
 `"deepseek"`（未设置时的默认值）指向 DeepSeek 直连，所有特性开启。
-`"ark"` 指向火山引擎 Ark，一个 OpenAI 兼容端点（见下节）。显式的 `baseUrl`
-总是优先于预设的 URL，因此你可以在保留某个预设能力配置的同时，
-把它指向一个代理。
+`"ark"` 指向火山引擎 Ark，一个 OpenAI 兼容端点（见下节）。
+`"anthropic"` 指向 Anthropic Messages API —— 它是另一套协议，而不是 OpenAI
+兼容端点（见其专节）。显式的 `baseUrl` 总是优先于预设的 URL，因此你可以在保留
+某个预设协议与能力配置的同时，把它指向一个代理。
 
 ```json
 { "provider": "ark" }
@@ -126,6 +127,48 @@ seekforge config set model glm-5.2
 由于 Ark 是 OpenAI 兼容端点，此预设下 DeepSeek 专有的行为会被禁用：
 不发送 DeepSeek 的 `thinking` 请求参数，不读取上下文缓存命中 token，
 并关闭成本/余额核算（成本报告为 `0`，也不查询 `/user/balance` 端点）。
+
+### Anthropic（Messages API）
+
+`anthropic` 是唯一一个**不是** OpenAI 兼容的预设。它使用 Anthropic Messages
+协议（`POST {baseUrl}/messages`），用 `x-api-key` 而不是 bearer token 认证，
+并把系统提示、工具调用和工具结果都表示为带类型的 content block。这套翻译由
+SeekForge 完成 —— agent、工具、会话等其余部分完全不变。
+
+1. 设置 `provider: "anthropic"`（基础 URL `https://api.anthropic.com/v1`）。
+2. 通过 `ANTHROPIC_API_KEY`（推荐）或 `apiKey` 配置字段提供密钥。
+   这个环境变量**只在** provider 为 `anthropic` 时被读取。
+3. 选择 `model`：`claude-opus-5`（目录首项）、`claude-sonnet-5`、
+   `claude-haiku-4-5`、`claude-opus-4-8`、`claude-fable-5`。其他 Claude 模型
+   id 同样可用；这份目录是模型选择器展示的内容，不是白名单。
+
+```json
+{ "provider": "anthropic", "model": "claude-opus-5" }
+```
+
+```bash
+export ANTHROPIC_API_KEY="…"
+seekforge config set provider anthropic --global
+seekforge config set model claude-opus-5
+```
+
+与 OpenAI 兼容预设的差异：
+
+| 行为 | 在此预设下 |
+| --- | --- |
+| `thinking` | `true` 请求自适应思考并要求返回摘要推理（否则推理流会是空的）；`false` 关闭思考；不设置则什么都不发，采用模型默认值 —— 另见下方注意事项 |
+| `reasoningEffort` | 作为请求的 effort 级别发送。与 `thinking: false` 同时使用时会被限制为 `high` —— 这是关闭思考时 API 允许的上限 |
+| 上下文缓存 token | 会读取。Anthropic 的输入计数只是**未命中缓存的余量**，因此 SeekForge 会把缓存读/写的计数加回去，报告完整的 prompt 规模 |
+| 成本 | 使用内置的 Anthropic 价格表计价 —— 无需 `modelPricing`，`maxCostUsd` 和成本读数即可工作。表中没有公开价格的模型报告为「未知」，而不是 `0` |
+| 余额 | 不查询；`/user/balance` 是 DeepSeek 自己的端点 |
+| `temperature` | 从不发送 —— 当前的 Claude 模型会拒绝采样参数 |
+| `maxTokens` | API 要求必填，因此未设置时会取默认值（16000），而不是省略 |
+
+> **思考与工具调用。** 开启思考时，该 API 期望客户端把 assistant 轮次的 thinking
+> block 连同回应它的工具结果一起回传。SeekForge 的消息历史没有地方保存这些
+> block，因此不会回传；带工具调用的轮次可能因为缺少该 block 被拒绝。若运行因此
+> 失败，请设置 `"thinking": false`（当前所有 Claude 模型都接受，唯独
+> `claude-fable-5` 无法关闭思考）。
 
 ### 「OpenAI 兼容」到底覆盖了什么
 
@@ -317,10 +360,10 @@ V4 推理强度级别。仅在启用思考模式时有意义。
 
 ### `modelPricing`（在其他 provider 上开启成本跟踪）
 
-**默认关闭。** DeepSeek provider 自带内置价格表，所以成本和 `maxCostUsd`
-预算开箱即用。其他 provider（`ark`、`openai`、`ollama`、`openrouter`……）
-**没有**价格表，因此在这些 provider 上报告的成本恒为 `0`，`maxCostUsd`
-也永远不会触发。设置 `modelPricing` 提供你自己的按模型费率，
+**默认关闭。** `deepseek` 与 `anthropic` provider 自带内置价格表，所以在它们的
+模型上成本和 `maxCostUsd` 预算开箱即用。其他 provider（`ark`、`openai`、
+`ollama`、`openrouter`……）**没有**价格表，因此在这些 provider 上报告的成本恒为
+`0`，`maxCostUsd` 也永远不会触发。设置 `modelPricing` 提供你自己的按模型费率，
 即可为这些 provider 打开成本/预算跟踪。
 
 SeekForge 刻意**不**为这些 provider 附带价格表，而不是塞一份猜出来的：一个错误的
@@ -854,7 +897,7 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 | `apiKey` | string | 字符串 |
 | `model` | string | 字符串 |
 | `baseUrl` | string | 字符串 |
-| `provider` | string | `deepseek` / `ark` / 预设名 |
+| `provider` | string | `deepseek` / `ark` / `anthropic` / 预设名 |
 | `runtimeBin` | string | 字符串 |
 | `commandAllowlist` | string[] | 逗号分隔字符串（`"pnpm test, cargo build"`） |
 | `sandbox` | enum | `off` / `read-only` / `workspace-write` / `restricted` |

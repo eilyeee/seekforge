@@ -1,5 +1,6 @@
 import type { ChatMessage, ChatResponse, ToolDefinitionForModel } from "@seekforge/shared";
 import type { ModelPricing } from "./constants.js";
+import type { WireProtocolId } from "./protocols/types.js";
 
 /**
  * Reported just before each retry backoff sleep in fetchWithRetry. `attempt`
@@ -29,7 +30,12 @@ export type RetryInfo = {
  * byte-for-byte unchanged.
  */
 export type ProviderCapabilities = {
-  /** Send the DeepSeek-style thinking.{type,reasoning_effort} request body. */
+  /**
+   * Send the provider's thinking / reasoning-effort request body. The wire
+   * protocol decides its shape (DeepSeek's `thinking.{type,reasoning_effort}`,
+   * Anthropic's `thinking` + `output_config.effort`); this flag only says
+   * whether the endpoint accepts one at all.
+   */
   thinking: boolean;
   /** Read prompt_cache_hit_tokens from usage (DeepSeek context cache). */
   cacheHitTokens: boolean;
@@ -50,6 +56,13 @@ export const DEEPSEEK_CAPABILITIES: ProviderCapabilities = {
 export type ProviderConfig = {
   apiKey: string;
   baseUrl?: string;
+  /**
+   * Wire protocol to speak. Comes from the preset (see presets.ts); unset means
+   * the OpenAI-compatible chat-completions line, which is what every provider
+   * that predates a second protocol speaks — so an unset field leaves the
+   * request byte-for-byte unchanged.
+   */
+  protocol?: WireProtocolId;
   /** "deepseek-v4-flash" | "deepseek-v4-pro" (legacy: deepseek-chat/reasoner). */
   model?: string;
   /** Mid-stream idle timeout (ms): no bytes for this long aborts a stalled stream. Default 120000. */

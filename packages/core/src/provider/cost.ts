@@ -1,5 +1,14 @@
 import type { TokenUsage } from "@seekforge/shared";
-import { FALLBACK_PRICING_MODEL, MODEL_PRICING, type ModelPricing } from "./constants.js";
+import { FALLBACK_PRICING_FAMILY, FALLBACK_PRICING_MODEL, MODEL_PRICING, type ModelPricing } from "./constants.js";
+
+/**
+ * The default model's rates, but only for models it can plausibly speak for.
+ * Borrowing DeepSeek's price for another DeepSeek id is an estimate; borrowing
+ * it for a Claude id is a wrong number wearing a right one's clothes.
+ */
+function fallbackPricingFor(model: string): ModelPricing | undefined {
+  return model.toLowerCase().startsWith(FALLBACK_PRICING_FAMILY) ? MODEL_PRICING[FALLBACK_PRICING_MODEL] : undefined;
+}
 
 export type UsageTokens = Pick<TokenUsage, "promptTokens" | "completionTokens" | "cacheHitTokens">;
 
@@ -33,11 +42,11 @@ export function pricingSourceFor(
   if (options.pricing?.[model] !== undefined) return "configured";
   if (options.costAccounting === false) return "unavailable";
   if (MODEL_PRICING[model] !== undefined) return "builtin";
-  return MODEL_PRICING[FALLBACK_PRICING_MODEL] !== undefined ? "fallback" : "unavailable";
+  return fallbackPricingFor(model) !== undefined ? "fallback" : "unavailable";
 }
 
 export function estimateCostUsd(usage: UsageTokens, model: string, pricing?: Record<string, ModelPricing>): number {
-  const rates = pricing?.[model] ?? MODEL_PRICING[model] ?? MODEL_PRICING[FALLBACK_PRICING_MODEL];
+  const rates = pricing?.[model] ?? MODEL_PRICING[model] ?? fallbackPricingFor(model);
   if (!rates) return 0;
   const cacheHit = Math.min(usage.cacheHitTokens, usage.promptTokens);
   const cacheMiss = usage.promptTokens - cacheHit;

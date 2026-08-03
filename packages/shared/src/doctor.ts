@@ -23,6 +23,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { apiKeyEnvVar } from "./provider-env.js";
 
 /**
  * A single diagnostic result rendered as one line by formatDoctorLines.
@@ -87,10 +88,11 @@ export function providerCheck(provider: string, baseUrl: string): DoctorCheck {
 }
 
 /**
- * The right key satisfies the check: ARK_API_KEY for ark, DEEPSEEK_API_KEY
- * otherwise; an explicit apiKey in config works for either. The missing-key
- * fix hint differs per app (setup-wizard vs `config set`) so it is built by
- * the caller from the env-var name.
+ * The right key satisfies the check: the provider's own variable when it has
+ * one (see provider-env.ts), DEEPSEEK_API_KEY otherwise; an explicit apiKey in
+ * config works for any of them. The missing-key fix hint differs per app
+ * (setup-wizard vs `config set`) so it is built by the caller from the env-var
+ * name.
  */
 export function apiKeyCheck(
   provider: string,
@@ -98,7 +100,7 @@ export function apiKeyCheck(
   env: DoctorProbes["env"],
   missingFixHint: (keyEnv: string) => string,
 ): DoctorCheck {
-  const keyEnv = provider === "ark" ? "ARK_API_KEY" : "DEEPSEEK_API_KEY";
+  const keyEnv = apiKeyEnvVar(provider);
   const hasKey = Boolean(apiKey ?? env(keyEnv));
   return hasKey
     ? { name: "api key", ok: true, detail: "configured" }

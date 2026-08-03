@@ -1,15 +1,19 @@
 /**
- * Pure SSE parsing + delta accumulation for DeepSeek streaming responses.
- * No I/O — feed it decoded text chunks (arbitrarily split) and finalize.
+ * Pure SSE parsing + delta accumulation for OpenAI-compatible (DeepSeek)
+ * streaming responses. No I/O — feed it decoded text chunks (arbitrarily
+ * split) and finalize.
+ *
+ * Line framing lives in ./sse-frame.ts, shared with the other wire protocols;
+ * this module owns only what a chat-completion chunk means.
  */
 
 import type { ChatFinishReason, ProviderToolCall } from "@seekforge/shared";
-import { mapFinishReason, ProviderProtocolError, type WireUsage } from "./mapping.js";
+import { mapFinishReason, type WireUsage } from "./mapping.js";
 import { isRecord } from "../util/guards.js";
+import { feedSseFrames, flushSseFrames, parseSsePayload, protocolLimit, type SseFrameState } from "./sse-frame.js";
 import {
   MAX_SSE_CONTENT_CHARS,
   MAX_SSE_DECODED_CHARS,
-  MAX_SSE_LINE_CHARS,
   MAX_SSE_REASONING_CHARS,
   MAX_SSE_TOOL_ARGUMENT_CHARS,
   MAX_SSE_TOOL_CALLS,
@@ -44,9 +48,7 @@ const DEFAULT_SSE_LIMITS: SseLimits = {
   toolCalls: MAX_SSE_TOOL_CALLS,
 };
 
-export type SseAccumulator = {
-  /** Carry-over for a partial line split across network chunks. */
-  buffer: string;
+export type SseAccumulator = SseFrameState & {
   content: string;
   /** Accumulated chain-of-thought (V4 thinking mode). */
   reasoningContent: string;
@@ -54,7 +56,6 @@ export type SseAccumulator = {
   rawFinishReason: string | null;
   usage: WireUsage | null;
   done: boolean;
-  decodedChars: number;
   totalToolArgumentChars: number;
   limits: SseLimits;
 };
@@ -79,10 +80,6 @@ export function createSseAccumulator(limits: Partial<SseLimits> = {}): SseAccumu
   };
 }
 
-function protocolLimit(label: string, limit: number): ProviderProtocolError {
-  return new ProviderProtocolError(`Provider protocol error: SSE ${label} exceeds ${limit}`);
-}
-
 /**
  * Feed a decoded text chunk. Chunks may split SSE lines anywhere; complete
  * lines are processed, the remainder is buffered. Calls onDelta for each
@@ -94,49 +91,23 @@ export function feedSseChunk(
   onDelta?: (delta: string) => void,
   onReasoningDelta?: (delta: string) => void,
 ): void {
-  if (chunk.length > acc.limits.decodedChars - acc.decodedChars) {
-    throw protocolLimit("decoded content", acc.limits.decodedChars);
-  }
-  acc.decodedChars += chunk.length;
-  let offset = 0;
-  while (offset < chunk.length) {
-    const newlineIdx = chunk.indexOf("\n", offset);
-    const end = newlineIdx === -1 ? chunk.length : newlineIdx;
-    const fragmentLength = end - offset;
-    if (acc.buffer.length + fragmentLength > MAX_SSE_LINE_CHARS) {
-      throw protocolLimit("line", MAX_SSE_LINE_CHARS);
-    }
-    acc.buffer += chunk.slice(offset, end);
-    if (newlineIdx === -1) return;
-
-    const line = acc.buffer;
-    acc.buffer = "";
-    processLine(acc, line, onDelta, onReasoningDelta);
-    offset = newlineIdx + 1;
-  }
+  feedSseFrames(acc, chunk, acc.limits.decodedChars, (payload) =>
+    processPayload(acc, payload, onDelta, onReasoningDelta),
+  );
 }
 
-function processLine(
+function processPayload(
   acc: SseAccumulator,
-  rawLine: string,
+  payload: string,
   onDelta?: (delta: string) => void,
   onReasoningDelta?: (delta: string) => void,
 ): void {
   if (acc.done) return;
-  const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-  if (!line.startsWith("data:")) return; // blank lines, comments, other fields
-  const payload = line.slice("data:".length).trim();
-  if (payload === "") return;
   if (payload === "[DONE]") {
     acc.done = true;
     return;
   }
-  let value: unknown;
-  try {
-    value = JSON.parse(payload) as unknown;
-  } catch {
-    return; // tolerate garbage lines
-  }
+  const value = parseSsePayload(payload);
   if (!isRecord(value)) return;
   if (isRecord(value["usage"])) acc.usage = value["usage"] as WireUsage;
   const choices = value["choices"];
@@ -206,12 +177,7 @@ export type SseResult = {
 };
 
 export function finalizeSse(acc: SseAccumulator): SseResult {
-  // Flush a trailing line that arrived without a final newline.
-  if (acc.buffer.length > 0) {
-    const rest = acc.buffer;
-    acc.buffer = "";
-    processLine(acc, rest);
-  }
+  flushSseFrames(acc, (payload) => processPayload(acc, payload));
   const toolCalls = [...acc.toolCallsByIndex.entries()]
     .sort(([a], [b]) => a - b)
     .map(([index, entry]) => ({

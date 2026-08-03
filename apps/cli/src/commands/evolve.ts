@@ -13,6 +13,7 @@ import {
 } from "@seekforge/core";
 import { t } from "../i18n.js";
 import { loadConfig } from "../config.js";
+import { apiKeyEnvVar } from "@seekforge/shared/provider-env";
 
 function truncate(text: string, max: number): string {
   const oneLine = text.replace(/\s+/g, " ").trim();
@@ -40,7 +41,7 @@ export async function evolveAnalyzeCommand(sessionId?: string): Promise<void> {
 
   const config = loadConfig(workspace);
   if (!config.apiKey) {
-    console.error(t("err.noApiKeyHint2"));
+    console.error(t("err.noApiKeyHint2", { keyEnv: apiKeyEnvVar(config.provider) }));
     process.exitCode = 1;
     return;
   }

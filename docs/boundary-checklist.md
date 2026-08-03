@@ -4445,6 +4445,45 @@ paragraph was updated, the table it describes was not.
   under it said "four of the five"; the edit that was meant to add the rows had
   quietly matched nothing, and no gate covers a tool table.
 
+## 406. A default price may only stand in for its own vendor
+
+An unknown model id falling back to a default model's rates is a reasonable
+estimate within one vendor and a fabrication across vendors, where list prices
+differ by more than an order of magnitude. The report reads the same either way.
+
+- **Do:** scope a fallback default to the family it belongs to, and report
+  "unknown" outside it rather than a number nothing supports.
+- **Caught:** `packages/core/src/provider/cost.ts` — adding a second vendor's
+  models made every unpriced Claude id inherit DeepSeek's rate, understating
+  cost roughly thirtyfold while `pricingSourceFor` still called it a "fallback".
+
+## 407. A field named like a total may be a remainder
+
+Two protocols can spell the same quantity with the same word and mean different
+things. Anthropic's `input_tokens` is the part of the prompt that missed the
+cache, not the prompt; the cached part is reported separately.
+
+- **Do:** read each protocol's own definition of a usage field before mapping it
+  onto an internal one, and reconstruct the internal quantity explicitly.
+- **Caught:** `packages/core/src/provider/protocols/anthropic.ts` — mapping
+  `input_tokens` straight to `promptTokens` would have understated every cached
+  turn, and prompt caching is on by default.
+
+## 408. A protocol may require echoing back data your model cannot hold
+
+Some request shapes are only valid if the client returns opaque blocks the
+server sent earlier — reasoning blocks with their signatures, for instance. An
+internal message type that has no field for them cannot produce a valid request,
+and the gap only appears on the second turn of a specific feature combination.
+
+- **Do:** check, when adding a protocol, what a *replayed* turn must contain, not
+  only what a fresh one must. State the limitation where the request is built
+  when the internal type cannot carry it yet.
+- **Open in** `packages/core/src/provider/protocols/anthropic.ts` — thinking
+  blocks are not replayed with the tool results that answer them, because
+  `ChatMessage` has nowhere to keep them; enabling thinking is opt-in with that
+  caveat documented.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

@@ -15,6 +15,7 @@ import type { ModelPricing } from "./constants.js";
 import { estimateCostUsd } from "./cost.js";
 import type { ChatRequest, ProviderCapabilities } from "./types.js";
 import { isRecord } from "../util/guards.js";
+import { withPairedToolCalls } from "./tool-pairing.js";
 import {
   MAX_SSE_CONTENT_CHARS,
   MAX_SSE_REASONING_CHARS,
@@ -89,51 +90,22 @@ export function supportsThinking(model: string): boolean {
 // --- request mapping --------------------------------------------------------
 
 export function toWireMessages(messages: ChatMessage[]): WireMessage[] {
-  // Enforce the tool-call pairing the OpenAI-compatible API requires: every
-  // assistant tool_call must have a matching tool response, and every tool
-  // message must answer a known tool_call. A history persisted mid-turn — a run
-  // cancelled or errored between the assistant message and its tool results, or
-  // hitting the tool-call cap (see agent/loop.ts) — violates this, and replaying
-  // it verbatim 400s the request on /resume. Drop unanswered assistant
-  // tool_calls and orphan tool results so the request is always well-formed;
-  // for a well-paired live history this is a no-op.
-  const keptToolMessages = new Set<number>();
-  const out: WireMessage[] = [];
-  for (let i = 0; i < messages.length; i++) {
-    const m = messages[i]!;
+  // Unanswered tool calls and orphan results are dropped first (see
+  // tool-pairing.ts) — the OpenAI-compatible API rejects either.
+  return withPairedToolCalls(messages).flatMap((m) => {
     if (m.role === "tool") {
-      if (!keptToolMessages.has(i) || m.toolCallId === undefined) continue;
-      out.push({ role: m.role, content: m.content, tool_call_id: m.toolCallId });
-      continue;
+      return m.toolCallId === undefined ? [] : [{ role: m.role, content: m.content, tool_call_id: m.toolCallId }];
     }
     const wire: WireMessage = { role: m.role, content: m.content };
-    if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
-      const resultIndexes = new Map<string, number[]>();
-      for (let j = i + 1; j < messages.length && messages[j]!.role === "tool"; j++) {
-        const id = messages[j]!.toolCallId;
-        if (id === undefined) continue;
-        const indexes = resultIndexes.get(id) ?? [];
-        indexes.push(j);
-        resultIndexes.set(id, indexes);
-      }
-      const kept = m.toolCalls.filter((c) => {
-        const indexes = resultIndexes.get(c.id);
-        const resultIndex = indexes?.shift();
-        if (resultIndex === undefined) return false;
-        keptToolMessages.add(resultIndex);
-        return true;
-      });
-      if (kept.length > 0) {
-        wire.tool_calls = kept.map((c) => ({
-          id: c.id,
-          type: "function",
-          function: { name: c.name, arguments: c.argumentsJson },
-        }));
-      }
+    if (m.toolCalls && m.toolCalls.length > 0) {
+      wire.tool_calls = m.toolCalls.map((c) => ({
+        id: c.id,
+        type: "function",
+        function: { name: c.name, arguments: c.argumentsJson },
+      }));
     }
-    out.push(wire);
-  }
-  return out;
+    return [wire];
+  });
 }
 
 export function toWireTools(
@@ -196,27 +168,60 @@ export function mapFinishReason(raw: string | null | undefined): ChatFinishReaso
   }
 }
 
+/**
+ * A token count is only usable if it is a plain non-negative integer within a
+ * sane ceiling: it is persisted, summed into budgets and multiplied by a price,
+ * so a float, a negative, or 1e300 from a misbehaving endpoint would corrupt
+ * every number derived from it. Shared by every wire protocol's usage mapping.
+ */
+export function validUsageCount(value: number | undefined, field: string): number {
+  if (value === undefined) return 0;
+  if (!Number.isSafeInteger(value) || value < 0 || value > MAX_PROVIDER_USAGE_TOKENS) {
+    throw new ProviderProtocolError(
+      `Provider protocol error: usage.${field} must be a non-negative safe integer no greater than ${MAX_PROVIDER_USAGE_TOKENS}`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Attach a cost to already-counted tokens.
+ *
+ * A user-supplied price for this model always wins — it enables cost/budget
+ * tracking on providers whose preset sets costAccounting: false (Ark, OpenAI).
+ * Otherwise keep the built-in behavior: priced when costAccounting, else 0.
+ * Protocol-independent, so every wire mapping reports cost the same way.
+ */
+export function priceUsage(
+  tokens: Pick<TokenUsage, "promptTokens" | "completionTokens" | "cacheHitTokens">,
+  model: string,
+  capabilities?: ProviderCapabilities,
+  modelPricing?: Record<string, ModelPricing>,
+): TokenUsage {
+  const costUsd =
+    modelPricing?.[model] !== undefined
+      ? estimateCostUsd(tokens, model, modelPricing)
+      : (capabilities?.costAccounting ?? true)
+        ? estimateCostUsd(tokens, model)
+        : 0;
+  return { ...tokens, costUsd };
+}
+
 export function mapUsage(
   raw: WireUsage | null | undefined,
   model: string,
   capabilities?: ProviderCapabilities,
   modelPricing?: Record<string, ModelPricing>,
 ): TokenUsage {
-  const validCount = (value: number | undefined, field: string): number => {
-    if (value === undefined) return 0;
-    if (!Number.isSafeInteger(value) || value < 0 || value > MAX_PROVIDER_USAGE_TOKENS) {
-      throw new ProviderProtocolError(
-        `Provider protocol error: usage.${field} must be a non-negative safe integer no greater than ${MAX_PROVIDER_USAGE_TOKENS}`,
-      );
-    }
-    return value;
-  };
   const tokenCount = (field: Exclude<keyof WireUsage, "prompt_tokens_details">): number =>
-    validCount(raw?.[field], field);
+    validUsageCount(raw?.[field], field);
   // Validate every token field the wire protocol can report, including the
   // miss count that cost accounting derives from prompt minus cache-hit tokens.
   tokenCount("prompt_cache_miss_tokens");
-  const detailsCached = validCount(raw?.prompt_tokens_details?.cached_tokens, "prompt_tokens_details.cached_tokens");
+  const detailsCached = validUsageCount(
+    raw?.prompt_tokens_details?.cached_tokens,
+    "prompt_tokens_details.cached_tokens",
+  );
   // OpenAI-compatible endpoints report cache hits under prompt_tokens_details;
   // DeepSeek's own field wins when both are present.
   const cacheHitTokens =
@@ -227,16 +232,7 @@ export function mapUsage(
     cacheHitTokens: 0,
   };
   tokens.cacheHitTokens = (capabilities?.cacheHitTokens ?? true) ? Math.min(cacheHitTokens, tokens.promptTokens) : 0;
-  // A user-supplied price for this model always wins — it enables cost/budget
-  // tracking on providers whose preset sets costAccounting: false (Ark, OpenAI).
-  // Otherwise keep the built-in behavior: priced when costAccounting, else 0.
-  const costUsd =
-    modelPricing?.[model] !== undefined
-      ? estimateCostUsd(tokens, model, modelPricing)
-      : (capabilities?.costAccounting ?? true)
-        ? estimateCostUsd(tokens, model)
-        : 0;
-  return { ...tokens, costUsd };
+  return priceUsage(tokens, model, capabilities, modelPricing);
 }
 
 export function mapWireToolCalls(raw: WireToolCall[] | undefined): ProviderToolCall[] {

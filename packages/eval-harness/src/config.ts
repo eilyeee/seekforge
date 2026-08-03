@@ -1,14 +1,16 @@
 /**
  * Eval config loading, replicated from the CLI (the harness must not depend
  * on apps/cli). Precedence: env key > project .seekforge/config.json >
- * ~/.seekforge/config.json. The env key is provider-aware: ARK_API_KEY for an
- * `ark` provider, DEEPSEEK_API_KEY otherwise — so a DeepSeek user who exports
+ * ~/.seekforge/config.json. The env key is provider-aware (see
+ * @seekforge/shared/provider-env): a provider with its own variable reads that
+ * one, everything else reads DEEPSEEK_API_KEY — so a DeepSeek user who exports
  * ARK_API_KEY for another tool never gets the Ark key sent to DeepSeek.
  */
 
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ModelPricing } from "@seekforge/core";
+import { apiKeyEnvVar } from "@seekforge/shared/provider-env";
 import { readTextFileBounded } from "./file-io.js";
 import { MAX_EVAL_CONFIG_BYTES } from "./limits.js";
 
@@ -76,11 +78,10 @@ function readJson(path: string): EvalConfig {
 export function loadEvalConfig(projectPath: string = process.cwd()): EvalConfig {
   const global = readJson(join(homedir(), ".seekforge", "config.json"));
   const project = readJson(join(projectPath, ".seekforge", "config.json"));
-  // Provider-aware env key: pick ARK_API_KEY only for an `ark` provider,
-  // DEEPSEEK_API_KEY otherwise (default provider is "deepseek"). Higher layer
-  // wins, matching the scalar merge below.
+  // Provider-aware env key, resolved from the same table the apps use. Higher
+  // layer wins, matching the scalar merge below.
   const provider = (project.provider ?? global.provider ?? "deepseek").toLowerCase();
-  const envApiKey = provider === "ark" ? process.env["ARK_API_KEY"] : process.env["DEEPSEEK_API_KEY"];
+  const envApiKey = process.env[apiKeyEnvVar(provider)];
   return {
     ...global,
     ...project,

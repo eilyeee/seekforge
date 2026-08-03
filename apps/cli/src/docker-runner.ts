@@ -18,7 +18,8 @@
  *   the host mount and every containerized run is a normal `seekforge audit`
  *   session.
  * - Secret handling: the provider API key is passed by ENV VAR NAME only
- *   (`-e ARK_API_KEY` / `-e DEEPSEEK_API_KEY`, no `=value`). Docker forwards the
+ *   (`-e ANTHROPIC_API_KEY` / `-e ARK_API_KEY` / `-e DEEPSEEK_API_KEY`, no
+ *   `=value`). Docker forwards the
  *   host's value at runtime; the secret is NEVER baked into the image or written
  *   into the argv. `buildDockerRunArgs` only ever references the variable name.
  * - Network: a real agent run needs egress to the provider API, so the DEFAULT
@@ -45,7 +46,7 @@ export const DEFAULT_RUNNER_NETWORK = "bridge";
  * value). Whichever are present in the host env are forwarded; the container
  * picks the one matching its configured provider.
  */
-export const PASSTHROUGH_KEY_ENV_VARS = ["ARK_API_KEY", "DEEPSEEK_API_KEY"] as const;
+export const PASSTHROUGH_KEY_ENV_VARS = ["ANTHROPIC_API_KEY", "ARK_API_KEY", "DEEPSEEK_API_KEY"] as const;
 
 /** Docker `--network` values we document (any string is still accepted). */
 export type DockerNetwork = "none" | "bridge" | "host" | (string & {});
@@ -77,7 +78,7 @@ export interface DockerRunnerOptions extends RunnerOptions {
  *
  * Layout:
  *   run --rm --network <net> -v <ws>:<workdir>:rw -w <workdir>
- *   [-e ARK_API_KEY] [-e DEEPSEEK_API_KEY] [--memory <m>] [--cpus <n>]
+ *   [-e ANTHROPIC_API_KEY] [-e ARK_API_KEY] [-e DEEPSEEK_API_KEY] [--memory <m>] [--cpus <n>]
  *   <image>
  *   seekforge run <task> -y [--max-cost <n>] [-m <model>] [--permission-mode <mode>]
  */

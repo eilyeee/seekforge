@@ -6,7 +6,8 @@
  * /user/balance) are disabled.
  */
 
-import { DEFAULT_BASE_URL, type ModelPricing } from "./constants.js";
+import { ANTHROPIC_MODELS, DEFAULT_BASE_URL, type ModelPricing } from "./constants.js";
+import type { WireProtocolId } from "./protocols/types.js";
 import { DEEPSEEK_CAPABILITIES, type ProviderCapabilities, type ProviderConfig, type RetryInfo } from "./types.js";
 
 export type ProviderPreset = {
@@ -14,6 +15,8 @@ export type ProviderPreset = {
   capabilities: ProviderCapabilities;
   /** Model ids offered by this provider, for the /model picker and GET /api/models. */
   models: readonly string[];
+  /** Wire protocol; unset means the OpenAI-compatible chat-completions line. */
+  protocol?: WireProtocolId;
 };
 
 export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
@@ -39,6 +42,17 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
       "minimax-m3",
       "minimax-m2.7",
     ],
+  },
+  // Anthropic speaks its own protocol, not an OpenAI-compatible one — see
+  // ./protocols/anthropic.ts. It reports cache reads and ships a published
+  // price list, so unlike the OpenAI-compatible non-DeepSeek presets both
+  // context-cache accounting and cost accounting stay on. /user/balance is
+  // DeepSeek's own endpoint and has no counterpart here.
+  anthropic: {
+    baseUrl: "https://api.anthropic.com/v1",
+    protocol: "anthropic",
+    capabilities: { thinking: true, cacheHitTokens: true, costAccounting: true, balance: false },
+    models: ANTHROPIC_MODELS,
   },
   // The presets below are generic OpenAI-compatible endpoints. Like `ark`, they
   // carry no built-in pricing table, so costAccounting is false and reported
@@ -102,6 +116,9 @@ export function resolveProviderConfig(input: {
   return {
     apiKey: input.apiKey,
     ...(baseUrl !== undefined ? { baseUrl } : {}),
+    // The protocol travels with the preset, never with the URL: pointing a
+    // preset at a proxy keeps the wire format it was chosen for.
+    ...(preset?.protocol !== undefined ? { protocol: preset.protocol } : {}),
     ...(input.model !== undefined ? { model: input.model } : {}),
     ...(capabilities !== undefined ? { capabilities } : {}),
     ...(input.modelPricing !== undefined ? { modelPricing: input.modelPricing } : {}),

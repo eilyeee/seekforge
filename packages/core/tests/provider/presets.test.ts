@@ -77,13 +77,45 @@ describe("resolveProviderPreset", () => {
   });
 
   it("exposes all presets on PROVIDER_PRESETS", () => {
-    expect(Object.keys(PROVIDER_PRESETS).sort()).toEqual(["ark", "deepseek", "ollama", "openai", "openrouter"]);
+    expect(Object.keys(PROVIDER_PRESETS).sort()).toEqual([
+      "anthropic",
+      "ark",
+      "deepseek",
+      "ollama",
+      "openai",
+      "openrouter",
+    ]);
+  });
+
+  it("only the anthropic preset speaks a non-OpenAI protocol", () => {
+    // Every other preset predates a second wire protocol; leaving the field
+    // unset is what keeps their requests byte-for-byte unchanged.
+    for (const [name, preset] of Object.entries(PROVIDER_PRESETS)) {
+      expect(preset.protocol, name).toBe(name === "anthropic" ? "anthropic" : undefined);
+    }
+  });
+
+  it("returns the anthropic preset with cache and cost accounting on", () => {
+    const preset = resolveProviderPreset("anthropic");
+    expect(preset?.baseUrl).toBe("https://api.anthropic.com/v1");
+    // Claude reports cache reads and has a published price list, so — unlike
+    // the OpenAI-compatible non-DeepSeek presets — neither is switched off.
+    expect(preset?.capabilities).toEqual({
+      thinking: true,
+      cacheHitTokens: true,
+      costAccounting: true,
+      balance: false,
+    });
+    expect(preset?.models).toContain("claude-opus-5");
+    expect(resolveProviderPreset("Anthropic")).toBe(preset);
   });
 });
 
 describe("resolveProviderConfig", () => {
   it("folds the ark preset: ark baseUrl + capabilities with thinking disabled", () => {
     const config = resolveProviderConfig({ provider: "ark", apiKey: "k", model: "glm-5.2" });
+    // An OpenAI-compatible preset carries no protocol field at all.
+    expect(config.protocol).toBeUndefined();
     expect(config.baseUrl).toBe("https://ark.cn-beijing.volces.com/api/plan/v3");
     expect(config.capabilities).toEqual({
       thinking: false,

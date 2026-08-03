@@ -86,11 +86,14 @@ Settable via `config set`? **Yes, with `--global`**.
 
 ### `provider`
 
-Named provider preset. Selects the API base URL **and** a capability set in one
-switch. `"deepseek"` (the default when unset) targets DeepSeek-direct with all
-features enabled. `"ark"` targets Volcengine Ark, an OpenAI-compatible endpoint
-(see the section below). An explicit `baseUrl` always wins over the preset's URL,
-so you can point a preset at a proxy while keeping its capability profile.
+Named provider preset. Selects the API base URL, the **wire protocol**, and a
+capability set in one switch. `"deepseek"` (the default when unset) targets
+DeepSeek-direct with all features enabled. `"ark"` targets Volcengine Ark, an
+OpenAI-compatible endpoint (see the section below). `"anthropic"` targets the
+Anthropic Messages API, which is a different protocol rather than an
+OpenAI-compatible one (see its section below). An explicit `baseUrl` always wins
+over the preset's URL, so you can point a preset at a proxy while keeping its
+protocol and capability profile.
 
 ```json
 { "provider": "ark" }
@@ -134,6 +137,50 @@ Because Ark is OpenAI-compatible, the DeepSeek-only behaviors are disabled under
 this preset: the DeepSeek `thinking` request parameter is not sent, context-cache
 hit tokens are not read, and cost/balance accounting are turned off (cost is
 reported as `0` and the `/user/balance` endpoint is not queried).
+
+### Anthropic (Messages API)
+
+`anthropic` is the one preset that is **not** OpenAI-compatible. It speaks the
+Anthropic Messages protocol (`POST {baseUrl}/messages`), authenticates with
+`x-api-key` instead of a bearer token, and sends the system prompt, tool calls,
+and tool results as typed content blocks. That is a translation SeekForge does
+for you — the agent, tools, sessions, and everything else are unchanged.
+
+1. Set `provider: "anthropic"` (base URL `https://api.anthropic.com/v1`).
+2. Supply the key via `ANTHROPIC_API_KEY` (preferred) or the `apiKey` config
+   field. This variable is read **only** when the provider is `anthropic`.
+3. Choose a `model`: `claude-opus-5` (default catalog entry), `claude-sonnet-5`,
+   `claude-haiku-4-5`, `claude-opus-4-8`, `claude-fable-5`. Any other Claude id
+   works too; the catalog is what the model picker offers, not a whitelist.
+
+```json
+{ "provider": "anthropic", "model": "claude-opus-5" }
+```
+
+```bash
+export ANTHROPIC_API_KEY="…"
+seekforge config set provider anthropic --global
+seekforge config set model claude-opus-5
+```
+
+What differs from the OpenAI-compatible presets:
+
+| Behavior | On this preset |
+| --- | --- |
+| `thinking` | `true` requests adaptive thinking with summarized reasoning (so the reasoning stream is not blank); `false` disables it; unset sends nothing and takes the model's default — see the caveat below |
+| `reasoningEffort` | Sent as the request's effort level. With `thinking: false` it is capped at `high`, which is the most the API accepts while thinking is off |
+| Context-cache tokens | Read. Anthropic reports the *uncached remainder* as its input count, so SeekForge adds the cache read/write counts back to report the whole prompt |
+| Cost | Priced from the built-in Anthropic table — `maxCostUsd` and the cost readout work without `modelPricing`. A model with no published rate here reports "unknown", not `0` |
+| Balance | Not queried; `/user/balance` is DeepSeek's own endpoint |
+| `temperature` | Never sent — the current Claude models reject sampling parameters |
+| `maxTokens` | Required by the API, so an unset value becomes a default (16000) rather than being omitted |
+
+> **Thinking and tool calls.** When thinking is on, this API expects the
+> assistant turn's thinking blocks to be sent back alongside the tool results
+> that answer it. SeekForge's message history has nowhere to keep them, so they
+> are not replayed and a tool-using turn may be rejected for the missing block.
+> If a run fails that way, set `"thinking": false` (accepted on every current
+> Claude model except `claude-fable-5`, which cannot turn thinking off).
 
 ### What "OpenAI-compatible" actually covers
 
@@ -339,11 +386,12 @@ Settable via `config set`? **No** — edit the file directly.
 
 ### `modelPricing` (cost tracking on other providers)
 
-**Default off.** The DeepSeek provider ships a built-in price table, so cost and
-the `maxCostUsd` budget work out of the box. Other providers (`ark`, `openai`,
-`ollama`, `openrouter`, …) carry **no** price table, so reported cost stays `0`
-there and `maxCostUsd` never triggers. Set `modelPricing` to supply your own
-per-model rates and turn cost/budget tracking on for those providers.
+**Default off.** The `deepseek` and `anthropic` providers ship built-in price
+tables, so cost and the `maxCostUsd` budget work out of the box on their models.
+The other providers (`ark`, `openai`, `ollama`, `openrouter`, …) carry **no**
+price table, so reported cost stays `0` there and `maxCostUsd` never triggers.
+Set `modelPricing` to supply your own per-model rates and turn cost/budget
+tracking on for those providers.
 
 SeekForge deliberately ships **no** price table for those providers rather than
 a guessed one: a wrong rate quietly mis-bills every budget built on it, which is
@@ -910,7 +958,7 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 | `apiKey` | string | String |
 | `model` | string | String |
 | `baseUrl` | string | String |
-| `provider` | string | `deepseek` / `ark` / preset name |
+| `provider` | string | `deepseek` / `ark` / `anthropic` / preset name |
 | `runtimeBin` | string | String |
 | `commandAllowlist` | string[] | Comma-separated string (`"pnpm test, cargo build"`) |
 | `sandbox` | enum | `off` / `read-only` / `workspace-write` / `restricted` |

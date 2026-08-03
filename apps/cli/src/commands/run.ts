@@ -24,6 +24,7 @@ import { resolveOutputStyle } from "../output-style.js";
 import { readStreamJsonInput } from "../stream-input.js";
 import { buildToolGatingRules, parseToolList } from "../tool-gating.js";
 import { expandExtraFileRefs, normalizeExtraDir } from "@seekforge/shared/workspace-dirs";
+import { apiKeyEnvVar } from "@seekforge/shared/provider-env";
 
 export type RunOptions = {
   mode: "ask" | "edit";
@@ -158,7 +159,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
 
   if (!config.apiKey) {
     fail(t("err.noApiKey"), {
-      hint: t("err.noApiKeyHint2"),
+      hint: t("err.noApiKeyHint2", { keyEnv: apiKeyEnvVar(config.provider) }),
     });
     return false;
   }

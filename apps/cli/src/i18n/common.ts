@@ -3,10 +3,12 @@
 export const common = {
   en: {
     // ── error messages (err.*) ──────────────────────────────────────────
-    "err.noApiKey": "no DeepSeek API key found",
-    "err.noApiKeyHint": "set DEEPSEEK_API_KEY or run: seekforge config set apiKey <key> --global",
+    // {keyEnv} is the configured provider's own variable — naming the wrong
+    // one sends the user to set a key the request will never read.
+    "err.noApiKey": "no API key found",
+    "err.noApiKeyHint": "set {keyEnv} or run: seekforge config set apiKey <key> --global",
     "err.noApiKeyHint2":
-      'set DEEPSEEK_API_KEY, or put {"apiKey": "..."} in .seekforge/config.json (project) or ~/.seekforge/config.json (global)',
+      'set {keyEnv}, or put {"apiKey": "..."} in .seekforge/config.json (project) or ~/.seekforge/config.json (global)',
     "err.reasonerNoToolCall": "deepseek-reasoner does not support tool calling and cannot drive the agent yet",
     "err.reasonerHint": "use deepseek-v4-flash (default)",
     "err.noPreviousSession": "no previous session to continue",
@@ -110,10 +112,10 @@ export const common = {
   },
   zh: {
     // ── error messages (err.*) ──────────────────────────────────────────
-    "err.noApiKey": "未找到 DeepSeek API 密钥",
-    "err.noApiKeyHint": "设置 DEEPSEEK_API_KEY 或运行：seekforge config set apiKey <key> --global",
+    "err.noApiKey": "未找到 API 密钥",
+    "err.noApiKeyHint": "设置 {keyEnv} 或运行：seekforge config set apiKey <key> --global",
     "err.noApiKeyHint2":
-      '设置 DEEPSEEK_API_KEY，或将 {"apiKey": "..."} 放入 .seekforge/config.json（项目）或 ~/.seekforge/config.json（全局）',
+      '设置 {keyEnv}，或将 {"apiKey": "..."} 放入 .seekforge/config.json（项目）或 ~/.seekforge/config.json（全局）',
     "err.reasonerNoToolCall": "deepseek-reasoner 不支持工具调用，暂无法驱动代理",
     "err.reasonerHint": "请使用 deepseek-v4-flash（默认）",
     "err.noPreviousSession": "没有上一个会话可继续",

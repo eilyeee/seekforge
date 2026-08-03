@@ -19,11 +19,11 @@
  *     first-match-wins, so higher layers' rules take precedence;
  *   - hooks: concatenated per stage LOWER-precedence first — every hook runs,
  *     lower layers' hooks first;
- *   - env overrides (last step): provider-aware API key (ARK_API_KEY when the
- *     merged provider is "ark", DEEPSEEK_API_KEY otherwise — so a DeepSeek
- *     user who happens to export ARK_API_KEY for another tool never gets the
- *     Ark key sent to the DeepSeek endpoint, and vice versa) and the
- *     SEEKFORGE_RUNTIME_BIN override.
+ *   - env overrides (last step): provider-aware API key (the merged provider's
+ *     own variable when it has one — see provider-env.ts — DEEPSEEK_API_KEY
+ *     otherwise, so a DeepSeek user who happens to export ARK_API_KEY for
+ *     another tool never gets the Ark key sent to the DeepSeek endpoint, and
+ *     vice versa) and the SEEKFORGE_RUNTIME_BIN override.
  *
  * NODE-ONLY (process.env + the fs-reading layer helper), so it lives behind
  * the "./config-layers" subpath export and is NOT re-exported from index.ts
@@ -31,6 +31,7 @@
  */
 
 import { readFileBounded } from "./bounded-file-read.js";
+import { apiKeyEnvVar } from "./provider-env.js";
 import { HOOK_STAGES, type HookEntry, type HookStage, type PermissionRule } from "./index.js";
 
 export const MAX_CONFIG_FILE_BYTES = 1_000_000;
@@ -275,8 +276,7 @@ export function mergeConfigLayers<T extends BaseConfigShape>(
   // exactly like the historical per-app `a ?? b ?? … ?? "deepseek"` chains).
   let envOverrides: Record<string, unknown> = {};
   if (opts.envOverrides !== false) {
-    const mergedProvider = (provider ?? "deepseek").toLowerCase();
-    const envKey = mergedProvider === "ark" ? process.env["ARK_API_KEY"] : process.env["DEEPSEEK_API_KEY"];
+    const envKey = process.env[apiKeyEnvVar(provider)];
     envOverrides = {
       ...(envKey ? { apiKey: envKey } : {}),
       ...(process.env["SEEKFORGE_RUNTIME_BIN"] ? { runtimeBin: process.env["SEEKFORGE_RUNTIME_BIN"] } : {}),

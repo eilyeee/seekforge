@@ -33,6 +33,13 @@ export type FetchWithRetryOptions = {
   timeoutMs?: number;
   /** Keep the request timeout armed until a successful response body is consumed. */
   timeoutBody?: boolean;
+  /**
+   * Vendor name in transport error messages. Defaults to "DeepSeek" so every
+   * existing message is byte-identical; a non-DeepSeek wire protocol passes its
+   * own, because "DeepSeek API error HTTP 401" is a misleading thing to read
+   * while talking to someone else.
+   */
+  label?: string;
 };
 
 export type ResponseHandler<T> = (response: Response) => Promise<T>;
@@ -221,6 +228,7 @@ export async function fetchWithRetry<T>(
   // A Retry-After the server asked us to wait (ms), honored in place of the
   // exponential backoff for the next attempt. Undefined = use backoff.
   let pendingRetryAfterMs: number | undefined;
+  const label = options.label ?? "DeepSeek";
   const maxRetries = options.maxRetries ?? MAX_RETRIES;
   if (!Number.isSafeInteger(maxRetries) || maxRetries < 0 || maxRetries > MAX_CONFIGURED_RETRIES) {
     throw new RangeError(`provider maxRetries must be an integer between 0 and ${MAX_CONFIGURED_RETRIES}`);
@@ -272,8 +280,8 @@ export async function fetchWithRetry<T>(
       const timedOut = err === timeoutErr;
       lastError = new DeepSeekApiError(
         timedOut
-          ? `DeepSeek API request timed out after ${timeoutMs}ms`
-          : `network error calling DeepSeek API: ${err instanceof Error ? err.message : String(err)}`,
+          ? `${label} API request timed out after ${timeoutMs}ms`
+          : `network error calling ${label} API: ${err instanceof Error ? err.message : String(err)}`,
       );
       pendingStatus = undefined;
       pendingRetryAfterMs = undefined;
@@ -297,8 +305,8 @@ export async function fetchWithRetry<T>(
           const timedOut = err === timeoutErr;
           lastError = new DeepSeekApiError(
             timedOut
-              ? `DeepSeek API response body timed out after ${timeoutMs}ms`
-              : `network error reading DeepSeek API response: ${err instanceof Error ? err.message : String(err)}`,
+              ? `${label} API response body timed out after ${timeoutMs}ms`
+              : `network error reading ${label} API response: ${err instanceof Error ? err.message : String(err)}`,
           );
           pendingStatus = undefined;
           pendingRetryAfterMs = undefined;
@@ -316,7 +324,7 @@ export async function fetchWithRetry<T>(
     const snippet = await readErrorSnippet(res).catch(() => "");
     clearAttemptTimeout();
     if (init.signal?.aborted) throw init.signal.reason;
-    const message = `DeepSeek API error HTTP ${res.status}${snippet ? `: ${snippet}` : ""}`;
+    const message = `${label} API error HTTP ${res.status}${snippet ? `: ${snippet}` : ""}`;
     const retryable = res.status === 429 || res.status >= 500;
     if (!retryable) throw new DeepSeekApiError(message, res.status);
     lastError = new DeepSeekApiError(message, res.status);

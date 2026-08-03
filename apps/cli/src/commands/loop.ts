@@ -75,6 +75,7 @@ import {
   resolveLoopRepository,
   type LoopWorktree,
 } from "../loop-worktree.js";
+import { apiKeyEnvVar } from "@seekforge/shared/provider-env";
 
 export type LoopOptions = {
   /** Verify command; exit 0 == success. Required unless autoVerify is enabled. */
@@ -1052,7 +1053,7 @@ async function preflightLoop(
     return;
   }
   if (!config.apiKey) {
-    fail(t("err.noApiKey"), { hint: t("err.noApiKeyHint2") });
+    fail(t("err.noApiKey"), { hint: t("err.noApiKeyHint2", { keyEnv: apiKeyEnvVar(config.provider) }) });
     return;
   }
 

@@ -1,5 +1,11 @@
 /**
- * DeepSeek provider module.
+ * Provider module.
+ *
+ * One provider, two wire protocols: the OpenAI-compatible chat-completions
+ * line (DeepSeek, Ark, OpenAI, Ollama, OpenRouter) and the Anthropic Messages
+ * line. Which one is spoken comes from the preset (see ./protocols); the
+ * network policy around it — retries, fallback model, timeouts, byte ceilings,
+ * cancellation — is the same either way and lives here.
  *
  * Contract (see packages/shared/src/index.ts for the types):
  *   createDeepSeekProvider(config: ProviderConfig): ChatProvider
@@ -11,14 +17,8 @@ import type { ChatResponse } from "@seekforge/shared";
 import { onAbortOnce } from "../util/abort.js";
 import * as crypto from "node:crypto";
 import { DEFAULT_BASE_URL, DEFAULT_MODEL } from "./constants.js";
-import {
-  buildRequestBody,
-  mapChatResponse,
-  mapUsage,
-  ProviderProtocolError,
-  type WireChatCompletion,
-} from "./mapping.js";
-import { createSseAccumulator, feedSseChunk, finalizeSse } from "./sse.js";
+import { ProviderProtocolError } from "./mapping.js";
+import { resolveWireProtocol } from "./protocols/index.js";
 import { DeepSeekApiError, fetchWithRetry, isRetryableError, readJsonResponseBounded } from "./http.js";
 import { DEEPSEEK_CAPABILITIES } from "./types.js";
 import type { ChatProvider, ChatRequest, ProviderConfig, RetryInfo } from "./types.js";
@@ -35,6 +35,17 @@ export {
 export { estimateCostUsd, pricingSourceFor, type PricingSource, type UsageTokens } from "./cost.js";
 export { MODEL_PRICING, DEFAULT_BASE_URL, DEFAULT_MODEL, DEPRECATED_MODELS, type ModelPricing } from "./constants.js";
 export { parseFallbackToolCalls, buildFallbackToolPrompt } from "./fallback.js";
+export {
+  resolveWireProtocol,
+  WIRE_PROTOCOLS,
+  anthropicProtocol,
+  openaiProtocol,
+  ANTHROPIC_VERSION,
+  DEFAULT_ANTHROPIC_MAX_TOKENS,
+  type WireProtocol,
+  type WireProtocolId,
+  type WireStreamSession,
+} from "./protocols/index.js";
 export { DeepSeekApiError } from "./http.js";
 export { MAX_PROVIDER_RESPONSE_BYTES } from "./protocol-limits.js";
 export { fetchBalance, verifyDeepSeekAccess, type AccountBalance, type ProviderAccessCheck } from "./balance.js";
@@ -110,12 +121,10 @@ async function readWithTimeouts<T>(
 
 export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
   const model = config.model ?? DEFAULT_MODEL;
+  const protocol = resolveWireProtocol(config.protocol);
   const baseUrl = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
-  const url = `${baseUrl}/chat/completions`;
-  const headers = {
-    "content-type": "application/json",
-    authorization: `Bearer ${config.apiKey}`,
-  };
+  const url = protocol.endpoint(baseUrl);
+  const headers = protocol.headers(config.apiKey);
   const thinking = {
     ...(config.thinking !== undefined ? { thinking: config.thinking } : {}),
     ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
@@ -134,6 +143,9 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
         baseUrl,
         apiKey: config.apiKey,
         model,
+        // The protocol changes the request AND the response shape, so two
+        // configs that differ only by it are not interchangeable cache entries.
+        protocol: protocol.id,
         capabilities,
         thinking: config.thinking ?? null,
         reasoningEffort: config.reasoningEffort ?? null,
@@ -155,12 +167,12 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
     stream: boolean,
     handleResponse: (response: Response) => Promise<T>,
   ): Promise<{ result: T; effectiveModel: string }> {
-    const primaryBody = JSON.stringify(buildRequestBody(model, req, stream, thinking, capabilities));
+    const primaryBody = JSON.stringify(protocol.buildBody(model, req, stream, thinking, capabilities));
     try {
       const result = await fetchWithRetry(
         url,
         { method: "POST", headers, body: primaryBody, signal: req.signal },
-        { ...retryOpts, timeoutBody: !stream },
+        { ...retryOpts, timeoutBody: !stream, label: protocol.errorLabel },
         handleResponse,
       );
       return { result, effectiveModel: model };
@@ -177,13 +189,13 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
       } catch {
         // A misbehaving frontend callback must never break the request path.
       }
-      const fallbackBody = JSON.stringify(buildRequestBody(fallbackModel, req, stream, thinking, capabilities));
+      const fallbackBody = JSON.stringify(protocol.buildBody(fallbackModel, req, stream, thinking, capabilities));
       try {
         // maxRetries: 0 → exactly one fallback attempt, no retry storm.
         const result = await fetchWithRetry(
           url,
           { method: "POST", headers, body: fallbackBody, signal: req.signal },
-          { maxRetries: 0, timeoutBody: !stream },
+          { maxRetries: 0, timeoutBody: !stream, label: protocol.errorLabel },
           handleResponse,
         );
         return { result, effectiveModel: fallbackModel };
@@ -195,12 +207,10 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
   }
 
   async function chat(req: ChatRequest): Promise<ChatResponse> {
-    const { result: json, effectiveModel } = await fetchWithFallback(
-      req,
-      false,
-      async (response) => (await readJsonResponseBounded(response)) as WireChatCompletion,
+    const { result: json, effectiveModel } = await fetchWithFallback(req, false, async (response) =>
+      readJsonResponseBounded(response),
     );
-    return mapChatResponse(json, effectiveModel, capabilities, config.modelPricing);
+    return protocol.mapResponse(json, effectiveModel, capabilities, config.modelPricing);
   }
 
   async function chatStream(
@@ -210,9 +220,9 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
   ): Promise<ChatResponse> {
     const { result: res, effectiveModel } = await fetchWithFallback(req, true, async (response) => response);
     if (!res.body) {
-      throw new DeepSeekApiError("DeepSeek API returned an empty streaming body");
+      throw new DeepSeekApiError(`${protocol.errorLabel} API returned an empty streaming body`);
     }
-    const acc = createSseAccumulator();
+    const session = protocol.openStream(effectiveModel, capabilities, config.modelPricing);
     const decoder = new TextDecoder();
     const reader = res.body.getReader();
     const idleTimeoutMs = boundedTimeoutMs(config.streamIdleTimeoutMs, STREAM_IDLE_TIMEOUT_MS);
@@ -238,15 +248,15 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
           );
         }
         streamBytes += value.byteLength;
-        feedSseChunk(acc, decoder.decode(value, { stream: true }), onDelta, onReasoningDelta);
-        if (acc.done) {
-          // [DONE] is the protocol terminator. Do not wait for a peer that keeps
+        session.feed(decoder.decode(value, { stream: true }), onDelta, onReasoningDelta);
+        if (session.done) {
+          // The protocol's terminator arrived. Do not wait for a peer that keeps
           // the transport open, and do not accept trailing bytes as deltas.
           await reader.cancel().catch(() => {});
           break;
         }
       }
-      feedSseChunk(acc, decoder.decode(), onDelta, onReasoningDelta);
+      session.feed(decoder.decode(), onDelta, onReasoningDelta);
     } catch (err) {
       // A stall (or any read error) leaves a pending read — cancel to settle it
       // and tear down the connection, then propagate.
@@ -255,17 +265,7 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
     } finally {
       reader.releaseLock();
     }
-    const result = finalizeSse(acc);
-    if (!acc.done) {
-      throw new DeepSeekApiError("streaming response ended before [DONE]");
-    }
-    return {
-      content: result.content,
-      toolCalls: result.toolCalls,
-      finishReason: result.finishReason,
-      usage: mapUsage(result.usage, effectiveModel, capabilities, config.modelPricing),
-      ...(result.reasoningContent ? { reasoningContent: result.reasoningContent } : {}),
-    };
+    return session.finish();
   }
 
   return { model, cacheIdentity, chat, chatStream };
