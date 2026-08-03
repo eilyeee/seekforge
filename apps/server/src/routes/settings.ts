@@ -23,7 +23,7 @@ import {
   loadUserCommands,
   MODEL_PRICING,
   resolveProviderPreset,
-  verifyDeepSeekAccess,
+  verifyProviderAccess,
   SessionBusyError,
   type HookConfig,
   type HookEntry,
@@ -383,7 +383,21 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     if (typeof apiKey !== "string" || apiKey.trim().length < 8 || apiKey.length > 512) {
       return sendApiError(res, 400, "bad_request", "apiKey must be a string from 8 to 512 characters");
     }
-    return sendJson(res, 200, await verifyDeepSeekAccess(apiKey.trim()));
+    // Verify against the provider this workspace is configured for: probing
+    // DeepSeek with someone's Ark or Anthropic key sends the secret to a vendor
+    // it was never issued for, and then reports the rejection as a bad key.
+    // The provider only selects among SeekForge's own preset endpoints — the
+    // configured baseUrl is deliberately NOT forwarded, because a repository's
+    // .seekforge/config.json could otherwise name where the key is sent.
+    const providerName = loadConfig(workspace).provider;
+    return sendJson(
+      res,
+      200,
+      await verifyProviderAccess({
+        apiKey: apiKey.trim(),
+        ...(providerName ? { provider: providerName } : {}),
+      }),
+    );
   }
 
   // Resources of every configured MCP server (resources/list), spawned on

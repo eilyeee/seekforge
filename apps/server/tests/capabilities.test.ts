@@ -428,6 +428,48 @@ describe("POST /api/provider/verify", () => {
       await new Promise<void>((resolve) => stub.close(() => resolve()));
     }
   });
+
+  it("checks the key against the configured provider, not always DeepSeek", async () => {
+    // A key belongs to the endpoint that issued it. Probing DeepSeek with an
+    // Anthropic key would hand that secret to a vendor it was never issued for,
+    // and then report the rejection as though the key were invalid. The
+    // destination still comes from the preset, never from a config baseUrl.
+    // The provider comes from the GLOBAL config: a repository's own
+    // .seekforge/config.json is sanitized of `provider` for the same reason it
+    // is sanitized of `baseUrl` — neither may choose where a secret goes.
+    const verifyWorkspace = makeWorkspace();
+    writeGlobalConfig({ provider: "anthropic" });
+    const verifyServer = await startServer({
+      workspace: verifyWorkspace,
+      port: 0,
+      token: TOKEN,
+      createAgent: unusedAgentFactory,
+    });
+    const actualFetch = globalThis.fetch;
+    const targets: string[] = [];
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const target = String(input);
+      if (target.startsWith("https://api.")) {
+        targets.push(target);
+        return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return actualFetch(input, init);
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${verifyServer.port}/api/provider/verify`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ apiKey: "sk-ant-onboarding-test" }),
+      });
+      expect(await jsonOf(res)).toEqual({ ok: true });
+      expect(targets).toEqual(["https://api.anthropic.com/v1/models"]);
+      expect(targets.join(" ")).not.toContain("deepseek");
+    } finally {
+      fetchSpy.mockRestore();
+      await verifyServer.close();
+      restorePrimaryGlobalConfig();
+    }
+  });
 });
 
 describe("GET /api/mcp/resources", () => {

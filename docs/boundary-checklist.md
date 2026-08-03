@@ -1732,6 +1732,12 @@ credential route: a user-owned key plus a repository-owned endpoint.
   endpoint. Never let project configuration redirect a newly submitted secret.
 - **Caught:** Server onboarding loaded project `baseUrl` before verifying a
   DeepSeek key, so a checked-out repository could receive the key as Bearer auth.
+- **Also caught:** pinning to *an* official endpoint is not enough when there is
+  more than one vendor. The pinned probe stayed on DeepSeek's account endpoint
+  whatever provider was configured, so onboarding sent an Ark or Anthropic key
+  to a vendor that never issued it — and then reported the inevitable rejection
+  as an invalid key. Derive the destination from the selected provider's own
+  compiled-in preset, which is trusted for the same reason the pin was.
 
 ## 133. Security identity comes from registration, not a naming convention
 

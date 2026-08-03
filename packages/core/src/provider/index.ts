@@ -48,7 +48,13 @@ export {
 } from "./protocols/index.js";
 export { DeepSeekApiError } from "./http.js";
 export { MAX_PROVIDER_RESPONSE_BYTES } from "./protocol-limits.js";
-export { fetchBalance, verifyDeepSeekAccess, type AccountBalance, type ProviderAccessCheck } from "./balance.js";
+export {
+  fetchBalance,
+  verifyDeepSeekAccess,
+  verifyProviderAccess,
+  type AccountBalance,
+  type ProviderAccessCheck,
+} from "./balance.js";
 export { wrapProviderWithCache, type ProviderCacheOptions } from "./cache.js";
 export { ProviderProtocolError } from "./mapping.js";
 export {

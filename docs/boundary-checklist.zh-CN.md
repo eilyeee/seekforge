@@ -1553,6 +1553,10 @@ endpoint。
   用户控制/官方 endpoint；绝不能让项目配置重定向用户刚提交的密钥。
 - **发现位置：** Server onboarding 在校验 DeepSeek Key 前读取项目 `baseUrl`，使检出的
   仓库可以通过 Bearer 认证接收该密钥。
+- **另一处：** 当厂商不止一家时，只固定到「某个」官方 endpoint 并不够。被固定的探测请求
+  无论配置了哪个 provider 都发往 DeepSeek 的账户接口，于是 onboarding 把 Ark 或
+  Anthropic 的密钥交给了从未签发它的厂商，再把必然的拒绝报告成「密钥无效」。目标地址应
+  当由所选 provider 自己那份编译进产物的预设推导——它可信的理由与当初固定的理由相同。
 
 ## 133. 安全身份必须来自注册记录，而不是命名约定
 

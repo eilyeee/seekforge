@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchBalance, verifyDeepSeekAccess } from "../../src/provider/balance.js";
+import { fetchBalance, verifyDeepSeekAccess, verifyProviderAccess } from "../../src/provider/balance.js";
 import { MAX_PROVIDER_RESPONSE_BYTES } from "../../src/provider/protocol-limits.js";
 
 function fetchReturning(json: unknown, ok = true, status = 200): ReturnType<typeof vi.fn> {
@@ -109,5 +109,86 @@ describe("verifyDeepSeekAccess", () => {
       }) as unknown as typeof fetch,
     );
     await expect(verifyDeepSeekAccess("sk-test")).resolves.toEqual({ ok: false, reason: "unreachable" });
+  });
+});
+
+describe("verifyProviderAccess", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const called = (spy: ReturnType<typeof vi.fn>): [string, RequestInit] =>
+    spy.mock.calls[0] as unknown as [string, RequestInit];
+
+  it("checks a DeepSeek key against DeepSeek", async () => {
+    const spy = fetchReturning({}, true, 200);
+    await expect(verifyProviderAccess({ apiKey: "sk-test" })).resolves.toEqual({ ok: true });
+    const [url, init] = called(spy);
+    expect(url).toBe("https://api.deepseek.com/user/balance");
+    expect((init.headers as Record<string, string>).authorization).toBe("Bearer sk-test");
+  });
+
+  it("never sends another provider's key to DeepSeek", async () => {
+    // The key belongs to the endpoint that issued it. Probing DeepSeek with an
+    // Ark key hands the secret to a vendor it was not issued for, and the
+    // rejection that follows then reads as "your key is invalid".
+    const spy = fetchReturning({}, true, 200);
+    await verifyProviderAccess({ apiKey: "ark-key", provider: "ark" });
+    const [url, init] = called(spy);
+    expect(url).toBe("https://ark.cn-beijing.volces.com/api/plan/v3/models");
+    expect(url).not.toContain("deepseek");
+    expect((init.headers as Record<string, string>).authorization).toBe("Bearer ark-key");
+  });
+
+  it("authenticates the way the provider's own protocol does", async () => {
+    const spy = fetchReturning({}, true, 200);
+    await verifyProviderAccess({ apiKey: "sk-ant-key", provider: "anthropic" });
+    const [url, init] = called(spy);
+    expect(url).toBe("https://api.anthropic.com/v1/models");
+    const headers = init.headers as Record<string, string>;
+    expect(headers["x-api-key"]).toBe("sk-ant-key");
+    expect(headers["anthropic-version"]).toBe("2023-06-01");
+    expect(headers["authorization"]).toBeUndefined();
+  });
+
+  it("honors an explicit base URL over the preset's", async () => {
+    // Only a trusted caller may pass one: the preset is a compiled-in constant,
+    // a baseUrl is configuration, and configuration must not be able to choose
+    // where a secret is sent (see the server route, which never forwards it).
+    const spy = fetchReturning({}, true, 200);
+    await verifyProviderAccess({ apiKey: "k", provider: "anthropic", baseUrl: "https://proxy.example/v1/" });
+    expect(called(spy)[0]).toBe("https://proxy.example/v1/models");
+  });
+
+  it("falls back to the default endpoint for a provider it does not recognize", async () => {
+    // Nothing trustworthy says where an unknown provider lives, and guessing
+    // from configuration is the one thing this must not do.
+    const spy = fetchReturning({}, true, 200);
+    await verifyProviderAccess({ apiKey: "k", provider: "acme-unknown" });
+    expect(called(spy)[0]).toBe("https://api.deepseek.com/user/balance");
+  });
+
+  it("classifies rejection, provider failure, and unreachability apart", async () => {
+    fetchReturning({}, false, 401);
+    await expect(verifyProviderAccess({ apiKey: "bad", provider: "anthropic" })).resolves.toEqual({
+      ok: false,
+      reason: "invalid_credentials",
+    });
+    fetchReturning({}, false, 503);
+    await expect(verifyProviderAccess({ apiKey: "k", provider: "anthropic" })).resolves.toEqual({
+      ok: false,
+      reason: "provider_error",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("offline");
+      }) as unknown as typeof fetch,
+    );
+    await expect(verifyProviderAccess({ apiKey: "k", provider: "anthropic" })).resolves.toEqual({
+      ok: false,
+      reason: "unreachable",
+    });
   });
 });
