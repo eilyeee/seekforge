@@ -4343,6 +4343,34 @@ surface is reused.
 - **Caught:** Desktop memory compaction previewed one prune threshold but applied
   the current field value, with callbacks not bound to a workspace generation.
 
+## 399. Code shipped to another runtime cannot rely on the build transform
+
+A function handed to a different runtime — a browser page, a worker, a database
+— travels as source. Whatever the local build inserted into it (name-keeping
+wrappers, coverage counters, helper prologues) travels too, and refers to
+helpers that do not exist there. This breaks per build tool, so it can pass in
+one entry point and fail in another.
+
+- **Do:** write such a function without constructs the transform rewrites (no
+  named inner function bindings), state that constraint next to it, and cover it
+  with a smoke test that runs through the same transform the users hit.
+- **Caught:** browser_snapshot's page-side extraction used named inner helpers;
+  under esbuild keepNames (which tsx enables, so every run from source) they
+  became `__name(...)` calls and the tool failed with "__name is not defined".
+
+## 400. A schema wrapper the converter does not know advertises nothing
+
+A validator that wraps its subject — a refinement, a transform, a branded type —
+is a different node than the object it validates. A converter that falls through
+to a permissive default for unknown nodes silently emits an EMPTY schema, and
+the model is told the tool takes no parameters at all. Validation still passes
+locally, so nothing fails until a caller gets it wrong.
+
+- **Do:** unwrap wrapper nodes to their inner type, and assert the advertised
+  parameter set for every tool rather than only for the plain ones.
+- **Caught:** zodToJsonSchema returned `{}` for two `.refine()`d tool schemas;
+  the description lint skipped them precisely because they looked parameterless.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Tool reach: drive the browser, rename a symbol, answer an MCP server
+
+Three capabilities that were shaped like gaps rather than choices.
+
+- **The browser tools can act on the page.** `browser_click`, `browser_fill`,
+  `browser_select`, `browser_press` and `browser_wait_for` join the four
+  read-only ones, so a login or a form submission can be verified end to end
+  instead of screenshotted. An interaction's permission level follows the loaded
+  page: a loopback dev server is ordinary work, any other page is confirmed on
+  every call. `packages/core/src/tools/browser/` replaces the single file, and
+  `scripts/browser-tools-smoke.mts` drives the whole loop against real Chromium
+  in CI.
+- **`lsp_rename` and `lsp_symbols`.** Rename a symbol across every file the
+  language server resolves it in, after approving a real diff with one
+  selectable hunk per file; edits outside the workspace, file create/rename/
+  delete operations, overlapping edits and stale targets all abort before
+  anything is written, and a mid-way failure rolls back. `lsp_symbols` searches
+  the project's declarations by name with their kinds. Tools may now define an
+  async `prepare` step that computes a review payload between `classify` and
+  permission enforcement; it cannot change the permission level.
+- **MCP sampling and elicitation.** A server can borrow the user's model
+  (confirmed every time, with the prompt shown verbatim and the cost reported)
+  or ask the user a question. Each capability is advertised only where an answer
+  is wired — the CLI and the local server today, not the TUI — so a server never
+  asks for something that will be refused. Both transports now share one
+  server-request module.
+
+Two defects found while building these are recorded as reusable classes in
+`docs/boundary-checklist.md`: page-side code broken by the build's name-keeping
+transform, and `.refine()`d tool schemas advertising no parameters at all.
+
 ## 1.0.0 (2026-07-31)
 
 0.7.0 shipped the five surfaces (CLI, REPL, TUI, local web, desktop app). 1.0.0
