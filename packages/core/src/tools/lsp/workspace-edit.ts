@@ -166,6 +166,31 @@ function uriToPath(uri: string): string {
 }
 
 /**
+ * Resolve a path through symlinks as far as it exists.
+ *
+ * Both ends of the comparison below have to be in the same form or a legitimate
+ * rename is rejected: the workspace may be reached through a symlink (`/tmp` is
+ * `/private/tmp` on macOS) while the language server answers with the resolved
+ * path it opened. Comparing one against the other yields a `..` relative path
+ * and looks exactly like an escape attempt.
+ *
+ * Falling back to the parent keeps the answer useful for a path that does not
+ * exist, so a missing file is reported as missing rather than as out-of-tree.
+ */
+function realpathAsFarAsPossible(target: string): string {
+  try {
+    return fs.realpathSync.native(target);
+  } catch {
+    // Fall through: the file itself may not exist.
+  }
+  try {
+    return path.join(fs.realpathSync.native(path.dirname(target)), path.basename(target));
+  } catch {
+    return path.resolve(target);
+  }
+}
+
+/**
  * Resolve, read and apply every edit in memory. Nothing is written; the result
  * is what the user reviews and what `applyWorkspaceEditPlan` then writes.
  *
@@ -179,9 +204,12 @@ export function planWorkspaceEdit(workspace: string, byUri: Map<string, LspTextE
   }
   const files: PlannedFileEdit[] = [];
   let totalEdits = 0;
+  const workspaceReal = realpathAsFarAsPossible(workspace);
   for (const [uri, edits] of byUri) {
     const absolute = uriToPath(uri);
-    const relative = path.relative(workspace, absolute);
+    // Compared in resolved form; resolveForWrite below re-derives the same
+    // path from the workspace root and remains the authoritative gate.
+    const relative = path.relative(workspaceReal, realpathAsFarAsPossible(absolute));
     if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
       throw new ToolError(
         "outside_workspace",

@@ -22,6 +22,13 @@ const MAX_SAMPLING_CHARS = 200_000;
 const MAX_SYSTEM_PROMPT_CHARS = 20_000;
 const MAX_ELICITATION_MESSAGE_CHARS = 4_000;
 const MAX_ELICITATION_FIELDS = 20;
+/**
+ * Requests a server may have in flight against us at once. Sampling and
+ * elicitation each occupy a person or a paid model call until they resolve, so
+ * a server that fires them in a loop would otherwise queue an unbounded pile of
+ * prompts. roots/list is exempt: it answers immediately from local state.
+ */
+const MAX_INFLIGHT_SERVER_REQUESTS = 4;
 
 // JSON-RPC error codes used in replies to a server.
 const INVALID_PARAMS = -32602;
@@ -227,11 +234,19 @@ export type ServerRequestResponderOptions = {
 export function createServerRequestResponder(
   options: ServerRequestResponderOptions,
 ): (id: string | number, method: string, params: unknown, signal?: AbortSignal) => Promise<JsonRpcReply> {
+  let inflight = 0;
   return async (id, method, params, signal) => {
     const ok = (result: unknown): JsonRpcReply => ({ jsonrpc: "2.0", id, result });
     const err = (code: number, message: string): JsonRpcReply => ({ jsonrpc: "2.0", id, error: { code, message } });
 
     if (method === "roots/list") return ok(buildRootsResult(options.workspaceRoots));
+
+    if (inflight >= MAX_INFLIGHT_SERVER_REQUESTS) {
+      return err(
+        INTERNAL_ERROR,
+        `too many concurrent requests from this server (limit ${MAX_INFLIGHT_SERVER_REQUESTS}); retry when one completes`,
+      );
+    }
 
     if (method === "sampling/createMessage") {
       const handler = options.handlers?.sampling;
@@ -242,6 +257,7 @@ export function createServerRequestResponder(
       } catch (error) {
         return err(INVALID_PARAMS, error instanceof Error ? error.message : String(error));
       }
+      inflight++;
       try {
         const result = await handler(request, signal);
         return ok({
@@ -252,6 +268,8 @@ export function createServerRequestResponder(
         });
       } catch (error) {
         return err(INTERNAL_ERROR, error instanceof Error ? error.message : String(error));
+      } finally {
+        inflight--;
       }
     }
 
@@ -264,6 +282,7 @@ export function createServerRequestResponder(
       } catch (error) {
         return err(INVALID_PARAMS, error instanceof Error ? error.message : String(error));
       }
+      inflight++;
       try {
         const result = await handler(request, signal);
         return ok(
@@ -271,6 +290,8 @@ export function createServerRequestResponder(
         );
       } catch (error) {
         return err(INTERNAL_ERROR, error instanceof Error ? error.message : String(error));
+      } finally {
+        inflight--;
       }
     }
 

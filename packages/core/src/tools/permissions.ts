@@ -21,6 +21,9 @@ export type PermissionOutcome =
   | { allowed: true; decision: PermissionDecision; selectedHunks?: number[] }
   | { allowed: false; decision: PermissionDecision; errorCode: string; errorMessage: string };
 
+/** A refusal reached without asking anyone (see denyBeforePrompt). */
+export type PermissionRefusal = Extract<PermissionOutcome, { allowed: false }>;
+
 /**
  * The token an allow-for-session confirmation remembers, and that subsequent
  * calls are matched against: the classified command for run_command/task_kill
@@ -142,11 +145,22 @@ function ruleMatches(rule: PermissionRule, toolName: string, cls: ClassifiedCall
   return boundary ? boundaryPrefix(subject, match, ["/", sep]) : subject.startsWith(match);
 }
 
-export async function enforcePermission(
+/**
+ * The refusals that need no input from anyone: the run's allow-list, deny
+ * rules, ask mode, and the absolute denylist. Returns undefined when the call
+ * survives them — which is not yet an approval, only "nothing rejected it out
+ * of hand".
+ *
+ * Split out so the dispatcher can apply it BEFORE a tool's async `prepare`
+ * step. Classification used to be pure, which made "no work happens before the
+ * permission decision" structural; a tool that does I/O to describe its own
+ * change would otherwise do that work even for a call the policy refuses.
+ */
+export function denyBeforePrompt(
   toolName: string,
   cls: ClassifiedCall,
   ctx: ToolContext,
-): Promise<PermissionOutcome> {
+): PermissionRefusal | undefined {
   if (ctx.policy.allowedTools && !ctx.policy.allowedTools.includes(toolName)) {
     return {
       allowed: false,
@@ -155,11 +169,10 @@ export async function enforcePermission(
       errorMessage: `Tool ${toolName} is outside the run's allowedTools list`,
     };
   }
-  const rules = ctx.policy.rules ?? [];
 
   // Deny rules first: a matching deny blocks at EVERY level (incl. readonly),
   // never prompts, never runs. First matching deny in the array wins.
-  const deny = rules.find((r) => r.action === "deny" && ruleMatches(r, toolName, cls));
+  const deny = (ctx.policy.rules ?? []).find((r) => r.action === "deny" && ruleMatches(r, toolName, cls));
   if (deny) {
     return {
       allowed: false,
@@ -169,9 +182,8 @@ export async function enforcePermission(
     };
   }
 
-  if (PERMISSION_LEVEL[cls.permission] === 0) {
-    return { allowed: true, decision: "auto_readonly" };
-  }
+  // Read-only survives everything below, so nothing further can refuse it.
+  if (PERMISSION_LEVEL[cls.permission] === 0) return undefined;
 
   if (ctx.policy.mode === "ask") {
     return {
@@ -191,6 +203,23 @@ export async function enforcePermission(
       errorMessage: `Denied: ${cls.description}`,
     };
   }
+
+  return undefined;
+}
+
+export async function enforcePermission(
+  toolName: string,
+  cls: ClassifiedCall,
+  ctx: ToolContext,
+): Promise<PermissionOutcome> {
+  const refused = denyBeforePrompt(toolName, cls, ctx);
+  if (refused) return refused;
+
+  if (PERMISSION_LEVEL[cls.permission] === 0) {
+    return { allowed: true, decision: "auto_readonly" };
+  }
+
+  const rules = ctx.policy.rules ?? [];
 
   // Allow rules: a matching allow skips the prompt — including for "env"
   // (that's the point: e.g. allow web_fetch for a specific docs domain).

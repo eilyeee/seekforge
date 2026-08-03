@@ -68,6 +68,8 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
+let skipped = false;
+
 const server = createServer((_req, res) => {
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   res.end(PAGE);
@@ -87,62 +89,64 @@ try {
       throw new Error(`Playwright is required for this run but missing: ${probe.error?.message}`);
     }
     console.log("SKIP: playwright-core is not installed — install it to run the browser smoke.");
-    process.exit(0);
+    skipped = true;
   }
-  assert(probe.ok, `browser_navigate failed: ${probe.error?.code} ${probe.error?.message}`);
-  assert((probe.data as { status: number }).status === 200, "expected HTTP 200 from the smoke page");
-  assert((probe.data as { title: string }).title === "SeekForge smoke", "unexpected page title");
+  if (!skipped) {
+    assert(probe.ok, `browser_navigate failed: ${probe.error?.code} ${probe.error?.message}`);
+    assert((probe.data as { status: number }).status === 200, "expected HTTP 200 from the smoke page");
+    assert((probe.data as { title: string }).title === "SeekForge smoke", "unexpected page title");
 
-  const snapshot = (await run("browser_snapshot", {})).data as {
-    headings: string[];
-    buttons: string[];
-    inputs: string[];
-  };
-  assert(
-    snapshot.headings.some((h) => h.includes("Sign in")),
-    "snapshot did not see the heading",
-  );
-  assert(snapshot.buttons.includes("Sign in"), "snapshot did not see the submit button");
-  assert(
-    snapshot.inputs.some((i) => i.includes("username")),
-    "snapshot did not see the username field",
-  );
+    const snapshot = (await run("browser_snapshot", {})).data as {
+      headings: string[];
+      buttons: string[];
+      inputs: string[];
+    };
+    assert(
+      snapshot.headings.some((h) => h.includes("Sign in")),
+      "snapshot did not see the heading",
+    );
+    assert(snapshot.buttons.includes("Sign in"), "snapshot did not see the submit button");
+    assert(
+      snapshot.inputs.some((i) => i.includes("username")),
+      "snapshot did not see the username field",
+    );
 
-  await run("browser_fill", { selector: "#user", text: "ada" });
-  const selected = (await run("browser_select", { selector: "#team", label: "Tools team" })).data as {
-    selected: string[];
-  };
-  assert(selected.selected.join(",") === "tools", `unexpected selection: ${selected.selected.join(",")}`);
+    await run("browser_fill", { selector: "#user", text: "ada" });
+    const selected = (await run("browser_select", { selector: "#team", label: "Tools team" })).data as {
+      selected: string[];
+    };
+    assert(selected.selected.join(",") === "tools", `unexpected selection: ${selected.selected.join(",")}`);
 
-  await run("browser_click", { selector: "#submit" });
-  // The result is rendered asynchronously: waiting is the point of the tool.
-  await run("browser_wait_for", { text: "Welcome ada (tools)" });
+    await run("browser_click", { selector: "#submit" });
+    // The result is rendered asynchronously: waiting is the point of the tool.
+    await run("browser_wait_for", { text: "Welcome ada (tools)" });
 
-  const after = (await run("browser_snapshot", {})).data as { text: string };
-  assert(after.text.includes("Welcome ada (tools)"), `page never showed the result: ${after.text}`);
+    const after = (await run("browser_snapshot", {})).data as { text: string };
+    assert(after.text.includes("Welcome ada (tools)"), `page never showed the result: ${after.text}`);
 
-  const console_ = (await run("browser_console", {})).data as { console: { text: string }[]; errors: string[] };
-  assert(
-    console_.console.some((entry) => entry.text.includes("submitting ada tools")),
-    "console capture missed the page's own log line",
-  );
-  assert(console_.errors.length === 0, `page raised errors: ${console_.errors.join("; ")}`);
+    const console_ = (await run("browser_console", {})).data as { console: { text: string }[]; errors: string[] };
+    assert(
+      console_.console.some((entry) => entry.text.includes("submitting ada tools")),
+      "console capture missed the page's own log line",
+    );
+    assert(console_.errors.length === 0, `page raised errors: ${console_.errors.join("; ")}`);
 
-  const shot = (await run("browser_screenshot", { path: "smoke.png" })).data as { path: string };
-  const bytes = readFileSync(join(workspace, shot.path)).length;
-  assert(bytes > 1000, `screenshot looks empty (${bytes} bytes)`);
+    const shot = (await run("browser_screenshot", { path: "smoke.png" })).data as { path: string };
+    const bytes = readFileSync(join(workspace, shot.path)).length;
+    assert(bytes > 1000, `screenshot looks empty (${bytes} bytes)`);
 
-  // Interacting with a page that is NOT loopback must be gated, whatever the
-  // approval mode says. Deny the confirmation and expect a refusal.
-  const gatedCtx: ToolContext = { ...ctx, confirm: async () => false };
-  await run("browser_navigate", { url: "https://example.com/" });
-  const denied = await dispatcher.execute(
-    { id: "gated", name: "browser_click", arguments: { selector: "h1" } },
-    gatedCtx,
-  );
-  assert(!denied.ok, "a click on a public page was allowed without confirmation");
+    // Interacting with a page that is NOT loopback must be gated, whatever the
+    // approval mode says. Deny the confirmation and expect a refusal.
+    const gatedCtx: ToolContext = { ...ctx, confirm: async () => false };
+    await run("browser_navigate", { url: "https://example.com/" });
+    const denied = await dispatcher.execute(
+      { id: "gated", name: "browser_click", arguments: { selector: "h1" } },
+      gatedCtx,
+    );
+    assert(!denied.ok, "a click on a public page was allowed without confirmation");
 
-  console.log(`Browser tools smoke passed (screenshot ${bytes} bytes)`);
+    console.log(`Browser tools smoke passed (screenshot ${bytes} bytes)`);
+  }
 } finally {
   await disposeBrowser();
   await new Promise<void>((resolve) => server.close(() => resolve()));

@@ -159,6 +159,31 @@ describe("the prepare step", () => {
     expect(res.meta?.durationMs).toBeTypeOf("number");
   });
 
+  it.each([
+    ["a deny rule", { rules: [{ action: "deny" as const, tool: "prepared_write" }] }, "denied_by_rule"],
+    ["an allowedTools list it is not on", { allowedTools: ["read_file"] }, "tool_not_allowed"],
+    ["ask mode", { mode: "ask" as const }, "forbidden_in_ask_mode"],
+  ])("does not run prepare for a call refused by %s", async (_label, policy, code) => {
+    let prepared = 0;
+    const dispatcher = createDispatcher([
+      preparingTool({
+        prepare: async () => {
+          prepared++;
+          return {};
+        },
+      }),
+    ]);
+    const res = await dispatcher.execute(
+      call("prepared_write", { path: "a.ts" }),
+      makeCtx(makeWorkspace(), { policy: { approvalMode: "auto", ...policy } }),
+    );
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe(code);
+    // prepare does I/O to describe the change; a refused tool does nothing.
+    expect(prepared).toBe(0);
+  });
+
   it("does not leak prepared state across concurrent calls sharing a context", async () => {
     const dispatcher = createDispatcher([preparingTool({ prepare: async (args) => ({ state: { of: args.path } }) })]);
     const ctx = makeCtx(makeWorkspace(), { policy: { approvalMode: "auto" } });

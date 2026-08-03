@@ -71,6 +71,11 @@ silent "first one" — so pass `index` to choose. The failure is reported as
 `ambiguous_selector` with the number of matches, and a selector that never
 appears as `element_not_found`.
 
+The page is shared for the whole session, so an interaction is pinned to the
+page it was approved against: if something moves the page between the approval
+and the action — a parallel subagent, a slow redirect — the action is refused
+with `page_changed` rather than landing somewhere the user never saw.
+
 Every interaction answers with the page's url afterwards, whether the action
 navigated, and any uncaught errors the page raised while it ran. `browser_fill`
 reports how many characters it typed, never the text itself — the field may be a

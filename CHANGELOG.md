@@ -29,9 +29,13 @@ Three capabilities that were shaped like gaps rather than choices.
   asks for something that will be refused. Both transports now share one
   server-request module.
 
-Two defects found while building these are recorded as reusable classes in
-`docs/boundary-checklist.md`: page-side code broken by the build's name-keeping
-transform, and `.refine()`d tool schemas advertising no parameters at all.
+Four defects found while building and reviewing these are recorded as reusable
+classes in `docs/boundary-checklist.md`: page-side code broken by the build's
+name-keeping transform, `.refine()`d tool schemas advertising no parameters at
+all, a step added in front of the permission gate inheriting what the gate
+withheld, and paths compared in two different resolved forms (which refused
+every legitimate rename under a symlinked workspace — i.e. every macOS temp
+dir).
 
 ## 1.0.0 (2026-07-31)
 

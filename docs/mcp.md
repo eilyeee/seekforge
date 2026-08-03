@@ -236,7 +236,9 @@ the session's own cost total, because it is not the session's work.
 The sampling provider is built from the same configuration as the agent's but is
 a separate instance, so a server's model calls stay out of the agent's retry bus
 and response cache. Requests are bounded before they reach the model: at most 50
-messages, 200,000 characters, text parts only.
+messages, 200,000 characters, text parts only. A server may also have at most
+4 sampling/elicitation requests in flight at once — each one occupies a person
+or a paid model call until it resolves — and is told to retry beyond that.
 
 **Elicitation** is answered through the same option-picker the `ask_user` tool
 uses, which bounds what it can collect: boolean and enumerated fields are

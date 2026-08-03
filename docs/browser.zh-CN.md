@@ -50,6 +50,8 @@ export SEEKFORGE_PLAYWRIGHT=/path/to/node_modules/playwright-core/index.mjs
 
 `selector` 是 Playwright 选择器：CSS（`#login button`）、文本（`text=Sign in`）或角色（`role=button[name="Save"]`）。从 `browser_snapshot` 的输出里挑。Playwright 是严格模式——选择器匹配到多个元素是错误，而不是静默取第一个——所以用 `index` 指定第几个。这类失败会报 `ambiguous_selector` 并给出匹配数量；始终没出现的选择器则报 `element_not_found`。
 
+页面在整个会话中是共享的，因此每次交互都会被钉死在「你批准时的那个页面」上：如果在批准与执行之间有东西把页面移走了（并行的子代理、一次慢重定向），这次操作会以 `page_changed` 被拒绝，而不是落在一个用户从未看到的页面上。
+
 每个交互都会返回操作后的页面 url、本次操作是否发生了跳转，以及操作期间页面抛出的未捕获错误。`browser_fill` 只返回输入了多少个字符，绝不回显文本本身——那个字段可能是密码。
 
 ### 安全性

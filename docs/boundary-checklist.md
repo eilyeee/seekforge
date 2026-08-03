@@ -4371,6 +4371,38 @@ locally, so nothing fails until a caller gets it wrong.
 - **Caught:** zodToJsonSchema returned `{}` for two `.refine()`d tool schemas;
   the description lint skipped them precisely because they looked parameterless.
 
+## 401. A new step before the gate inherits the gate's guarantees
+
+When a pipeline's decision point moves, everything now in front of it silently
+gains the privileges the decision was there to withhold. A step added "just to
+describe the work" still runs for a caller the policy refuses — and describing
+the work can mean I/O, a subprocess, or a paid call.
+
+- **Do:** split the refusals that need no input from anyone out of the gate and
+  apply them before the new step, keeping one implementation for both callers;
+  assert per refusal reason that the step did not run.
+- **Caught:** the tool dispatcher's async `prepare` (added so a rename can show
+  its diff) ran before permission enforcement, so a tool excluded by
+  `allowedTools`, blocked by a deny rule, or forbidden in ask mode still issued
+  its language-server request.
+
+## 402. Compare paths in one resolved form or reject the ordinary case
+
+A path that arrives from another process is resolved; a path held locally often
+is not. Comparing the two decides containment on a spelling difference — and on
+macOS the workspace is routinely reached through a symlink, so the common case
+is the failing one. It fails closed, which is why it reads as a security check
+working rather than a feature that never worked.
+
+- **Do:** resolve both sides before comparing (falling back to the parent for a
+  path that does not exist yet, so "missing" is not reported as "outside"), and
+  keep the authoritative sandbox check where it was.
+- **Caught:** `lsp_rename` compared the language server's resolved uris against
+  the raw workspace path; under any symlinked workspace (`/var` → `/private/var`
+  on every macOS temp dir) every legitimate rename was refused as
+  `outside_workspace`. The tests missed it because the stub server echoed back
+  the unresolved paths the test itself supplied.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

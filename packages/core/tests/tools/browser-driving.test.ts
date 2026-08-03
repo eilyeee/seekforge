@@ -387,6 +387,40 @@ describe("what an interaction reports back", () => {
   });
 });
 
+describe("the page an action was approved against", () => {
+  it("refuses to act after the page moved between the approval and the action", async () => {
+    await navigate("http://127.0.0.1:5173/");
+    const res = await dispatcher.execute(
+      call("browser_click", { selector: "#buy" }),
+      ctx({
+        policy: { approvalMode: "confirm" },
+        // Something else — a parallel subagent, a slow redirect — moves the
+        // shared page while the prompt is on screen.
+        confirm: async () => {
+          fake().url = "https://example.com/checkout";
+          return true;
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("page_changed");
+    // Nothing was clicked on the page the user never saw.
+    expect(fake().actions.some((a) => a.type === "click")).toBe(false);
+  });
+
+  it("allows a fill that navigates to still submit", async () => {
+    await navigate();
+    fake().navigateTo["#q"] = "http://127.0.0.1:5173/results";
+    const res = await dispatcher.execute(
+      call("browser_fill", { selector: "#q", text: "seekforge", submit: true }),
+      ctx(),
+    );
+    expect(res.ok, JSON.stringify(res.error)).toBe(true);
+    expect(fake().actions.at(-1)).toMatchObject({ type: "press", key: "Enter" });
+  });
+});
+
 describe("cancellation", () => {
   it("tears the browser down when the run is aborted mid-action", async () => {
     await navigate();

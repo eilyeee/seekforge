@@ -21,4 +21,10 @@ export const browserTools: ToolSpec[] = [
 
 export { acquireBrowserLease, disposeBrowser, type BrowserLease } from "./session.js";
 export { assertBrowserUrlAllowed, checkBrowserUrl, isLoopbackHost } from "./url-guard.js";
-export { composeSelector, describeValue, interactionPermission, mapInteractionError } from "./interact.js";
+export {
+  composeSelector,
+  describeTarget,
+  describeValue,
+  interactionPermission,
+  mapInteractionError,
+} from "./interact.js";

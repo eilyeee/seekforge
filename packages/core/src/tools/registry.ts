@@ -3,7 +3,7 @@ import type { PermissionName, ToolCall, ToolDefinitionForModel, ToolResult } fro
 import type { ToolContext, ToolDispatcher } from "./index.js";
 import { ToolError } from "./errors.js";
 import { zodToJsonSchema } from "./json-schema.js";
-import { enforcePermission, type PermissionDecision } from "./permissions.js";
+import { denyBeforePrompt, enforcePermission, type PermissionDecision, type PermissionRefusal } from "./permissions.js";
 import { runHooks, type HookPayload } from "../hooks/index.js";
 
 /** Result of classifying one concrete call before permission enforcement. */
@@ -129,13 +129,23 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
        * Classify, then let an async `prepare` enrich the review payload. The
        * permission level is re-asserted from the classification afterwards so
        * the enrichment cannot change what the user is being asked to approve.
+       *
+       * A call the policy refuses out of hand never reaches `prepare`: that
+       * step does I/O to describe the change, and a tool the run has denied
+       * must do nothing at all. The refusal is returned so the caller reports
+       * it verbatim instead of re-deriving it.
        */
-      const classifyAndPrepare = async (spec: ToolSpec, args: unknown): Promise<ClassifiedCall> => {
+      const classifyAndPrepare = async (
+        spec: ToolSpec,
+        args: unknown,
+      ): Promise<{ classified: ClassifiedCall; refused?: PermissionRefusal }> => {
         const base = spec.classify(args as never, ctx);
-        if (!spec.prepare) return base;
+        if (!spec.prepare) return { classified: base };
+        const refused = denyBeforePrompt(call.name, base, ctx);
+        if (refused) return { classified: base, refused };
         const prepared = await spec.prepare(args as never, ctx);
         preparedState = prepared.state;
-        return { ...base, ...prepared.review, permission: base.permission };
+        return { classified: { ...base, ...prepared.review, permission: base.permission } };
       };
 
       const toolError = (err: unknown): ToolResult =>
@@ -149,10 +159,13 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
       // without asking the user to approve a write that was never going to
       // happen — while every call still ends at the shared meta/log epilogue.
       let prepareFailure: ToolResult | undefined;
+      let refusedBeforePrepare: PermissionRefusal | undefined;
       if (tool && parsed?.success) {
         effectiveArgs = parsed.data;
         try {
-          classified = await classifyAndPrepare(tool, parsed.data);
+          const outcome = await classifyAndPrepare(tool, parsed.data);
+          classified = outcome.classified;
+          refusedBeforePrepare = outcome.refused;
         } catch (err) {
           prepareFailure = toolError(err);
         }
@@ -165,6 +178,10 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
           result = fail("invalid_args", `Invalid arguments for ${call.name}`, parsed?.error.issues);
         } else if (prepareFailure || !classified) {
           result = prepareFailure ?? fail("internal_error", `${call.name} produced no classification`);
+        } else if (refusedBeforePrepare) {
+          permission = classified.permission;
+          decision = refusedBeforePrepare.decision;
+          result = fail(refusedBeforePrepare.errorCode, refusedBeforePrepare.errorMessage);
         } else {
           permission = classified.permission;
           const outcome = await enforcePermission(call.name, classified, ctx);
@@ -229,7 +246,15 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
                   // run() must describe the arguments actually being run.
                   let reClassified: ClassifiedCall | undefined;
                   try {
-                    reClassified = await classifyAndPrepare(tool, reparsed.data);
+                    const reOutcome = await classifyAndPrepare(tool, reparsed.data);
+                    if (reOutcome.refused) {
+                      classified = reOutcome.classified;
+                      permission = reOutcome.classified.permission;
+                      decision = reOutcome.refused.decision;
+                      updatedDenied = fail(reOutcome.refused.errorCode, reOutcome.refused.errorMessage);
+                    } else {
+                      reClassified = reOutcome.classified;
+                    }
                   } catch (err) {
                     updatedDenied = toolError(err);
                   }

@@ -124,6 +124,18 @@ export type ElicitationHandlerDeps = {
 
 const DECLINE = "Decline";
 
+/**
+ * A refusal label that cannot be mistaken for one of the server's own options.
+ * The answer comes back as the chosen string, so an enum that literally
+ * contains "Decline" would otherwise make choosing it look like refusing.
+ */
+function declineLabel(options: readonly string[]): string {
+  if (!options.includes(DECLINE)) return DECLINE;
+  let label = `${DECLINE} (do not answer)`;
+  while (options.includes(label)) label = `${label} `;
+  return label;
+}
+
 function describeField(field: ElicitationField): string {
   const label = field.title ?? field.name;
   const detail = field.description ? ` — ${field.description}` : "";
@@ -156,11 +168,12 @@ export function createMcpElicitationHandler(deps: ElicitationHandlerDeps): Elici
     const content: Record<string, unknown> = {};
     for (const field of request.fields) {
       const options = field.type === "boolean" ? ["Yes", "No"] : [...(field.options ?? [])];
+      const decline = declineLabel(options);
       const answer = await deps.askUser({
         question: `MCP server "${request.server}": ${request.message}\n${describeField(field)}`,
-        options: [...options, DECLINE],
+        options: [...options, decline],
       });
-      if (answer === DECLINE) return { action: "decline" };
+      if (answer === decline) return { action: "decline" };
       if (field.type === "boolean") {
         content[field.name] = answer === "Yes";
         continue;

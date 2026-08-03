@@ -303,6 +303,23 @@ describe("lsp_rename refuses rather than half-applying", () => {
     expect(res.error?.message).toContain("valid identifier");
   });
 
+  it("still applies when the workspace is reached through a symlink", async () => {
+    // A real language server answers with the path it opened, which is fully
+    // resolved. On macOS the workspace itself is usually reached through a
+    // symlink (/tmp -> /private/tmp), so comparing the two raw looks exactly
+    // like an escape attempt and rejects a perfectly ordinary rename.
+    const linked = path.join(root, "linked-workspace");
+    fs.symlinkSync(workspace, linked);
+    const realWidget = fs.realpathSync.native(path.join(workspace, "widget.ts"));
+    setFixture({
+      rename: { changes: { [pathToFileURL(realWidget).href]: [edit(0, 13, 6, "Panel")] } },
+    });
+
+    const res = await createDefaultDispatcher().execute(renameCall(), makeCtx(linked));
+    expect(res.ok, JSON.stringify(res.error)).toBe(true);
+    expect(read("widget.ts")).toContain("class Panel");
+  });
+
   it("refuses to write into a symlink that points out of the workspace", async () => {
     const outside = path.join(root, "escape.ts");
     fs.writeFileSync(outside, "export class Widget {}\n");

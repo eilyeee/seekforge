@@ -158,6 +158,30 @@ describe("answering a server request", () => {
     expect(reply).toMatchObject({ error: { code: -32603, message: "the user declined" } });
   });
 
+  it("refuses a server that piles up requests instead of queueing prompts", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const responder = respond({
+      sampling: async () => {
+        await held;
+        return { text: "done", model: "m" };
+      },
+    });
+    const sample = (id: number) =>
+      responder(id, "sampling/createMessage", { messages: [{ role: "user", content: "x" }] });
+
+    const pending = [sample(1), sample(2), sample(3), sample(4)];
+    const overflow = await sample(5);
+    expect(overflow).toMatchObject({ error: { code: -32603, message: expect.stringContaining("too many") } });
+
+    // Once the held ones drain, the next request is served normally again.
+    release();
+    await Promise.all(pending);
+    expect(await sample(6)).toMatchObject({ result: { model: "m" } });
+  });
+
   it("shapes a sampling result the way the protocol expects", async () => {
     const reply = await respond({
       sampling: async () => ({ text: "done", model: "test-model", stopReason: "stop" }),
@@ -247,6 +271,26 @@ describe("putting a server's question to the user", () => {
       fields: [{ name: "confirm", type: "boolean", required: true }],
     });
     expect(result).toEqual({ action: "decline" });
+  });
+
+  it("keeps its refusal option distinct from an enum that says Decline", async () => {
+    const seen: string[][] = [];
+    const handler = createMcpElicitationHandler({
+      askUser: async ({ options }) => {
+        seen.push(options);
+        return "Decline";
+      },
+    });
+
+    const result = await handler({
+      server: "deploy",
+      message: "Pick an action",
+      fields: [{ name: "action", type: "string", options: ["Approve", "Decline"], required: true }],
+    });
+
+    // Choosing the server's own "Decline" value is an ANSWER, not a refusal.
+    expect(result).toEqual({ action: "accept", content: { action: "Decline" } });
+    expect(seen[0]).toEqual(["Approve", "Decline", "Decline (do not answer)"]);
   });
 
   it("refuses a free-text field instead of inventing a value", async () => {

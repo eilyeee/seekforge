@@ -63,10 +63,19 @@ export function composeSelector(selector: string, index?: number): string {
   return index === undefined ? selector : `${selector} >> nth=${index}`;
 }
 
-/** Shorten a model-supplied string for a confirmation prompt. */
+/**
+ * Shorten free text for a confirmation prompt. NOT for a selector or a url:
+ * those name the target of the action, and a prompt that hides part of the
+ * target is a prompt the user cannot actually judge.
+ */
 export function describeValue(value: string): string {
   const collapsed = value.replace(/\s+/g, " ").trim();
   return collapsed.length > MAX_DESCRIBED_CHARS ? `${collapsed.slice(0, MAX_DESCRIBED_CHARS)}…` : collapsed;
+}
+
+/** Collapse whitespace in a target (selector or url) without truncating it. */
+export function describeTarget(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 /**
@@ -86,7 +95,20 @@ export function interactionPermission(): PermissionName {
 /** Suffix naming the page an interaction lands on, for the confirmation prompt. */
 function onPage(): string {
   const url = currentPageUrl();
-  return url ? ` on ${describeValue(url)}` : "";
+  return url ? ` on ${describeTarget(url)}` : "";
+}
+
+/**
+ * Pin the interaction to the page the user was shown.
+ *
+ * The permission level is decided from where the page points, and the page is
+ * shared process-wide — a parallel subagent, or a click of our own that
+ * navigated, can move it between the approval and the action. Recording the url
+ * in `prepare` (which runs before the prompt) and re-checking it in `act` means
+ * an action lands on the page that was approved, or not at all.
+ */
+async function capturePage(): Promise<{ state: { url: string | undefined } }> {
+  return { state: { url: currentPageUrl() } };
 }
 
 /**
@@ -128,7 +150,10 @@ type ActionOutcome = {
  * the resulting url and any errors the page raised while acting.
  */
 async function act(
-  ctx: { signal?: AbortSignal },
+  // `prepared` carries the url captured before the prompt. A follow-up step
+  // within one tool call (fill → submit) deliberately passes a context without
+  // it: the first step may have navigated the page on purpose.
+  ctx: { signal?: AbortSignal; prepared?: unknown },
   label: string,
   selector: string,
   action: (page: PlaywrightPage) => Promise<unknown>,
@@ -136,6 +161,13 @@ async function act(
   await loadPlaywright();
   const page = requirePage();
   const urlBefore = page.url();
+  const approved = (ctx.prepared as { url?: string } | undefined)?.url;
+  if (approved !== undefined && approved !== urlBefore) {
+    throw new ToolError(
+      "page_changed",
+      `the page moved from ${approved} to ${urlBefore} before this action ran — re-read it with browser_snapshot and retry`,
+    );
+  }
   const errorsBefore = capturedActivity().errors.length;
   try {
     await runBrowserOperation(action(page), ctx.signal, label);
@@ -166,9 +198,10 @@ export const browserClick = defineTool({
     "Returns the resulting url, whether the click navigated, and any page errors it raised. " +
     "Pass index when the selector matches several elements. Requires browser_navigate first; clicking a page outside loopback is always confirmed.",
   schema: clickSchema,
+  prepare: capturePage,
   classify: (args) => ({
     permission: interactionPermission(),
-    description: `Click ${describeValue(args.selector)}${onPage()}`,
+    description: `Click ${describeTarget(args.selector)}${onPage()}`,
   }),
   async run(args, ctx) {
     const selector = composeSelector(args.selector, args.index);
@@ -193,10 +226,11 @@ export const browserFill = defineTool({
     "Set submit:true to press Enter afterwards. Returns the resulting url, whether it navigated, and any page errors. " +
     "Requires browser_navigate first; filling a page outside loopback is always confirmed.",
   schema: fillSchema,
+  prepare: capturePage,
   classify: (args) => ({
     permission: interactionPermission(),
     description:
-      `Type "${describeValue(args.text)}" into ${describeValue(args.selector)}${onPage()}` +
+      `Type "${describeValue(args.text)}" into ${describeTarget(args.selector)}${onPage()}` +
       (args.submit ? " and submit" : ""),
   }),
   async run(args, ctx) {
@@ -243,9 +277,10 @@ export const browserSelect = defineTool({
     "Returns the option(s) actually selected plus the resulting url and any page errors. " +
     "Requires browser_navigate first; selecting on a page outside loopback is always confirmed.",
   schema: selectSchema,
+  prepare: capturePage,
   classify: (args) => ({
     permission: interactionPermission(),
-    description: `Select ${describeValue(args.value ?? args.label ?? "")} in ${describeValue(args.selector)}${onPage()}`,
+    description: `Select ${describeValue(args.value ?? args.label ?? "")} in ${describeTarget(args.selector)}${onPage()}`,
   }),
   async run(args, ctx) {
     const selector = composeSelector(args.selector, args.index);
@@ -283,6 +318,7 @@ export const browserPress = defineTool({
     "Give a selector to focus an element first, or omit it to send the key to whatever currently has focus. " +
     "Requires browser_navigate first; pressing keys on a page outside loopback is always confirmed.",
   schema: pressSchema,
+  prepare: capturePage,
   classify: (args) => ({
     permission: interactionPermission(),
     description:
@@ -319,11 +355,12 @@ export const browserWaitFor = defineTool({
     "Wait until an element (selector) or some visible text appears, or is hidden, on the loaded page — use it after an action that renders asynchronously, instead of screenshotting a half-drawn page. " +
     "Pass exactly one of selector or text. Fails with element_not_found on timeout. Read-only; requires browser_navigate first.",
   schema: waitSchema,
+  prepare: capturePage,
   // Waiting observes; it never changes the page, so it stays read-only
   // regardless of which host the page came from.
   classify: (args) => ({
     permission: "readonly",
-    description: `Wait for ${describeValue(args.selector ?? `text=${args.text ?? ""}`)}`,
+    description: `Wait for ${describeTarget(args.selector ?? `text=${args.text ?? ""}`)}`,
   }),
   async run(args, ctx) {
     // Playwright's text engine takes the same selector slot, so waiting for
