@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createDefaultDispatcher } from "../../src/tools/index.js";
-import { unifiedDiff } from "../../src/tools/builtins/fs.js";
+import { unifiedDiff } from "../../src/tools/diff.js";
 import { call, makeCtx, makeWorkspace } from "./helpers.js";
 
 const dispatcher = createDefaultDispatcher();

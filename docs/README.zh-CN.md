@@ -16,9 +16,11 @@
 - [插件](plugins.zh-CN.md) — 一等 skill/agent/MCP/hook 扩展包、绑定摘要的审批、
   生命周期命令与安全边界。
 - [技能](skills.zh-CN.md) — 原生格式、层级、自动选择、生命周期安全、诊断与使用遥测。
-- [浏览器 / 可视化验证](browser.zh-CN.md) — 可选的、基于 Playwright 的
-  `browser_navigate` / `browser_screenshot` / `browser_snapshot` /
-  `browser_console` 工具，以及前端验证循环。
+- [浏览器 / 可视化验证](browser.zh-CN.md) — 可选的、基于 Playwright 的工具：
+  打开页面（`browser_navigate`）、查看页面（`browser_screenshot` /
+  `browser_snapshot` / `browser_console`）、操作页面（`browser_click` /
+  `browser_fill` / `browser_select` / `browser_press` / `browser_wait_for`），
+  以及前端验证循环。
 - [LSP / 精确符号智能](lsp.zh-CN.md) — 可选的、基于语言服务器的
   `lsp_definition` / `lsp_references` / `lsp_diagnostics` 工具，提供精确的
   定义/引用/诊断信息，区别于词法层面的 `repo_map`/`find_definition`。

@@ -11,11 +11,11 @@ import { visionTools } from "./vision.js";
 import { memoryTools } from "./memory.js";
 import { commandInvokeTools } from "./command-invoke.js";
 import { repoMapTools } from "./repo-map.js";
-import { browserTools } from "./browser.js";
+import { browserTools } from "../browser/index.js";
 import { lspTools } from "./lsp.js";
 
 export { configureVision, type VisionConfig } from "./vision.js";
-export { acquireBrowserLease, disposeBrowser, type BrowserLease } from "./browser.js";
+export { acquireBrowserLease, disposeBrowser, type BrowserLease } from "../browser/index.js";
 export { acquireLspServerLease, disposeLspServers, type LspServerLease } from "../lsp/client.js";
 
 export function builtinTools(): ToolSpec[] {

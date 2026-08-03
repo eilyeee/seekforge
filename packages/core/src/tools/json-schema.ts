@@ -10,6 +10,8 @@ type ZodDef = {
   exactLength?: { value?: number };
   values?: Iterable<string>;
   innerType?: z.ZodTypeAny;
+  /** ZodEffects (.refine/.transform/.superRefine) wraps the real schema here. */
+  schema?: z.ZodTypeAny;
 };
 
 /**
@@ -89,6 +91,15 @@ export function zodToJsonSchema(schema: z.ZodTypeAny): Record<string, unknown> {
     case "ZodDefault": {
       const inner = def.innerType ? zodToJsonSchema(def.innerType) : {};
       // Outer .describe() wins over the inner one.
+      return { ...inner, ...out };
+    }
+    case "ZodEffects": {
+      // .refine()/.superRefine()/.transform() wrap the real schema. Falling
+      // through to the default here would advertise a tool with NO parameters
+      // at all, so the model could never call it correctly — unwrap instead.
+      // The refinement itself is a validation rule with no JSON Schema
+      // equivalent; it still runs, and a violation fails with invalid_args.
+      const inner = def.schema ? zodToJsonSchema(def.schema) : {};
       return { ...inner, ...out };
     }
     default:

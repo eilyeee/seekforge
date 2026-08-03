@@ -98,3 +98,12 @@ jobs:
         run: pnpm dlx playwright@1.55.0 install --with-deps chromium
       - name: Build and exercise the Desktop UI in a real headless browser
         run: node scripts/playwright-smoke.mjs
+      # playwright-core is an OPTIONAL dependency of the browser tools and is
+      # deliberately NOT declared in packages/core/package.json — installing it
+      # here (in a throwaway checkout) is what lets the tools resolve it.
+      - name: Install playwright-core for the browser tools
+        run: pnpm --filter @seekforge/core add -D playwright-core@1.55.0
+      - name: Drive the browser tools against real Chromium
+        run: npx tsx scripts/browser-tools-smoke.mts
+        env:
+          SEEKFORGE_REQUIRE_BROWSER_SMOKE: "1"

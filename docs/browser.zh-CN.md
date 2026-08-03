@@ -2,7 +2,7 @@
 
 > [English](browser.md) | **简体中文**
 
-SeekForge 可以驱动一个真实的 headless 浏览器，让智能体**验证前端改动**：打开你的开发服务器、读取控制台中的报错、对 DOM 做快照、截取屏幕截图。该能力由 [Playwright] 提供支持，它是一个**可选的、需你自行安装的 opt-in 附加组件**（刻意不作为声明依赖，因此常规安装绝不会拉取浏览器驱动）——核心保持精简，不需要它的用户完全不受影响。
+SeekForge 可以驱动一个真实的 headless 浏览器，让智能体**验证前端改动**：打开你的开发服务器、读取控制台中的报错、对 DOM 做快照、截取屏幕截图——并且可以**操作页面**，因此像「登录 + 提交表单」这样的流程能被真正跑通验证，而不只是看一眼。该能力由 [Playwright] 提供支持，它是一个**可选的、需你自行安装的 opt-in 附加组件**（刻意不作为声明依赖，因此常规安装绝不会拉取浏览器驱动）——核心保持精简，不需要它的用户完全不受影响。
 
 [Playwright]: https://playwright.dev
 
@@ -23,14 +23,34 @@ browser tools need Playwright: pnpm add -w playwright-core && npx playwright ins
 
 Playwright 通过**工具内部的动态 import** 加载，绝不在顶层加载，因此无论是否安装，typecheck、构建与测试套件都能通过。
 
-## 四个工具
+如果你已经在别处装了 Playwright（全局安装、或另一个项目里），不必再装一份——把 `SEEKFORGE_PLAYWRIGHT` 指向它即可，取值是任何能解析到 `playwright-core` 模块的 import specifier 或文件 URL：
+
+```sh
+export SEEKFORGE_PLAYWRIGHT=/path/to/node_modules/playwright-core/index.mjs
+```
+
+## 打开与查看页面
 
 | 工具 | 参数 | 权限 | 作用 |
 | --- | --- | --- | --- |
 | `browser_navigate` | `url` | `env`（总是需要确认） | 在共享的 headless 浏览器中打开 `url`（只启动一次，跨调用复用）。返回最终 url、HTTP 状态码与标题；并开始捕获控制台/错误/失败请求。 |
 | `browser_screenshot` | `path?` | `execute` | 将整页 PNG 保存到 `.seekforge/uploads/`（或 `path`）并返回路径。对页面本身只读。 |
 | `browser_snapshot` | — | `readonly` | 返回一份简洁的文本快照（标题、url、标题层级、链接、按钮、输入框、可见文本），让智能体无需图片即可「看到」页面。 |
-| `browser_console` | — | `readonly` | 返回自上次 navigate 以来捕获的控制台消息、未捕获的页面错误与失败的网络请求——这是判断「我的改动是否弄坏了页面」的关键信号。 |
+| `browser_console` | — | `readonly` | 返回自上次 navigate 以来捕获的控制台消息、未捕获的页面错误与失败的网络请求——这是判断「我的改动是否弄坏了页面」的关键信号。交互不会清空它。 |
+
+## 操作页面
+
+| 工具 | 参数 | 权限 | 作用 |
+| --- | --- | --- | --- |
+| `browser_click` | `selector`、`index?`、`timeoutMs?` | 见下 | 等元素可操作后点击它。 |
+| `browser_fill` | `selector`、`text`、`index?`、`submit?`、`timeoutMs?` | 见下 | 替换输入框的内容；`submit:true` 会在填完后按回车。 |
+| `browser_select` | `selector`、`value?` \| `label?`、`index?`、`timeoutMs?` | 见下 | 在 `<select>` 中选择某一项；没有匹配项时以 `option_not_found` 失败。 |
+| `browser_press` | `key`、`selector?`、`index?`、`timeoutMs?` | 见下 | 按下某个键或组合键（`Enter`、`Escape`、`Control+A`），可先聚焦到某元素。 |
+| `browser_wait_for` | `selector?` \| `text?`、`state?`、`timeoutMs?` | `readonly` | 等到某元素/文本出现（或消失）之后再去看页面。 |
+
+`selector` 是 Playwright 选择器：CSS（`#login button`）、文本（`text=Sign in`）或角色（`role=button[name="Save"]`）。从 `browser_snapshot` 的输出里挑。Playwright 是严格模式——选择器匹配到多个元素是错误，而不是静默取第一个——所以用 `index` 指定第几个。这类失败会报 `ambiguous_selector` 并给出匹配数量；始终没出现的选择器则报 `element_not_found`。
+
+每个交互都会返回操作后的页面 url、本次操作是否发生了跳转，以及操作期间页面抛出的未捕获错误。`browser_fill` 只返回输入了多少个字符，绝不回显文本本身——那个字段可能是密码。
 
 ### 安全性
 
@@ -40,7 +60,14 @@ Playwright 通过**工具内部的动态 import** 加载，绝不在顶层加载
 
 该策略会重新应用到每一次导航和子资源请求，包括 DNS 解析结果，因此初始确认后的普通重定向以及同时返回公网/私网地址的 DNS 响应都会被阻止。获准继续请求时 Chromium 会再次解析主机，而 Playwright 无法把连接固定到已检查的地址，因此仍存在很窄的 TTL-0 DNS rebinding 竞态；强制的 `env` 确认是这项残余风险的补偿控制。
 
-三个检查工具只作用于**已加载**的页面，不发起新的对外动作，因此归为 `readonly`（snapshot/console）或 `execute`（screenshot，会写出一个 PNG 产物）。在你先执行 navigate 之前，它们会以 `no_page` 失败。
+检查类工具只作用于**已加载**的页面，不发起新的对外动作，因此归为 `readonly`（snapshot/console）或 `execute`（screenshot，会写出一个 PNG 产物）。在你先执行 navigate 之前，它们会以 `no_page` 失败。
+
+交互类工具的权限**由当前页面指向哪里决定**，因为那才决定一次点击真正能造成什么后果：
+
+- **回环页面**（`localhost`、`127.0.0.0/8`、`::1`）→ `execute`。操作你自己的开发服务器属于日常工作，在 auto 模式下无人值守地执行。
+- **其他任何页面** → `env`，**每次调用**都确认（auto 模式也不例外），并原样展示选择器与页面地址。在别人的站点上点一下可能意味着发帖、下单或删除；批准了打开页面，不等于批准了之后在上面做的每一件事。
+
+`browser_wait_for` 只是观察，因此无论页面来自哪里都保持 `readonly`。
 
 共享浏览器在一次会话中只有一个实例，并在会话结束时销毁（另有进程退出兜底），因此绝不会泄漏 headless 浏览器进程。
 
@@ -53,10 +80,15 @@ Playwright 通过**工具内部的动态 import** 加载，绝不在顶层加载
    这是「我是不是弄坏了它」的最快信号。
 4. `browser_snapshot()` — 确认预期的标题/链接/表单字段都在，
    而无需为一张图片消耗 token。
-5. `browser_screenshot()` — 截取一张 PNG 留档，或交给
+5. 把你真正改动的流程跑一遍：`browser_fill({selector:"#user", text:"ada"})` →
+   `browser_select({selector:"#team", label:"Tools team"})` →
+   `browser_click({selector:"#submit"})` → `browser_wait_for({text:"Welcome"})`。
+6. `browser_screenshot()` — 截取一张 PNG 留档，或交给
    `image_analyze` 做视觉检查（「布局是不是坏了？」）。
 
-如此迭代：编辑 → 重新 `browser_navigate`（或刷新）→ `browser_console`，直到页面干净为止。
+如此迭代：编辑 → 重新 `browser_navigate`（或刷新）→ 交互 → `browser_console`，直到页面干净为止。
+
+`scripts/browser-tools-smoke.mts` 会用真实 Chromium 与一个临时页面完整跑一遍这个循环；只要 Chromium 可用，CI 就会执行它。
 
 停止 Agent 运行会取消等待中的浏览器 DNS 检查，以及正在执行的导航、截图、标题读取或
 页面快照操作；需要中断 Playwright 时会关闭共享浏览器。

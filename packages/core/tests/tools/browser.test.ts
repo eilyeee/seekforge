@@ -1,31 +1,46 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { PermissionRequest } from "@seekforge/shared";
+import { ToolError } from "../../src/tools/errors.js";
 import {
   acquireBrowserLease,
   acquireLspServerLease,
   createDefaultDispatcher,
   disposeBrowser,
 } from "../../src/tools/index.js";
-import { assertBrowserUrlAllowed, browserTools, checkBrowserUrl } from "../../src/tools/builtins/browser.js";
+import {
+  assertBrowserUrlAllowed,
+  browserTools,
+  checkBrowserUrl,
+  composeSelector,
+  describeValue,
+  interactionPermission,
+  mapInteractionError,
+} from "../../src/tools/browser/index.js";
 import { call, makeCtx, makeWorkspace } from "./helpers.js";
 
 /**
- * These tests never launch a real browser (CI has none). They cover two things:
- *   1. the four tools register with the expected schemas + permission levels, and
- *   2. graceful degradation — with playwright-core absent, every tool returns a
+ * These tests never launch a real browser (CI has none). They cover three things:
+ *   1. the tools register with the expected schemas + permission levels,
+ *   2. the pure decision logic of the interaction tools (selector composition,
+ *      permission level, Playwright error translation), and
+ *   3. graceful degradation — with playwright-core absent, every tool returns a
  *      clear, actionable "browser_unavailable" error instead of crashing.
  * The optional dep is not installed in this workspace, so the dynamic import in
- * browser.ts fails and exercises the degradation path for free.
+ * playwright.ts fails and exercises the degradation path for free.
+ *
+ * A real Chromium drives the same tools end to end in scripts/browser-tools-smoke.mjs.
  */
 
-const NAMES = ["browser_navigate", "browser_screenshot", "browser_snapshot", "browser_console"];
+const INSPECT_NAMES = ["browser_navigate", "browser_screenshot", "browser_snapshot", "browser_console"];
+const INTERACT_NAMES = ["browser_click", "browser_fill", "browser_select", "browser_press", "browser_wait_for"];
+const NAMES = [...INSPECT_NAMES, ...INTERACT_NAMES];
 
 describe("browser tools registration", () => {
   afterEach(async () => {
     await disposeBrowser();
   });
 
-  it("exposes exactly the four browser tools", () => {
+  it("exposes exactly the navigate, inspect and interaction tools", () => {
     expect(browserTools.map((t) => t.name).sort()).toEqual([...NAMES].sort());
   });
 
@@ -41,7 +56,7 @@ describe("browser tools registration", () => {
     await lspRun.release();
   });
 
-  it("advertises all four through the default dispatcher", () => {
+  it("advertises all of them through the default dispatcher", () => {
     const defs = createDefaultDispatcher().list();
     for (const name of NAMES) {
       expect(defs.find((d) => d.name === name)).toBeDefined();
@@ -61,6 +76,8 @@ describe("browser tools registration", () => {
     expect(level("browser_snapshot")).toBe("readonly");
     expect(level("browser_console")).toBe("readonly");
     expect(level("browser_screenshot")).toBe("execute");
+    // Waiting only observes, so it stays read-only whatever the page is.
+    expect(level("browser_wait_for")).toBe("readonly");
   });
 });
 
@@ -103,6 +120,51 @@ describe("browser URL policy", () => {
   });
 });
 
+describe("interaction targeting and failure translation", () => {
+  it("leaves an unambiguous selector alone and narrows an indexed one", () => {
+    expect(composeSelector("#save")).toBe("#save");
+    expect(composeSelector("button.row", 2)).toBe("button.row >> nth=2");
+    // Index 0 is a real choice ("the first of several"), not an absent one.
+    expect(composeSelector("button.row", 0)).toBe("button.row >> nth=0");
+  });
+
+  it("collapses and caps values shown in a confirmation prompt", () => {
+    expect(describeValue("  sign\n  in  ")).toBe("sign in");
+    const long = describeValue("x".repeat(500));
+    expect(long.endsWith("…")).toBe(true);
+    expect(long.length).toBeLessThanOrEqual(121);
+  });
+
+  it("turns a strict-mode violation into an actionable ambiguity error", () => {
+    const err = mapInteractionError(
+      new Error('locator.click: Error: strict mode violation: "button" resolved to 3 elements'),
+      "Click",
+      "button",
+    );
+    expect(err.code).toBe("ambiguous_selector");
+    expect(err.message).toContain("3 elements");
+    expect(err.message).toContain("index");
+  });
+
+  it("turns a Playwright timeout into element_not_found with the next step", () => {
+    const timeout = Object.assign(new Error("Timeout 15000ms exceeded."), { name: "TimeoutError" });
+    const err = mapInteractionError(timeout, "Click", "#missing");
+    expect(err.code).toBe("element_not_found");
+    expect(err.message).toContain("browser_snapshot");
+  });
+
+  it("passes a cancellation through untouched instead of relabelling it", () => {
+    const cancelled = new ToolError("cancelled", "Click cancelled");
+    expect(mapInteractionError(cancelled, "Click", "#save")).toBe(cancelled);
+  });
+
+  it("keeps interactions at execute while no page is loaded", () => {
+    // Nothing to act on yet: run() fails with no_page, so prompting would be
+    // asking the user to approve an action with no possible effect.
+    expect(interactionPermission()).toBe("execute");
+  });
+});
+
 describe("browser tools graceful degradation (Playwright absent)", () => {
   afterEach(async () => {
     await disposeBrowser();
@@ -120,16 +182,36 @@ describe("browser tools graceful degradation (Playwright absent)", () => {
     expect(res.error?.message).toContain("playwright install chromium");
   });
 
-  it.each(["browser_screenshot", "browser_snapshot", "browser_console"])(
+  const ARGS: Record<string, Record<string, unknown>> = {
+    browser_screenshot: { path: "shot.png" },
+    browser_click: { selector: "#save" },
+    browser_fill: { selector: "#name", text: "hello" },
+    browser_select: { selector: "#country", value: "NL" },
+    browser_press: { key: "Enter" },
+    browser_wait_for: { selector: "#done" },
+  };
+
+  it.each(["browser_screenshot", "browser_snapshot", "browser_console", ...INTERACT_NAMES])(
     "%s reports browser_unavailable when Playwright is missing",
     async (name) => {
       const dispatcher = createDefaultDispatcher();
-      const args = name === "browser_screenshot" ? { path: "shot.png" } : {};
-      const res = await dispatcher.execute(call(name, args), makeCtx(makeWorkspace()));
+      const res = await dispatcher.execute(call(name, ARGS[name] ?? {}), makeCtx(makeWorkspace()));
       expect(res.ok).toBe(false);
       expect(res.error?.code).toBe("browser_unavailable");
     },
   );
+
+  it.each([
+    ["browser_select", { selector: "#c", value: "a", label: "A" }],
+    ["browser_select", { selector: "#c" }],
+    ["browser_wait_for", { selector: "#a", text: "a" }],
+    ["browser_wait_for", {}],
+  ] as const)("%s rejects an ambiguous target instead of guessing", async (name, args) => {
+    const dispatcher = createDefaultDispatcher();
+    const res = await dispatcher.execute(call(name, args), makeCtx(makeWorkspace()));
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("invalid_args");
+  });
 
   it("browser_navigate refuses private/loopback urls before touching Playwright", async () => {
     const dispatcher = createDefaultDispatcher();

@@ -38,4 +38,17 @@ describe("zodToJsonSchema", () => {
       items: { type: "boolean" },
     });
   });
+  it("looks through a .refine() wrapper to the object it validates", () => {
+    // A refined schema that fell through to the default case advertised NO
+    // parameters, so the model could not call the tool at all.
+    const refined = z
+      .object({ a: z.string().describe("first"), b: z.string().optional() })
+      .refine((v) => v.b === undefined, { message: "pass only one" });
+    expect(zodToJsonSchema(refined)).toEqual({
+      type: "object",
+      properties: { a: { type: "string", description: "first" }, b: { type: "string" } },
+      required: ["a"],
+      additionalProperties: false,
+    });
+  });
 });

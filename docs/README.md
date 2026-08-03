@@ -23,8 +23,10 @@ and quick start; this folder holds the reference docs.
 - [Skills](skills.md) — native format, precedence, automatic selection,
   lifecycle safety, diagnostics, and usage telemetry.
 - [Browser / visual verification](browser.md) — the optional Playwright-backed
-  `browser_navigate` / `browser_screenshot` / `browser_snapshot` /
-  `browser_console` tools and the frontend verify loop.
+  tools that open a page (`browser_navigate`), read it (`browser_screenshot` /
+  `browser_snapshot` / `browser_console`) and drive it (`browser_click` /
+  `browser_fill` / `browser_select` / `browser_press` / `browser_wait_for`),
+  plus the frontend verify loop.
 - [LSP / precise symbol intelligence](lsp.md) — the optional language-server-backed
   `lsp_definition` / `lsp_references` / `lsp_diagnostics` tools for precise
   definitions/references/diagnostics vs. the lexical `repo_map`/`find_definition`.

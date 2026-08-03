@@ -4,10 +4,13 @@
 
 SeekForge can drive a real headless browser so the agent can **verify a frontend
 change**: open your dev server, read the console for errors, snapshot the DOM,
-and capture a screenshot. This is powered by [Playwright], which is an
-**optional, opt-in add-on you install yourself** (it is deliberately NOT a
-declared dependency, so a normal install never pulls in a browser driver) — the
-core stays lean and users who don't want it are completely unaffected.
+capture a screenshot — and act on the page, so a flow that takes a login and a
+form submission can be verified end to end rather than just looked at.
+
+This is powered by [Playwright], which is an **optional, opt-in add-on you
+install yourself** (it is deliberately NOT a declared dependency, so a normal
+install never pulls in a browser driver) — the core stays lean and users who
+don't want it are completely unaffected.
 
 [Playwright]: https://playwright.dev
 
@@ -33,14 +36,45 @@ Playwright is loaded via a **dynamic import inside the tool**, never at the top
 level, so typecheck, build, and the test suite all pass whether or not it is
 installed.
 
-## The four tools
+If Playwright is already installed somewhere else (a global install, another
+project), point `SEEKFORGE_PLAYWRIGHT` at it instead of installing a second
+copy — the value is any import specifier or file URL that resolves to a
+`playwright-core` module:
+
+```sh
+export SEEKFORGE_PLAYWRIGHT=/path/to/node_modules/playwright-core/index.mjs
+```
+
+## Opening and reading a page
 
 | Tool | Args | Permission | What it does |
 | --- | --- | --- | --- |
 | `browser_navigate` | `url` | `env` (always confirmed) | Opens `url` in a shared headless browser (launches once, reused across calls). Returns final url, HTTP status, and title; starts capturing console/errors/failed-requests. |
 | `browser_screenshot` | `path?` | `execute` | Saves a full-page PNG under `.seekforge/uploads/` (or `path`) and returns the path. Read-only on the page. |
 | `browser_snapshot` | — | `readonly` | Returns a concise text snapshot (title, url, headings, links, buttons, inputs, visible text) so the agent can "see" the page without an image. |
-| `browser_console` | — | `readonly` | Returns console messages, uncaught page errors, and failed network requests captured since the last navigate — the key signal for "did my change break the page". |
+| `browser_console` | — | `readonly` | Returns console messages, uncaught page errors, and failed network requests captured since the last navigate — the key signal for "did my change break the page". Interactions do not clear it. |
+
+## Acting on the page
+
+| Tool | Args | Permission | What it does |
+| --- | --- | --- | --- |
+| `browser_click` | `selector`, `index?`, `timeoutMs?` | see below | Clicks an element once it is actionable. |
+| `browser_fill` | `selector`, `text`, `index?`, `submit?`, `timeoutMs?` | see below | Replaces a field's value; `submit:true` presses Enter afterwards. |
+| `browser_select` | `selector`, `value?` \| `label?`, `index?`, `timeoutMs?` | see below | Chooses an option in a `<select>`; fails with `option_not_found` if nothing matched. |
+| `browser_press` | `key`, `selector?`, `index?`, `timeoutMs?` | see below | Presses a key or chord (`Enter`, `Escape`, `Control+A`), optionally focusing an element first. |
+| `browser_wait_for` | `selector?` \| `text?`, `state?`, `timeoutMs?` | `readonly` | Waits until something appears (or is hidden) before you look at the page. |
+
+`selector` is a Playwright selector: CSS (`#login button`), text (`text=Sign in`)
+or role (`role=button[name="Save"]`). Take them from `browser_snapshot`.
+Playwright is strict — a selector matching several elements is an error, not a
+silent "first one" — so pass `index` to choose. The failure is reported as
+`ambiguous_selector` with the number of matches, and a selector that never
+appears as `element_not_found`.
+
+Every interaction answers with the page's url afterwards, whether the action
+navigated, and any uncaught errors the page raised while it ran. `browser_fill`
+reports how many characters it typed, never the text itself — the field may be a
+password.
 
 ### Security
 
@@ -63,10 +97,23 @@ the approved request continues; Playwright cannot pin that connection to the
 checked address, so a narrow TTL-0 DNS-rebinding race remains. The mandatory
 `env` confirmation is the compensating control for that residual risk.
 
-The three inspect tools act only on the **already-loaded** page and take no new
+The inspect tools act only on the **already-loaded** page and take no new
 outward action, so they are `readonly` (snapshot/console) or `execute`
 (screenshot, which writes a PNG artifact). They fail with `no_page` until you
 navigate first.
+
+Interactions are classified from **where the loaded page points**, because that
+decides what a click can actually do:
+
+- **Loopback page** (`localhost`, `127.0.0.0/8`, `::1`) → `execute`. Driving
+  your own dev server is ordinary work and runs unattended in auto mode.
+- **Any other page** → `env`, confirmed on **every** call even in auto mode, with
+  the selector and the page shown verbatim. A click on someone else's site can
+  post, purchase or delete; one approval of the navigation is not an approval of
+  everything done afterwards.
+
+`browser_wait_for` only observes, so it stays `readonly` wherever the page came
+from.
 
 The shared browser is a single instance for the session and is torn down at
 session end (with a process-exit fallback), so a headless browser process is
@@ -81,11 +128,17 @@ never leaked.
    change. This is the fastest "did I break it" signal.
 4. `browser_snapshot()` — confirm the expected headings/links/form fields are
    present, without spending tokens on an image.
-5. `browser_screenshot()` — capture a PNG for the record, or to hand to
+5. Drive the flow you actually changed: `browser_fill({selector:"#user",
+   text:"ada"})` → `browser_select({selector:"#team", label:"Tools team"})` →
+   `browser_click({selector:"#submit"})` → `browser_wait_for({text:"Welcome"})`.
+6. `browser_screenshot()` — capture a PNG for the record, or to hand to
    `image_analyze` for a visual check ("is the layout broken?").
 
-Iterate: edit → re-`browser_navigate` (or reload) → `browser_console` until the
-page is clean.
+Iterate: edit → re-`browser_navigate` (or reload) → interact → `browser_console`
+until the page is clean.
+
+`scripts/browser-tools-smoke.mts` runs exactly this loop against a real Chromium
+and a throwaway page; CI runs it whenever Chromium is available.
 
 Stopping the Agent run cancels pending browser DNS checks and active navigation,
 screenshot, title, or snapshot operations, closing the shared browser when
