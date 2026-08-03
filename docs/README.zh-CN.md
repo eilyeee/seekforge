@@ -21,10 +21,11 @@
   `browser_snapshot` / `browser_console`）、操作页面（`browser_click` /
   `browser_fill` / `browser_select` / `browser_press` / `browser_wait_for`），
   以及前端验证循环。
-- [LSP / 精确符号智能](lsp.zh-CN.md) — 可选的、基于语言服务器的
-  `lsp_definition` / `lsp_references` / `lsp_diagnostics` / `lsp_symbols` 工具，
-  提供精确的定义/引用/诊断/符号搜索，区别于词法层面的 `repo_map`/`find_definition`；
-  另有 `lsp_rename` 提供经审阅的跨文件重命名。
+- [LSP / 精确符号智能](lsp.zh-CN.md) — 可选的、基于语言服务器的工具：读取编译器的视角
+  （`lsp_definition` / `lsp_references` / `lsp_diagnostics` / `lsp_hover` /
+  `lsp_document_symbols` / `lsp_symbols` / `lsp_code_actions`），而非词法层面的
+  `repo_map`/`find_definition`；也让它来改（`lsp_rename` / `lsp_apply_code_action` /
+  `lsp_format`），改动都要经过 diff 审阅。
 - [Loop 工程](loop-engineering.zh-CN.md) — 自主的「运行→验证→继续」循环及其护栏机制。
 - [图工程](graph-engineering.zh-CN.md) — 持久化的异构 Agent/Loop/函数/路由/审批门/子图编排。
 - [Loop 教程](loop-tutorial.zh-CN.md) — 自主 Loop 运行在 CLI、TUI、桌面端、

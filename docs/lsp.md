@@ -23,6 +23,10 @@ A language server resolves symbols the way the compiler does:
 | "Where is `X` defined?" | `find_definition` — every regex match for `X` | `lsp_definition` — the one true definition, across imports/re-exports |
 | "Who uses `X`?" | `search_text` — every textual mention of `X` | `lsp_references` — every real read/write/call site the compiler resolves |
 | "Did my change break something?" | grep for error strings | `lsp_diagnostics` — the compiler's/type-checker's own errors & warnings |
+| "Where does `X` live?" | `search_text` — every mention, declaration or not | `lsp_symbols` — declarations only, each with its kind |
+| "What type is this?" | read the definition and infer | `lsp_hover` — the resolved type, overloads already applied |
+| "Rename `X` to `Y`" | search/replace, one file at a time, same-named symbols caught in the crossfire | `lsp_rename` — the declaration and every real reference, across files |
+| "Fix this error" | write the fix by hand | `lsp_apply_code_action` — the fix the compiler itself proposes |
 
 Reach for the LSP tools when you need **accuracy** (before a rename, to gauge
 blast radius, to confirm a fix type-checks); reach for the lexical tools to
@@ -50,13 +54,20 @@ The server is spawned **lazily inside the tool**, never at import time, so
 typecheck, build, and the whole test suite pass whether or not any server is
 installed. A file type with no configured server returns `lsp_unsupported`.
 
-## The three tools
+## The tools
 
 | Tool | Args | Permission | What it does |
 | --- | --- | --- | --- |
 | `lsp_definition` | `path`, `line`, `character?` | `readonly` | Go-to-definition for the symbol at that position; returns the defining `file:line(s)`. |
 | `lsp_references` | `path`, `line`, `character?` | `readonly` | Find all references to that symbol; returns every `file:line` plus a count. |
 | `lsp_diagnostics` | `path` | `readonly` | Opens the file in the server and returns its diagnostics (`error`/`warning`/… with line + message). |
+| `lsp_hover` | `path`, `line`, `character?` | `readonly` | The compiler's own description of a symbol: resolved type or signature, plus its doc comment. |
+| `lsp_document_symbols` | `path` | `readonly` | Outline one file in source order — every declaration with its kind, 1-based line and nesting depth. |
+| `lsp_symbols` | `query`, `path?`, `limit?` | `readonly` | Search the whole project for declarations matching `query`; returns name, kind and `path:line`. |
+| `lsp_code_actions` | `path`, `line`, `endLine?`, `kind?` | `readonly` | List the fixes the server offers for those lines; the diagnostics there travel with the request. |
+| `lsp_apply_code_action` | `path`, `line`, `endLine?`, `title` | `write` | Apply one of them by title, after you approve its diff. |
+| `lsp_format` | `path`, `tabSize?`, `insertSpaces?` | `write` | Format the file with the server's formatter, after you approve the diff. |
+| `lsp_rename` | `path`, `line`, `character?`, `newName` | `write` | Rename the symbol everywhere the server resolves it, across files, after you approve the diff. |
 
 `path` is workspace-relative and must stay inside the workspace (same sandbox as
 every other file tool; sensitive files like `.env`/keys are refused). `line` is
@@ -65,14 +76,29 @@ every other file tool; sensitive files like `.env`/keys are refused). `line` is
 locations inside the repo are workspace-relative, out-of-tree locations (stdlib,
 dependencies) are shown as absolute paths.
 
-Four of the five only read/analyze, so they are classified **`readonly`** — like
-the browser inspect tools (`browser_snapshot` / `browser_console`) — and are
+`lsp_symbols` asks a **server-wide** question, so it needs to know which
+language server to ask. It uses the ones already running for this workspace —
+normally the one previous `lsp_*` calls started. If none is running it fails
+with `lsp_no_session`; pass `path` (any file in the language) to start one.
+
+The analysis tools only read, so they are classified **`readonly`** — like the
+browser inspect tools (`browser_snapshot` / `browser_console`) — and are
 auto-allowed under every approval mode.
 
-## Renaming
+## Editing
 
-`lsp_rename` is the only LSP tool that writes, and it writes to files the caller
-never named. It is handled accordingly.
+Three tools write: `lsp_rename`, `lsp_apply_code_action` and `lsp_format`. All
+three work the same way — the language server produces the edit, you approve a
+real diff, and it is applied all-or-nothing — so the rules spelled out for
+rename below hold for all of them.
+
+`lsp_apply_code_action` is how the compiler fixes its own complaints: list what
+is on offer with `lsp_code_actions` on a line `lsp_diagnostics` flagged, then
+apply one by title. An action that asks the server to run a command instead of
+producing an edit is refused; that is not something to run on your behalf.
+
+Rename is the case worth spelling out, because it writes to files the caller
+never named.
 
 **You approve a diff, not an intention.** Before you are asked anything, the
 rename is computed in full: the server is asked for the edit, every target is
@@ -126,6 +152,8 @@ client** over the server's stdio:
   and text) the first time a file is touched; `textDocument/didChange` bumps the
   version to force a fresh diagnostics pass.
 - **Requests.** `textDocument/definition`, `textDocument/references`,
+  `textDocument/hover`, `textDocument/documentSymbol`, `textDocument/codeAction`
+  (+ `codeAction/resolve`), `textDocument/formatting`,
   `textDocument/rename`, `workspace/symbol`, and the server-pushed
   `textDocument/publishDiagnostics` notification (awaited briefly after
   opening/changing the file). Positions are converted from our 1-based `line`

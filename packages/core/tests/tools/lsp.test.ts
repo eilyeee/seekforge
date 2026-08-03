@@ -22,7 +22,18 @@ import { call, makeCtx, makeWorkspace } from "./helpers.js";
  *      force absence by emptying PATH so the outcome is deterministic.
  */
 
-const NAMES = ["lsp_definition", "lsp_references", "lsp_diagnostics", "lsp_rename", "lsp_symbols"];
+const NAMES = [
+  "lsp_definition",
+  "lsp_references",
+  "lsp_diagnostics",
+  "lsp_hover",
+  "lsp_document_symbols",
+  "lsp_code_actions",
+  "lsp_apply_code_action",
+  "lsp_format",
+  "lsp_rename",
+  "lsp_symbols",
+];
 
 describe("lsp wire framing (pure)", () => {
   it("frames a message with a byte-accurate Content-Length and round-trips", () => {
@@ -147,7 +158,22 @@ describe("lsp tools registration", () => {
     expect(cls("lsp_references", { path: "src/a.ts", line: 3 }).permission).toBe("readonly");
     expect(cls("lsp_diagnostics", { path: "src/a.ts" }).permission).toBe("readonly");
     expect(cls("lsp_symbols", { query: "Widget" }).permission).toBe("readonly");
+    expect(cls("lsp_hover", { path: "src/a.ts", line: 3 }).permission).toBe("readonly");
+    expect(cls("lsp_document_symbols", { path: "src/a.ts" }).permission).toBe("readonly");
+    expect(cls("lsp_code_actions", { path: "src/a.ts", line: 3 }).permission).toBe("readonly");
     expect(cls("lsp_definition", { path: "src/a.ts", line: 3 }).path).toBe("src/a.ts");
+  });
+
+  it("classifies the editing tools as writes on the file they touch", () => {
+    const cls = (name: string, args: Record<string, unknown>) =>
+      lspTools.find((t) => t.name === name)!.classify(args as never, makeCtx(makeWorkspace()));
+    const action = cls("lsp_apply_code_action", { path: "src/a.ts", line: 3, title: "Add import" });
+    expect(action.permission).toBe("write");
+    expect(action.path).toBe("src/a.ts");
+    expect(action.description).toContain("Add import");
+    const format = cls("lsp_format", { path: "src/a.ts" });
+    expect(format.permission).toBe("write");
+    expect(format.path).toBe("src/a.ts");
   });
 
   it("classifies lsp_rename as a write on the anchor file", () => {
@@ -175,6 +201,11 @@ describe("lsp tools graceful degradation (no language server on PATH)", () => {
     ["lsp_diagnostics", { path: "src/app.ts" }],
     ["lsp_rename", { path: "src/app.ts", line: 1, newName: "renamed" }],
     ["lsp_symbols", { query: "Widget", path: "src/app.ts" }],
+    ["lsp_hover", { path: "src/app.ts", line: 1 }],
+    ["lsp_document_symbols", { path: "src/app.ts" }],
+    ["lsp_code_actions", { path: "src/app.ts", line: 1 }],
+    ["lsp_apply_code_action", { path: "src/app.ts", line: 1, title: "Fix" }],
+    ["lsp_format", { path: "src/app.ts" }],
   ])("%s reports lsp_unavailable with an install hint", async (name, args) => {
     const dispatcher = createDefaultDispatcher();
     const res = await dispatcher.execute(call(name, args), makeCtx(makeWorkspace()));

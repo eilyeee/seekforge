@@ -45,18 +45,27 @@ Install the TypeScript/JavaScript language server: `npm i -g typescript-language
 | `lsp_definition` | `path`, `line`, `character?` | `readonly` | 对该位置的符号执行跳转到定义；返回定义所在的 `file:line(s)`。 |
 | `lsp_references` | `path`, `line`, `character?` | `readonly` | 查找该符号的全部引用；返回每个 `file:line` 及数量。 |
 | `lsp_diagnostics` | `path` | `readonly` | 在服务器中打开该文件并返回其诊断信息（`error`/`warning`/… 附带行号与消息）。 |
-| `lsp_symbols` | `query`, `path?`, `limit?` | `readonly` | 在整个项目里搜索匹配 `query` 的声明；返回名称、种类（`class`、`function`…）与 `path:line`。 |
+| `lsp_hover` | `path`, `line`, `character?` | `readonly` | 编译器自己对某个符号的描述：解析后的类型或签名，以及它的文档注释。 |
+| `lsp_document_symbols` | `path` | `readonly` | 按源码顺序列出单个文件的大纲——每个声明及其种类、1-based 行号与嵌套层级。 |
+| `lsp_symbols` | `query`, `path?`, `limit?` | `readonly` | 在整个项目里搜索匹配 `query` 的声明；返回名称、种类与 `path:line`。 |
+| `lsp_code_actions` | `path`, `line`, `endLine?`, `kind?` | `readonly` | 列出服务器为这些行提供的修复；请求会带上这些行上的诊断。 |
+| `lsp_apply_code_action` | `path`, `line`, `endLine?`, `title` | `write` | 在你批准其 diff 之后，按标题应用其中一个。 |
+| `lsp_format` | `path`, `tabSize?`, `insertSpaces?` | `write` | 在你批准 diff 之后，用服务器自带的格式化器格式化该文件。 |
 | `lsp_rename` | `path`, `line`, `character?`, `newName` | `write` | 在你批准 diff 之后，把该符号在服务器能解析到的所有位置改名，跨文件。 |
 
 `lsp_symbols` 问的是**服务器级**的问题，因此需要知道该问哪个语言服务器。它会使用当前工作区里已经在运行的服务器——通常就是之前的 `lsp_*` 调用启动的那个。如果一个都没有，它会以 `lsp_no_session` 失败；传 `path`（该语言的任意一个文件）即可启动一个。
 
 `path` 是工作区相对路径，且必须位于工作区内（与其他所有文件工具使用同一沙箱；`.env`/密钥等敏感文件会被拒绝）。`line` 是 **1-based**（与编辑器/工具惯例一致）；`character` 是 **0-based**（0 = 行首），默认 0。结果以 **1-based** 行号报告；仓库内的位置为工作区相对路径，仓库外的位置（标准库、依赖）以绝对路径显示。
 
-五个工具中有四个只读取/分析，因此归为 **`readonly`**——与浏览器检查工具（`browser_snapshot` / `browser_console`）一样——在所有审批模式下自动放行。
+分析类工具只做读取，因此归为 **`readonly`**——与浏览器检查工具（`browser_snapshot` / `browser_console`）一样——在所有审批模式下自动放行。
 
-## 重命名
+## 编辑
 
-`lsp_rename` 是唯一会写盘的 LSP 工具，而且它写的是调用方从未点名的文件。因此它的处理方式也不同。
+有三个工具会写盘：`lsp_rename`、`lsp_apply_code_action` 和 `lsp_format`。三者的工作方式相同——由语言服务器产出编辑、你批准一份真实的 diff、然后要么全做要么不做——因此下面针对重命名写明的规则，对三者同样成立。
+
+`lsp_apply_code_action` 就是让编译器修自己提出的问题：在 `lsp_diagnostics` 标记的那一行上用 `lsp_code_actions` 列出可选项，再按标题应用其中一个。如果某个 action 要求服务器**执行命令**而不是产出编辑，会被拒绝——那不是可以代你运行的东西。
+
+重命名值得单独讲清楚，因为它写的是调用方从未点名的文件。
 
 **你批准的是 diff，而不是意图。** 在问你任何事情之前，这次重命名已经被完整算了出来：向服务器要到编辑、解析每一个目标、读取每一个文件并**在内存里**把编辑应用完。确认弹窗随后带着每个文件的真实 unified diff，以及按文件划分的可勾选 hunk。此刻磁盘上还没有任何改动。
 
@@ -92,6 +101,8 @@ lsp_diagnostics({ path: "src/widget.ts" })            # 确认仍能编译
   `languageId`、版本与文本）；`textDocument/didChange` 提升版本号，
   以强制一次全新的诊断。
 - **请求。** `textDocument/definition`、`textDocument/references`、
+  `textDocument/hover`、`textDocument/documentSymbol`、`textDocument/codeAction`
+  （及 `codeAction/resolve`）、`textDocument/formatting`、
   `textDocument/rename`、`workspace/symbol`，以及服务器推送的
   `textDocument/publishDiagnostics` 通知（在打开/修改文件后短暂等待）。
   位置在边界处从我们的 1-based `line` 转换为 LSP 的 0-based 行/列。

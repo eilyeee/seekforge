@@ -39,6 +39,16 @@ function handle(message) {
     }
   } else if (message.method === "workspace/symbol") {
     send({ jsonrpc: "2.0", id: message.id, result: fixture.symbols ?? [] });
+  } else if (message.method === "textDocument/hover") {
+    send({ jsonrpc: "2.0", id: message.id, result: fixture.hover ?? null });
+  } else if (message.method === "textDocument/documentSymbol") {
+    send({ jsonrpc: "2.0", id: message.id, result: fixture.outline ?? [] });
+  } else if (message.method === "textDocument/codeAction") {
+    send({ jsonrpc: "2.0", id: message.id, result: fixture.codeActions ?? [] });
+  } else if (message.method === "codeAction/resolve") {
+    send({ jsonrpc: "2.0", id: message.id, result: { ...message.params, edit: fixture.resolvedEdit } });
+  } else if (message.method === "textDocument/formatting") {
+    send({ jsonrpc: "2.0", id: message.id, result: fixture.formatting ?? [] });
   } else if (message.id !== undefined) {
     send({ jsonrpc: "2.0", id: message.id, result: null });
   }
@@ -330,6 +340,194 @@ describe("lsp_rename refuses rather than half-applying", () => {
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("outside_workspace");
     expect(fs.readFileSync(outside, "utf8")).toBe("export class Widget {}\n");
+  });
+});
+
+describe("lsp_hover and lsp_document_symbols", () => {
+  it("flattens whatever shape the server answers hover with", async () => {
+    setFixture({
+      hover: {
+        contents: [{ language: "typescript", value: "class Widget" }, "The widget.", { value: "" }],
+      },
+    });
+    const res = await createDefaultDispatcher().execute(
+      call("lsp_hover", { path: "widget.ts", line: 1, character: 13 }),
+      ctxWith(),
+    );
+    expect(res.ok, JSON.stringify(res.error)).toBe(true);
+    expect(res.data).toEqual({ path: "widget.ts", line: 1, hover: "class Widget\n\nThe widget." });
+  });
+
+  it("says so when the server has nothing there, instead of returning empty", async () => {
+    setFixture({ hover: null });
+    const res = await createDefaultDispatcher().execute(call("lsp_hover", { path: "widget.ts", line: 1 }), ctxWith());
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("no_hover");
+  });
+
+  it("flattens a nested outline into ordered entries with their depth", async () => {
+    setFixture({
+      outline: [
+        {
+          name: "Widget",
+          kind: 5,
+          detail: "class",
+          range: { start: { line: 0, character: 0 }, end: { line: 4, character: 1 } },
+          children: [
+            { name: "render", kind: 6, range: { start: { line: 2, character: 2 }, end: { line: 3, character: 3 } } },
+          ],
+        },
+        { name: "make", kind: 12, range: { start: { line: 6, character: 0 }, end: { line: 6, character: 9 } } },
+      ],
+    });
+    const res = await createDefaultDispatcher().execute(call("lsp_document_symbols", { path: "widget.ts" }), ctxWith());
+    expect(res.ok, JSON.stringify(res.error)).toBe(true);
+    expect(res.data).toEqual({
+      path: "widget.ts",
+      count: 3,
+      symbols: [
+        { name: "Widget", kind: "class", line: 1, depth: 0, detail: "class" },
+        { name: "render", kind: "method", line: 3, depth: 1 },
+        { name: "make", kind: "function", line: 7, depth: 0 },
+      ],
+    });
+  });
+
+  it("reads the older flat outline shape too", async () => {
+    setFixture({
+      outline: [
+        {
+          name: "Widget",
+          kind: 5,
+          location: {
+            uri: uri("widget.ts"),
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } },
+          },
+        },
+      ],
+    });
+    const res = await createDefaultDispatcher().execute(call("lsp_document_symbols", { path: "widget.ts" }), ctxWith());
+    expect(res.data).toMatchObject({ symbols: [{ name: "Widget", kind: "class", line: 1, depth: 0 }] });
+  });
+});
+
+describe("lsp_code_actions", () => {
+  const ACTION = {
+    title: "Add missing import",
+    kind: "quickfix",
+    isPreferred: true,
+    edit: { changes: {} as Record<string, unknown> },
+  };
+
+  const actionEditing = (): Record<string, unknown> => ({
+    ...ACTION,
+    edit: { changes: { [uri("uses.ts")]: [edit(0, 9, 6, "Panel")] } },
+  });
+
+  it("lists what the server offers, with kind and preference", async () => {
+    setFixture({
+      codeActions: [
+        actionEditing(),
+        { title: "Remove unused", kind: "quickfix", disabled: { reason: "nothing here" } },
+      ],
+    });
+    const res = await createDefaultDispatcher().execute(
+      call("lsp_code_actions", { path: "widget.ts", line: 1 }),
+      ctxWith(),
+    );
+    expect(res.ok, JSON.stringify(res.error)).toBe(true);
+    expect(res.data).toMatchObject({
+      count: 2,
+      actions: [
+        { title: "Add missing import", kind: "quickfix", preferred: true },
+        { title: "Remove unused", unavailable: "nothing here" },
+      ],
+    });
+  });
+
+  it("applies the named action after showing its diff", async () => {
+    setFixture({ codeActions: [actionEditing()] });
+    let request: PermissionRequest | undefined;
+    const res = await createDefaultDispatcher().execute(
+      call("lsp_apply_code_action", { path: "widget.ts", line: 1, title: "Add missing import" }),
+      ctxWith({
+        policy: { approvalMode: "confirm" },
+        confirm: async (req) => {
+          request = req;
+          return true;
+        },
+      }),
+    );
+
+    expect(res.ok, JSON.stringify(res.error)).toBe(true);
+    expect(request?.preview?.diff).toContain("+import { Panel }");
+    expect(read("uses.ts")).toContain("import { Panel }");
+  });
+
+  it("resolves an action the server sent without its edit", async () => {
+    setFixture({
+      codeActions: [{ title: "Organize imports", kind: "source.organizeImports", data: { token: 1 } }],
+      resolvedEdit: { changes: { [uri("uses.ts")]: [edit(0, 9, 6, "Panel")] } },
+    });
+    const res = await createDefaultDispatcher().execute(
+      call("lsp_apply_code_action", { path: "widget.ts", line: 1, title: "Organize imports" }),
+      ctxWith(),
+    );
+    expect(res.ok, JSON.stringify(res.error)).toBe(true);
+    expect(read("uses.ts")).toContain("import { Panel }");
+  });
+
+  it("names what is on offer when the title does not match", async () => {
+    setFixture({ codeActions: [actionEditing()] });
+    const res = await createDefaultDispatcher().execute(
+      call("lsp_apply_code_action", { path: "widget.ts", line: 1, title: "Something else" }),
+      ctxWith(),
+    );
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("action_not_found");
+    expect(res.error?.message).toContain("Add missing import");
+  });
+
+  it("refuses an action that asks the server to run a command instead of editing", async () => {
+    setFixture({ codeActions: [{ title: "Run the fixer", command: { command: "fix.all" } }] });
+    const res = await createDefaultDispatcher().execute(
+      call("lsp_apply_code_action", { path: "widget.ts", line: 1, title: "Run the fixer" }),
+      ctxWith(),
+    );
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("unsupported_action");
+    expect(read("uses.ts")).toBe(USES);
+  });
+});
+
+describe("lsp_format", () => {
+  it("shows the formatting diff and writes it once approved", async () => {
+    // A zero-width insert: what a formatter does when it reindents a line.
+    setFixture({ formatting: [edit(1, 0, 0, "  ")] });
+    let request: PermissionRequest | undefined;
+    const res = await createDefaultDispatcher().execute(
+      call("lsp_format", { path: "widget.ts", tabSize: 4 }),
+      ctxWith({
+        policy: { approvalMode: "confirm" },
+        confirm: async (req) => {
+          request = req;
+          return true;
+        },
+      }),
+    );
+    expect(res.ok, JSON.stringify(res.error)).toBe(true);
+    expect(request?.permission).toBe("write");
+    expect(request?.preview?.diff).toContain("widget.ts");
+    expect(res.data).toMatchObject({ path: "widget.ts", formatted: true });
+    expect(read("widget.ts")).toContain("  export const make");
+  });
+
+  it("reports an already-formatted file rather than an empty write", async () => {
+    setFixture({ formatting: [] });
+    const res = await createDefaultDispatcher().execute(call("lsp_format", { path: "widget.ts" }), ctxWith());
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("no_changes");
+    expect(read("widget.ts")).toBe(WIDGET);
   });
 });
 

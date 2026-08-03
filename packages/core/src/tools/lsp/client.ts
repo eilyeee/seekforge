@@ -266,6 +266,75 @@ export function symbolKindLabel(kind?: number): string {
 
 const ZERO_RANGE: LspRange = { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } };
 
+/** One entry of a file's outline (textDocument/documentSymbol). */
+export type LspOutlineSymbol = {
+  name: string;
+  kind: string;
+  /** 0-based line where the symbol starts. */
+  line: number;
+  /** Nesting depth: 0 = top level, 1 = a member of the entry above it, … */
+  depth: number;
+  detail?: string;
+};
+
+/** Editor formatting preferences sent with textDocument/formatting. */
+export type LspFormattingOptions = { tabSize: number; insertSpaces: boolean };
+
+/** Cap hover text: a doc comment can be very long, and this goes in a tool result. */
+const MAX_HOVER_CHARS = 4_000;
+
+/**
+ * Flatten a hover result. The spec allows a plain string, a `{language, value}`
+ * pair, a markup object, or an array of any of those — all of which mean the
+ * same thing to a reader, so they collapse to text.
+ */
+function normalizeHover(result: unknown): string {
+  const render = (part: unknown): string => {
+    if (typeof part === "string") return part;
+    if (!isRecord(part)) return "";
+    if (typeof part.value === "string") return part.value;
+    return "";
+  };
+  if (result === null || result === undefined) return "";
+  const contents = isRecord(result) ? result.contents : undefined;
+  const parts = Array.isArray(contents) ? contents : [contents];
+  const text = parts.map(render).filter(Boolean).join("\n\n").trim();
+  return text.length > MAX_HOVER_CHARS ? `${text.slice(0, MAX_HOVER_CHARS)}\n…[truncated]` : text;
+}
+
+/** Cap an outline so one generated file cannot flood a tool result. */
+const MAX_OUTLINE_SYMBOLS = 500;
+
+/**
+ * Flatten a document outline. Servers answer either the newer nested
+ * DocumentSymbol tree or the older flat SymbolInformation list; both become one
+ * ordered list carrying nesting depth, which is what a reader actually needs.
+ */
+function normalizeOutline(result: unknown): LspOutlineSymbol[] {
+  if (!Array.isArray(result)) return [];
+  const out: LspOutlineSymbol[] = [];
+  const walk = (items: unknown[], depth: number): void => {
+    for (const item of items) {
+      if (out.length >= MAX_OUTLINE_SYMBOLS) return;
+      if (!isRecord(item) || typeof item.name !== "string") continue;
+      const range =
+        (isRecord(item.range) ? item.range : undefined) ??
+        (isRecord(item.location) && isRecord(item.location.range) ? item.location.range : undefined);
+      const start = isRecord(range) && isRecord(range.start) ? range.start : undefined;
+      out.push({
+        name: item.name,
+        kind: symbolKindLabel(typeof item.kind === "number" ? item.kind : undefined),
+        line: typeof start?.line === "number" ? start.line : 0,
+        depth,
+        ...(typeof item.detail === "string" && item.detail ? { detail: item.detail } : {}),
+      });
+      if (Array.isArray(item.children)) walk(item.children, depth + 1);
+    }
+  };
+  walk(result, 0);
+  return out;
+}
+
 /**
  * Coerce workspace/symbol results. The older SymbolInformation always carries a
  * full location; the newer WorkspaceSymbol may give only a uri, deferring the
@@ -391,6 +460,17 @@ class LspSession {
             references: { dynamicRegistration: false },
             publishDiagnostics: { relatedInformation: false },
             rename: { dynamicRegistration: false, prepareSupport: false },
+            hover: { dynamicRegistration: false, contentFormat: ["plaintext", "markdown"] },
+            documentSymbol: { dynamicRegistration: false, hierarchicalDocumentSymbolSupport: true },
+            codeAction: {
+              dynamicRegistration: false,
+              // Servers answer the newer CodeAction shape only when the client
+              // says it understands it; otherwise they fall back to Command,
+              // which carries no edit we could review.
+              codeActionLiteralSupport: { codeActionKind: { valueSet: ["quickfix", "refactor", "source"] } },
+              resolveSupport: { properties: ["edit"] },
+            },
+            formatting: { dynamicRegistration: false },
           },
           workspace: {
             // documentChanges gets the versioned edit shape; the empty
@@ -587,6 +667,58 @@ class LspSession {
       REQUEST_TIMEOUT_MS,
       signal,
     );
+  }
+
+  async hover(absPath: string, position: LspPosition, signal?: AbortSignal): Promise<string> {
+    const { uri } = this.syncDocument(absPath);
+    const result = await this.request(
+      "textDocument/hover",
+      { textDocument: { uri }, position },
+      REQUEST_TIMEOUT_MS,
+      signal,
+    );
+    return normalizeHover(result);
+  }
+
+  async documentSymbols(absPath: string, signal?: AbortSignal): Promise<LspOutlineSymbol[]> {
+    const { uri } = this.syncDocument(absPath);
+    const result = await this.request(
+      "textDocument/documentSymbol",
+      { textDocument: { uri } },
+      REQUEST_TIMEOUT_MS,
+      signal,
+    );
+    return normalizeOutline(result);
+  }
+
+  async codeActions(
+    absPath: string,
+    range: LspRange,
+    diagnostics: LspDiagnostic[],
+    only: string | undefined,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const { uri } = this.syncDocument(absPath);
+    return this.request(
+      "textDocument/codeAction",
+      {
+        textDocument: { uri },
+        range,
+        context: { diagnostics, ...(only ? { only: [only] } : {}) },
+      },
+      REQUEST_TIMEOUT_MS,
+      signal,
+    );
+  }
+
+  /** Resolve a code action that arrived without its edit (spec: codeAction/resolve). */
+  async resolveCodeAction(action: unknown, signal?: AbortSignal): Promise<unknown> {
+    return this.request("codeAction/resolve", action, REQUEST_TIMEOUT_MS, signal);
+  }
+
+  async formatting(absPath: string, options: LspFormattingOptions, signal?: AbortSignal): Promise<unknown> {
+    const { uri } = this.syncDocument(absPath);
+    return this.request("textDocument/formatting", { textDocument: { uri }, options }, REQUEST_TIMEOUT_MS, signal);
   }
 
   async workspaceSymbols(query: string, signal?: AbortSignal): Promise<LspSymbol[]> {
@@ -885,6 +1017,73 @@ export async function lspDiagnostics(
 ): Promise<LspDiagnostic[]> {
   const { session } = await getSession(workspace, absPath, signal);
   return session.diagnosticsFor(absPath, signal);
+}
+
+/** The compiler's own description of the symbol at `position` (type, signature, doc). */
+export async function lspHover(
+  workspace: string,
+  absPath: string,
+  position: LspPosition,
+  signal?: AbortSignal,
+): Promise<string> {
+  const { session } = await getSession(workspace, absPath, signal);
+  return session.hover(absPath, position, signal);
+}
+
+/** A precise outline of one file, straight from the parser. */
+export async function lspDocumentSymbols(
+  workspace: string,
+  absPath: string,
+  signal?: AbortSignal,
+): Promise<LspOutlineSymbol[]> {
+  const { session } = await getSession(workspace, absPath, signal);
+  return session.documentSymbols(absPath, signal);
+}
+
+/**
+ * The fixes the language server offers for a range — usually for the
+ * diagnostics reported there, which are fetched first so the server has the
+ * context it needs to answer.
+ */
+export async function lspCodeActions(
+  workspace: string,
+  absPath: string,
+  range: LspRange,
+  only: string | undefined,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const { session } = await getSession(workspace, absPath, signal);
+  const diagnostics = (await session.diagnosticsFor(absPath, signal)).filter((d) => rangesOverlap(d.range, range));
+  return session.codeActions(absPath, range, diagnostics, only, signal);
+}
+
+/** Resolve a code action the server returned without its edit. */
+export async function lspResolveCodeAction(
+  workspace: string,
+  absPath: string,
+  action: unknown,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const { session } = await getSession(workspace, absPath, signal);
+  return session.resolveCodeAction(action, signal);
+}
+
+/** Whole-file formatting edits. */
+export async function lspFormatting(
+  workspace: string,
+  absPath: string,
+  options: LspFormattingOptions,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const { session } = await getSession(workspace, absPath, signal);
+  return session.formatting(absPath, options, signal);
+}
+
+/** True when two ranges share at least one position. */
+function rangesOverlap(a: LspRange, b: LspRange): boolean {
+  const before = (p: LspPosition, q: LspPosition): boolean =>
+    p.line < q.line || (p.line === q.line && p.character <= q.character);
+  return before(a.start, b.end) && before(b.start, a.end);
 }
 
 /** Ask the language server for the edit that renames the symbol at `position`. */

@@ -4432,6 +4432,19 @@ feature is wired end to end, compiles, and does nothing.
   options, which did not declare it — an MCP server's sampling would have gone
   uncounted in exactly the surface the feature was being added for.
 
+## 405. A replace that matched nothing looks exactly like one that worked
+
+Rewriting a file by string replacement succeeds silently when the pattern does
+not match: the script exits 0, the file is written, and the change is simply
+absent. In prose this ships a document that contradicts itself — the surrounding
+paragraph was updated, the table it describes was not.
+
+- **Do:** assert the pattern is present before replacing, every time, and check
+  the result (a count, a grep) rather than the exit code.
+- **Caught:** the LSP tool table kept listing three tools while the sentence
+  under it said "four of the five"; the edit that was meant to add the rows had
+  quietly matched nothing, and no gate covers a tool table.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

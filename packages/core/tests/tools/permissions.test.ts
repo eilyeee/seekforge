@@ -654,6 +654,11 @@ describe("dispatcher basics", () => {
       "lsp_definition",
       "lsp_references",
       "lsp_diagnostics",
+      "lsp_hover",
+      "lsp_document_symbols",
+      "lsp_code_actions",
+      "lsp_apply_code_action",
+      "lsp_format",
       "lsp_rename",
       "lsp_symbols",
     ]);
