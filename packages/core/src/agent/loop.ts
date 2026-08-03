@@ -8,10 +8,12 @@ import {
   type PermissionRequest,
   type PermissionRule,
   type ProviderToolCall,
+  type TokenUsage,
   type ToolResult,
 } from "@seekforge/shared";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ChatProvider, RetryInfo } from "../provider/index.js";
+import type { UsageBus } from "./usage-bus.js";
 import type { RuntimeClient } from "../runtime/index.js";
 import {
   acquireBrowserLease,
@@ -324,6 +326,12 @@ export type AgentCoreDeps = {
    * Unset = retry progress is not surfaced (the provider still retries).
    */
   retryBus?: RetryBus;
+  /**
+   * Tokens spent outside this loop (an MCP server's sampling call). Drained
+   * into the session total whenever usage is reported, so a cost incurred
+   * during a tool call is not invisible to the user paying for it.
+   */
+  usageBus?: UsageBus;
   /** Internal: nesting depth. Depth > 0 never advertises dispatch_agent. */
   _depth?: number;
   /** Internal: dispatch-manager override (test seam). */
@@ -850,6 +858,16 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         const allowedToolSet = deps.allowedTools ? new Set(deps.allowedTools) : undefined;
         const toolDefs = allowedToolSet ? allToolDefs.filter((tool) => allowedToolSet.has(tool.name)) : allToolDefs;
         let usage = ZERO_USAGE;
+        /**
+         * The running total, including anything recorded outside the loop since
+         * the last report. Draining here rather than at the point of spend keeps
+         * one owner for the total.
+         */
+        const withExternalUsage = (): TokenUsage => {
+          const external = deps.usageBus?.drain();
+          if (external) usage = addUsage(usage, external);
+          return usage;
+        };
         let sessionEndStatus: "completed" | "failed" | "cancelled" | undefined;
         let toolCallCount = 0;
         let turnsUsed = 0;
@@ -1042,7 +1060,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                   : null) ?? compactMessages(messages, messageBudgetTokens);
               if (compacted?.usage) {
                 usage = addUsage(usage, compacted.usage);
-                yield emit({ type: "usage.updated", usage });
+                yield emit({ type: "usage.updated", usage: withExternalUsage() });
                 throwIfCancelled();
               }
               // Last resort: shrink oversized tool payloads in place so the
@@ -1133,7 +1151,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               () => new AgentLimitError("cancelled", "cancelled by user"),
             );
             usage = addUsage(usage, res.usage);
-            yield emit({ type: "usage.updated", usage });
+            yield emit({ type: "usage.updated", usage: withExternalUsage() });
             throwIfCancelled();
 
             // Window occupancy after each provider response (cheap estimate).
@@ -1461,7 +1479,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                     ...meta,
                     status: "running",
                     updatedAt: new Date().toISOString(),
-                    usage: addUsage(priorUsage, usage),
+                    usage: addUsage(priorUsage, withExternalUsage()),
                     plan: items,
                   });
                 }
@@ -1614,7 +1632,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               });
               if (extraction.usage) {
                 usage = addUsage(usage, extraction.usage);
-                report = { ...report, usage };
+                report = { ...report, usage: withExternalUsage() };
                 yield emit({ type: "usage.updated", usage });
                 throwIfCancelled();
               }
@@ -1639,7 +1657,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             ...meta,
             status: "completed",
             updatedAt: new Date().toISOString(),
-            usage: addUsage(priorUsage, usage),
+            usage: addUsage(priorUsage, withExternalUsage()),
             ...(lastPlanItems ? { plan: lastPlanItems } : {}),
           });
 
@@ -1685,7 +1703,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             ...meta,
             status: code === "cancelled" ? "cancelled" : "failed",
             updatedAt: new Date().toISOString(),
-            usage: addUsage(priorUsage, usage),
+            usage: addUsage(priorUsage, withExternalUsage()),
             ...(lastPlanItems ? { plan: lastPlanItems } : {}),
           });
           const cancelled = code === "cancelled";

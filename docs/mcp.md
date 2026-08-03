@@ -230,8 +230,10 @@ on **every** call — there is no approval-mode bypass, only whatever your
 frontend's confirm does (a headless `-y` run therefore approves it, exactly as
 `-y` approves everything else). The prompt names the server, the model, and the
 text being sent. What the call cost is written to stderr as
-`[mcp:<server>] sampling used <n> tokens ($x.xxxx)`; it is **not** folded into
-the session's own cost total, because it is not the session's work.
+`[mcp:<server>] sampling used <n> tokens ($x.xxxx)` **and** folded into the
+session's own total, so it appears in `usage.updated`, in the session record,
+and in whatever the frontend shows you — the same place as every other token
+you paid for.
 
 The sampling provider is built from the same configuration as the agent's but is
 a separate instance, so a server's model calls stay out of the agent's retry bus

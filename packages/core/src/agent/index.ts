@@ -47,6 +47,7 @@ export {
   type AgentCoreDeps,
   type RetryBus,
 } from "./loop.js";
+export { createUsageBus, type UsageBus } from "./usage-bus.js";
 export {
   acquireSessionLease,
   acquireSessionLeaseWithPreemption,

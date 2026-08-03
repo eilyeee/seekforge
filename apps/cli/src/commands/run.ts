@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline/promises";
-import { listSessions, loadAgentDefinitions, readSessionMeta } from "@seekforge/core";
+import { createUsageBus, listSessions, loadAgentDefinitions, readSessionMeta } from "@seekforge/core";
 import type { AgentEvent, ApprovalMode, FinalReport } from "@seekforge/shared";
 import { cliMcpServerRequestHandlers, createCliAgent, prepareMcp } from "../agent-factory.js";
 import { colorIsEnabled, fail } from "../colors.js";
@@ -343,7 +343,14 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
   // terminal prompt would race it for the same fd and corrupt the next
   // envelope. Deny automatically in that mode (as `machine` output already does).
   const confirm = machine || opts.inputFormat === "stream-json" ? async () => false : confirmInTerminal;
-  const mcp = await prepareMcp(mcpConfigForRun, projectPath, cliMcpServerRequestHandlers({ config, confirm, model }));
+  // Shared by the MCP sampling handler and the agent, so a server's model calls
+  // land in this run's usage rather than only on stderr.
+  const usageBus = createUsageBus();
+  const mcp = await prepareMcp(
+    mcpConfigForRun,
+    projectPath,
+    cliMcpServerRequestHandlers({ config, confirm, model, usageBus }),
+  );
   let created: ReturnType<typeof createCliAgent>;
   try {
     created = createCliAgent({
@@ -353,6 +360,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
       model,
       mcpToolSpecs: mcp.specs,
       confirm,
+      usageBus,
       onModelDelta: emitPartial ?? renderer?.modelDelta,
       onReasoningDelta: renderer?.reasoningDelta,
       extractMemory: mode === "edit",

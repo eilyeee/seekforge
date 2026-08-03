@@ -19,6 +19,7 @@ import {
   type PluginContributions,
   type ToolSpec,
   type McpServerRequestHandlers,
+  type UsageBus,
 } from "@seekforge/core";
 import type { ConfirmResult, PermissionRequest, PermissionRule } from "@seekforge/shared";
 import type { CliConfig } from "./config.js";
@@ -53,6 +54,8 @@ export type CliAgentOptions = {
   allowedTools?: string[];
   /** Run-local contribution snapshot shared across plugin MCP/hooks/skills/agents. */
   pluginContributions?: PluginContributions;
+  /** Session usage bus shared with the MCP sampling handler (see cliMcpServerRequestHandlers). */
+  usageBus?: UsageBus;
 };
 
 export type CliAgent = {
@@ -122,6 +125,7 @@ export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
       },
     ),
     dispatcher: createDefaultDispatcher(opts.mcpToolSpecs ?? []),
+    ...(opts.usageBus ? { usageBus: opts.usageBus } : {}),
     ...(opts.maxTurns !== undefined && opts.maxTurns > 0 ? { limits: { maxAgentTurns: opts.maxTurns } } : {}),
     confirm: opts.confirm,
     onModelDelta: opts.onModelDelta,
@@ -195,6 +199,8 @@ export function cliMcpServerRequestHandlers(input: {
   confirm?: (req: PermissionRequest) => Promise<ConfirmResult>;
   askUser?: (q: { question: string; options: string[] }) => Promise<string>;
   model?: string;
+  /** Session usage bus, so a server's sampling shows up in the session total. */
+  usageBus?: UsageBus;
 }): McpServerRequestHandlers | undefined {
   const { config } = input;
   const handlers: McpServerRequestHandlers = {
@@ -212,6 +218,7 @@ export function cliMcpServerRequestHandlers(input: {
                 input.model ?? config.model,
               ),
             confirm: input.confirm,
+            ...(input.usageBus ? { onUsage: (usage) => input.usageBus?.record(usage) } : {}),
           }),
         }
       : {}),

@@ -6,6 +6,7 @@ import type { AgentEvent, ChatMessage, ChatResponse, ToolCall, ToolResult } from
 import type { ChatProvider, ChatRequest } from "../../src/provider/index.js";
 import { createDefaultDispatcher, type ToolContext, type ToolDispatcher } from "../../src/tools/index.js";
 import { createAgentCore } from "../../src/agent/loop.js";
+import { createUsageBus } from "../../src/agent/usage-bus.js";
 import { readMemoryMaintenanceState } from "../../src/memory/index.js";
 import {
   createSessionTrace,
@@ -48,6 +49,18 @@ function fakeDispatcher(result: ToolResult): ToolDispatcher & { calls: ToolCall[
   };
 }
 
+/** A dispatcher whose tool call spends tokens outside the loop, as MCP sampling does. */
+function recordingDispatcher(bus: { record: (u: typeof USAGE) => void }): ToolDispatcher {
+  const inner = fakeDispatcher({ ok: true, data: { content: "x" } });
+  return {
+    list: inner.list,
+    execute: async (call: ToolCall, ctx: ToolContext) => {
+      bus.record({ promptTokens: 100, completionTokens: 50, cacheHitTokens: 0, costUsd: 0.02 });
+      return inner.execute(call, ctx);
+    },
+  };
+}
+
 async function collect(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
   const out: AgentEvent[] = [];
   for await (const e of events) out.push(e);
@@ -78,6 +91,44 @@ describe("agent loop", () => {
     expect(sessions).toHaveLength(1);
     expect(sessions[0]!.status).toBe("completed");
     expect(sessions[0]!.usage?.costUsd).toBeCloseTo(0.001);
+  });
+
+  it("counts tokens spent outside the loop in the session total", async () => {
+    // An MCP server borrowing the user's model during a tool call spends real
+    // money that the loop never sees in a provider response of its own.
+    const usageBus = createUsageBus();
+    const agent = createAgentCore({
+      provider: fakeProvider([
+        response({
+          toolCalls: [{ id: "read-1", name: "read_file", argumentsJson: '{"path":"a.ts"}' }],
+          finishReason: "tool_calls",
+        }),
+        response({ content: "## Summary\ndone" }),
+      ]),
+      dispatcher: recordingDispatcher(usageBus),
+      confirm: async () => true,
+      usageBus,
+    });
+
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    const totals = events.filter((e) => e.type === "usage.updated");
+    const final = totals.at(-1) as { usage: { costUsd: number; promptTokens: number } };
+    // Two provider calls (0.001 each) plus the server's own call.
+    expect(final.usage.costUsd).toBeCloseTo(0.022);
+    expect(final.usage.promptTokens).toBe(120);
+    expect(listSessions(workspace)[0]!.usage?.costUsd).toBeCloseTo(0.022);
+  });
+
+  it("leaves the total untouched when nothing spends outside the loop", async () => {
+    const usageBus = createUsageBus();
+    const agent = createAgentCore({
+      provider: fakeProvider([response({ content: "## Summary\ndone" })]),
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+      usageBus,
+    });
+    await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    expect(listSessions(workspace)[0]!.usage?.costUsd).toBeCloseTo(0.001);
   });
 
   it("continues a bounded execution slice in the same session without adding a user turn", async () => {

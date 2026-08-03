@@ -4403,6 +4403,21 @@ working rather than a feature that never worked.
   `outside_workspace`. The tests missed it because the stub server echoed back
   the unresolved paths the test itself supplied.
 
+## 403. "Could not read it" is not "it does not exist"
+
+A reader that answers `null` for both a missing value and an unavailable one
+lets every consumer treat unavailability as absence. In a diff that means an
+overwrite renders as a creation: all additions, no deletions, and a reviewer who
+approves believing nothing is being replaced.
+
+- **Do:** keep the two outcomes distinguishable at the boundary, and have the
+  consumer refuse to render rather than render from the ambiguous value.
+- **Caught:** the write-tool preview returned `null` for a runtime-backed
+  session (whose files need an async read) exactly as it did for a new file, so
+  every `write_file` in a Rust-runtime or Docker session was reviewed as a brand
+  new file. The async read now happens in `prepare`; the sync path renders
+  nothing when it cannot read.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

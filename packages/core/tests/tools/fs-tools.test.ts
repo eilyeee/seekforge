@@ -1,7 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createDefaultDispatcher } from "../../src/tools/index.js";
+import type { PermissionRequest } from "@seekforge/shared";
+import { createDefaultDispatcher, ToolError } from "../../src/tools/index.js";
+import type { RuntimeClient } from "../../src/runtime/index.js";
 import { unifiedDiff } from "../../src/tools/diff.js";
 import { call, makeCtx, makeWorkspace } from "./helpers.js";
 
@@ -381,6 +383,125 @@ describe("edit-review preview (write tools)", () => {
     expect(preview?.diff).toContain("more lines truncated");
     // Body capped at 400 lines + header(2) + marker; comfortably under 2000.
     expect(preview!.diff.split("\n").length).toBeLessThan(420);
+  });
+});
+
+describe("edit-review preview through the runtime backend", () => {
+  /**
+   * A session whose files live behind the runtime (the Rust backend, the Docker
+   * runner) used to approve every write blind: the preview needs an async read,
+   * which classify cannot do, so no diff ever reached the prompt.
+   */
+  function fakeRuntime(files: Record<string, string>): {
+    runtime: RuntimeClient;
+    calls: Array<{ method: string; params: Record<string, unknown> }>;
+  } {
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    return {
+      calls,
+      runtime: {
+        async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+          calls.push({ method, params });
+          if (method === "read_file") {
+            const content = files[String(params.path)];
+            if (content === undefined) throw new ToolError("not_found", `no ${String(params.path)}`);
+            return { content } as T;
+          }
+          if (method === "write_file") {
+            files[String(params.path)] = String(params.content);
+            return { path: params.path } as T;
+          }
+          if (method === "apply_patch") return { path: params.path, editsApplied: 1 } as T;
+          throw new ToolError("unsupported", method);
+        },
+        async ping() {
+          return { version: "fake" };
+        },
+        dispose() {},
+      },
+    };
+  }
+
+  async function captureRuntimeRequest(
+    files: Record<string, string>,
+    name: string,
+    args: unknown,
+  ): Promise<{ ok: boolean; preview?: { path: string; diff: string }; hunks?: unknown }> {
+    const { runtime } = fakeRuntime(files);
+    let request: PermissionRequest | undefined;
+    const res = await dispatcher.execute(
+      call(name, args),
+      makeCtx(makeWorkspace(), {
+        runtime,
+        policy: { approvalMode: "confirm" },
+        confirm: async (req) => {
+          request = req;
+          return true;
+        },
+      }),
+    );
+    return { ok: res.ok, preview: request?.preview, hunks: request?.hunks };
+  }
+
+  it("shows write_file's diff for a file that only exists behind the runtime", async () => {
+    const { ok, preview } = await captureRuntimeRequest({ "a.txt": "line1\nline2\n" }, "write_file", {
+      path: "a.txt",
+      content: "line1\nCHANGED\n",
+      overwrite: true,
+    });
+    expect(ok).toBe(true);
+    expect(preview?.path).toBe("a.txt");
+    expect(preview?.diff).toContain("-line2");
+    expect(preview?.diff).toContain("+CHANGED");
+  });
+
+  it("shows apply_patch's diff, alongside the per-edit hunks", async () => {
+    const { ok, preview, hunks } = await captureRuntimeRequest({ "a.txt": "alpha\nbeta\n" }, "apply_patch", {
+      path: "a.txt",
+      edits: [
+        { oldString: "alpha", newString: "ALPHA" },
+        { oldString: "beta", newString: "BETA" },
+      ],
+    });
+    expect(ok).toBe(true);
+    expect(preview?.diff).toContain("+ALPHA");
+    expect(preview?.diff).toContain("+BETA");
+    expect(hunks).toHaveLength(2);
+  });
+
+  it("treats a file the runtime does not have as a creation", async () => {
+    const { preview } = await captureRuntimeRequest({}, "write_file", { path: "new.txt", content: "fresh\n" });
+    expect(preview?.diff).toContain("@@ -0,0");
+    expect(preview?.diff).toContain("+fresh");
+    // Nothing is being replaced, so nothing is shown as removed.
+    expect(preview?.diff.split("\n").filter((l) => l.startsWith("-") && !l.startsWith("---"))).toEqual([]);
+  });
+
+  it("still writes when the preview read fails", async () => {
+    const runtime = fakeRuntime({}).runtime;
+    const broken: RuntimeClient = {
+      ...runtime,
+      async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+        if (method === "read_file") throw new Error("runtime unreachable");
+        return runtime.call<T>(method, params);
+      },
+    };
+    let request: PermissionRequest | undefined;
+    const res = await dispatcher.execute(
+      call("write_file", { path: "a.txt", content: "x" }),
+      makeCtx(makeWorkspace(), {
+        runtime: broken,
+        policy: { approvalMode: "confirm" },
+        confirm: async (req) => {
+          request = req;
+          return true;
+        },
+      }),
+    );
+    // The preview is best effort; losing it must not lose the write — and an
+    // unreadable file must not be reviewed as though it were a new one.
+    expect(res.ok).toBe(true);
+    expect(request?.preview).toBeUndefined();
   });
 });
 

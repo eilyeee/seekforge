@@ -19,7 +19,7 @@ import { declRanges, extractSymbols } from "../../agent/repo-map.js";
 import { ensureAstBackend } from "../../agent/repo-map-ast.js";
 import { callRuntime } from "../runtime-backend.js";
 import { compileGlob } from "./glob.js";
-import { defineTool, type ToolSpec } from "../registry.js";
+import { defineTool, type PreparedCall, type ToolSpec } from "../registry.js";
 import type { ToolContext } from "../index.js";
 import { FileTooLargeError, readFileBoundedSync, readUtf8FileBoundedSync } from "../../util/fs.js";
 
@@ -31,22 +31,27 @@ const MAX_TOOL_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_CONTEXT_LINES = 10;
 
 /**
- * Reads the current content of a workspace file for diff previews at classify
- * time. Returns null when the file does not exist (creation) or cannot be read.
- * Never throws — preview is best-effort and must never block the write path.
- *
- * Synchronous local read only: classify is sync, so a runtime-backed session
- * (where the file lives behind an async call) simply gets no preview, which the
- * frontends handle by falling back to the plain allow/deny prompt.
+ * Reads the current content of a workspace file for a diff preview at classify
+ * time. Returns null when the file does not exist — i.e. the write is a
+ * creation. Never throws: a preview is best-effort and must never block a write.
  */
 function readCurrentForPreview(ctx: ToolContext, relPath: string): string | null {
   try {
-    if (ctx.runtime) return null;
     const resolved = resolveForRead(ctx.workspace, relPath);
     return readUtf8FileBoundedSync(resolved, MAX_TOOL_FILE_BYTES);
   } catch {
     return null;
   }
+}
+
+/** Render before → after as a preview, or undefined when nothing changes. */
+function renderPreview(
+  relPath: string,
+  before: string | null,
+  after: string,
+): { path: string; diff: string } | undefined {
+  if (before === after) return undefined;
+  return { path: relPath, diff: unifiedDiff(before, after, relPath) };
 }
 
 /** Best-effort write-tool preview; returns undefined on any failure. */
@@ -55,13 +60,45 @@ function buildPreview(
   relPath: string,
   computeAfter: (before: string | null) => string,
 ): { path: string; diff: string } | undefined {
+  // A runtime-backed session keeps its files behind an async call that classify
+  // cannot make. "Could not read it" is NOT "it does not exist": rendering the
+  // diff from a null `before` claimed every overwrite was a brand-new file, so
+  // the review showed additions and no deletions. Those sessions get their real
+  // diff from `runtimePreview` in the tool's `prepare` step instead.
+  if (ctx.runtime) return undefined;
   try {
     const before = readCurrentForPreview(ctx, relPath);
-    const after = computeAfter(before);
-    if (before === after) return undefined;
-    return { path: relPath, diff: unifiedDiff(before, after, relPath) };
+    return renderPreview(relPath, before, computeAfter(before));
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * The same preview, for a session whose files live behind the runtime backend.
+ *
+ * Without this those sessions approve every write blind: the frontends fall
+ * back to a bare allow/deny because no diff ever arrives. The read is async, so
+ * it belongs in `prepare` — it runs after the call is classified and after the
+ * policy has had its chance to refuse, but before the user is asked.
+ */
+async function runtimePreview(
+  ctx: ToolContext,
+  relPath: string,
+  computeAfter: (before: string | null) => string,
+): Promise<PreparedCall> {
+  if (!ctx.runtime) return {};
+  try {
+    const before = await runtimeBeforeContent(ctx, relPath, { signal: ctx.signal });
+    // Match the local path's bound: a file too big to read locally is too big
+    // to render as a prompt either.
+    if (before !== null && Buffer.byteLength(before, "utf8") > MAX_TOOL_FILE_BYTES) return {};
+    const preview = renderPreview(relPath, before, computeAfter(before));
+    return preview ? { review: { preview } } : {};
+  } catch {
+    // Best effort, exactly like the local preview: a failure here must never
+    // stop the write the user may still approve.
+    return {};
   }
 }
 
@@ -540,11 +577,19 @@ function pushMatch(matches: SearchMatch[], lines: string[], rel: string, i: numb
  * before a delegated write. A missing/unreadable file maps to null (the
  * checkpoint semantics for "did not exist before this session").
  */
-async function runtimeBeforeContent(ctx: ToolContext, relPath: string): Promise<string | null> {
+async function runtimeBeforeContent(
+  ctx: ToolContext,
+  relPath: string,
+  opts?: { signal?: AbortSignal },
+): Promise<string | null> {
   try {
-    const res = await callRuntime<{ content: string }>(ctx.runtime!, "read_file", ctx.workspace, {
-      path: relPath,
-    });
+    const res = await callRuntime<{ content: string }>(
+      ctx.runtime!,
+      "read_file",
+      ctx.workspace,
+      { path: relPath },
+      opts?.signal ? { signal: opts.signal } : undefined,
+    );
     return res.content;
   } catch (err) {
     if (err instanceof ToolError && (err.code === "not_found" || err.code === "io_error")) return null;
@@ -563,6 +608,7 @@ const writeFile = defineTool({
   description:
     "Write content as the COMPLETE file at path (parent directories are created). Whole-file replacement: use only for new files or intentional full rewrites — use apply_patch for any edit to an existing file. Fails if the file already exists unless overwrite is true.",
   schema: writeFileSchema,
+  prepare: (args, ctx) => runtimePreview(ctx, args.path, () => args.content),
   classify: (args, ctx) => {
     const preview = buildPreview(ctx, args.path, () => args.content);
     return {
@@ -646,6 +692,7 @@ const applyPatch = defineTool({
   description:
     'Edit the file at path with search/replace edits, applied atomically (any failure writes nothing). Read the file first; each oldString must be copied VERBATIM from its current content (exact whitespace/indentation) and match EXACTLY ONCE — add surrounding lines to make it unique. newString is the replacement. Prefer several small targeted edits over one large rewrite. Example edit: {oldString:"const port = 3000;", newString:"const port = 8080;"}. If a patch fails (no_match/ambiguous), re-read the file and retry with the latest content.',
   schema: applyPatchSchema,
+  prepare: (args, ctx) => runtimePreview(ctx, args.path, (before) => applyEdits(before ?? "", args.edits)),
   classify: (args, ctx) => {
     // applyEdits throws on no_match/ambiguous; buildPreview swallows it and the
     // preview is simply omitted — the real run will surface the same error.

@@ -17,6 +17,7 @@ import {
   loadAgentDefinitions,
   createMcpElicitationHandler,
   createMcpSamplingHandler,
+  createUsageBus,
   loadMcpToolSpecs,
   loadPluginContributions,
   loadSkills,
@@ -175,12 +176,19 @@ async function prepareAgentDeps(
   // The handler resolves it when a request actually arrives, by which point
   // this box is filled.
   let deps: (AgentCoreDeps & { runtime?: RuntimeClient }) | undefined;
+  // What a server spends through sampling belongs in this session's total, so
+  // the same bus is given to the handler and to the loop.
+  const usageBus = createUsageBus();
   const mcp = await loadMcpToolSpecs(servers, [opts.workspace], signal, {
-    sampling: createMcpSamplingHandler({ provider: () => deps?.provider, confirm: opts.confirm }),
+    sampling: createMcpSamplingHandler({
+      provider: () => deps?.provider,
+      confirm: opts.confirm,
+      onUsage: (usage) => usageBus.record(usage),
+    }),
     ...(opts.askUser ? { elicitation: createMcpElicitationHandler({ askUser: opts.askUser }) } : {}),
   });
   try {
-    deps = buildAgentDeps(opts, mcp.specs, pluginContributions);
+    deps = { ...buildAgentDeps(opts, mcp.specs, pluginContributions), usageBus };
     return { deps, entries: mcp.entries, disposeMcp: mcp.dispose };
   } catch (err) {
     mcp.dispose();

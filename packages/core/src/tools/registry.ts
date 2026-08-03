@@ -47,7 +47,7 @@ export type PreparedCall = {
    * of this ran, so a tool cannot lower its own gate with information it went
    * and fetched.
    */
-  review?: Pick<ClassifiedCall, "description" | "path" | "command" | "preview" | "hunks">;
+  review?: Partial<Pick<ClassifiedCall, "description" | "path" | "command" | "preview" | "hunks">>;
   /**
    * Handed to `run` as `ctx.prepared`, so the work behind the preview is not
    * repeated — and so the write applies exactly what the user approved.
@@ -145,7 +145,14 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
         if (refused) return { classified: base, refused };
         const prepared = await spec.prepare(args as never, ctx);
         preparedState = prepared.state;
-        return { classified: { ...base, ...prepared.review, permission: base.permission } };
+        // Only what prepare actually supplied is merged: a spread would let an
+        // explicitly-undefined field erase the classification's own value.
+        const classified: ClassifiedCall = { ...base };
+        for (const [key, value] of Object.entries(prepared.review ?? {})) {
+          if (value !== undefined) (classified as Record<string, unknown>)[key] = value;
+        }
+        classified.permission = base.permission;
+        return { classified };
       };
 
       const toolError = (err: unknown): ToolResult =>

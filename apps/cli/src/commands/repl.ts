@@ -11,6 +11,7 @@ import {
   loadAgentDefinitions,
   loadUserCommands,
   readSessionMeta,
+  createUsageBus,
 } from "@seekforge/core";
 import type { PermissionRequest, PermissionRule, TokenUsage } from "@seekforge/shared";
 import { cliMcpServerRequestHandlers, createCliAgent, prepareMcp } from "../agent-factory.js";
@@ -97,6 +98,7 @@ export async function replCommand(opts: {
   // MCP servers live for the whole REPL. The REPL has a terminal to prompt on,
   // so a server may ask for a model call or an answer — both go through the
   // same readline channels the agent itself uses.
+  const usageBus = createUsageBus();
   const mcp = await prepareMcp(
     config,
     projectPath,
@@ -104,6 +106,7 @@ export async function replCommand(opts: {
       config,
       confirm: makeConfirm(rl),
       askUser: makeAskUser(rl),
+      usageBus,
       ...(opts.model !== undefined ? { model: opts.model } : {}),
     }),
   );
@@ -147,6 +150,7 @@ export async function replCommand(opts: {
       ...(runOpts?.permissionRules ? { permissionRules: runOpts.permissionRules } : {}),
       ...(runOpts?.allowedTools ? { allowedTools: runOpts.allowedTools } : {}),
       confirm: makeConfirm(rl),
+      usageBus,
       onModelDelta: renderer.modelDelta,
       onReasoningDelta: renderer.reasoningDelta,
       askUser: makeAskUser(rl),
