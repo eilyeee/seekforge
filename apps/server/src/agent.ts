@@ -57,7 +57,7 @@ export type CreateAgentOptions = {
   /** Streamed chain-of-thought deltas (thinking mode), mirrored over the WS. */
   onReasoningDelta?: (chunk: string) => void;
   /** ask_user bridge: resolves with the user's answer over the WS. */
-  askUser?: (q: { question: string; options: string[] }) => Promise<string>;
+  askUser?: (q: { question: string; options: string[]; freeText?: boolean }) => Promise<string>;
   extractMemory: boolean;
   /** Per-run model/thinking overrides (frame fields win over config). */
   overrides?: RunOverrides;

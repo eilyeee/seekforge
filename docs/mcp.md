@@ -242,11 +242,11 @@ messages, 200,000 characters, text parts only. A server may also have at most
 4 sampling/elicitation requests in flight at once — each one occupies a person
 or a paid model call until it resolves — and is told to retry beyond that.
 
-**Elicitation** is answered through the same option-picker the `ask_user` tool
-uses, which bounds what it can collect: boolean and enumerated fields are
-answered, and a field needing free-form text is **declined** with that reason
-rather than answered with a guess — a server will act on whatever it is told.
-The requested schema must be a flat object of primitives, as the specification
+**Elicitation** is answered through the same channel the `ask_user` tool uses:
+boolean and enumerated fields become a choice, anything else asks you to type a
+value. Declining any single field declines the whole request — a server acts on
+whatever it is told, so a half-answered form is worse than no answer. The
+requested schema must be a flat object of primitives, as the specification
 requires; anything nested is rejected.
 
 Wired today in: the CLI (`seekforge run`, the REPL) and the local server (the

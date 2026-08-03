@@ -19,7 +19,13 @@ export type ContinuationPreset = "standard" | "extended" | "maximum";
 export type PendingPermission = { requestId: string; request: PermissionRequest };
 
 /** ask_user question awaiting an answer (question.request frame). */
-export type PendingQuestion = { id: string; question: string; options: string[] };
+export type PendingQuestion = {
+  id: string;
+  question: string;
+  options: string[];
+  /** The user may type an answer instead of picking one of `options`. */
+  freeText?: boolean;
+};
 
 /** Worktree session binding: the tab's `ws` is the worktree's workspace id. */
 export type TabWorktree = {
@@ -236,7 +242,12 @@ function routeFrameContent(state: TabsState, tabId: string, frame: ServerFrame):
 
     case "question.request":
       return updateTab(state, tabId, {
-        pendingQuestion: { id: frame.id, question: frame.question, options: frame.options },
+        pendingQuestion: {
+          id: frame.id,
+          question: frame.question,
+          options: frame.options,
+          ...(frame.freeText ? { freeText: true } : {}),
+        },
       });
 
     case "loop.event":

@@ -44,7 +44,7 @@ export type TuiAgentOptions = {
   /** Shared background-task manager: tasks survive across turns (app owns it). */
   background?: BackgroundTasks;
   /** ask_user channel (TUI question overlay). */
-  askUser?: (q: { question: string; options: string[] }) => Promise<string>;
+  askUser?: (q: { question: string; options: string[]; freeText?: boolean }) => Promise<string>;
   /** Run-bound controls for observing and steering dispatched subagents. */
   dispatchManager?: DispatchManager;
 };

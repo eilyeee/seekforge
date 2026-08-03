@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
 import { Button } from "../ui/Button";
 import { Modal } from "../ui/Modal";
@@ -9,6 +9,8 @@ export const DECLINED_ANSWER = "(the user declined to answer)";
 type Props = {
   question: string;
   options: string[];
+  /** The user may type an answer instead of picking one of `options`. */
+  freeText?: boolean;
   onAnswer: (answer: string) => void;
 };
 
@@ -17,9 +19,17 @@ type Props = {
  * PermissionModal layout: the options render as buttons; dismissing
  * (Escape / backdrop) answers with the declined sentinel so the agent
  * is never left blocked. Keyboard: 1-9 pick an option (TUI parity).
+ *
+ * An open question (`freeText`) also gets a text field, focused on open, for a
+ * value only the user has. The options stay: they are how the user declines.
  */
-export function QuestionModal({ question, options, onAnswer }: Props) {
+export function QuestionModal({ question, options, freeText, onAnswer }: Props) {
   const t = useT();
+  const [typed, setTyped] = useState("");
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (freeText) inputRef.current?.focus();
+  }, [freeText]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -50,6 +60,28 @@ export function QuestionModal({ question, options, onAnswer }: Props) {
       }
     >
       <p className="mb-4 whitespace-pre-wrap text-sm text-secondary">{question}</p>
+
+      {freeText && (
+        <form
+          className="mb-4 flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const answer = typed.trim();
+            if (answer !== "") onAnswer(answer);
+          }}
+        >
+          <input
+            ref={inputRef}
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            placeholder={t("chat.question.typePlaceholder")}
+            className="focus-ring min-w-0 flex-1 rounded-lg border border-strong bg-surface px-3 py-2 text-sm text-primary"
+          />
+          <Button size="sm" variant="primary" type="submit" disabled={typed.trim() === ""}>
+            {t("chat.question.send")}
+          </Button>
+        </form>
+      )}
 
       <div className="flex flex-col gap-2">
         {options.map((option, i) => (

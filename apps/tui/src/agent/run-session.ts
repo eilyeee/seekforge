@@ -30,7 +30,7 @@ export type RunSessionDeps = {
   /** Shared background-task manager (tasks outlive single runs). */
   background: BackgroundTasks;
   /** Routes the ask_user tool to the TUI question overlay. */
-  askUser: (q: { question: string; options: string[] }) => Promise<string>;
+  askUser: (q: { question: string; options: string[]; freeText?: boolean }) => Promise<string>;
   /** Pushes a reducer action (events, deltas, lifecycle) into the UI state. */
   dispatch: (action: ChatAction) => void;
   /**

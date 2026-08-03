@@ -2082,7 +2082,18 @@ export type ServerFrame =
       runId?: string;
       seq?: number;
     })
-  | ({ type: "question.request"; id: string; question: string; options: string[] } & {
+  | ({
+      type: "question.request";
+      id: string;
+      question: string;
+      options: string[];
+      /**
+       * The user may type an answer instead of picking one of `options`.
+       * Additive: a client that ignores it still renders the options, which are
+       * never empty, so the question stays answerable.
+       */
+      freeText?: boolean;
+    } & {
       runId?: string;
       seq?: number;
     })

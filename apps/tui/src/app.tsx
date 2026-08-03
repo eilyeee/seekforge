@@ -710,7 +710,13 @@ export function App({
               pendingQuestionByTabRef.current.set(runTabId, { runId, resolve });
               dispatchTab({
                 type: "overlay",
-                overlay: { kind: "question", question: q.question, options: [...q.options], index: 0 },
+                overlay: {
+                  kind: "question",
+                  question: q.question,
+                  options: [...q.options],
+                  index: 0,
+                  ...(q.freeText ? { freeText: true, typed: "" } : {}),
+                },
               });
               ring(`Question: ${clipLine(q.question, 60)}`);
             }),
@@ -2485,13 +2491,30 @@ export function App({
           dispatch({ type: "overlay", overlay: null });
           resolve?.resolve(answer);
         };
+        const typed = overlay.typed ?? "";
         if (stroke.name === "escape") {
           resolveAnswer("(the user declined to answer)");
         } else if (stroke.name === "return") {
-          resolveAnswer(overlay.options[overlay.index] ?? "(the user declined to answer)");
+          // A typed answer wins over the highlighted option: it is what the
+          // user was in the middle of writing.
+          const answer = typed.trim() !== "" ? typed.trim() : overlay.options[overlay.index];
+          resolveAnswer(answer ?? "(the user declined to answer)");
         } else if (stroke.name === "up" || stroke.name === "down") {
           dispatch({ type: "overlay-move", delta: stroke.name === "up" ? -1 : 1, count: overlay.options.length });
-        } else if (/^[1-9]$/.test(rawInput)) {
+        } else if (overlay.freeText && (stroke.name === "backspace" || stroke.name === "delete")) {
+          dispatch({ type: "overlay", overlay: { ...overlay, typed: typed.slice(0, -1) } });
+        } else if (
+          overlay.freeText &&
+          stroke.name === undefined &&
+          rawInput.length > 0 &&
+          !stroke.ctrl &&
+          !stroke.meta
+        ) {
+          // Printable input only — a named key (arrows, tab, page…) would
+          // otherwise append its raw escape sequence to the answer. Digits type
+          // here rather than jumping: an open answer may well start with one.
+          dispatch({ type: "overlay", overlay: { ...overlay, typed: typed + rawInput } });
+        } else if (!overlay.freeText && /^[1-9]$/.test(rawInput)) {
           const n = Number(rawInput) - 1;
           if (n < overlay.options.length) {
             const picked = overlay.options[n];
@@ -2910,7 +2933,12 @@ export function App({
         />
       ) : null}
       {state.overlay?.kind === "question" ? (
-        <QuestionPanel question={state.overlay.question} options={state.overlay.options} index={state.overlay.index} />
+        <QuestionPanel
+          question={state.overlay.question}
+          options={state.overlay.options}
+          index={state.overlay.index}
+          {...(state.overlay.freeText ? { freeText: true, typed: state.overlay.typed ?? "" } : {})}
+        />
       ) : null}
       {state.overlay?.kind === "context" ? (
         <ContextInspector

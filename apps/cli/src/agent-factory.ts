@@ -36,7 +36,7 @@ export type CliAgentOptions = {
   /** Streamed chain-of-thought deltas (V4 thinking mode). */
   onReasoningDelta?: (chunk: string) => void;
   /** ask_user channel (REPL readline prompt). Absent in non-interactive runs. */
-  askUser?: (q: { question: string; options: string[] }) => Promise<string>;
+  askUser?: (q: { question: string; options: string[]; freeText?: boolean }) => Promise<string>;
   extractMemory: boolean;
   /** Specialist agents the loop may dispatch via dispatch_agent. */
   subagents?: AgentDefinition[];
@@ -197,7 +197,7 @@ export async function prepareMcp(
 export function cliMcpServerRequestHandlers(input: {
   config: CliConfig;
   confirm?: (req: PermissionRequest) => Promise<ConfirmResult>;
-  askUser?: (q: { question: string; options: string[] }) => Promise<string>;
+  askUser?: (q: { question: string; options: string[]; freeText?: boolean }) => Promise<string>;
   model?: string;
   /** Session usage bus, so a server's sampling shows up in the session total. */
   usageBus?: UsageBus;

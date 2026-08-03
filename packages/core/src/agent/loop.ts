@@ -155,7 +155,7 @@ export type AgentCoreDeps = {
    * non-interactive runs; never forwarded to nested subagent runs (they must
    * not block on user input).
    */
-  askUser?: (q: { question: string; options: string[] }) => Promise<string>;
+  askUser?: (q: { question: string; options: string[]; freeText?: boolean }) => Promise<string>;
   limits?: Partial<AgentLimits>;
   /** Model context window in tokens. DeepSeek: 128K. */
   contextWindowTokens?: number;

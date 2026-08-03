@@ -54,7 +54,16 @@ export type Overlay =
    */
   | { kind: "candidates"; candidates: MemoryCandidate[]; index: number; scope: CandidateScope }
   /** ask_user tool question awaiting an answer. */
-  | { kind: "question"; question: string; options: string[]; index: number }
+  | {
+      kind: "question";
+      question: string;
+      options: string[];
+      index: number;
+      /** The user may type an answer instead of picking one. */
+      freeText?: boolean;
+      /** What they have typed so far (freeText only). */
+      typed?: string;
+    }
   /** Slash-argument picker ("/resume <cursor>"): Tab fills, Enter runs. */
   | {
       kind: "args";

@@ -7,6 +7,10 @@ type QuestionPanelProps = {
   question: string;
   options: readonly string[];
   index: number;
+  /** The user may type an answer instead of picking one. */
+  freeText?: boolean;
+  /** What they have typed so far (freeText only). */
+  typed?: string;
 };
 
 /**
@@ -15,15 +19,22 @@ type QuestionPanelProps = {
  * keypress routing and resolves the pending ask_user promise on Enter/Esc or
  * a number key, same pattern as PermissionPanel/ListOverlay.
  */
-export function QuestionPanel({ question, options, index }: QuestionPanelProps): React.ReactElement {
+export function QuestionPanel({ question, options, index, freeText, typed }: QuestionPanelProps): React.ReactElement {
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="magenta" paddingX={1} marginY={1}>
       <Text color="magenta" bold>
         {t("question.title")}
       </Text>
       <Text>{question}</Text>
+      {freeText ? (
+        <Box marginTop={1}>
+          <Text color={ACCENT}>{"› "}</Text>
+          <Text>{typed ?? ""}</Text>
+          <Text inverse> </Text>
+        </Box>
+      ) : null}
       {options.map((option, i) => {
-        const selected = i === index;
+        const selected = i === index && !(freeText && (typed ?? "") !== "");
         return (
           <Text key={i} color={selected ? ACCENT : undefined} dimColor={!selected}>
             {selected ? "❯ " : "  "}
@@ -32,9 +43,15 @@ export function QuestionPanel({ question, options, index }: QuestionPanelProps):
         );
       })}
       <Text dimColor>
-        {t("question.footerPrefix")}
-        {options.length}
-        {t("question.footerSuffix")}
+        {freeText ? (
+          t("question.footerFreeText")
+        ) : (
+          <>
+            {t("question.footerPrefix")}
+            {options.length}
+            {t("question.footerSuffix")}
+          </>
+        )}
       </Text>
     </Box>
   );

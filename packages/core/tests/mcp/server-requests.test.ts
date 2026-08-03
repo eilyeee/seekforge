@@ -293,22 +293,40 @@ describe("putting a server's question to the user", () => {
     expect(seen[0]).toEqual(["Approve", "Decline", "Decline (do not answer)"]);
   });
 
-  it("refuses a free-text field instead of inventing a value", async () => {
-    let asked = 0;
+  it("collects a typed value for a field that cannot be enumerated", async () => {
+    const asked: Array<{ options: string[]; freeText?: boolean }> = [];
     const handler = createMcpElicitationHandler({
-      askUser: async ({ options }) => {
-        asked++;
-        return options[0]!;
+      askUser: async (q) => {
+        asked.push(q);
+        return "acme-prod";
       },
     });
+
+    const result = await handler({
+      server: "deploy",
+      message: "Which account?",
+      fields: [{ name: "account", type: "string", required: true }],
+    });
+
+    expect(result).toEqual({ action: "accept", content: { account: "acme-prod" } });
+    // Nothing to choose from, so the only option is the way out.
+    expect(asked[0]).toEqual({
+      question: 'MCP server "deploy": Which account?\naccount',
+      options: ["Decline"],
+      freeText: true,
+    });
+  });
+
+  it("parses a typed number and declines one that is not a number", async () => {
+    const numeric = createMcpElicitationHandler({ askUser: async () => "42" });
     await expect(
-      handler({
-        server: "deploy",
-        message: "Which account?",
-        fields: [{ name: "account", type: "string", required: true }],
-      }),
-    ).rejects.toThrow(/free-form/);
-    expect(asked).toBe(0);
+      numeric({ server: "s", message: "How many?", fields: [{ name: "count", type: "integer", required: true }] }),
+    ).resolves.toEqual({ action: "accept", content: { count: 42 } });
+
+    const nonsense = createMcpElicitationHandler({ askUser: async () => "lots" });
+    await expect(
+      nonsense({ server: "s", message: "How many?", fields: [{ name: "count", type: "integer", required: true }] }),
+    ).resolves.toEqual({ action: "decline" });
   });
 });
 

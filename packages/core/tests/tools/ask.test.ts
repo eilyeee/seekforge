@@ -13,6 +13,8 @@ describe("ask_user tool", () => {
       { question: "pick one", options: ["only"] },
       { question: "pick one", options: ["a", "b", "c", "d", "e", "f", "g"] },
       { question: "pick one", options: ["a", ""] },
+      // Neither choices nor an open question: nothing to answer.
+      { question: "what now?" },
     ]) {
       const res = await dispatcher.execute(call("ask_user", args), ctx);
       expect(res.ok).toBe(false);
@@ -46,6 +48,48 @@ describe("ask_user tool", () => {
     expect(res.ok).toBe(true);
     expect(res.data).toEqual({ answer: "drop" });
     expect(seen).toEqual([{ question: "keep or drop?", options: ["keep", "drop"] }]);
+  });
+
+  it("asks an open question with a Skip option, so it stays answerable anywhere", async () => {
+    const seen: Array<{ question: string; options: string[]; freeText?: boolean }> = [];
+    const ctx = makeCtx(makeWorkspace(), {
+      askUser: async (q) => {
+        seen.push(q);
+        return "https://api.example.com";
+      },
+    });
+    const res = await dispatcher.execute(
+      call("ask_user", { question: "What is the API base url?", freeText: true }),
+      ctx,
+    );
+
+    expect(res.ok).toBe(true);
+    expect(res.data).toEqual({ answer: "https://api.example.com" });
+    // A frontend that ignores freeText still shows one answerable choice.
+    expect(seen).toEqual([{ question: "What is the API base url?", options: ["Skip"], freeText: true }]);
+  });
+
+  it("reports a skipped open question as declined rather than as an answer", async () => {
+    const ctx = makeCtx(makeWorkspace(), { askUser: async () => "Skip" });
+    const res = await dispatcher.execute(call("ask_user", { question: "Which account?", freeText: true }), ctx);
+    expect(res.data).toEqual({ answer: "Skip", declined: true });
+  });
+
+  it("keeps the choices when an open question also offers them", async () => {
+    const seen: Array<{ options: string[]; freeText?: boolean }> = [];
+    const ctx = makeCtx(makeWorkspace(), {
+      askUser: async (q) => {
+        seen.push(q);
+        return "typed answer";
+      },
+    });
+    const res = await dispatcher.execute(
+      call("ask_user", { question: "Which branch?", options: ["main", "develop"], freeText: true }),
+      ctx,
+    );
+    expect(res.ok).toBe(true);
+    expect(seen[0]).toMatchObject({ options: ["main", "develop"], freeText: true });
+    expect(res.data).toEqual({ answer: "typed answer" });
   });
 
   it("is readonly: runs without confirmation even in stricter approval modes", async () => {

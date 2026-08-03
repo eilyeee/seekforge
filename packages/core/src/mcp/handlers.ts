@@ -145,33 +145,21 @@ function describeField(field: ElicitationField): string {
 /**
  * Ask the user for the values a server requested.
  *
- * Bounded on purpose: this answers through the frontend's option-picker, so it
- * can collect booleans and enums, and can confirm a request that asks for
- * nothing but agreement. A free-text field has no channel to be typed into, so
- * the request is DECLINED with that reason rather than answered with a guess —
- * a made-up value is worse than a decline, since the server will act on it.
+ * Booleans and enums become a choice; anything else asks for a typed answer.
+ * Declining any single field declines the whole request — a server acts on
+ * whatever it is told, so a half-answered form is worse than no answer.
  */
 export function createMcpElicitationHandler(deps: ElicitationHandlerDeps): ElicitationHandler {
   return async (request: ElicitationRequest): Promise<ElicitationResult> => {
-    const unanswerable = request.fields.filter(
-      (field) => field.type !== "boolean" && (!field.options || field.options.length === 0),
-    );
-    if (unanswerable.length > 0) {
-      throw new McpError(
-        "mcp_elicitation_unsupported",
-        `this client can only answer boolean or enum fields; ${unanswerable
-          .map((field) => field.name)
-          .join(", ")} need free-form input`,
-      );
-    }
-
     const content: Record<string, unknown> = {};
     for (const field of request.fields) {
-      const options = field.type === "boolean" ? ["Yes", "No"] : [...(field.options ?? [])];
-      const decline = declineLabel(options);
+      const choices = field.type === "boolean" ? ["Yes", "No"] : [...(field.options ?? [])];
+      const decline = declineLabel(choices);
+      const typed = choices.length === 0;
       const answer = await deps.askUser({
         question: `MCP server "${request.server}": ${request.message}\n${describeField(field)}`,
-        options: [...options, decline],
+        options: [...choices, decline],
+        ...(typed ? { freeText: true } : {}),
       });
       if (answer === decline) return { action: "decline" };
       if (field.type === "boolean") {

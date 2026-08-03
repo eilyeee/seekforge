@@ -56,6 +56,7 @@ function PendingModals() {
         <QuestionModal
           question={tab.pendingQuestion.question}
           options={tab.pendingQuestion.options}
+          {...(tab.pendingQuestion.freeText ? { freeText: true } : {})}
           onAnswer={respondQuestion}
         />
       )}

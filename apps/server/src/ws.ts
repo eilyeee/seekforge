@@ -287,7 +287,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     });
 
   /** ask_user bridge, mirroring `confirm`: timeout/disconnect = declined. */
-  const askUser = (q: { question: string; options: string[] }): Promise<string> =>
+  const askUser = (q: { question: string; options: string[]; freeText?: boolean }): Promise<string> =>
     new Promise<string>((resolve) => {
       if (closed) {
         resolve(DECLINED_ANSWER);
@@ -309,8 +309,16 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           id,
           question: q.question,
           options: q.options,
+          ...(q.freeText ? { freeText: true } : {}),
         });
-      else send({ type: "question.request", id, question: q.question, options: q.options });
+      else
+        send({
+          type: "question.request",
+          id,
+          question: q.question,
+          options: q.options,
+          ...(q.freeText ? { freeText: true } : {}),
+        });
     });
 
   const reserve = (

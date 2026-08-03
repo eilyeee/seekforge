@@ -341,7 +341,7 @@ return `bad_frame`.
 {"type": "run.accepted", "runId": "run-...", "status": "queued", "seq": 1}
 {"type": "event", "sessionId": "...", "event": <AgentEvent>}  // every AgentEvent, incl. session.completed/failed
 {"type": "permission.request", "requestId": "p1", "request": <PermissionRequest>}
-{"type": "question.request", "id": "q1", "question": "...", "options": ["...", "..."]}  // ask_user tool
+{"type": "question.request", "id": "q1", "question": "...", "options": ["...", "..."], "freeText": true}  // ask_user tool; freeText optional
 {"type": "loop.event", "event": <LoopEvent>}                  // includes requirements.*, iteration.*, verify.stage.*, verify.flaky, loop.snapshot/recovery/rollback, and loop.done
 {"type": "error", "code": "...", "message": "..."}            // protocol-level errors (bad frame, busy, ...)
 {"type": "idle"}                                              // sent when a run/loop finishes and a new start/send/loop is accepted
@@ -404,6 +404,10 @@ Rules:
   treated as denied). A malformed response is `bad_frame`; if its `requestId`
   can be recovered, the pending request is denied immediately so malformed
   `selectedHunks` can never widen a partial approval.
+`question.request.freeText` is optional. When present the user may type an
+answer instead of picking one of `options`; `options` is never empty, so a
+client that ignores the flag still renders an answerable prompt.
+
 - `question.request` (ask_user tool) pauses the run until the matching
   `question.answer` arrives. The socket closing or 120 s without an answer
   resolve the question as `"(the user declined to answer)"`; an empty

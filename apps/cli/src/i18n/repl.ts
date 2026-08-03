@@ -59,6 +59,7 @@ export const repl = {
     "repl.allowPrompt": "Allow? [y/N] ",
     "repl.question": "Question",
     "repl.answerPrompt": "answer [1-{max}]: ",
+    "repl.answerPromptFreeText": "answer [1-{max}, or type your own]: ",
     "repl.userDeclined": "(the user declined to answer)",
   },
   zh: {
@@ -118,6 +119,7 @@ export const repl = {
     "repl.allowPrompt": "是否允许？[y/N] ",
     "repl.question": "问题",
     "repl.answerPrompt": "回答 [1-{max}]：",
+    "repl.answerPromptFreeText": "回答 [1-{max}，或直接输入]：",
     "repl.userDeclined": "（用户拒绝回答）",
   },
 };

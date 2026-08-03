@@ -51,16 +51,23 @@ function makeConfirm(rl: Interface): (req: PermissionRequest) => Promise<boolean
 }
 
 /** ask_user channel over the REPL's readline: numbered options, pick by index. */
-function makeAskUser(rl: Interface): (q: { question: string; options: string[] }) => Promise<string> {
+function makeAskUser(
+  rl: Interface,
+): (q: { question: string; options: string[]; freeText?: boolean }) => Promise<string> {
   return async (q) => {
     console.log(`\n${yellow(t("repl.question"))} ${q.question}`);
     q.options.forEach((opt, i) => {
       console.log(`  ${i + 1}. ${opt}`);
     });
-    const answer = (await rl.question(t("repl.answerPrompt", { max: q.options.length }))).trim();
+    const prompt = q.freeText
+      ? t("repl.answerPromptFreeText", { max: q.options.length })
+      : t("repl.answerPrompt", { max: q.options.length });
+    const answer = (await rl.question(prompt)).trim();
     const selected = parseNumberedChoice(answer, q.options.length);
-    if (selected === null) return t("repl.userDeclined");
-    return q.options[selected] as string;
+    if (selected !== null) return q.options[selected] as string;
+    // A typed answer is the point of freeText; only an empty line declines.
+    if (q.freeText && answer !== "") return answer;
+    return t("repl.userDeclined");
   };
 }
 

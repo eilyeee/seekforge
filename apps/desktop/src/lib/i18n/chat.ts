@@ -94,6 +94,8 @@ export const chat = {
     // QuestionModal
     "chat.question.title": "The agent has a question",
     "chat.question.decline": "Decline to answer",
+    "chat.question.typePlaceholder": "Type your answer…",
+    "chat.question.send": "Send",
 
     // PlanCard
     "chat.plan.title": "plan",
@@ -469,6 +471,8 @@ export const chat = {
     // QuestionModal
     "chat.question.title": "代理有一个问题",
     "chat.question.decline": "拒绝回答",
+    "chat.question.typePlaceholder": "输入你的回答…",
+    "chat.question.send": "发送",
 
     // PlanCard
     "chat.plan.title": "计划",

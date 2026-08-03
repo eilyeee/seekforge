@@ -58,6 +58,7 @@ const EN: Record<string, string> = {
   "question.title": "Question from the agent",
   "question.footerPrefix": "↑↓ or 1-",
   "question.footerSuffix": " select · Enter answer · Esc declines",
+  "question.footerFreeText": "type an answer · ↑↓ select · Enter send · Esc declines",
 
   // ── Sidebar file tree (Ctrl+E) ────────────────────────────────────────────
   "sidebar.title": "Files",
@@ -149,6 +150,7 @@ const ZH_CN: Record<string, string> = {
   "question.title": "来自代理的提问",
   "question.footerPrefix": "↑↓ 或 1-",
   "question.footerSuffix": " 选择 · Enter 回答 · Esc 拒绝",
+  "question.footerFreeText": "直接输入答案 · ↑↓ 选择 · 回车提交 · esc 拒绝",
 
   "sidebar.title": "文件",
   "sidebar.empty": "（空）",

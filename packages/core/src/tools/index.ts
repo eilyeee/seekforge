@@ -37,8 +37,15 @@ export type ToolContext = {
   confirm: (req: PermissionRequest) => Promise<ConfirmResult>;
   /** Cancels foreground work when the current agent run is aborted. */
   signal?: AbortSignal;
-  /** Interactive question channel (TUI). Absent in non-interactive runs. */
-  askUser?: (q: { question: string; options: string[] }) => Promise<string>;
+  /**
+   * Interactive question channel. Absent in non-interactive runs.
+   *
+   * `options` is never empty, so a frontend that does not implement `freeText`
+   * still shows an answerable question. `freeText` asks for a typed answer in
+   * addition to the choices — an open question ships one "Skip" option so
+   * declining stays possible everywhere.
+   */
+  askUser?: (q: { question: string; options: string[]; freeText?: boolean }) => Promise<string>;
   /**
    * Optional Rust execution backend (seekforge-runtime). When present,
    * fs/command/git tools delegate raw IO to it; permission checks and

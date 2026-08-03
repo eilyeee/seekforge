@@ -222,6 +222,23 @@ describe("routeFrame", () => {
     expect(next.tabs.find((t) => t.tabId === "t1")!.pendingQuestion).toBeNull();
   });
 
+  it("carries an open question's freeText flag to the tab", () => {
+    const frame: ServerFrame = {
+      type: "question.request",
+      id: "q2",
+      question: "Which account?",
+      options: ["Skip"],
+      freeText: true,
+    };
+    const next = routeFrame(threeTabs(), "t2", frame);
+    expect(next.tabs.find((t) => t.tabId === "t2")!.pendingQuestion).toEqual({
+      id: "q2",
+      question: "Which account?",
+      options: ["Skip"],
+      freeText: true,
+    });
+  });
+
   it("idle clears the pending question", () => {
     let s = updateTab(threeTabs(), "t2", {
       pendingQuestion: { id: "q2", question: "?", options: ["x"] },
