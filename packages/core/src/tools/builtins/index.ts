@@ -14,6 +14,7 @@ import { repoMapTools } from "./repo-map.js";
 import { browserTools } from "../browser/index.js";
 import { lspTools } from "./lsp.js";
 import { testTools } from "./tests.js";
+import { notebookTools } from "./notebook.js";
 
 export { configureVision, type VisionConfig } from "./vision.js";
 export { acquireBrowserLease, disposeBrowser, type BrowserLease } from "../browser/index.js";
@@ -36,5 +37,6 @@ export function builtinTools(): ToolSpec[] {
     ...browserTools,
     ...lspTools,
     ...testTools,
+    ...notebookTools,
   ];
 }

@@ -116,7 +116,9 @@ VS Code 用户可以使用 [`apps/vscode`](apps/vscode/README.md) 中的轻量�
 （敏感文件除外）。agent 还可以：发布实时计划清单（`update_plan`）、提交
 自己的工作（`git_commit`；`git push` 每一次都要确认，force-push 直接拒绝）、
 运行项目自己的测试并拿回「哪几个测试挂了」而不是一大段输出（`run_tests`）、
-读取代码背后的历史（`git_log` / `git_blame` / `git_show`）、抓取公开文档页面
+读取代码背后的历史（`git_log` / `git_blame` / `git_show`）、
+把 Jupyter notebook 当作 cell 而不是 JSON 来读写（`notebook_read` / `notebook_edit`）、
+抓取公开文档页面
 （`web_fetch`——每个 URL 都需显式确认；私有地址一律拒绝）。
 
 ## 桌面工作台

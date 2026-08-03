@@ -120,7 +120,8 @@ Headless single-run via `seekforge -p "<prompt>"` accepts the same flags as
 The agent can also: publish a live plan checklist (`update_plan`), run the
 project's tests and get back which ones failed rather than a wall of output
 (`run_tests`), read the history behind the code (`git_log` / `git_blame` /
-`git_show`), commit its work
+`git_show`), work on Jupyter notebooks as cells rather than JSON
+(`notebook_read` / `notebook_edit`), commit its work
 (`git_commit`; a `git push` is confirmed every single time and a force-push is
 refused outright), and fetch public docs pages (`web_fetch` — every URL needs
 explicit confirmation; private addresses refused).
