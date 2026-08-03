@@ -664,6 +664,7 @@ describe("dispatcher basics", () => {
       "lsp_format",
       "lsp_rename",
       "lsp_symbols",
+      "run_tests",
     ]);
     const readFileDef = defs.find((d) => d.name === "read_file");
     if (!readFileDef) throw new Error("read_file tool definition missing");

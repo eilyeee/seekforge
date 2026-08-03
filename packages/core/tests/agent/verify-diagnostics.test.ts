@@ -113,4 +113,36 @@ describe("parseVerifyDiagnostics", () => {
     const result = parseVerifyDiagnostics(output);
     expect(result.failedTests).toContain("tests/early.test.ts > fails first");
   });
+
+  it("reads a vitest stack frame as a location, not as its own column number", () => {
+    // `❯ file:line:col` frames used to report the column as the message ("0"),
+    // which told a repair prompt nothing at all.
+    const result = parseVerifyDiagnostics(
+      [
+        " FAIL  tests/math.test.ts > adds two numbers",
+        "AssertionError: expected 3 to be 4",
+        " ❯ tests/math.test.ts:12:20",
+        " Test Files  1 failed (1)",
+      ].join("\n"),
+    );
+    expect(result.framework).toBe("vitest");
+    expect(result.diagnostics).toEqual([
+      { file: "tests/math.test.ts", line: 12, message: "AssertionError: expected 3 to be 4" },
+    ]);
+  });
+
+  it("still reads a message that follows the location on the same line", () => {
+    const result = parseVerifyDiagnostics(
+      [
+        " FAIL  src/a.test.js > adds",
+        "src/a.test.js:7: Expected true to equal false",
+        " Test Files  1 failed (1)",
+      ].join("\n"),
+    );
+    expect(result.diagnostics).toContainEqual({
+      file: "src/a.test.js",
+      line: 7,
+      message: "Expected true to equal false",
+    });
+  });
 });

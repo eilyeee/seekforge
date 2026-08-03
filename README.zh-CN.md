@@ -23,8 +23,8 @@ session 20260610T110258-c1pbi7
 → apply_patch {"path":"src/components/LoginButton.vue", ...}
 ✓ apply_patch
 ● changed src/components/LoginButton.vue
-→ run_command {"command":"pnpm test"}
-✓ run_command
+→ run_tests {}
+✓ run_tests  5 passed
 ...
 Tokens: 38.7K prompt (33.2K cache hit) / 6.1K completion   Cost: $0.0124
 ```
@@ -115,6 +115,7 @@ VS Code 用户可以使用 [`apps/vscode`](apps/vscode/README.md) 中的轻量�
 再按一次 `Ctrl+C` 强制退出。任务中的 `@path` 标记会内联该文件内容
 （敏感文件除外）。agent 还可以：发布实时计划清单（`update_plan`）、提交
 自己的工作（`git_commit`；`git push` 每一次都要确认，force-push 直接拒绝）、
+运行项目自己的测试并拿回「哪几个测试挂了」而不是一大段输出（`run_tests`）、
 读取代码背后的历史（`git_log` / `git_blame` / `git_show`）、抓取公开文档页面
 （`web_fetch`——每个 URL 都需显式确认；私有地址一律拒绝）。
 

@@ -127,7 +127,11 @@ function extractDiagnostics(output: string, framework: VerifyFramework): VerifyD
                 ? [/^(.+?\.cs)\((\d+),\d+\):\s+(?:error|warning)\s+\w+:\s+(.+)$/]
                 : [
                     /^at\s+(?:.*?\s+\()?((?:[A-Za-z]:)?[^():]+\.[cm]?[jt]sx?):(\d+):\d+\)?\s*$/,
-                    /^([^:]+\.[cm]?[jt]sx?):(\d+)(?::\d+)?\s*(?:[-:]\s*)?(.+)$/,
+                    // `file.ts:12: message`, `file.ts:12:34`, and vitest's
+                    // `❯ file.ts:12:34` stack frames. The column is consumed
+                    // explicitly: leaving it to the message group made a frame
+                    // report its own column number as the failure ("message: 0").
+                    /^(?:❯\s*)?((?:[A-Za-z]:)?[^\s:]+\.[cm]?[jt]sx?):(\d+)(?::\d+)?(?:\s*[-:]\s*(.*))?$/,
                   ];
 
   let pendingMessage = "";
@@ -149,7 +153,7 @@ function extractDiagnostics(output: string, framework: VerifyFramework): VerifyD
         result.push({
           file: match[1],
           line: Number(match[2]),
-          message: match[3] ?? (pendingMessage || "test failed"),
+          message: match[3]?.trim() || pendingMessage || "test failed",
         });
       }
       break;

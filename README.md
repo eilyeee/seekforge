@@ -24,8 +24,8 @@ session 20260610T110258-c1pbi7
 → apply_patch {"path":"src/components/LoginButton.vue", ...}
 ✓ apply_patch
 ● changed src/components/LoginButton.vue
-→ run_command {"command":"pnpm test"}
-✓ run_command
+→ run_tests {}
+✓ run_tests  5 passed
 ...
 Tokens: 38.7K prompt (33.2K cache hit) / 6.1K completion   Cost: $0.0124
 ```
@@ -117,8 +117,10 @@ Headless single-run via `seekforge -p "<prompt>"` accepts the same flags as
 `Ctrl+C` cancels a running session cooperatively (the trace is kept, so
 `seekforge resume` can pick it up); a second `Ctrl+C` force-quits.
 `@path` tokens in a task inline that file's content (sensitive files excluded).
-The agent can also: publish a live plan checklist (`update_plan`), read the
-history behind the code (`git_log` / `git_blame` / `git_show`), commit its work
+The agent can also: publish a live plan checklist (`update_plan`), run the
+project's tests and get back which ones failed rather than a wall of output
+(`run_tests`), read the history behind the code (`git_log` / `git_blame` /
+`git_show`), commit its work
 (`git_commit`; a `git push` is confirmed every single time and a force-push is
 refused outright), and fetch public docs pages (`web_fetch` — every URL needs
 explicit confirmation; private addresses refused).

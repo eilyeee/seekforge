@@ -39,6 +39,15 @@ function handle(message) {
     }
   } else if (message.method === "workspace/symbol") {
     send({ jsonrpc: "2.0", id: message.id, result: fixture.symbols ?? [] });
+  } else if (message.method === "textDocument/didOpen" || message.method === "textDocument/didChange") {
+    // A real server publishes diagnostics after every sync; without this the
+    // client waits out its full diagnostics window on every code-action call.
+    const doc = message.params.textDocument;
+    send({
+      jsonrpc: "2.0",
+      method: "textDocument/publishDiagnostics",
+      params: { uri: doc.uri, version: doc.version, diagnostics: fixture.diagnostics ?? [] },
+    });
   } else if (message.method === "textDocument/hover") {
     send({ jsonrpc: "2.0", id: message.id, result: fixture.hover ?? null });
   } else if (message.method === "textDocument/documentSymbol") {
