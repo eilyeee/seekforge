@@ -213,10 +213,85 @@ export type LspDiagnostic = {
   code?: string | number;
 };
 
+/** One entry from workspace/symbol, normalized across the spec's two shapes. */
+export type LspSymbol = {
+  name: string;
+  kind: string;
+  uri: string;
+  range: LspRange;
+  /** The class/module the symbol belongs to, when the server reports one. */
+  container?: string;
+};
+
 const SEVERITY: Record<number, string> = { 1: "error", 2: "warning", 3: "information", 4: "hint" };
 
 export function severityLabel(severity?: number): string {
   return severity != null && SEVERITY[severity] ? SEVERITY[severity] : "info";
+}
+
+// SymbolKind, from the LSP spec. Reported as a name so the model does not have
+// to know the numbering.
+const SYMBOL_KINDS: Record<number, string> = {
+  1: "file",
+  2: "module",
+  3: "namespace",
+  4: "package",
+  5: "class",
+  6: "method",
+  7: "property",
+  8: "field",
+  9: "constructor",
+  10: "enum",
+  11: "interface",
+  12: "function",
+  13: "variable",
+  14: "constant",
+  15: "string",
+  16: "number",
+  17: "boolean",
+  18: "array",
+  19: "object",
+  20: "key",
+  21: "null",
+  22: "enum-member",
+  23: "struct",
+  24: "event",
+  25: "operator",
+  26: "type-parameter",
+};
+
+export function symbolKindLabel(kind?: number): string {
+  return kind != null && SYMBOL_KINDS[kind] ? SYMBOL_KINDS[kind] : "symbol";
+}
+
+const ZERO_RANGE: LspRange = { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } };
+
+/**
+ * Coerce workspace/symbol results. The older SymbolInformation always carries a
+ * full location; the newer WorkspaceSymbol may give only a uri, deferring the
+ * range to a resolve request we do not make — those still point at the right
+ * file, so they are reported at its start rather than dropped.
+ */
+function normalizeSymbols(result: unknown): LspSymbol[] {
+  if (!Array.isArray(result)) return [];
+  const out: LspSymbol[] = [];
+  for (const item of result) {
+    const symbol = item as {
+      name?: unknown;
+      kind?: number;
+      containerName?: unknown;
+      location?: { uri?: unknown; range?: LspRange };
+    };
+    if (typeof symbol?.name !== "string" || typeof symbol.location?.uri !== "string") continue;
+    out.push({
+      name: symbol.name,
+      kind: symbolKindLabel(symbol.kind),
+      uri: symbol.location.uri,
+      range: symbol.location.range ?? ZERO_RANGE,
+      ...(typeof symbol.containerName === "string" && symbol.containerName ? { container: symbol.containerName } : {}),
+    });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +390,14 @@ class LspSession {
             definition: { dynamicRegistration: false },
             references: { dynamicRegistration: false },
             publishDiagnostics: { relatedInformation: false },
+            rename: { dynamicRegistration: false, prepareSupport: false },
+          },
+          workspace: {
+            // documentChanges gets the versioned edit shape; the empty
+            // resourceOperations list tells the server we cannot create, rename
+            // or delete files, so it should not answer with any.
+            workspaceEdit: { documentChanges: true, resourceOperations: [], failureHandling: "abort" },
+            symbol: { dynamicRegistration: false },
           },
         },
       },
@@ -490,6 +573,25 @@ class LspSession {
       signal,
     );
     return normalizeLocations(result);
+  }
+
+  async rename(absPath: string, position: LspPosition, newName: string, signal?: AbortSignal): Promise<unknown> {
+    const { uri } = this.syncDocument(absPath);
+    return this.request(
+      "textDocument/rename",
+      {
+        textDocument: { uri },
+        position,
+        newName,
+      },
+      REQUEST_TIMEOUT_MS,
+      signal,
+    );
+  }
+
+  async workspaceSymbols(query: string, signal?: AbortSignal): Promise<LspSymbol[]> {
+    const result = await this.request("workspace/symbol", { query }, REQUEST_TIMEOUT_MS, signal);
+    return normalizeSymbols(result);
   }
 
   async diagnosticsFor(absPath: string, signal?: AbortSignal): Promise<LspDiagnostic[]> {
@@ -785,4 +887,56 @@ export async function lspDiagnostics(
   return session.diagnosticsFor(absPath, signal);
 }
 
-export type { LspLocation };
+/** Ask the language server for the edit that renames the symbol at `position`. */
+export async function lspRename(
+  workspace: string,
+  absPath: string,
+  position: LspPosition,
+  newName: string,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const { session } = await getSession(workspace, absPath, signal);
+  return session.rename(absPath, position, newName, signal);
+}
+
+/**
+ * Search symbols across the project.
+ *
+ * `hintPath` names a file in the language to search — workspace/symbol is a
+ * server-wide request, and which server answers it depends on the language.
+ * Without a hint, every server already running for this workspace is asked,
+ * which is the one the agent has been using; if none is, that is reported
+ * rather than guessed at.
+ */
+export async function lspWorkspaceSymbols(
+  workspace: string,
+  query: string,
+  hintPath?: string,
+  signal?: AbortSignal,
+): Promise<LspSymbol[]> {
+  if (hintPath !== undefined) {
+    const { session } = await getSession(workspace, hintPath, signal);
+    return session.workspaceSymbols(query, signal);
+  }
+  const key = workspaceIdentity(workspace);
+  const running = [...sessions.values()].filter((session) => session.workspace === key && session.usable);
+  if (running.length === 0) {
+    throw new ToolError(
+      "lsp_no_session",
+      "no language server is running for this workspace — pass `path` naming any file in the language to search",
+    );
+  }
+  const seen = new Set<string>();
+  const merged: LspSymbol[] = [];
+  for (const session of running) {
+    for (const symbol of await session.workspaceSymbols(query, signal)) {
+      const id = `${symbol.uri}\0${symbol.range.start.line}\0${symbol.range.start.character}\0${symbol.name}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      merged.push(symbol);
+    }
+  }
+  return merged;
+}
+
+export type { LspLocation, LspRange };

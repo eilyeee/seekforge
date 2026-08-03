@@ -28,8 +28,9 @@ and quick start; this folder holds the reference docs.
   `browser_fill` / `browser_select` / `browser_press` / `browser_wait_for`),
   plus the frontend verify loop.
 - [LSP / precise symbol intelligence](lsp.md) — the optional language-server-backed
-  `lsp_definition` / `lsp_references` / `lsp_diagnostics` tools for precise
-  definitions/references/diagnostics vs. the lexical `repo_map`/`find_definition`.
+  `lsp_definition` / `lsp_references` / `lsp_diagnostics` / `lsp_symbols` tools
+  for precise definitions/references/diagnostics/symbol search vs. the lexical
+  `repo_map`/`find_definition`, plus `lsp_rename` for a reviewed cross-file rename.
 - [Loop engineering](loop-engineering.md) — the autonomous run→verify→continue
   loop and its guardrails.
 - [Graph Engineering](graph-engineering.md) — durable heterogeneous Agent/Loop/function/router/gate/subgraph orchestration.

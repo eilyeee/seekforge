@@ -31,6 +31,30 @@ export type ClassifiedCall = {
   hunks?: { index: number; preview: string }[];
 };
 
+/**
+ * What an async `prepare` step contributes before permission enforcement.
+ *
+ * `classify` is synchronous, which is right for tools whose diff is a pure
+ * function of their arguments and the file on disk. A tool whose effect is only
+ * known after I/O — a language server deciding which files a rename touches —
+ * cannot produce a review payload there, and the user would be asked to approve
+ * a write they cannot see. `prepare` is where that tool does the work.
+ */
+export type PreparedCall = {
+  /**
+   * Merged over the classification for the confirmation prompt. Deliberately
+   * cannot carry `permission`: the level is decided by `classify`, before any
+   * of this ran, so a tool cannot lower its own gate with information it went
+   * and fetched.
+   */
+  review?: Pick<ClassifiedCall, "description" | "path" | "command" | "preview" | "hunks">;
+  /**
+   * Handed to `run` as `ctx.prepared`, so the work behind the preview is not
+   * repeated — and so the write applies exactly what the user approved.
+   */
+  state?: unknown;
+};
+
 export type ToolRunOutput = {
   data: unknown;
   meta?: ToolResult["meta"];
@@ -48,6 +72,14 @@ export type ToolSpec<S extends z.ZodTypeAny = z.ZodTypeAny> = {
    */
   parametersOverride?: Record<string, unknown>;
   classify: (args: z.infer<S>, ctx: ToolContext) => ClassifiedCall;
+  /**
+   * Optional async step between `classify` and permission enforcement, for a
+   * tool that must do I/O to know what it is about to do. It may enrich the
+   * review payload and hand state to `run`; it may not change the permission
+   * level. Throwing here fails the call outright — better than prompting for a
+   * write that was never going to succeed.
+   */
+  prepare?: (args: z.infer<S>, ctx: ToolContext) => Promise<PreparedCall>;
   run: (args: z.infer<S>, ctx: ToolContext) => Promise<ToolRunOutput>;
 };
 
@@ -85,6 +117,7 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
       let classified: ClassifiedCall | undefined;
       let effectiveArgs: unknown = call.arguments;
       let inputRewritten = false;
+      let preparedState: unknown;
       let result: ToolResult;
 
       const fail = (code: string, message: string, detail?: unknown): ToolResult => ({
@@ -92,16 +125,47 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
         error: { code, message, ...(detail !== undefined ? { detail } : {}) },
       });
 
+      /**
+       * Classify, then let an async `prepare` enrich the review payload. The
+       * permission level is re-asserted from the classification afterwards so
+       * the enrichment cannot change what the user is being asked to approve.
+       */
+      const classifyAndPrepare = async (spec: ToolSpec, args: unknown): Promise<ClassifiedCall> => {
+        const base = spec.classify(args as never, ctx);
+        if (!spec.prepare) return base;
+        const prepared = await spec.prepare(args as never, ctx);
+        preparedState = prepared.state;
+        return { ...base, ...prepared.review, permission: base.permission };
+      };
+
+      const toolError = (err: unknown): ToolResult =>
+        err instanceof ToolError
+          ? fail(err.code, err.message, err.detail)
+          : fail("internal_error", err instanceof Error ? err.message : String(err));
+
       const tool = byName.get(call.name);
+      const parsed = tool?.schema.safeParse(call.arguments ?? {});
+      // Classify (and prepare) up front so a prepare failure can be reported
+      // without asking the user to approve a write that was never going to
+      // happen — while every call still ends at the shared meta/log epilogue.
+      let prepareFailure: ToolResult | undefined;
+      if (tool && parsed?.success) {
+        effectiveArgs = parsed.data;
+        try {
+          classified = await classifyAndPrepare(tool, parsed.data);
+        } catch (err) {
+          prepareFailure = toolError(err);
+        }
+      }
+
       if (!tool) {
         result = fail("unknown_tool", `Unknown tool: ${call.name}`);
       } else {
-        const parsed = tool.schema.safeParse(call.arguments ?? {});
-        if (!parsed.success) {
-          result = fail("invalid_args", `Invalid arguments for ${call.name}`, parsed.error.issues);
+        if (!parsed?.success) {
+          result = fail("invalid_args", `Invalid arguments for ${call.name}`, parsed?.error.issues);
+        } else if (prepareFailure || !classified) {
+          result = prepareFailure ?? fail("internal_error", `${call.name} produced no classification`);
         } else {
-          effectiveArgs = parsed.data;
-          classified = tool.classify(parsed.data as never, ctx);
           permission = classified.permission;
           const outcome = await enforcePermission(call.name, classified, ctx);
           decision = outcome.decision;
@@ -113,7 +177,9 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
             // alter another in-flight apply_patch call.
             const runCtx: ToolContext = { ...ctx };
             delete runCtx.selectedHunks;
+            delete runCtx.prepared;
             if (outcome.selectedHunks !== undefined) runCtx.selectedHunks = [...outcome.selectedHunks];
+            if (preparedState !== undefined) runCtx.prepared = preparedState;
             // Hooks fire only for calls that passed permission enforcement.
             // Model-controlled content goes into the payload (stdin), never
             // into the hook command line.
@@ -159,15 +225,26 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
                   // The rewritten args can change the path/command, so re-classify
                   // and re-enforce permission — a hook must not be able to smuggle
                   // a denylisted/forbidden call past the gate via updatedInput.
-                  const reClassified = tool.classify(reparsed.data as never, ctx);
-                  const reCheck = await enforcePermission(call.name, reClassified, ctx);
-                  classified = reClassified;
-                  permission = reClassified.permission;
-                  decision = reCheck.decision;
-                  if (!reCheck.allowed) updatedDenied = fail(reCheck.errorCode, reCheck.errorMessage);
-                  else {
-                    delete runCtx.selectedHunks;
-                    if (reCheck.selectedHunks !== undefined) runCtx.selectedHunks = [...reCheck.selectedHunks];
+                  // prepare runs again for the same reason: the state handed to
+                  // run() must describe the arguments actually being run.
+                  let reClassified: ClassifiedCall | undefined;
+                  try {
+                    reClassified = await classifyAndPrepare(tool, reparsed.data);
+                  } catch (err) {
+                    updatedDenied = toolError(err);
+                  }
+                  if (reClassified) {
+                    const reCheck = await enforcePermission(call.name, reClassified, ctx);
+                    classified = reClassified;
+                    permission = reClassified.permission;
+                    decision = reCheck.decision;
+                    if (!reCheck.allowed) updatedDenied = fail(reCheck.errorCode, reCheck.errorMessage);
+                    else {
+                      delete runCtx.selectedHunks;
+                      delete runCtx.prepared;
+                      if (reCheck.selectedHunks !== undefined) runCtx.selectedHunks = [...reCheck.selectedHunks];
+                      if (preparedState !== undefined) runCtx.prepared = preparedState;
+                    }
                   }
                 }
               }
@@ -178,11 +255,7 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
                   const out = await tool.run(runArgs as never, runCtx);
                   result = { ok: true, data: out.data, ...(out.meta ? { meta: out.meta } : {}) };
                 } catch (err) {
-                  if (err instanceof ToolError) {
-                    result = fail(err.code, err.message, err.detail);
-                  } else {
-                    result = fail("internal_error", err instanceof Error ? err.message : String(err));
-                  }
+                  result = toolError(err);
                 }
                 // postToolUse is advisory: failures log to stderr, never block.
                 // It sees the args actually run (post-updatedInput); the payload

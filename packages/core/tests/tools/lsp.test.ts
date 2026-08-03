@@ -16,13 +16,13 @@ import { call, makeCtx, makeWorkspace } from "./helpers.js";
  *   1. PURE wire framing — encodeLspMessage/parseLspMessages: correct
  *      Content-Length framing, two concatenated messages, a partial message,
  *      and a malformed header block.
- *   2. the three tools register with the expected schemas + readonly level, and
+ *   2. the tools register with the expected schemas + permission levels, and
  *   3. graceful degradation — with no server binary on PATH, every tool returns
  *      an actionable `lsp_unavailable` install hint instead of crashing. We
  *      force absence by emptying PATH so the outcome is deterministic.
  */
 
-const NAMES = ["lsp_definition", "lsp_references", "lsp_diagnostics"];
+const NAMES = ["lsp_definition", "lsp_references", "lsp_diagnostics", "lsp_rename", "lsp_symbols"];
 
 describe("lsp wire framing (pure)", () => {
   it("frames a message with a byte-accurate Content-Length and round-trips", () => {
@@ -127,11 +127,11 @@ describe("lsp language → server resolution", () => {
 });
 
 describe("lsp tools registration", () => {
-  it("exposes exactly the three lsp tools", () => {
+  it("exposes exactly the lsp tools", () => {
     expect(lspTools.map((t) => t.name).sort()).toEqual([...NAMES].sort());
   });
 
-  it("advertises all three through the default dispatcher", () => {
+  it("advertises all of them through the default dispatcher", () => {
     const defs = createDefaultDispatcher().list();
     for (const name of NAMES) {
       const def = defs.find((d) => d.name === name);
@@ -140,13 +140,22 @@ describe("lsp tools registration", () => {
     }
   });
 
-  it("classifies every lsp tool as readonly, surfacing the path", () => {
+  it("classifies the analysis tools as readonly, surfacing the path", () => {
     const cls = (name: string, args: Record<string, unknown>) =>
       lspTools.find((t) => t.name === name)!.classify(args as never, makeCtx(makeWorkspace()));
     expect(cls("lsp_definition", { path: "src/a.ts", line: 3 }).permission).toBe("readonly");
     expect(cls("lsp_references", { path: "src/a.ts", line: 3 }).permission).toBe("readonly");
     expect(cls("lsp_diagnostics", { path: "src/a.ts" }).permission).toBe("readonly");
+    expect(cls("lsp_symbols", { query: "Widget" }).permission).toBe("readonly");
     expect(cls("lsp_definition", { path: "src/a.ts", line: 3 }).path).toBe("src/a.ts");
+  });
+
+  it("classifies lsp_rename as a write on the anchor file", () => {
+    const rename = lspTools.find((t) => t.name === "lsp_rename")!;
+    const cls = rename.classify({ path: "src/a.ts", line: 3, newName: "widget" } as never, makeCtx(makeWorkspace()));
+    expect(cls.permission).toBe("write");
+    expect(cls.path).toBe("src/a.ts");
+    expect(cls.description).toContain("widget");
   });
 });
 
@@ -164,6 +173,8 @@ describe("lsp tools graceful degradation (no language server on PATH)", () => {
     ["lsp_definition", { path: "src/app.ts", line: 1 }],
     ["lsp_references", { path: "src/app.ts", line: 1 }],
     ["lsp_diagnostics", { path: "src/app.ts" }],
+    ["lsp_rename", { path: "src/app.ts", line: 1, newName: "renamed" }],
+    ["lsp_symbols", { query: "Widget", path: "src/app.ts" }],
   ])("%s reports lsp_unavailable with an install hint", async (name, args) => {
     const dispatcher = createDefaultDispatcher();
     const res = await dispatcher.execute(call(name, args), makeCtx(makeWorkspace()));

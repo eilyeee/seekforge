@@ -79,6 +79,14 @@ export type ToolContext = {
    * apply all edits (backward-compatible behavior).
    */
   selectedHunks?: number[];
+  /**
+   * Whatever the tool's own `prepare` step computed for this call (see
+   * ToolSpec.prepare). Set by the dispatcher, call-local, and typed as unknown
+   * because only the tool that produced it knows its shape — it exists so a
+   * write applies exactly the change the user reviewed, rather than recomputing
+   * it against a workspace that may have moved on.
+   */
+  prepared?: unknown;
 };
 
 export interface ToolDispatcher {
@@ -94,7 +102,7 @@ export function createDefaultDispatcher(extraTools: ToolSpec[] = []): ToolDispat
 // Additional exports for tests / other modules.
 export { ToolError } from "./errors.js";
 export { createDispatcher, defineTool, TOOL_NAME_PATTERN } from "./registry.js";
-export type { ClassifiedCall, ToolRunOutput, ToolSpec } from "./registry.js";
+export type { ClassifiedCall, PreparedCall, ToolRunOutput, ToolSpec } from "./registry.js";
 export { enforcePermission } from "./permissions.js";
 export type { PermissionDecision, PermissionOutcome } from "./permissions.js";
 export {

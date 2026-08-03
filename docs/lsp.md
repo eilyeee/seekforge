@@ -65,9 +65,40 @@ every other file tool; sensitive files like `.env`/keys are refused). `line` is
 locations inside the repo are workspace-relative, out-of-tree locations (stdlib,
 dependencies) are shown as absolute paths.
 
-All three tools only read/analyze, so they are classified **`readonly`** — like
+Four of the five only read/analyze, so they are classified **`readonly`** — like
 the browser inspect tools (`browser_snapshot` / `browser_console`) — and are
 auto-allowed under every approval mode.
+
+## Renaming
+
+`lsp_rename` is the only LSP tool that writes, and it writes to files the caller
+never named. It is handled accordingly.
+
+**You approve a diff, not an intention.** Before you are asked anything, the
+rename is computed in full: the server is asked for the edit, every target is
+resolved, every file is read and the edit applied *in memory*. The confirmation
+prompt then carries the real unified diff of every file, plus one selectable
+hunk per file. Nothing has been written at that point.
+
+**It is all-or-nothing.** The edit is refused outright — before the prompt — if
+it would touch a file outside the workspace (a definition in `node_modules` or
+the standard library), if it goes through a symlink leading out, if the server
+asks to create/rename/delete files (SeekForge advertises no support for those
+and does not apply them), or if any target has changed since the server read it.
+If a write fails part-way through, the files already written are restored.
+
+**Held-back files are reported.** If you approve only some of the hunks, the
+result names the files that were skipped — a partial rename leaves references
+pointing at the old name, and the agent has to know that.
+
+Every file is checkpointed before it is touched, so `seekforge rewind` undoes
+the whole rename like any other edit.
+
+```
+lsp_references({ path: "src/widget.ts", line: 12 })   # gauge the blast radius
+lsp_rename({ path: "src/widget.ts", line: 12, newName: "Panel" })
+lsp_diagnostics({ path: "src/widget.ts" })            # confirm it still compiles
+```
 
 ## Session lifecycle
 
@@ -86,12 +117,21 @@ client** over the server's stdio:
   `encodeLspMessage` / `parseLspMessages` are kept pure and stream-safe: the
   parser handles multiple messages in one buffer, a partial trailing message
   (left for the next chunk), and resynchronizes past a malformed header.
-- **Handshake.** `initialize` (advertising definition/references/diagnostics
-  capabilities and the workspace root) → wait for the result → `initialized`.
+- **Handshake.** `initialize` (advertising definition/references/diagnostics/
+  rename/workspace-symbol capabilities and the workspace root) → wait for the
+  result → `initialized`. The advertised workspace edit support lists **no**
+  resource operations, telling the server it must not answer a rename with
+  file creates, renames or deletes.
 - **Documents.** `textDocument/didOpen` (with the file's `languageId`, version,
   and text) the first time a file is touched; `textDocument/didChange` bumps the
   version to force a fresh diagnostics pass.
-- **Requests.** `textDocument/definition`, `textDocument/references`, and the
-  server-pushed `textDocument/publishDiagnostics` notification (awaited briefly
-  after opening/changing the file). Positions are converted from our 1-based
-  `line` to LSP's 0-based line/character at the boundary.
+- **Requests.** `textDocument/definition`, `textDocument/references`,
+  `textDocument/rename`, `workspace/symbol`, and the server-pushed
+  `textDocument/publishDiagnostics` notification (awaited briefly after
+  opening/changing the file). Positions are converted from our 1-based `line`
+  to LSP's 0-based line/character at the boundary.
+- **Applying a rename.** `tools/lsp/workspace-edit.ts` normalizes both
+  WorkspaceEdit shapes (`changes` and `documentChanges`), converts LSP positions
+  to string offsets (`character` counts UTF-16 code units, which is exactly a
+  JavaScript string index), rejects overlapping edits, and writes through the
+  same verified path as every other tool write.
