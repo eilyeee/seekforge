@@ -45,7 +45,16 @@ const SERVER_PROMPTS = [
 ] as const;
 
 /** Tools exposed in read-only mode (all classify as L0 readonly). */
-export const MCP_READONLY_TOOLS = ["read_file", "list_files", "search_text", "git_status", "git_diff"] as const;
+export const MCP_READONLY_TOOLS = [
+  "read_file",
+  "list_files",
+  "search_text",
+  "git_status",
+  "git_diff",
+  "git_log",
+  "git_blame",
+  "git_show",
+] as const;
 
 export type ServeMcpOptions = {
   /** Absolute path of the workspace all tool calls are sandboxed to. */

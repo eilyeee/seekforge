@@ -386,7 +386,7 @@ on failure `isError` is `true` and `text` is `"<code>: <message>"`.
 
 #### Read-only (default)
 
-In read-only mode **5 tools** are exposed, all classifying as `L0 readonly`:
+In read-only mode **8 tools** are exposed, all classifying as `L0 readonly`:
 
 | Tool            | Permission class |
 |---|---|
@@ -395,6 +395,9 @@ In read-only mode **5 tools** are exposed, all classifying as `L0 readonly`:
 | `search_text`   | readonly         |
 | `git_status`    | readonly         |
 | `git_diff`      | readonly         |
+| `git_log`       | readonly         |
+| `git_blame`     | readonly         |
+| `git_show`      | readonly         |
 
 The `ToolContext` runs in `"ask"` approval mode and the `confirm` callback
 **always denies** — three independent layers prevent writes.

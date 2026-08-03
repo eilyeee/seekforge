@@ -346,7 +346,7 @@ seekforge mcp-serve: FULL ACCESS (trusted callers only) on /path/to/workspace
 
 #### 只读模式（默认）
 
-只读模式下暴露 **5 个工具**，全部分类为 `L0 readonly`：
+只读模式下暴露 **8 个工具**，全部分类为 `L0 readonly`：
 
 | 工具            | 权限分类 |
 |---|---|
@@ -355,6 +355,9 @@ seekforge mcp-serve: FULL ACCESS (trusted callers only) on /path/to/workspace
 | `search_text`   | readonly         |
 | `git_status`    | readonly         |
 | `git_diff`      | readonly         |
+| `git_log`       | readonly         |
+| `git_blame`     | readonly         |
+| `git_show`      | readonly         |
 
 `ToolContext` 运行在 `"ask"` 审批模式下，且 `confirm` 回调**始终拒绝** ——
 三个相互独立的层共同阻止写入。

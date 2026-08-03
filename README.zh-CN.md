@@ -114,7 +114,8 @@ VS Code 用户可以使用 [`apps/vscode`](apps/vscode/README.md) 中的轻量�
 `Ctrl+C` 协作式取消运行中的会话（trace 保留，`seekforge resume` 可接续）；
 再按一次 `Ctrl+C` 强制退出。任务中的 `@path` 标记会内联该文件内容
 （敏感文件除外）。agent 还可以：发布实时计划清单（`update_plan`）、提交
-自己的工作（`git_commit`——push 不可能发生）、抓取公开文档页面
+自己的工作（`git_commit`；`git push` 每一次都要确认，force-push 直接拒绝）、
+读取代码背后的历史（`git_log` / `git_blame` / `git_show`）、抓取公开文档页面
 （`web_fetch`——每个 URL 都需显式确认；私有地址一律拒绝）。
 
 ## 桌面工作台

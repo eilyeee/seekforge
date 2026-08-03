@@ -117,9 +117,11 @@ Headless single-run via `seekforge -p "<prompt>"` accepts the same flags as
 `Ctrl+C` cancels a running session cooperatively (the trace is kept, so
 `seekforge resume` can pick it up); a second `Ctrl+C` force-quits.
 `@path` tokens in a task inline that file's content (sensitive files excluded).
-The agent can also: publish a live plan checklist (`update_plan`), commit its
-work (`git_commit` — push stays impossible), and fetch public docs pages
-(`web_fetch` — every URL needs explicit confirmation; private addresses refused).
+The agent can also: publish a live plan checklist (`update_plan`), read the
+history behind the code (`git_log` / `git_blame` / `git_show`), commit its work
+(`git_commit`; a `git push` is confirmed every single time and a force-push is
+refused outright), and fetch public docs pages (`web_fetch` — every URL needs
+explicit confirmation; private addresses refused).
 
 ## Desktop workbench
 
