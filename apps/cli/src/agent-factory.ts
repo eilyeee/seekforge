@@ -4,6 +4,9 @@ import {
   createAgentCore,
   createDefaultDispatcher,
   createRuntimeClient,
+  buildProvider,
+  createMcpElicitationHandler,
+  createMcpSamplingHandler,
   loadMcpToolSpecs,
   loadSkills,
   loadPluginContributions,
@@ -15,6 +18,7 @@ import {
   type RuntimeClient,
   type PluginContributions,
   type ToolSpec,
+  type McpServerRequestHandlers,
 } from "@seekforge/core";
 import type { ConfirmResult, PermissionRequest, PermissionRule } from "@seekforge/shared";
 import type { CliConfig } from "./config.js";
@@ -159,6 +163,7 @@ export function createCliAgent(opts: CliAgentOptions): CliAgent {
 export async function prepareMcp(
   config: CliConfig,
   workspacePath?: string,
+  serverRequestHandlers?: McpServerRequestHandlers,
 ): Promise<{ specs: ToolSpec[]; dispose: () => void; pluginContributions: PluginContributions }> {
   const workspace = workspacePath ?? process.cwd();
   const pluginContributions = loadPluginContributions(workspace);
@@ -166,5 +171,51 @@ export async function prepareMcp(
   if (Object.keys(servers).length === 0) {
     return { specs: [], dispose: () => {}, pluginContributions };
   }
-  return { ...(await loadMcpToolSpecs(servers, workspacePath ? [workspacePath] : undefined)), pluginContributions };
+  return {
+    ...(await loadMcpToolSpecs(servers, workspacePath ? [workspacePath] : undefined, undefined, serverRequestHandlers)),
+    pluginContributions,
+  };
+}
+
+/**
+ * Answers for the requests an MCP server can send back to us, built from the
+ * channels this run already has.
+ *
+ * Only what is actually available is wired: without a confirm channel there is
+ * nobody to approve spending the user's tokens, and without an ask channel
+ * nobody to answer a question — in either case the capability is left
+ * unadvertised and the server never asks.
+ *
+ * The sampling provider is built from the same config as the agent's, but is
+ * its own instance: a server's own model calls stay out of the agent's retry
+ * bus and response cache.
+ */
+export function cliMcpServerRequestHandlers(input: {
+  config: CliConfig;
+  confirm?: (req: PermissionRequest) => Promise<ConfirmResult>;
+  askUser?: (q: { question: string; options: string[] }) => Promise<string>;
+  model?: string;
+}): McpServerRequestHandlers | undefined {
+  const { config } = input;
+  const handlers: McpServerRequestHandlers = {
+    ...(input.confirm && config.apiKey
+      ? {
+          sampling: createMcpSamplingHandler({
+            provider: () =>
+              buildProvider(
+                {
+                  provider: config.provider,
+                  apiKey: config.apiKey,
+                  baseUrl: config.baseUrl,
+                  modelPricing: config.modelPricing,
+                },
+                input.model ?? config.model,
+              ),
+            confirm: input.confirm,
+          }),
+        }
+      : {}),
+    ...(input.askUser ? { elicitation: createMcpElicitationHandler({ askUser: input.askUser }) } : {}),
+  };
+  return handlers.sampling || handlers.elicitation ? handlers : undefined;
 }

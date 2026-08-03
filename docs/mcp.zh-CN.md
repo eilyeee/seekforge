@@ -183,11 +183,10 @@ mcp__<server>__<tool>
 
 ### 1.6 能力（Capabilities）
 
-stdio 客户端在其 initialize capabilities 中声明 `roots.listChanged: true`。
+两种传输都在其 initialize capabilities 中声明 `roots.listChanged: true`。
 工作区路径（启动时传入的绝对目录）通过 roots 能力告知每个服务器，并在服务器
-发起的 `roots/list` 请求时作出应答。请求级作用域的 HTTP 传输不声明 roots，
-因为它无法应答由服务器发起的请求；这样可以避免一个符合规范的服务器等待一个
-永远不会到达的响应。初始化之后，HTTP 请求会带上协商得到的
+发起的 `roots/list` 请求时作出应答——stdio 直接应答；HTTP 则在初始化后、
+服务器支持时保持的那条独立 GET SSE 流上应答。初始化之后，HTTP 请求会带上协商得到的
 `MCP-Protocol-Version` 头。Streamable HTTP 的响应必须是 JSON-RPC 对象，
 且其 id 与待处理请求匹配；标量、数组、null 以及 id 不匹配的响应都会被拒绝。
 配置了 `oauth` 时，HTTP 401 会触发一次符合标准的 `refresh_token` 交换，
@@ -196,6 +195,35 @@ stdio 客户端在其 initialize capabilities 中声明 `roots.listChanged: true
 轮换后的 refresh token 会被持久化；若响应未返回新的 refresh token，则保留原有
 的而不是丢弃。因此无人值守的进程需要先完成一次 `mcp login`，或在启动前准备好
 refresh token 或静态 header。
+
+#### 采样（sampling）与征询（elicitation）
+
+还有两种请求由服务器发往客户端，而且**只有当前端确实接上了应答通道时才会被声明**。
+什么都没接的客户端会把该能力报告为不存在，符合规范的服务器就不会发问；万一它仍然发了，
+拿到的是 JSON-RPC `-32601`，而不是一直挂着。
+
+| 能力 | 方法 | 何时接上 | 会发生什么 |
+| --- | --- | --- | --- |
+| `sampling` | `sampling/createMessage` | 前端有确认通道且配置了模型 | 服务器的 prompt 会原样（截断后）展示给你，你批准后用你自己的模型执行。 |
+| `elicitation` | `elicitation/create` | 前端有向用户提问的通道 | 服务器的问题会抛给你，你的回答被返回。 |
+
+**采样花的是你的 token，跑的是你没写过的 prompt**，因此**每一次**都要确认——这里没有
+审批模式的旁路，只有你的前端 confirm 本身的行为（所以无头 `-y` 运行会批准它，
+就像 `-y` 批准其他一切一样）。确认提示会写明是哪个服务器、用哪个模型、发送什么文本。
+这次调用花了多少，会以 `[mcp:<server>] sampling used <n> tokens ($x.xxxx)` 写到 stderr；
+它**不会**被计入会话自身的成本合计，因为那不是这次会话的工作。
+
+采样用的 provider 与 agent 用的来自同一份配置，但是独立实例：服务器发起的模型调用不会
+混进 agent 的重试总线与响应缓存。请求在抵达模型之前先被限界：最多 50 条消息、
+200,000 字符，且只接受文本部分。
+
+**征询**通过 `ask_user` 工具用的那个选项选择器来回答，这也界定了它能收集什么：布尔与
+枚举字段可以回答；需要自由文本的字段会被**拒绝**并说明原因，而不是猜一个值填进去——
+服务器会拿到什么就照做什么。请求的 schema 必须如规范要求那样是一层扁平的原始类型对象，
+任何嵌套都会被拒绝。
+
+目前接上的是：CLI（`seekforge run`、REPL）与本地 server（桌面端与 Web 工作台，
+经 WebSocket 的确认/提问通道）。TUI 目前两者都不声明。
 
 `tools/list`、`resources/list` 和 `prompts/list` 会逐页消费每个不透明的
 `nextCursor`。重复出现的 cursor 会被拒绝，发现过程上限为 100 页和 10,000 条，

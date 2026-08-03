@@ -13,7 +13,7 @@ import {
   readSessionMeta,
 } from "@seekforge/core";
 import type { PermissionRequest, PermissionRule, TokenUsage } from "@seekforge/shared";
-import { createCliAgent, prepareMcp } from "../agent-factory.js";
+import { cliMcpServerRequestHandlers, createCliAgent, prepareMcp } from "../agent-factory.js";
 import { buildToolGatingRules, parseToolList } from "../tool-gating.js";
 import { dim, fail, yellow } from "../colors.js";
 import { loadConfig } from "../config.js";
@@ -93,8 +93,20 @@ export async function replCommand(opts: {
     return;
   }
 
-  const mcp = await prepareMcp(config, projectPath); // MCP servers live for the whole REPL
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  // MCP servers live for the whole REPL. The REPL has a terminal to prompt on,
+  // so a server may ask for a model call or an answer — both go through the
+  // same readline channels the agent itself uses.
+  const mcp = await prepareMcp(
+    config,
+    projectPath,
+    cliMcpServerRequestHandlers({
+      config,
+      confirm: makeConfirm(rl),
+      askUser: makeAskUser(rl),
+      ...(opts.model !== undefined ? { model: opts.model } : {}),
+    }),
+  );
   let model = opts.model ?? config.model ?? "deepseek-v4-flash";
   let sessionId: string | undefined;
   let totalUsage: TokenUsage = { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 };

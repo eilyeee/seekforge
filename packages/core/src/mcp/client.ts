@@ -1,9 +1,9 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { pathToFileURL } from "node:url";
 import { McpError } from "./errors.js";
 import { abortablePromise, onAbortOnce } from "../util/abort.js";
 import { createMcpHttpTransport } from "./http.js";
 import { createBoundedLineReader, MAX_MCP_MESSAGE_BYTES } from "./framing.js";
+import { clientCapabilities, createServerRequestResponder, type McpServerRequestHandlers } from "./server-requests.js";
 import type { McpPrompt, McpResource, McpServerConfig, McpTool } from "./types.js";
 import { SEEKFORGE_VERSION } from "../version.js";
 
@@ -23,6 +23,12 @@ export type McpClientOptions = {
   workspaceRoots?: string[];
   /** Server notifications observed on stdio response streams or Streamable HTTP SSE. */
   onNotification?: (notification: { method: string; params?: unknown }) => void;
+  /**
+   * Answers to server-initiated requests that need a model or the user
+   * (sampling/elicitation). A capability is advertised only when its handler is
+   * present here, so an unwired client is never asked.
+   */
+  serverRequestHandlers?: McpServerRequestHandlers;
 };
 
 export type McpClient = {
@@ -77,13 +83,6 @@ const CLIENT_INFO = { name: "seekforge", version: SEEKFORGE_VERSION };
 const MAX_LIST_PAGES = 100;
 const MAX_LIST_ITEMS = 10_000;
 
-/**
- * Client capabilities advertised in initialize. We support filesystem roots
- * (and notify on change), enabling servers to scope themselves to the
- * workspace and to issue roots/list requests back to us.
- */
-const CLIENT_CAPABILITIES = { roots: { listChanged: true } } as const;
-
 /** A read resource is capped at this many characters (text after flattening). */
 export const RESOURCE_READ_MAX_CHARS = 50_000;
 
@@ -126,12 +125,6 @@ function flattenPromptMessages(messages: PromptMessage[]): string {
       return `${role}: ${flattenContent(parts)}`;
     })
     .join("\n\n");
-}
-
-/** Builds the roots/list reply payload from the configured workspace paths. */
-function buildRootsResult(workspaceRoots: string[] | undefined): { roots: Array<{ uri: string; name?: string }> } {
-  const roots = (workspaceRoots ?? []).map((p) => ({ uri: pathToFileURL(p).href, name: "workspace" }));
-  return { roots };
 }
 
 /** Reads a complete MCP list while failing closed on malformed cursor loops. */
@@ -194,6 +187,11 @@ type McpTransport = {
  */
 function createStdioTransport(options: McpClientOptions): McpTransport {
   const defaultTimeout = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  const respondToServer = createServerRequestResponder({
+    name: options.name,
+    ...(options.workspaceRoots !== undefined ? { workspaceRoots: options.workspaceRoots } : {}),
+    ...(options.serverRequestHandlers !== undefined ? { handlers: options.serverRequestHandlers } : {}),
+  });
   let child: ChildProcessWithoutNullStreams | undefined;
   let handshake: Promise<void> | undefined;
   let pending = new Map<number, Pending>();
@@ -257,9 +255,8 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
           }
           return;
         }
-        // Server-initiated requests: answer roots/list with the workspace roots.
-        // Any other server request gets a JSON-RPC "method not found"; bare
-        // notifications (no id) are tolerated silently.
+        // Server-initiated requests are answered by the shared responder;
+        // bare notifications (no id) are tolerated silently.
         if (typeof msg["method"] === "string") {
           const method = msg["method"];
           if (id === undefined || id === null) {
@@ -273,17 +270,13 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
             }
             return;
           }
-          if (method === "roots/list") {
-            proc.stdin.write(
-              `${JSON.stringify({ jsonrpc: "2.0", id, result: buildRootsResult(options.workspaceRoots) })}\n`,
-              () => {},
-            );
-            return;
-          }
-          proc.stdin.write(
-            `${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32601, message: `method not found: ${method}` } })}\n`,
-            () => {},
-          );
+          if (typeof id !== "string" && typeof id !== "number") return;
+          // A handler may take a while (it asks a person, or a model); the
+          // reply is written when it resolves, and a dead child is tolerated.
+          void respondToServer(id, method, msg["params"]).then((reply) => {
+            if (child !== proc || !proc.stdin.writable) return;
+            proc.stdin.write(`${JSON.stringify(reply)}\n`, () => {});
+          });
         }
       },
     });
@@ -377,7 +370,7 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
         "initialize",
         {
           protocolVersion: PROTOCOL_VERSION,
-          capabilities: CLIENT_CAPABILITIES,
+          capabilities: clientCapabilities(options.serverRequestHandlers),
           clientInfo: CLIENT_INFO,
         },
         HANDSHAKE_TIMEOUT_MS,

@@ -195,12 +195,12 @@ Client info sent in `initialize`:
 
 ### 1.6 Capabilities
 
-The stdio client advertises `roots.listChanged: true` in its initialize capabilities.
-Workspace paths (absolute directories passed at startup) are advertised to each
-server via the roots capability and answered on server-initiated `roots/list`
-requests. The request-scoped HTTP transport does not advertise roots because it
-cannot answer server-initiated requests; this prevents a conforming server from
-waiting on a response that cannot arrive. After initialization, HTTP requests
+Both transports advertise `roots.listChanged: true` in their initialize
+capabilities. Workspace paths (absolute directories passed at startup) are
+advertised to each server via the roots capability and answered on
+server-initiated `roots/list` requests — over stdio directly, and over HTTP on
+the standalone GET SSE stream kept open after initialization when the server
+supports one. After initialization, HTTP requests
 include the negotiated `MCP-Protocol-Version` header. Streamable HTTP responses
 must be JSON-RPC objects whose id matches
 the pending request; scalar, array, null, and mismatched-id responses are rejected.
@@ -212,6 +212,42 @@ memory. When there is no `oauth` block, a credential stored by
 refresh token is persisted, and a response that omits one keeps the previous
 token rather than dropping it. Unattended processes therefore need either a
 prior `mcp login`, a configured refresh token, or a static header.
+
+#### Sampling and elicitation
+
+Two more requests travel server → client, and each is advertised **only when the
+frontend has wired an answer for it**. A client with nothing wired reports the
+capability as absent, and a conforming server never asks; if it asks anyway it
+gets JSON-RPC `-32601`, not a hang.
+
+| Capability | Method | Wired when | What happens |
+| --- | --- | --- | --- |
+| `sampling` | `sampling/createMessage` | the frontend has a confirm channel and a model is configured | The server's prompt is shown to you verbatim (capped) and, once you approve, run against your own model. |
+| `elicitation` | `elicitation/create` | the frontend has an ask-the-user channel | The server's question is put to you, and your answer is returned. |
+
+**Sampling spends your tokens on a prompt you did not write**, so it is confirmed
+on **every** call — there is no approval-mode bypass, only whatever your
+frontend's confirm does (a headless `-y` run therefore approves it, exactly as
+`-y` approves everything else). The prompt names the server, the model, and the
+text being sent. What the call cost is written to stderr as
+`[mcp:<server>] sampling used <n> tokens ($x.xxxx)`; it is **not** folded into
+the session's own cost total, because it is not the session's work.
+
+The sampling provider is built from the same configuration as the agent's but is
+a separate instance, so a server's model calls stay out of the agent's retry bus
+and response cache. Requests are bounded before they reach the model: at most 50
+messages, 200,000 characters, text parts only.
+
+**Elicitation** is answered through the same option-picker the `ask_user` tool
+uses, which bounds what it can collect: boolean and enumerated fields are
+answered, and a field needing free-form text is **declined** with that reason
+rather than answered with a guess — a server will act on whatever it is told.
+The requested schema must be a flat object of primitives, as the specification
+requires; anything nested is rejected.
+
+Wired today in: the CLI (`seekforge run`, the REPL) and the local server (the
+desktop and web workbenches, over the WebSocket confirm/question channels). The
+TUI advertises neither yet.
 
 `tools/list`, `resources/list`, and `prompts/list` consume every opaque
 `nextCursor`. Repeated cursors are rejected and discovery is capped at 100 pages

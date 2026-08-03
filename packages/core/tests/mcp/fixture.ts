@@ -32,6 +32,8 @@ let initialized = false;
 let clientProtocolVersion = null;
 let clientCapabilities = null;
 let rootsAnswer = null;
+let samplingAnswer = null;
+let elicitationAnswer = null;
 const slowCalls = new Map();
 const cancelledRequests = [];
 const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
@@ -41,6 +43,15 @@ rl.on("line", (line) => {
   // The client's answer to our server→client roots/list request.
   if (msg.id === "srv-1" && (msg.result !== undefined || msg.error !== undefined)) {
     rootsAnswer = msg.result || { error: msg.error };
+    return;
+  }
+  // Answers to the sampling/elicitation requests this server sends back.
+  if (msg.id === "srv-sample" && (msg.result !== undefined || msg.error !== undefined)) {
+    samplingAnswer = msg.result !== undefined ? { result: msg.result } : { error: msg.error };
+    return;
+  }
+  if (msg.id === "srv-elicit" && (msg.result !== undefined || msg.error !== undefined)) {
+    elicitationAnswer = msg.result !== undefined ? { result: msg.result } : { error: msg.error };
     return;
   }
   if (msg.method === "initialize") {
@@ -110,6 +121,37 @@ rl.on("line", (line) => {
     ] } });
     if (rootsAnswer !== null) { reply(); return; }
     const wait = setInterval(() => { if (rootsAnswer !== null) { clearInterval(wait); reply(); } }, 5);
+    return;
+  }
+  // Ask the client to run a model call, then report whatever came back.
+  if (msg.method === "tools/call" && msg.params.name === "__sample") {
+    samplingAnswer = null;
+    send({ jsonrpc: "2.0", id: "srv-sample", method: "sampling/createMessage", params:
+      (msg.params.arguments && msg.params.arguments.params) || {
+        messages: [{ role: "user", content: { type: "text", text: "summarize this changelog" } }],
+        systemPrompt: "You are a release-notes writer.",
+        maxTokens: 100,
+      } });
+    const wait = setInterval(() => {
+      if (samplingAnswer === null) return;
+      clearInterval(wait);
+      send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify(samplingAnswer) }] } });
+    }, 5);
+    return;
+  }
+  // Ask the client to put a question to its user.
+  if (msg.method === "tools/call" && msg.params.name === "__elicit") {
+    elicitationAnswer = null;
+    send({ jsonrpc: "2.0", id: "srv-elicit", method: "elicitation/create", params:
+      (msg.params.arguments && msg.params.arguments.params) || {
+        message: "Deploy to production?",
+        requestedSchema: { type: "object", properties: { confirm: { type: "boolean", title: "Confirm" } }, required: ["confirm"] },
+      } });
+    const wait = setInterval(() => {
+      if (elicitationAnswer === null) return;
+      clearInterval(wait);
+      send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify(elicitationAnswer) }] } });
+    }, 5);
     return;
   }
   if (msg.method === "tools/call" && msg.params.name === "__getCancelled") {

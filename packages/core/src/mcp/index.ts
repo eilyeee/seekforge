@@ -1,6 +1,24 @@
 /** MCP (Model Context Protocol) support — SeekForge as an MCP client (stdio or Streamable HTTP) and as an MCP server (server.ts). */
 
 export { createMcpClient, McpError, RESOURCE_READ_MAX_CHARS } from "./client.js";
+export { createMcpElicitationHandler, createMcpSamplingHandler } from "./handlers.js";
+export type { ElicitationHandlerDeps, SamplingHandlerDeps, SamplingProvider } from "./handlers.js";
+export {
+  clientCapabilities,
+  parseElicitationRequest,
+  parseSamplingRequest,
+  createServerRequestResponder,
+} from "./server-requests.js";
+export type {
+  ElicitationField,
+  ElicitationHandler,
+  ElicitationRequest,
+  ElicitationResult,
+  McpServerRequestHandlers,
+  SamplingHandler,
+  SamplingRequest,
+  SamplingResult,
+} from "./server-requests.js";
 export { MAX_MCP_ERROR_CHARS, sanitizeMcpErrorMessage } from "./errors.js";
 export { MCP_READONLY_TOOLS, serveMcp } from "./server.js";
 export type { McpServerHandle, ServeMcpOptions } from "./server.js";

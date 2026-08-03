@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { listSessions, loadAgentDefinitions, readSessionMeta } from "@seekforge/core";
 import type { AgentEvent, ApprovalMode, FinalReport } from "@seekforge/shared";
-import { createCliAgent, prepareMcp } from "../agent-factory.js";
+import { cliMcpServerRequestHandlers, createCliAgent, prepareMcp } from "../agent-factory.js";
 import { colorIsEnabled, fail } from "../colors.js";
 import { loadConfig } from "../config.js";
 import { expandFileRefs } from "@seekforge/shared/file-refs";
@@ -339,7 +339,11 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
   });
   const allowedTools = parseToolList(opts.allowedTools);
 
-  const mcp = await prepareMcp(mcpConfigForRun, projectPath);
+  // stream-json input consumes process.stdin as an async generator; a live
+  // terminal prompt would race it for the same fd and corrupt the next
+  // envelope. Deny automatically in that mode (as `machine` output already does).
+  const confirm = machine || opts.inputFormat === "stream-json" ? async () => false : confirmInTerminal;
+  const mcp = await prepareMcp(mcpConfigForRun, projectPath, cliMcpServerRequestHandlers({ config, confirm, model }));
   let created: ReturnType<typeof createCliAgent>;
   try {
     created = createCliAgent({
@@ -348,10 +352,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
       pluginContributions: mcp.pluginContributions,
       model,
       mcpToolSpecs: mcp.specs,
-      // stream-json input consumes process.stdin as an async generator; a live
-      // terminal prompt would race it for the same fd and corrupt the next
-      // envelope. Deny automatically in that mode (as `machine` output already does).
-      confirm: machine || opts.inputFormat === "stream-json" ? async () => false : confirmInTerminal,
+      confirm,
       onModelDelta: emitPartial ?? renderer?.modelDelta,
       onReasoningDelta: renderer?.reasoningDelta,
       extractMemory: mode === "edit",

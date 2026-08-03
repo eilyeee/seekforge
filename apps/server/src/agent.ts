@@ -15,6 +15,8 @@ import {
   createRuntimeClient,
   engineeringGraphNeedsAgentRuntime,
   loadAgentDefinitions,
+  createMcpElicitationHandler,
+  createMcpSamplingHandler,
   loadMcpToolSpecs,
   loadPluginContributions,
   loadSkills,
@@ -168,13 +170,18 @@ async function prepareAgentDeps(
 }> {
   const pluginContributions = loadPluginContributions(opts.workspace);
   const servers = mergePluginMcpServers(opts.workspace, loadConfig(opts.workspace).mcpServers, pluginContributions);
-  const mcp = await loadMcpToolSpecs(servers, [opts.workspace], signal);
+  // The MCP clients have to exist before the agent's deps (their tools go into
+  // the dispatcher), but a sampling request needs the provider those deps own.
+  // The handler resolves it when a request actually arrives, by which point
+  // this box is filled.
+  let deps: (AgentCoreDeps & { runtime?: RuntimeClient }) | undefined;
+  const mcp = await loadMcpToolSpecs(servers, [opts.workspace], signal, {
+    sampling: createMcpSamplingHandler({ provider: () => deps?.provider, confirm: opts.confirm }),
+    ...(opts.askUser ? { elicitation: createMcpElicitationHandler({ askUser: opts.askUser }) } : {}),
+  });
   try {
-    return {
-      deps: buildAgentDeps(opts, mcp.specs, pluginContributions),
-      entries: mcp.entries,
-      disposeMcp: mcp.dispose,
-    };
+    deps = buildAgentDeps(opts, mcp.specs, pluginContributions);
+    return { deps, entries: mcp.entries, disposeMcp: mcp.dispose };
   } catch (err) {
     mcp.dispose();
     throw err;

@@ -6,6 +6,7 @@ import { redactSecrets } from "../tools/redact.js";
 import { defineTool, type ToolSpec } from "../tools/registry.js";
 import { truncateHeadTail } from "../tools/text.js";
 import { createMcpClient, McpError, type McpClient, type McpContentPart } from "./client.js";
+import type { McpServerRequestHandlers } from "./server-requests.js";
 import { sanitizeMcpErrorMessage } from "./errors.js";
 import type { McpPromptArgument, McpServerConfig, McpTool } from "./types.js";
 
@@ -292,11 +293,17 @@ export async function getMcpPrompt(
  * (listMcpResources / readMcpResource). dispose() shuts every client down
  * (kills the child processes). `workspaceRoots` (absolute paths) is advertised
  * to each server via the roots capability and answered on roots/list.
+ *
+ * `serverRequestHandlers` answers the requests that go the other way and need a
+ * model or the user (sampling/elicitation). Each capability is advertised only
+ * when its handler is supplied, so leaving them out keeps the previous behavior
+ * exactly: servers are told the client cannot do it and never ask.
  */
 export async function loadMcpToolSpecs(
   servers: Record<string, McpServerConfig>,
   workspaceRoots?: string[],
   signal?: AbortSignal,
+  serverRequestHandlers?: McpServerRequestHandlers,
 ): Promise<{ specs: ToolSpec[]; entries: McpClientEntry[]; dispose: () => void }> {
   const entries: McpClientEntry[] = [];
   for (const [serverName, value] of Object.entries(servers)) {
@@ -328,6 +335,7 @@ export async function loadMcpToolSpecs(
         name: serverName,
         config,
         ...(workspaceRoots !== undefined ? { workspaceRoots } : {}),
+        ...(serverRequestHandlers !== undefined ? { serverRequestHandlers } : {}),
       }),
       trusted: true,
       ...(config.permission ? { permission: config.permission } : {}),

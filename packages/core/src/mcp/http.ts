@@ -3,7 +3,7 @@ import { McpError } from "./errors.js";
 import { readMcpOAuthCredential, recordMcpOAuthTokens } from "./oauth-store.js";
 import { isRecord } from "../util/guards.js";
 import { abortablePromise, onAbortOnce } from "../util/abort.js";
-import { pathToFileURL } from "node:url";
+import { clientCapabilities, createServerRequestResponder } from "./server-requests.js";
 import { SEEKFORGE_VERSION } from "../version.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -12,7 +12,6 @@ const MAX_JSON_RESPONSE_BYTES = 1_048_576;
 // Latest stable MCP spec revision; servers version-fallback to their own.
 const PROTOCOL_VERSION = "2025-06-18";
 const CLIENT_INFO = { name: "seekforge", version: SEEKFORGE_VERSION };
-const CLIENT_CAPABILITIES = { roots: { listChanged: true } } as const;
 
 type JsonRpcResponse = {
   jsonrpc?: string;
@@ -175,6 +174,11 @@ export function createMcpHttpTransport(options: McpClientOptions): {
   /** Same endpoint, already narrowed — stored credentials are keyed by it. */
   const serverUrl: string = url;
   const timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  const respondToServer = createServerRequestResponder({
+    name: options.name,
+    ...(options.workspaceRoots !== undefined ? { workspaceRoots: options.workspaceRoots } : {}),
+    ...(options.serverRequestHandlers !== undefined ? { handlers: options.serverRequestHandlers } : {}),
+  });
 
   let sessionId: string | undefined;
   let negotiatedVersion: string | undefined;
@@ -327,19 +331,8 @@ export function createMcpHttpTransport(options: McpClientOptions): {
   async function sendServerResponse(message: JsonRpcMessage, signal: AbortSignal): Promise<void> {
     const id = message.id;
     if (id === undefined || id === null || typeof message.method !== "string") return;
-    const payload =
-      message.method === "roots/list"
-        ? {
-            jsonrpc: "2.0",
-            id,
-            result: {
-              roots: (options.workspaceRoots ?? []).map((root) => ({
-                uri: pathToFileURL(root).href,
-                name: "workspace",
-              })),
-            },
-          }
-        : { jsonrpc: "2.0", id, error: { code: -32601, message: `method not found: ${message.method}` } };
+    if (typeof id !== "string" && typeof id !== "number") return;
+    const payload = await respondToServer(id, message.method, message.params, signal);
     const controller = new AbortController();
     const offAbort = onAbortOnce(signal, () => controller.abort());
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -568,7 +561,7 @@ export function createMcpHttpTransport(options: McpClientOptions): {
     if (!handshake) {
       handshake = rawRequest<{ protocolVersion?: unknown }>("initialize", {
         protocolVersion: PROTOCOL_VERSION,
-        capabilities: CLIENT_CAPABILITIES,
+        capabilities: clientCapabilities(options.serverRequestHandlers),
         clientInfo: CLIENT_INFO,
       })
         .then(async (result) => {
