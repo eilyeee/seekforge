@@ -48,6 +48,43 @@ import type { WireProtocol, WireStreamSession } from "./types.js";
 export const ANTHROPIC_VERSION = "2023-06-01";
 
 /**
+ * Prompt caching is opt-in per request on this protocol, and an agent loop is
+ * exactly the shape it exists for: the same tools and system prompt are resent
+ * on every turn, and the conversation only ever grows at the end. Without a
+ * breakpoint none of that is cached and every turn re-pays full input price for
+ * the whole prefix; with one, a hit bills at a tenth.
+ *
+ * Two breakpoints, both on the boundary of something that does not change:
+ *
+ *  1. the end of the system prompt, which covers `tools` + `system` — the
+ *     largest genuinely fixed span, since the wire order is tools, system,
+ *     messages;
+ *  2. the end of the last message, so the next turn reads the whole
+ *     conversation so far instead of reprocessing it.
+ *
+ * The second is what makes a long run cheap, and it is also why the ordering
+ * rules in toAnthropicMessages matter more than they look: a prefix that
+ * changes shape mid-conversation invalidates everything after it.
+ *
+ * The one thing that can defeat both: tools render FIRST, so a tool catalog
+ * that changes between turns invalidates the system prompt and the whole
+ * conversation with it. That happens only when
+ * `selectToolDefinitionsForBudget` (agent/context.ts) narrows a catalog too
+ * large for the window — rare, and the price of a wasted write is a quarter of
+ * that prefix against the nine tenths a hit saves, so it is not worth trading
+ * context correctness to avoid.
+ */
+const CACHE_CONTROL = { type: "ephemeral" } as const;
+
+/**
+ * Below this the tail breakpoint is not worth its write premium: a cache write
+ * costs 1.25x and a read saves 0.9x, so a prefix that will be read at least
+ * once pays for itself, but a conversation that is still one turn long may
+ * never be resent at all.
+ */
+const MIN_MESSAGES_FOR_TAIL_CACHE = 3;
+
+/**
  * `max_tokens` is required, so an absent per-request value still has to become
  * a number. 16k fits under every current Claude model's output ceiling and is
  * generous for one agentic turn. It bounds thinking *and* visible text
@@ -58,10 +95,14 @@ export const DEFAULT_ANTHROPIC_MAX_TOKENS = 16_000;
 
 // --- request mapping --------------------------------------------------------
 
-type AnthropicContentBlock =
-  | { type: "text"; text: string }
-  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
-  | { type: "tool_result"; tool_use_id: string; content: string };
+type CacheControl = { cache_control?: { readonly type: "ephemeral" } };
+
+type AnthropicContentBlock = CacheControl &
+  (
+    | { type: "text"; text: string }
+    | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
+    | { type: "tool_result"; tool_use_id: string; content: string }
+  );
 
 type AnthropicMessage = { role: "user" | "assistant"; content: string | AnthropicContentBlock[] };
 
@@ -144,6 +185,27 @@ export function toAnthropicMessages(messages: ChatMessage[]): { system?: string;
   return { ...(system ? { system } : {}), messages: out };
 }
 
+/**
+ * Mark the end of the conversation as cacheable, so the next turn reads this
+ * one's prefix instead of reprocessing it.
+ *
+ * The marker goes on the LAST content block of the LAST message: a cache is a
+ * prefix match, so this is the furthest point that is still common to the next
+ * request. A string-content message is expanded into a block to carry it —
+ * `content` accepts either form, and only the block form has somewhere to put
+ * the marker.
+ */
+function withTailCacheBreakpoint(messages: AnthropicMessage[]): AnthropicMessage[] {
+  const last = messages[messages.length - 1];
+  if (last === undefined || messages.length < MIN_MESSAGES_FOR_TAIL_CACHE) return messages;
+  const blocks: AnthropicContentBlock[] =
+    typeof last.content === "string" ? [{ type: "text", text: last.content }] : [...last.content];
+  const tail = blocks[blocks.length - 1];
+  if (tail === undefined) return messages;
+  blocks[blocks.length - 1] = { ...tail, cache_control: CACHE_CONTROL };
+  return [...messages.slice(0, -1), { role: last.role, content: blocks }];
+}
+
 export function toAnthropicTools(
   tools: ToolDefinitionForModel[],
 ): Array<{ name: string; description: string; input_schema: unknown }> {
@@ -215,6 +277,11 @@ export function mapAnthropicUsage(
       promptTokens,
       completionTokens: validUsageCount(usage.output_tokens, "output_tokens"),
       cacheHitTokens: capabilities.cacheHitTokens ? Math.min(cacheRead, promptTokens) : 0,
+      // Reported separately because it is billed separately: populating the
+      // cache costs more than an ordinary input token, and a cost nobody can
+      // reconstruct from the counts next to it is the kind of number this
+      // project does not ship.
+      ...(cacheWrite > 0 ? { cacheWriteTokens: cacheWrite } : {}),
     },
     model,
     capabilities,
@@ -484,10 +551,12 @@ export const anthropicProtocol: WireProtocol = {
     const body: Record<string, unknown> = {
       model,
       max_tokens: req.maxTokens ?? DEFAULT_ANTHROPIC_MAX_TOKENS,
-      messages,
+      messages: withTailCacheBreakpoint(messages),
       stream,
     };
-    if (system !== undefined) body.system = system;
+    // A cached system prompt has to be sent as a block: the string form has
+    // nowhere to hang the breakpoint that covers it and the tool definitions.
+    if (system !== undefined) body.system = [{ type: "text", text: system, cache_control: CACHE_CONTROL }];
     if (req.tools && req.tools.length > 0) body.tools = toAnthropicTools(req.tools);
     // `temperature` is deliberately never sent: the current model line rejects
     // sampling parameters outright, so forwarding one would fail every request

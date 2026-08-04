@@ -12,7 +12,7 @@ import type {
   ToolDefinitionForModel,
 } from "@seekforge/shared";
 import type { ModelPricing } from "./constants.js";
-import { estimateCostUsd } from "./cost.js";
+import { estimateCostUsd, type UsageTokens } from "./cost.js";
 import type { ChatRequest, ProviderCapabilities } from "./types.js";
 import { isRecord } from "../util/guards.js";
 import { withPairedToolCalls } from "./tool-pairing.js";
@@ -193,7 +193,7 @@ export function validUsageCount(value: number | undefined, field: string): numbe
  * Protocol-independent, so every wire mapping reports cost the same way.
  */
 export function priceUsage(
-  tokens: Pick<TokenUsage, "promptTokens" | "completionTokens" | "cacheHitTokens">,
+  tokens: UsageTokens,
   model: string,
   capabilities?: ProviderCapabilities,
   modelPricing?: Record<string, ModelPricing>,

@@ -231,8 +231,16 @@ export type ChatMessage = {
 export type TokenUsage = {
   promptTokens: number;
   completionTokens: number;
-  /** DeepSeek context-cache hits (subset of promptTokens). */
+  /** Context-cache hits (subset of promptTokens). */
   cacheHitTokens: number;
+  /**
+   * Prompt tokens WRITTEN to the cache (also a subset of promptTokens), on
+   * providers that bill a write above the ordinary input rate. Optional
+   * because most report no such thing; present so `costUsd` stays reproducible
+   * from the counts beside it rather than being a number only the provider can
+   * explain.
+   */
+  cacheWriteTokens?: number;
   costUsd: number;
 };
 
@@ -246,20 +254,26 @@ export const ZERO_USAGE: TokenUsage = {
 
 /** Field-wise sum of two usage records (returns a new object). */
 export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
+  const cacheWriteTokens = (a.cacheWriteTokens ?? 0) + (b.cacheWriteTokens ?? 0);
   return {
     promptTokens: a.promptTokens + b.promptTokens,
     completionTokens: a.completionTokens + b.completionTokens,
     cacheHitTokens: a.cacheHitTokens + b.cacheHitTokens,
+    // Absent stays absent: a provider that never reports cache writes should
+    // not start reporting zero of them once its usage is summed.
+    ...(a.cacheWriteTokens !== undefined || b.cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
     costUsd: a.costUsd + b.costUsd,
   };
 }
 
 /** Field-wise difference a - b (returns a new object). */
 export function subtractUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
+  const cacheWriteTokens = (a.cacheWriteTokens ?? 0) - (b.cacheWriteTokens ?? 0);
   return {
     promptTokens: a.promptTokens - b.promptTokens,
     completionTokens: a.completionTokens - b.completionTokens,
     cacheHitTokens: a.cacheHitTokens - b.cacheHitTokens,
+    ...(a.cacheWriteTokens !== undefined || b.cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
     costUsd: a.costUsd - b.costUsd,
   };
 }

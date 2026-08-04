@@ -10,7 +10,10 @@ function fallbackPricingFor(model: string): ModelPricing | undefined {
   return model.toLowerCase().startsWith(FALLBACK_PRICING_FAMILY) ? MODEL_PRICING[FALLBACK_PRICING_MODEL] : undefined;
 }
 
-export type UsageTokens = Pick<TokenUsage, "promptTokens" | "completionTokens" | "cacheHitTokens">;
+export type UsageTokens = Pick<TokenUsage, "promptTokens" | "completionTokens" | "cacheHitTokens"> & {
+  /** Prompt tokens written to the cache; billed above the miss rate where a provider says so. */
+  cacheWriteTokens?: number;
+};
 
 /**
  * Estimate the USD cost of a single request from its token usage.
@@ -49,10 +52,17 @@ export function estimateCostUsd(usage: UsageTokens, model: string, pricing?: Rec
   const rates = pricing?.[model] ?? MODEL_PRICING[model] ?? fallbackPricingFor(model);
   if (!rates) return 0;
   const cacheHit = Math.min(usage.cacheHitTokens, usage.promptTokens);
-  const cacheMiss = usage.promptTokens - cacheHit;
+  // Hits and writes are both subsets of the prompt, and a token is never both.
+  // Whatever is left over was processed at the ordinary input rate.
+  const cacheWrite = Math.min(Math.max(usage.cacheWriteTokens ?? 0, 0), usage.promptTokens - cacheHit);
+  const cacheMiss = usage.promptTokens - cacheHit - cacheWrite;
   const cost =
     (cacheMiss * rates.inputCacheMissPer1M +
       cacheHit * rates.inputCacheHitPer1M +
+      // A provider that charges nothing extra to populate its cache simply has
+      // no write rate; those tokens then bill exactly like a miss, which is
+      // what they are.
+      cacheWrite * (rates.inputCacheWritePer1M ?? rates.inputCacheMissPer1M) +
       usage.completionTokens * rates.outputPer1M) /
     1_000_000;
   return Number.isFinite(cost) && cost >= 0 ? cost : 0;

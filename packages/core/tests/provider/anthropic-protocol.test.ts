@@ -62,7 +62,9 @@ describe("anthropic request shape", () => {
       { role: "user", content: "hi" },
       { role: "system", content: "and precise" },
     ]);
-    expect(body["system"]).toBe("you are terse\n\nand precise");
+    expect(body["system"]).toEqual([
+      { type: "text", text: "you are terse\n\nand precise", cache_control: { type: "ephemeral" } },
+    ]);
     expect(body["messages"]).toEqual([{ role: "user", content: "hi" }]);
   });
 
@@ -109,6 +111,104 @@ describe("anthropic request shape", () => {
     );
     expect(body).not.toHaveProperty("thinking");
     expect(body).not.toHaveProperty("output_config");
+  });
+});
+
+describe("anthropic prompt caching", () => {
+  const conversation: ChatMessage[] = [
+    { role: "system", content: "you are terse" },
+    { role: "user", content: "first" },
+    { role: "assistant", content: "answer" },
+    { role: "user", content: "second" },
+  ];
+
+  it("caches the span that never changes: tools plus system", () => {
+    // Wire order is tools, system, messages — so a breakpoint at the end of
+    // system covers the tool definitions too, which are resent verbatim every
+    // single turn and are usually the largest fixed thing in the request.
+    const body = anthropicProtocol.buildBody(
+      MODEL,
+      {
+        messages: conversation,
+        tools: [{ name: "inspect", description: "Inspect", parameters: { type: "object" } }],
+      },
+      true,
+      {},
+      CAPABILITIES,
+    );
+    const system = body["system"] as Array<Record<string, unknown>>;
+    expect(system[system.length - 1]?.["cache_control"]).toEqual({ type: "ephemeral" });
+  });
+
+  it("caches the conversation so far, so the next turn reads it instead of paying for it", () => {
+    const body = build(conversation);
+    const messages = body["messages"] as Array<{ role: string; content: unknown }>;
+    const last = messages[messages.length - 1]!;
+    // A string-content message is expanded into a block, because only a block
+    // has anywhere to carry the marker.
+    expect(last.content).toEqual([{ type: "text", text: "second", cache_control: { type: "ephemeral" } }]);
+    // Only the tail is marked: an earlier breakpoint would cache a prefix this
+    // request already pays for anyway.
+    expect(JSON.stringify(messages.slice(0, -1))).not.toContain("cache_control");
+  });
+
+  it("marks the last block of a tool-result turn, not the first", () => {
+    const body = build([
+      { role: "user", content: "read both" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          { id: "a", name: "read_file", argumentsJson: "{}" },
+          { id: "b", name: "read_file", argumentsJson: "{}" },
+        ],
+      },
+      { role: "tool", content: "A", toolCallId: "a" },
+      { role: "tool", content: "B", toolCallId: "b" },
+    ]);
+    const messages = body["messages"] as Array<{ content: Array<Record<string, unknown>> }>;
+    const blocks = messages[messages.length - 1]!.content;
+    expect(blocks[0]?.["cache_control"]).toBeUndefined();
+    expect(blocks[blocks.length - 1]?.["cache_control"]).toEqual({ type: "ephemeral" });
+  });
+
+  it("does not pay a write premium for a conversation that may never be resent", () => {
+    const body = build([
+      { role: "system", content: "you are terse" },
+      { role: "user", content: "one shot" },
+    ]);
+    expect(JSON.stringify(body["messages"])).not.toContain("cache_control");
+  });
+
+  it("stays well under the four-breakpoint ceiling", () => {
+    const long: ChatMessage[] = [{ role: "system", content: "s" }];
+    for (let i = 0; i < 20; i++) {
+      long.push({ role: "user", content: `q${i}` }, { role: "assistant", content: `a${i}` });
+    }
+    const body = anthropicProtocol.buildBody(
+      MODEL,
+      { messages: long, tools: [{ name: "t", description: "d", parameters: { type: "object" } }] },
+      true,
+      {},
+      CAPABILITIES,
+    );
+    expect(JSON.stringify(body).split('"cache_control"').length - 1).toBe(2);
+  });
+
+  it("prices a cache write above an ordinary input token", () => {
+    const usage = mapAnthropicResponse(
+      {
+        content: [{ type: "text", text: "ok" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 1_000_000 },
+      },
+      MODEL,
+      CAPABILITIES,
+    ).usage;
+    expect(usage.cacheWriteTokens).toBe(1_000_000);
+    // claude-opus-5: $5/M input, so a write is $6.25/M — not $5/M, and the
+    // reported counts have to be enough to check that.
+    expect(usage.costUsd).toBeCloseTo(6.25, 10);
   });
 });
 
@@ -220,8 +320,11 @@ describe("anthropic response mapping", () => {
     expect(usage.promptTokens).toBe(7_000);
     expect(usage.cacheHitTokens).toBe(4_000);
     expect(usage.completionTokens).toBe(500);
-    // 3k miss @ $5/M + 4k hit @ $0.50/M + 500 out @ $25/M
-    expect(usage.costUsd).toBeCloseTo((3_000 * 5 + 4_000 * 0.5 + 500 * 25) / 1_000_000, 10);
+    expect(usage.cacheWriteTokens).toBe(2_000);
+    // 1k miss @ $5/M + 4k hit @ $0.50/M + 2k write @ $6.25/M + 500 out @ $25/M.
+    // The write is the reason the three counts have to be reported apart: at
+    // the miss rate this turn would be billed 25% under its invoice.
+    expect(usage.costUsd).toBeCloseTo((1_000 * 5 + 4_000 * 0.5 + 2_000 * 6.25 + 500 * 25) / 1_000_000, 10);
   });
 
   it("says why a refusal is empty instead of returning a blank turn", () => {
@@ -411,7 +514,7 @@ describe("anthropic transport", () => {
     expect(request.body).toMatchObject({
       model: MODEL,
       stream: true,
-      system: "be terse",
+      system: [{ type: "text", text: "be terse", cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: "transport check" }],
       thinking: { type: "adaptive", display: "summarized" },
     });

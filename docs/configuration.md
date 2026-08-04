@@ -169,8 +169,9 @@ What differs from the OpenAI-compatible presets:
 | --- | --- |
 | `thinking` | `true` requests adaptive thinking with summarized reasoning (so the reasoning stream is not blank); `false` disables it; unset sends nothing and takes the model's default — see the caveat below |
 | `reasoningEffort` | Sent as the request's effort level. With `thinking: false` it is capped at `high`, which is the most the API accepts while thinking is off |
+| Prompt caching | On, and the largest cost lever here: this API caches only where a request marks a breakpoint, so SeekForge marks the end of the system prompt (which covers the tool definitions) and the end of the conversation. A cached prefix bills at a tenth of the input rate on the next turn |
 | Context-cache tokens | Read. Anthropic reports the *uncached remainder* as its input count, so SeekForge adds the cache read/write counts back to report the whole prompt |
-| Cost | Priced from the built-in Anthropic table — `maxCostUsd` and the cost readout work without `modelPricing`. A model with no published rate here reports "unknown", not `0` |
+| Cost | Priced from the built-in Anthropic table — `maxCostUsd` and the cost readout work without `modelPricing`. Cache writes bill at 1.25x input and are counted separately, so the reported cost can be reconstructed from the reported tokens. A model with no published rate here reports "unknown", not `0` |
 | Balance | Not queried; `/user/balance` is DeepSeek's own endpoint |
 | `temperature` | Never sent — the current Claude models reject sampling parameters |
 | `maxTokens` | Required by the API, so an unset value becomes a default (16000) rather than being omitted |

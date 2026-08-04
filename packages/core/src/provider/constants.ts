@@ -14,6 +14,12 @@ export const DEPRECATED_MODELS = ["deepseek-chat", "deepseek-reasoner"] as const
 export type ModelPricing = {
   inputCacheMissPer1M: number;
   inputCacheHitPer1M: number;
+  /**
+   * Rate for prompt tokens WRITTEN to the cache, where a provider charges a
+   * premium for populating it. Omitted means "same as a cache miss", which is
+   * how every provider without an explicit write price behaves.
+   */
+  inputCacheWritePer1M?: number;
   outputPer1M: number;
 };
 
@@ -34,25 +40,23 @@ export const ANTHROPIC_MODELS = [
  * Source of truth: https://platform.claude.com/docs/en/pricing — check there
  * when updating. Verified 2026-08-03.
  *
- * Cache reads bill at a tenth of the input rate, which is what
- * `inputCacheHitPer1M` means here. Cache *writes* bill above the input rate;
- * this three-rate shape has no slot for that premium, so a turn that populates
- * the cache is priced a little under its invoice.
+ * Cache reads bill at a tenth of the input rate and cache writes at 1.25x it,
+ * which is what `inputCacheHitPer1M` and `inputCacheWritePer1M` carry.
  *
  * `claude-sonnet-5` is listed at its standard rate. An introductory rate runs
  * through 2026-08-31; until then this over-reports that model's cost, which is
  * the safer direction for a budget than under-reporting it.
  */
 export const ANTHROPIC_MODEL_PRICING: Record<string, ModelPricing> = {
-  "claude-fable-5": { inputCacheMissPer1M: 10, inputCacheHitPer1M: 1, outputPer1M: 50 },
-  "claude-mythos-5": { inputCacheMissPer1M: 10, inputCacheHitPer1M: 1, outputPer1M: 50 },
-  "claude-opus-5": { inputCacheMissPer1M: 5, inputCacheHitPer1M: 0.5, outputPer1M: 25 },
-  "claude-opus-4-8": { inputCacheMissPer1M: 5, inputCacheHitPer1M: 0.5, outputPer1M: 25 },
-  "claude-opus-4-7": { inputCacheMissPer1M: 5, inputCacheHitPer1M: 0.5, outputPer1M: 25 },
-  "claude-opus-4-6": { inputCacheMissPer1M: 5, inputCacheHitPer1M: 0.5, outputPer1M: 25 },
-  "claude-sonnet-5": { inputCacheMissPer1M: 3, inputCacheHitPer1M: 0.3, outputPer1M: 15 },
-  "claude-sonnet-4-6": { inputCacheMissPer1M: 3, inputCacheHitPer1M: 0.3, outputPer1M: 15 },
-  "claude-haiku-4-5": { inputCacheMissPer1M: 1, inputCacheHitPer1M: 0.1, outputPer1M: 5 },
+  "claude-fable-5": { inputCacheMissPer1M: 10, inputCacheHitPer1M: 1, inputCacheWritePer1M: 12.5, outputPer1M: 50 },
+  "claude-mythos-5": { inputCacheMissPer1M: 10, inputCacheHitPer1M: 1, inputCacheWritePer1M: 12.5, outputPer1M: 50 },
+  "claude-opus-5": { inputCacheMissPer1M: 5, inputCacheHitPer1M: 0.5, inputCacheWritePer1M: 6.25, outputPer1M: 25 },
+  "claude-opus-4-8": { inputCacheMissPer1M: 5, inputCacheHitPer1M: 0.5, inputCacheWritePer1M: 6.25, outputPer1M: 25 },
+  "claude-opus-4-7": { inputCacheMissPer1M: 5, inputCacheHitPer1M: 0.5, inputCacheWritePer1M: 6.25, outputPer1M: 25 },
+  "claude-opus-4-6": { inputCacheMissPer1M: 5, inputCacheHitPer1M: 0.5, inputCacheWritePer1M: 6.25, outputPer1M: 25 },
+  "claude-sonnet-5": { inputCacheMissPer1M: 3, inputCacheHitPer1M: 0.3, inputCacheWritePer1M: 3.75, outputPer1M: 15 },
+  "claude-sonnet-4-6": { inputCacheMissPer1M: 3, inputCacheHitPer1M: 0.3, inputCacheWritePer1M: 3.75, outputPer1M: 15 },
+  "claude-haiku-4-5": { inputCacheMissPer1M: 1, inputCacheHitPer1M: 0.1, inputCacheWritePer1M: 1.25, outputPer1M: 5 },
 };
 
 /**
