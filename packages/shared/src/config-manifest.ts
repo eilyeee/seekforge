@@ -45,6 +45,7 @@ export const SURFACE_CONFIG_KEYS = {
     "costBudgetUsd",
     "mouse",
     "visionModel",
+    "browserProfile",
     "llmCache",
     "routing",
   ],

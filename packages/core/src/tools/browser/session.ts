@@ -1,6 +1,8 @@
+import { existsSync } from "node:fs";
 import { ToolError } from "../errors.js";
 import { abortablePromise, onAbortOnce } from "../../util/abort.js";
 import { installProcessTeardown } from "../../util/process-teardown.js";
+import { writeBrowserProfile } from "./profile.js";
 import { assertBrowserUrlAllowed, isLoopbackHost } from "./url-guard.js";
 import { loadPlaywright, type PlaywrightBrowser, type PlaywrightContext, type PlaywrightPage } from "./playwright.js";
 
@@ -31,6 +33,26 @@ let page: PlaywrightPage | null = null;
 let activeBrowserSignal: AbortSignal | undefined;
 const browserLeases = new Set<symbol>();
 
+/**
+ * Where this session loads and stores its cookies, or null for the default:
+ * a context that starts logged out and forgets everything when it closes.
+ *
+ * Module-level for the same reason the vision endpoint is — ToolContext carries
+ * no credentials and no user paths, so the app injects this once at assembly
+ * time. Nothing the model can call reaches it: the agent cannot decide to start
+ * persisting cookies, or to persist them somewhere else.
+ */
+let storageStatePath: string | null = null;
+
+/**
+ * Configure browser-session persistence. Call once at app assembly time with an
+ * absolute path (see resolveBrowserProfilePath), or null to keep every run
+ * ephemeral. Off by default: a stored session is a stored login.
+ */
+export function configureBrowserProfile(path: string | null): void {
+  storageStatePath = path;
+}
+
 // Capture buffers, reset on every navigate so `browser_console` reports only
 // what happened since the current page loaded. Interactions deliberately do NOT
 // reset them: a click that triggers an error should still be visible afterwards.
@@ -47,7 +69,11 @@ export async function getPage(): Promise<PlaywrightPage> {
     installExitHook();
   }
   if (!context) {
-    context = await browser.newContext();
+    // A configured profile that does not exist yet is the normal first run, not
+    // an error — Playwright would throw on a missing storageState file, so the
+    // absence is checked here and the context simply starts logged out.
+    const restore = storageStatePath !== null && existsSync(storageStatePath);
+    context = await browser.newContext(restore ? { storageState: storageStatePath } : undefined);
     // Re-check every navigation/subresource so a public URL cannot redirect the
     // browser into an unapproved private network target. This validates the
     // request host with a DNS lookup, but unlike web_fetch it cannot PIN the
@@ -165,7 +191,8 @@ export async function runBrowserOperation<T>(
   label: string,
 ): Promise<T> {
   activeBrowserSignal = signal;
-  const offAbort = onAbortOnce(signal, () => void closeBrowser());
+  // Cancellation does not persist the session — see closeBrowser.
+  const offAbort = onAbortOnce(signal, () => void closeBrowser(false));
   try {
     return await abortablePromise(operation, signal, () => new ToolError("cancelled", `${label} cancelled`));
   } finally {
@@ -183,19 +210,64 @@ export async function disposeBrowser(): Promise<void> {
   await closeBrowser();
 }
 
-async function closeBrowser(): Promise<void> {
+/**
+ * The teardown in flight, if any.
+ *
+ * Teardown nulls the module state synchronously and then awaits — a CDP round
+ * trip for the session state, then the browser close. Without this, a second
+ * caller arriving during that window sees `browser === null`, concludes there
+ * is nothing to do, and returns immediately: the run's cleanup would report
+ * "browser released" while the profile write was still in flight, and a process
+ * that exited right after would lose it. Everyone joins the same promise
+ * instead.
+ */
+let teardown: Promise<void> | null = null;
+
+/**
+ * Close the shared browser.
+ *
+ * `persist` decides whether the session is written to the configured profile.
+ * A cancelled run passes false, and that is a deliberate answer to a question
+ * with two defensible sides: stopping mid-flow — halfway through a login
+ * redirect, just after a cookie rotated — would otherwise overwrite a good
+ * saved login with a broken one. Cancel means "forget what I was doing", so the
+ * last successfully finished run stays the one on disk.
+ */
+function closeBrowser(persist = true): Promise<void> {
+  if (teardown) return teardown;
   const b = browser;
+  const ctx = context;
   browser = null;
   context = null;
   page = null;
   resetCapture();
-  if (b) {
-    try {
-      await b.close();
-    } catch {
-      // Best-effort teardown — a failed close must not surface as an error.
+  if (!b && !ctx) return Promise.resolve();
+  teardown = (async () => {
+    // While the context still exists. A failure must not become a tool error —
+    // teardown runs on the cancellation path too — but it must not be silent
+    // either, or the next run would start logged out with no explanation.
+    if (persist && ctx && storageStatePath !== null) {
+      try {
+        writeBrowserProfile(await ctx.storageState(), storageStatePath);
+      } catch (error) {
+        console.error(
+          `[browser] could not save the session profile (${storageStatePath}): ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
     }
-  }
+    if (b) {
+      try {
+        await b.close();
+      } catch {
+        // Best-effort teardown — a failed close must not surface as an error.
+      }
+    }
+  })().finally(() => {
+    teardown = null;
+  });
+  return teardown;
 }
 
 export type BrowserLease = {

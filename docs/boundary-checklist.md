@@ -4600,6 +4600,26 @@ nobody is listening to, in the middle of the next one.
   anyway — the setup it used to cover can legitimately be waiting on a human to
   answer a prompt.
 
+## 415. Teardown that awaits must be joinable, or "released" is a lie
+
+Teardown that nulls its module state synchronously and then awaits has a window
+where a second caller sees nothing left to do and returns immediately. That is
+harmless while teardown only closes things — and stops being harmless the moment
+it also SAVES something. The run's cleanup reports "released", the process is
+free to exit, and the write is still in flight.
+
+- **Do:** keep the in-flight teardown promise in a module variable and have
+  every entry point (abort handler, dispose, lease release) return that same
+  promise. Reset it in a `finally` so the next lifecycle starts clean.
+- **Caught:** in review of browser-session persistence. `closeBrowser()` nulled
+  `browser`/`context` and then awaited a CDP round trip plus a file write, while
+  the abort path called it fire-and-forget (`void closeBrowser()`) — so the
+  run's `await browserLease.release()` joined nothing and resolved instantly.
+- **Second half:** the same review asked whether cancelling should save at all.
+  It should not: stopping mid-login-redirect would overwrite a good stored
+  session with a broken one. "Cancel" means forget what I was doing, and a
+  teardown flag now says which kind this is.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

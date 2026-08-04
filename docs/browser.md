@@ -126,6 +126,52 @@ The shared browser is a single instance for the session and is torn down at
 session end (with a process-exit fallback), so a headless browser process is
 never leaked.
 
+## Staying logged in between runs
+
+By default every run starts logged out and forgets everything when it ends —
+the browser context is created empty and torn down with the session. That is the
+right default: what would be saved is not a preference, it is the cookies and
+localStorage of every origin the page touched, which for a logged-in site **is**
+the login.
+
+Set `browserProfile` in your own `~/.seekforge/config.json` to keep it:
+
+```json
+{ "browserProfile": "work" }
+```
+
+The session is then loaded from and written back to
+`~/.seekforge/browser-profiles/work.json`, created `0700`/`0600` so no other
+account on the machine can read it. A profile that does not exist yet is the
+normal first run, not an error.
+
+The setting is a **name, not a path**. A path would let a typo — or a config
+layer that should never have been trusted with the decision — drop live session
+cookies into a repository working tree, where the next `git add -A` publishes
+them. Names are restricted to letters, digits, dot, dash and underscore, so
+they cannot leave that directory. The value is also user-owned: a project config
+cannot turn persistence on, name a profile, or point the browser at a state file
+the repository shipped.
+
+Nothing the model can call reaches this. The agent cannot decide to start
+storing cookies, or to store them somewhere else; the app resolves the path once
+at startup and the browser session never learns anything more about it.
+
+You do not need the agent to create the file. Point your own Playwright script
+or `playwright codegen --save-storage` at the same path, log in as yourself
+once, and every later run starts authenticated:
+
+```bash
+npx playwright codegen --save-storage ~/.seekforge/browser-profiles/work.json https://example.com
+```
+
+The profile is written when a run **finishes**. Cancelling a run (Ctrl+C, stop)
+closes the browser without saving: stopping halfway through a login redirect, or
+just after a cookie rotated, would otherwise replace a working session with a
+broken one. The last run that finished stays the one on disk.
+
+To forget a session, delete the file.
+
 ## The verification loop
 
 1. Start your dev server (e.g. `run_command` with `npm run dev` in the

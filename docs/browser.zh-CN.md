@@ -75,6 +75,45 @@ export SEEKFORGE_PLAYWRIGHT=/path/to/node_modules/playwright-core/index.mjs
 
 共享浏览器在一次会话中只有一个实例，并在会话结束时销毁（另有进程退出兜底），因此绝不会泄漏 headless 浏览器进程。
 
+## 在多次运行之间保持登录
+
+默认情况下，每次运行都从未登录状态开始，并在结束时忘掉一切 —— 浏览器上下文是空的，
+随会话一起销毁。这个默认值是对的：会被保存下来的不是某种偏好设置，而是页面接触过的
+每一个 origin 的 cookie 和 localStorage，对一个已登录的站点来说，那**就是**登录本身。
+
+在你自己的 `~/.seekforge/config.json` 里设置 `browserProfile` 即可保留它：
+
+```json
+{ "browserProfile": "work" }
+```
+
+此后会话会从 `~/.seekforge/browser-profiles/work.json` 载入，并在结束时写回；
+目录与文件分别以 `0700`/`0600` 创建，因此机器上的其他账号读不到。首次运行时该文件
+还不存在是正常情况，不是错误。
+
+这个设置是**名字，不是路径**。路径会让一个笔误 —— 或者一个本就不该被信任来做这个
+决定的配置层 —— 把有效的会话 cookie 落进仓库工作区，而下一次 `git add -A` 就会把
+它们发布出去。名字被限制为字母、数字、点、短横线和下划线，因此无法离开那个目录。
+这个值同样是用户所有：项目配置既不能打开持久化、不能指定 profile 名，也不能把浏览器
+指向仓库自带的某个状态文件。
+
+模型能调用的任何东西都碰不到它。Agent 无法决定「开始保存 cookie」，也无法决定把它们
+保存到别处；应用在启动时一次性解析出路径，而浏览器会话对它一无所知。
+
+你也不需要让 agent 来生成这个文件。把你自己的 Playwright 脚本或
+`playwright codegen --save-storage` 指向同一个路径，以你自己的身份登录一次，
+之后每次运行就都是已认证状态：
+
+```bash
+npx playwright codegen --save-storage ~/.seekforge/browser-profiles/work.json https://example.com
+```
+
+profile 是在一次运行**正常结束**时写入的。取消运行（Ctrl+C、停止）会关闭浏览器但
+不保存：在登录跳转跑到一半、或某个 cookie 刚刚轮换之后停下来，否则就会用一个坏掉的
+会话覆盖掉本来能用的那个。留在磁盘上的，始终是最后一次正常结束的运行。
+
+要忘掉一次会话，删掉那个文件即可。
+
 ## 验证循环
 
 1. 启动你的开发服务器（例如用 `run_command` 在后台运行 `npm run dev`），

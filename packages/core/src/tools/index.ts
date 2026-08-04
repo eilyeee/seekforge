@@ -157,6 +157,9 @@ export type { SearchReplaceEdit } from "./edits.js";
 export { zodToJsonSchema } from "./json-schema.js";
 export {
   acquireBrowserLease,
+  browserProfileDir,
+  configureBrowserProfile,
+  resolveBrowserProfilePath,
   acquireLspServerLease,
   builtinTools,
   configureVision,

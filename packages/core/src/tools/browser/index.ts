@@ -20,7 +20,8 @@ export const browserTools: ToolSpec[] = [
   ...browserInteractionTools,
 ];
 
-export { acquireBrowserLease, disposeBrowser, type BrowserLease } from "./session.js";
+export { acquireBrowserLease, configureBrowserProfile, disposeBrowser, type BrowserLease } from "./session.js";
+export { browserProfileDir, resolveBrowserProfilePath, writeBrowserProfile } from "./profile.js";
 export { assertBrowserUrlAllowed, checkBrowserUrl, isLoopbackHost } from "./url-guard.js";
 export {
   composeSelector,

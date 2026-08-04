@@ -1,9 +1,12 @@
 import type React from "react";
 import { createRequire } from "node:module";
+import { homedir } from "node:os";
 import { render } from "ink";
 import {
   buildProvider,
+  configureBrowserProfile,
   configureVision,
+  resolveBrowserProfilePath,
   createMcpElicitationHandler,
   createMcpSamplingHandler,
   createUsageBus,
@@ -67,6 +70,15 @@ async function main(): Promise<void> {
         }
       : null,
   );
+  // Browser-session persistence, off unless the user named a profile. Resolved
+  // once here, so an invalid name is a startup error the user sees rather than
+  // a tool failure three prompts into a run.
+  try {
+    configureBrowserProfile(config.browserProfile ? resolveBrowserProfilePath(homedir(), config.browserProfile) : null);
+  } catch (error) {
+    process.stdout.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  }
 
   // The TUI is interactive only. Without a TTY (CI, piped stdout, smoke import)
   // there is nothing to render — print a short notice and exit cleanly instead

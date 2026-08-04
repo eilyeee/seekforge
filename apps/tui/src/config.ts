@@ -59,6 +59,13 @@ export type TuiConfig = {
   locale?: "en" | "zh-CN";
   /** Vision model for the image_analyze tool (OpenAI-compatible endpoint). */
   visionModel?: { model: string; baseUrl?: string; apiKey?: string };
+  /**
+   * Name of a persistent browser session profile. When set, the browser tools
+   * start from `~/.seekforge/browser-profiles/<name>.json` and write it back on
+   * teardown, so a site logged into once stays logged in. Unset = every run
+   * starts logged out, which is the default because the file IS the login.
+   */
+  browserProfile?: string;
   /** Cache identical non-streaming LLM calls on disk (evals/subagents). */
   llmCache?: boolean;
   /** Flat documented key: /plan runs think on this model (e.g. deepseek-v4-pro). Takes precedence over routing.planModel. */

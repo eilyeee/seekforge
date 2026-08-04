@@ -74,6 +74,8 @@ export type PlaywrightPage = {
 export type PlaywrightContext = {
   newPage(): Promise<PlaywrightPage>;
   route(pattern: string, handler: (route: PlaywrightRoute) => Promise<void>): Promise<void>;
+  /** Cookies + localStorage of every origin this context touched. */
+  storageState(): Promise<unknown>;
 };
 export type PlaywrightBrowser = {
   newContext(opts?: unknown): Promise<PlaywrightContext>;

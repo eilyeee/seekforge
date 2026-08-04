@@ -18,7 +18,14 @@ import { notebookTools } from "./notebook.js";
 import { skillTools } from "./skill.js";
 
 export { configureVision, type VisionConfig } from "./vision.js";
-export { acquireBrowserLease, disposeBrowser, type BrowserLease } from "../browser/index.js";
+export {
+  acquireBrowserLease,
+  browserProfileDir,
+  configureBrowserProfile,
+  disposeBrowser,
+  resolveBrowserProfilePath,
+  type BrowserLease,
+} from "../browser/index.js";
 export { acquireLspServerLease, disposeLspServers, type LspServerLease } from "../lsp/client.js";
 
 export function builtinTools(): ToolSpec[] {
