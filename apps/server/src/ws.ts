@@ -28,12 +28,14 @@ import type {
   ClientFrame,
   ConfirmResult,
   PermissionRequest,
+  PermissionRule,
   RunOverrides,
   ChatContinuationPolicy,
   ServerFrame,
 } from "@seekforge/shared";
 import { decodeClientFrame } from "@seekforge/shared/ws-protocol";
 import type { CreateAgentFn, ResumeLoopFn, RunLoopFn } from "./agent.js";
+import { appendGlobalPermissionRule } from "./config.js";
 import { isSafeId } from "./ids.js";
 import type { WorkspaceRegistry } from "./workspaces.js";
 import {
@@ -45,6 +47,11 @@ import {
 } from "./run-ledger.js";
 
 export const PERMISSION_TIMEOUT_MS = 120_000;
+
+/** How a rule reads in a notice — the raw match, never a paraphrase of it. */
+function describeRule(rule: PermissionRule): string {
+  return rule.match === undefined ? `${rule.action} ${rule.tool}` : `${rule.action} ${rule.tool}: ${rule.match}`;
+}
 
 /**
  * Model/reasoning delta chunks are buffered per session and flushed as one
@@ -388,6 +395,29 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       handle = await deps.createAgent({
         workspace: input.workspace,
         confirm,
+        // Where an "always allow" answer is written. The server binds 127.0.0.1
+        // behind a bearer token, so whoever answers the prompt is already the
+        // account that started it — its own global config is the same place the
+        // TUI writes, and the only layer where an allow rule survives a load.
+        // The notice names the file: a permission that outlives the run has to
+        // be findable.
+        persistRule: (rule) => {
+          const emit = (level: "info" | "warn", message: string): void => {
+            const frame: ServerFrame = { type: "event", sessionId, event: { type: "notice", level, message } };
+            if (activeRunId && activeWorkspace) sendRun(activeRunId, activeWorkspace, frame);
+            else send(frame);
+          };
+          try {
+            emit("info", `saved permission rule: ${describeRule(rule)} → ${appendGlobalPermissionRule(rule)}`);
+          } catch (error) {
+            emit(
+              "warn",
+              `could not save the permission rule, allowed for this session only: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          }
+        },
         askUser,
         onModelDelta: (chunk) => bufferDelta("model.delta", sessionId, chunk),
         onReasoningDelta: (chunk) => bufferDelta("reasoning.delta", sessionId, chunk),
@@ -877,10 +907,11 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         if (!settle) return fail("unknown_request", `no pending permission request: ${String(requestId)}`);
         if (approved && selectedHunks) {
           settle({ allow: true, selectedHunks });
-        } else if (approved && remember === "session") {
-          // remember:"session" forwards the richer ConfirmResult so core grows
-          // its session allowlist; a plain allow/deny stays a bare boolean.
-          settle({ allow: true, remember: "session" });
+        } else if (approved && (remember === "session" || remember === "always")) {
+          // The richer ConfirmResult, so core grows its session allowlist and —
+          // for "always" — hands the rule it proposed to the persistRule sink
+          // below. A plain allow/deny stays a bare boolean.
+          settle({ allow: true, remember });
         } else {
           settle(approved);
         }

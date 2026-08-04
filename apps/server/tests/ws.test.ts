@@ -815,6 +815,26 @@ describe("permission bridge", () => {
     expect(resultSeen).toEqual({ allow: true, remember: "session" });
   });
 
+  it("forwards remember:always, so core can hand the rule to its persist sink", async () => {
+    let resultSeen: ConfirmResult | undefined;
+    const { server } = await boot(permissionScript((r) => (resultSeen = r)));
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "write it", mode: "edit", approvalMode: "confirm" });
+    const req = await rx.waitFor((f) => f.type === "permission.request");
+    sendFrame(ws, {
+      type: "permission.response",
+      requestId: req.requestId,
+      approved: true,
+      remember: "always",
+    });
+    await rx.waitFor((f) => f.type === "idle");
+    // The rule itself never crosses the wire in the response — core computed it,
+    // put it on the REQUEST, and looks it up again from there. A client cannot
+    // substitute a different one on the way back.
+    expect(resultSeen).toEqual({ allow: true, remember: "always" });
+  });
+
   it("a denied response with remember stays a bare false (no session grant)", async () => {
     let resultSeen: ConfirmResult | undefined;
     const { server } = await boot(permissionScript((r) => (resultSeen = r)));

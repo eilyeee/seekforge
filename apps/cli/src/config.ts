@@ -41,6 +41,20 @@ export type CliConfig = {
   /** UI language for CLI chrome (errors, prompts, command output). */
   locale?: "en" | "zh-CN";
   /**
+   * Vision endpoint for the `image_analyze` builtin (OpenAI-compatible). The
+   * main provider usually cannot see images, so this is typically a separate
+   * model and key. Unset leaves the tool reporting "vision_unconfigured".
+   * User-owned: a project config cannot point it anywhere.
+   */
+  visionModel?: { model: string; baseUrl?: string; apiKey?: string };
+  /**
+   * Name of a persistent browser session profile. When set, the browser tools
+   * start from `~/.seekforge/browser-profiles/<name>.json` and write it back
+   * when the run finishes, so a site logged into once stays logged in. Unset =
+   * every run starts logged out. See docs/browser.md.
+   */
+  browserProfile?: string;
+  /**
    * Default per-run cost budget in USD: a `run`/`ask` stops once cumulative
    * cost reaches it (graceful abort, trace kept). Overridden by the CLI
    * `--max-cost` flag. Off when unset/non-positive. Edit the file directly;

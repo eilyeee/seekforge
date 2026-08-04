@@ -313,8 +313,8 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
     if (!requestId || typeof frame["approved"] !== "boolean") {
       return bad("permission.response needs requestId and approved", requestId);
     }
-    if (frame["remember"] !== undefined && frame["remember"] !== "session") {
-      return bad('permission.response.remember must be "session" when present', requestId);
+    if (frame["remember"] !== undefined && frame["remember"] !== "session" && frame["remember"] !== "always") {
+      return bad('permission.response.remember must be "session" or "always" when present', requestId);
     }
     const selectedHunks = frame["selectedHunks"];
     if (

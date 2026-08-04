@@ -40,7 +40,7 @@ import {
   type EngineeringGraphState,
   type RunEngineeringGraphOptions,
 } from "@seekforge/core";
-import type { ConfirmResult, PermissionRequest, RunOverrides } from "@seekforge/shared";
+import type { ConfirmResult, PermissionRequest, PermissionRule, RunOverrides } from "@seekforge/shared";
 import { loadConfig } from "./config.js";
 
 export type { RunOverrides } from "@seekforge/shared";
@@ -53,6 +53,12 @@ export type CreateAgentOptions = {
    * grows its session allowlist on "allow for session".
    */
   confirm: (req: PermissionRequest) => Promise<ConfirmResult>;
+  /**
+   * Where a `remember: "always"` approval is written. Absent = core never
+   * offers the durable choice, so a client cannot ask for a persistence this
+   * server has nowhere to put.
+   */
+  persistRule?: (rule: PermissionRule) => void;
   onModelDelta?: (chunk: string) => void;
   /** Streamed chain-of-thought deltas (thinking mode), mirrored over the WS. */
   onReasoningDelta?: (chunk: string) => void;
@@ -147,6 +153,7 @@ export function buildAgentDeps(
     }),
     dispatcher: createDefaultDispatcher(mcpToolSpecs),
     confirm: opts.confirm,
+    ...(opts.persistRule ? { persistRule: opts.persistRule } : {}),
     onModelDelta: opts.onModelDelta,
     ...(opts.onReasoningDelta ? { onReasoningDelta: opts.onReasoningDelta } : {}),
     ...(opts.askUser ? { askUser: opts.askUser } : {}),

@@ -87,11 +87,20 @@ function taskWithEditorContext(task, editor, workspaceRoot) {
  * — but the raw strings must always stay in front of the approver.
  */
 function permissionSummary(request) {
+  const rule = request.rememberRule;
   return [
     request.description,
     request.command ? `\nRaw command:\n${request.command}` : "",
     request.path ? `\nRaw path:\n${request.path}` : "",
+    // What "Always allow" would write, verbatim. Shown whether or not the
+    // approver uses that button — it is the text they are being offered.
+    rule ? `\nAlways-allow rule:\n${describeRule(rule)}` : "",
   ].join("");
+}
+
+/** The rule as the CLI, TUI and Desktop all print it — never a paraphrase. */
+function describeRule(rule) {
+  return rule.match === undefined ? `${rule.action} ${rule.tool}` : `${rule.action} ${rule.tool}: ${rule.match}`;
 }
 
 /** True when the request carries a diff worth opening in its own document. */
@@ -404,6 +413,7 @@ module.exports = {
   formatTranscript,
   hasDiffPreview,
   normalizeServerUrl,
+  describeRule,
   permissionHunkItems,
   permissionSummary,
   usageSummary,

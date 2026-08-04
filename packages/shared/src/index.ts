@@ -2076,8 +2076,13 @@ export type ClientFrame =
       type: "permission.response";
       requestId: string;
       approved: boolean;
-      /** "session" = allow this (and similar) for the rest of the session. */
-      remember?: "session";
+      /**
+       * "session" = allow this (and similar) for the rest of the run.
+       * "always" additionally writes the request's `rememberRule` to the
+       * server account's own config, so it survives the run. Only honored when
+       * the request carried a rule; a client must not invent one.
+       */
+      remember?: "session" | "always";
       /** Per-hunk selection for multi-hunk apply_patch calls. */
       selectedHunks?: number[];
     }

@@ -668,16 +668,23 @@ permission prompt write one for you (below).
 
 #### Saving a rule from the permission prompt
 
-The TUI permission panel offers three answers, not two:
+Every permission prompt offers three answers, not two:
 
-| Key | Effect |
-| --- | --- |
-| `y` | allow this call once |
-| `a` | allow this and similar calls for the rest of the session (not persisted) |
-| `A` | allow always — writes the rule to `~/.seekforge/config.json` |
+| TUI key | Desktop / VS Code | Effect |
+| --- | --- | --- |
+| `y` | Allow once | allow this call once |
+| `a` | Allow for session | allow this and similar calls for the rest of the run (not persisted) |
+| `A` | Always allow | writes the rule to `~/.seekforge/config.json` |
 
-`A` appears only when the prompt shows the rule it would write, and the rule
-shown is exactly what lands in the file. It is deliberately narrower than what
+The third answer appears only when the prompt also shows the rule it would
+write, and the rule shown is exactly what lands in the file. Core decides
+whether to propose one at all; a frontend that has not been given a rule does
+not offer the option, because it would then have to invent what to persist.
+
+`seekforge serve` (and therefore the Desktop) writes the rule to the config of
+the account running the server. That is the same trust domain: the server binds
+127.0.0.1 and requires a bearer token, so whoever answers the prompt is already
+the account that started it. It is deliberately narrower than what
 you may write by hand:
 
 - **Shell commands only** (`run_command`, `task_kill`). A command is an identity
@@ -867,6 +874,43 @@ behavior applies). Both the legacy shape and the Claude-Code shape are accepted:
 A `userPromptSubmit` (or `sessionStart`) hook contributes context via
 `additionalContext` — or, absent that, its trimmed stdout — which is appended to
 the task as a `<hook-context>…</hook-context>` block (capped at 8000 chars).
+
+### `visionModel`
+
+**Default off.** The endpoint the `image_analyze` tool sends images to. The
+main coding model usually cannot see images (DeepSeek has no vision model at
+all), so this is normally a different provider and a different key —
+OpenAI-compatible, base URL without the trailing `/chat/completions`.
+
+```json
+{ "visionModel": { "model": "qwen-vl-plus", "baseUrl": "https://…/v1", "apiKey": "sk-…" } }
+```
+
+`apiKey` may be omitted for a keyless local endpoint. Unset, `image_analyze`
+fails with `vision_unconfigured` rather than pretending to look at the picture.
+
+User-owned: it names a credential destination, so a repository config cannot
+set it. Applies to every frontend — CLI, TUI and the server alike.
+
+Settable via `config set`? **No** — edit the file directly.
+
+### `browserProfile`
+
+**Default off.** Name of a persistent browser session profile. When set, the
+browser tools start from `~/.seekforge/browser-profiles/<name>.json` and write
+it back when a run finishes, so a site logged into once stays logged in. Unset,
+every run starts logged out and forgets everything when it ends.
+
+```json
+{ "browserProfile": "work" }
+```
+
+It is a name, not a path, and the file it names holds live session cookies —
+see [Browser / visual verification](browser.md) for why that distinction
+matters, how to create the file with `playwright codegen` instead of the agent,
+and what happens when a run is cancelled.
+
+Settable via `config set`? **No** — edit the file directly.
 
 ### `locale`
 

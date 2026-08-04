@@ -556,6 +556,44 @@ export function setConfigValue(workspace: string, key: string, value: unknown, g
   }
 }
 
+/**
+ * Append one permission rule to the USER-owned global config.
+ *
+ * The trust question this answers: `seekforge serve` binds 127.0.0.1 and
+ * requires a bearer token, so anyone who can reach it is already the account
+ * that started it — the same trust domain as the shell running the CLI. Writing
+ * that account's own `~/.seekforge/config.json` is therefore exactly as correct
+ * here as in the TUI. The project config is NOT an option: sanitizeProjectConfig
+ * strips every allow rule from a repository layer, so a rule written there would
+ * save, report success, and be discarded on every load.
+ *
+ * Idempotent, and it refuses a malformed existing config for the same reason
+ * setConfigValue does — writing a fresh document would discard every other key.
+ */
+export function appendGlobalPermissionRule(rule: PermissionRule): string {
+  const path = join(seekforgeHome(), ".seekforge", "config.json");
+  let current: Record<string, unknown> = {};
+  if (existsSync(path)) {
+    try {
+      current = parseConfigDoc(readFileBounded(path, MAX_CONFIG_FILE_BYTES).toString("utf8"));
+    } catch {
+      throw new ConfigValueError(`refusing to overwrite malformed ${path} — fix or delete it first`);
+    }
+  }
+  const existing = Array.isArray(current.permissionRules) ? (current.permissionRules as PermissionRule[]) : [];
+  const same = (a: PermissionRule, b: PermissionRule): boolean =>
+    a.action === b.action && a.tool === b.tool && (a.match ?? "") === (b.match ?? "");
+  if (!existing.some((candidate) => same(candidate, rule))) {
+    current.permissionRules = [...existing, rule];
+  }
+  const serialized = `${JSON.stringify(current, null, 2)}\n`;
+  if (Buffer.byteLength(serialized, "utf8") > MAX_CONFIG_FILE_BYTES) {
+    throw new ConfigValueError(`config exceeds ${MAX_CONFIG_FILE_BYTES} bytes`);
+  }
+  writeGlobalConfigAtomic(path, serialized);
+  return path;
+}
+
 /** Atomic + fsync write for the global (~/.seekforge) config, with symlink guard. */
 function writeGlobalConfigAtomic(path: string, serialized: string): void {
   const dir = dirname(path);

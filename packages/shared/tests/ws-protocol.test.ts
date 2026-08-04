@@ -139,6 +139,17 @@ describe("WS client protocol decoder", () => {
     });
   });
 
+  it("accepts both remember values on a permission response, and nothing else", () => {
+    const base = { type: "permission.response", requestId: "p1", approved: true };
+    expect(parseClientFrame({ ...base, remember: "session" }, limits)).toMatchObject({ ok: true });
+    expect(parseClientFrame({ ...base, remember: "always" }, limits)).toMatchObject({ ok: true });
+    expect(parseClientFrame(base, limits)).toMatchObject({ ok: true });
+    // The decoder is the gate: an unknown value must be refused here rather
+    // than reaching a switch that quietly treats it as "no".
+    expect(parseClientFrame({ ...base, remember: "forever" }, limits)).toMatchObject({ ok: false });
+    expect(parseClientFrame({ ...base, remember: true }, limits)).toMatchObject({ ok: false });
+  });
+
   it("enforces caller-provided loop and steering limits", () => {
     expect(
       parseClientFrame(

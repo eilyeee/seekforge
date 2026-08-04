@@ -1,10 +1,15 @@
 import { useEffect, useState } from "react";
 import { useT } from "../../lib/i18n";
-import type { PermissionRequest } from "@seekforge/shared";
+import type { PermissionRequest, PermissionRule } from "@seekforge/shared";
 import { Badge, type BadgeTone } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Modal } from "../ui/Modal";
 import { DiffBlock } from "../DiffBlock";
+
+/** The rule verbatim — the same shape the CLI and TUI print, never a paraphrase. */
+function describeRule(rule: PermissionRule): string {
+  return rule.match === undefined ? `${rule.action} ${rule.tool}` : `${rule.action} ${rule.tool}: ${rule.match}`;
+}
 
 const PERMISSION_TONE: Record<string, BadgeTone> = {
   readonly: "neutral",
@@ -16,8 +21,11 @@ const PERMISSION_TONE: Record<string, BadgeTone> = {
 
 type Props = {
   request: PermissionRequest;
-  /** remember "session" allows this (and similar) for the rest of the session. */
-  onRespond: (approved: boolean, remember?: "session", selectedHunks?: number[]) => void;
+  /**
+   * remember "session" allows this (and similar) for the rest of the run;
+   * "always" also writes `request.rememberRule` to the server account's config.
+   */
+  onRespond: (approved: boolean, remember?: "session" | "always", selectedHunks?: number[]) => void;
 };
 
 /**
@@ -259,6 +267,13 @@ export function PermissionModal({ request, onRespond }: Props) {
             {tModal("chat.permission.allowSession")}
             <kbd className="rounded bg-surface-overlay px-1 font-mono text-2xs text-tertiary">a</kbd>
           </Button>
+          {/* Offered only when core proposed a rule. A frontend must never
+              invent one: the text below IS what gets written. */}
+          {request.rememberRule && (
+            <Button onClick={() => onRespond(true, "always")} title={describeRule(request.rememberRule)}>
+              {tModal("chat.permission.allowAlways")}
+            </Button>
+          )}
           <Button variant="primary" onClick={() => onRespond(true)} autoFocus>
             {tModal("chat.permission.allowOnce")}
             <kbd className="rounded bg-white/20 px-1 font-mono text-2xs">y</kbd>
@@ -268,6 +283,16 @@ export function PermissionModal({ request, onRespond }: Props) {
     >
       <p className="mb-3 text-sm text-secondary">{request.description}</p>
 
+      {request.rememberRule && (
+        <div className="mb-3">
+          <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">
+            {tModal("chat.permission.rememberRuleLabel")}
+          </div>
+          <pre className="overflow-x-auto rounded-lg border border-subtle bg-surface p-2.5 font-mono text-xs text-secondary">
+            {describeRule(request.rememberRule)}
+          </pre>
+        </div>
+      )}
       {request.command !== undefined && (
         <div className="mb-3">
           <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">

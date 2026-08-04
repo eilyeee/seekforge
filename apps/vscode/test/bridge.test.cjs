@@ -8,6 +8,7 @@ const {
   hasDiffPreview,
   normalizeServerUrl,
   permissionHunkItems,
+  describeRule,
   permissionSummary,
   readStoredToken,
   taskWithEditorContext,
@@ -271,4 +272,21 @@ test("renders a transcript for reading rather than replay", () => {
   // An attachment the reader cannot see still has to be visible AS an omission:
   // the model saw something this transcript does not show.
   assert.match(out, /image attached: shot\.png/);
+});
+
+test("the always-allow rule is in the modal detail, verbatim, and only when core proposed one", () => {
+  const withoutRule = permissionSummary({ description: "Run a command", command: "pnpm test" });
+  assert.doesNotMatch(withoutRule, /Always-allow rule/);
+
+  const withRule = permissionSummary({
+    description: "Run a command",
+    command: "pnpm test",
+    rememberRule: { action: "allow", tool: "run_command", match: "pnpm test" },
+  });
+  // The approver sees exactly what would be written — not a description of it.
+  assert.match(withRule, /Always-allow rule:\nallow run_command: pnpm test/);
+});
+
+test("a rule with no match reads as the whole-tool grant it is", () => {
+  assert.equal(describeRule({ action: "allow", tool: "web_search" }), "allow web_search");
 });

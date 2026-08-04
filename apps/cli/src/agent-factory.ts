@@ -1,6 +1,10 @@
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import {
   buildAgentCoreDeps,
+  configureBrowserProfile,
+  configureVision,
+  resolveBrowserProfilePath,
   createAgentCore,
   createDefaultDispatcher,
   createRuntimeClient,
@@ -75,10 +79,46 @@ export type CliAgentDeps = {
  * need the deps object directly (e.g. `seekforge loop` → runAutoLoop) use this;
  * createCliAgent layers createAgentCore on top. dispose() releases the runtime.
  */
+/**
+ * Apply the config keys that configure builtin tools. Separate and exported so
+ * a test can assert the mapping without building a whole agent, and idempotent
+ * because several CLI commands build deps more than once per process.
+ *
+ * An invalid `browserProfile` is reported and ignored rather than thrown: it is
+ * a convenience, and refusing to run a task because a browser profile name has
+ * a slash in it would be a worse trade than running without the profile.
+ */
+export function configureCliTools(config: CliConfig): void {
+  configureVision(
+    config.visionModel?.baseUrl
+      ? {
+          model: config.visionModel.model,
+          baseUrl: config.visionModel.baseUrl,
+          ...(config.visionModel.apiKey ? { apiKey: config.visionModel.apiKey } : {}),
+        }
+      : null,
+  );
+  try {
+    configureBrowserProfile(config.browserProfile ? resolveBrowserProfilePath(homedir(), config.browserProfile) : null);
+  } catch (error) {
+    configureBrowserProfile(null);
+    console.error(`warning: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
   const { config } = opts;
   const workspace = opts.workspace ?? process.cwd();
   const pluginContributions = opts.pluginContributions ?? loadPluginContributions(workspace);
+
+  // Builtin tools that need app-level configuration. These are module-level
+  // seams rather than deps because ToolContext carries no credentials and no
+  // user paths — the TUI configures them in its entry point, and every CLI
+  // entry point goes through here. Until this existed, `visionModel` and
+  // `browserProfile` worked in the TUI and did nothing in `seekforge run`,
+  // which is worse than not supporting them: the same config file behaved
+  // differently depending on which command read it.
+  configureCliTools(config);
 
   let runtime: RuntimeClient | undefined;
   if (config.runtimeBin) {

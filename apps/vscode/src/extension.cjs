@@ -49,14 +49,19 @@ async function reviewPermission(request) {
     });
   }
   const hunks = permissionHunkItems(request);
+  // "Always allow" appears only when core proposed a rule, and the rule itself
+  // is in the modal detail: a frontend must never offer a persistence whose
+  // text it made up.
   const choice = await vscode.window.showWarningMessage(
     request.description,
     { modal: true, detail: permissionSummary(request) },
     ...(hunks.length > 0 ? ["Allow selected edits…"] : []),
     "Allow once",
     "Allow for session",
+    ...(request?.rememberRule ? ["Always allow"] : []),
     "Reject",
   );
+  if (choice === "Always allow") return { approved: true, remember: "always" };
   if (choice === "Allow for session") return { approved: true, remember: "session" };
   if (choice === "Allow once") return { approved: true };
   if (choice !== "Allow selected edits…") return { approved: false };

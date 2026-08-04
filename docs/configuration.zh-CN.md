@@ -614,16 +614,21 @@ global/settings 层可以包含两种 action。
 
 #### 从权限提示保存规则
 
-TUI 权限面板提供三种回答，而不是两种：
+每一个权限提示都提供三种回答，而不是两种：
 
-| 按键 | 效果 |
-| --- | --- |
-| `y` | 只允许这一次 |
-| `a` | 本次会话内允许该调用及同类调用（不落盘） |
-| `A` | 始终允许 —— 把规则写入 `~/.seekforge/config.json` |
+| TUI 按键 | Desktop / VS Code | 效果 |
+| --- | --- | --- |
+| `y` | Allow once | 只允许这一次 |
+| `a` | Allow for session | 本次运行内允许该调用及同类调用（不落盘） |
+| `A` | Always allow | 把规则写入 `~/.seekforge/config.json` |
 
-只有当提示把将要写入的那条规则原文展示出来时，`A` 才会出现；展示的规则就是
-落盘的规则。它比你手写时能写的范围更窄，这是刻意的：
+只有当提示同时把将要写入的那条规则原文展示出来时，第三个选项才会出现；展示的
+规则就是落盘的规则。是否提出这条规则由 core 决定；没拿到规则的前端不会提供这个
+选项，否则它就得自己编造要持久化的内容。
+
+`seekforge serve`（因而也包括 Desktop）会把规则写入**运行服务端的那个账号**的
+配置。这是同一个信任域：服务端只监听 127.0.0.1 且要求 bearer token，所以能回答
+这个提示的人，本来就是启动它的那个账号。它比你手写时能写的范围更窄，这是刻意的：
 
 - **只针对 shell 命令**（`run_command`、`task_kill`）。命令是一年后你仍然认得的
   身份，而且 allow 规则按 token 边界匹配它，所以 `pnpm test` 永远不会覆盖
@@ -803,6 +808,41 @@ hook 条目会在可信配置层间对**所有**阶段按阶段拼接：**global
 `userPromptSubmit`（或 `sessionStart`）hook 通过 `additionalContext`
 ——缺省时用其去除首尾空白的 stdout ——贡献上下文，这些内容以
 `<hook-context>…</hook-context>` 块的形式追加到任务上（上限 8000 字符）。
+
+### `visionModel`
+
+**默认关闭。** `image_analyze` 工具把图片发往的端点。主编码模型通常看不了图片
+（DeepSeek 根本没有视觉模型），所以这里一般是另一个 provider、另一把 key ——
+OpenAI 兼容格式，base URL 不带结尾的 `/chat/completions`。
+
+```json
+{ "visionModel": { "model": "qwen-vl-plus", "baseUrl": "https://…/v1", "apiKey": "sk-…" } }
+```
+
+本地无鉴权端点可以省略 `apiKey`。未设置时，`image_analyze` 会以
+`vision_unconfigured` 失败，而不是假装自己看过那张图。
+
+用户所有：它指定了一个凭据去向，因此仓库配置不能设置它。对所有前端生效 ——
+CLI、TUI 和服务端一视同仁。
+
+可通过 `config set` 设置？**不可以** —— 直接编辑文件。
+
+### `browserProfile`
+
+**默认关闭。** 持久化浏览器会话 profile 的名字。设置后，浏览器工具会从
+`~/.seekforge/browser-profiles/<name>.json` 载入，并在一次运行正常结束时写回，
+于是登录过一次的站点就保持登录。未设置时，每次运行都从未登录状态开始，并在结束
+时忘掉一切。
+
+```json
+{ "browserProfile": "work" }
+```
+
+它是名字而不是路径，而它指向的那个文件装着有效的会话 cookie —— 这个区别为什么
+重要、如何用 `playwright codegen` 而不是让 agent 来生成这个文件、以及运行被取消
+时会发生什么，见[浏览器 / 视觉验证](browser.zh-CN.md)。
+
+可通过 `config set` 设置？**不可以** —— 直接编辑文件。
 
 ### `locale`
 

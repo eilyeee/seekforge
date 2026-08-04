@@ -261,7 +261,7 @@ type AppStore = {
   /** Stop one running subagent without cancelling its parent task. */
   cancelSubagent: (dispatchId: string) => void;
   newSession: () => void;
-  respondPermission: (approved: boolean, remember?: "session", selectedHunks?: number[]) => void;
+  respondPermission: (approved: boolean, remember?: "session" | "always", selectedHunks?: number[]) => void;
   /** Answers the pending ask_user question on the active tab. */
   respondQuestion: (answer: string) => void;
   continueSession: (meta: SessionMeta, messages: ChatMessage[], workspaceId: string, events?: AgentEvent[]) => void;

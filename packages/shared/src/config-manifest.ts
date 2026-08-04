@@ -24,6 +24,12 @@ export const COMMON_CONFIG_KEYS = [
   "locale",
   "runRetentionMaxCount",
   "runRetentionMaxAgeDays",
+  // Tool-configuration keys: they configure BUILTIN tools (image_analyze, the
+  // browser session), which every frontend runs. Surface-scoping them made the
+  // CLI report them as unknown while the TUI honored them — the same file
+  // working in one command and warned about in another.
+  "visionModel",
+  "browserProfile",
 ] as const;
 
 export const SURFACE_CONFIG_KEYS = {
@@ -36,19 +42,7 @@ export const SURFACE_CONFIG_KEYS = {
     "guardNoProgress",
     "profiles",
   ],
-  tui: [
-    "accent",
-    "bell",
-    "notify",
-    "vim",
-    "statusLine",
-    "costBudgetUsd",
-    "mouse",
-    "visionModel",
-    "browserProfile",
-    "llmCache",
-    "routing",
-  ],
+  tui: ["accent", "bell", "notify", "vim", "statusLine", "costBudgetUsd", "mouse", "llmCache", "routing"],
   server: ["models"],
 } as const;
 

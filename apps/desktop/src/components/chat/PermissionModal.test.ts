@@ -67,9 +67,11 @@ function inspect(request: PermissionRequest): Collected & { onResponds: boolean[
 }
 
 // Helper: collect all onRespond calls with full args (approved, remember, selectedHunks).
-function inspectCalls(request: PermissionRequest): Array<[boolean, undefined | "session", undefined | number[]]> {
-  const calls: Array<[boolean, undefined | "session", undefined | number[]]> = [];
-  const onRespond = (approved: boolean, remember?: "session", selectedHunks?: number[]): void => {
+function inspectCalls(
+  request: PermissionRequest,
+): Array<[boolean, undefined | "session" | "always", undefined | number[]]> {
+  const calls: Array<[boolean, undefined | "session" | "always", undefined | number[]]> = [];
+  const onRespond = (approved: boolean, remember?: "session" | "always", selectedHunks?: number[]): void => {
     calls.push([approved, remember, selectedHunks]);
   };
   const acc: Collected = { text: [], types: [], clicks: [] };
@@ -161,8 +163,8 @@ describe("PermissionModal — edit-review preview", () => {
   });
 
   it("'Allow for session' calls onRespond(true, 'session')", () => {
-    const calls: Array<[boolean, "session" | undefined]> = [];
-    const onRespond = (approved: boolean, remember?: "session"): void => {
+    const calls: Array<[boolean, "session" | "always" | undefined]> = [];
+    const onRespond = (approved: boolean, remember?: "session" | "always"): void => {
       calls.push([approved, remember]);
     };
     const acc: Collected = { text: [], types: [], clicks: [] };
@@ -174,6 +176,25 @@ describe("PermissionModal — edit-review preview", () => {
     expect(calls).toContainEqual([true, "session"]);
     expect(calls).toContainEqual([true, undefined]);
     expect(calls).toContainEqual([false, undefined]);
+  });
+
+  it("offers 'Always allow' only when core proposed a rule, and shows the rule itself", () => {
+    // Without a rule the option must not exist: a frontend that offered it
+    // would have to invent what to write, which is the one thing the shape of
+    // this field exists to prevent.
+    expect(inspect(plainReq).text.join("")).not.toContain("Always allow");
+
+    const withRule: PermissionRequest = {
+      ...plainReq,
+      command: "pnpm test",
+      rememberRule: { action: "allow", tool: "run_command", match: "pnpm test" },
+    };
+    const rendered = inspect(withRule).text.join("");
+    expect(rendered).toContain("Always allow");
+    // The rule is shown verbatim — what you approve is what gets written.
+    expect(rendered).toContain("allow run_command: pnpm test");
+
+    expect(inspectCalls(withRule)).toContainEqual([true, "always", undefined]);
   });
 });
 
