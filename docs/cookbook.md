@@ -264,11 +264,29 @@ seekforge memory approve <candidate-id>  # mc-... id; --user for user memory
 seekforge memory reject <candidate-id>
 seekforge memory stats                   # extraction-quality stats
 seekforge memory compact --dry-run       # collapse duplicates deterministically
+seekforge memory keywords --dry-run      # how many facts lack retrieval keywords
+seekforge memory keywords                # give them some (calls the model)
 ```
 
 Auto-extracted facts stay **pending** until you approve them, unless you set
 `memoryAutoApproveConfidence`. See
 [Configuration → memoryAutoApproveConfidence](configuration.md#memoryautoapproveconfidence).
+
+**Retrieval keywords.** A fact carries a handful of search terms in both
+English and Chinese, so a question asked in one language can reach an answer
+written in the other. Extraction attaches them in the model call it was already
+making — which means a fact you typed by hand has none, and neither does
+anything remembered before the field existed. `memory keywords` closes that gap
+on demand: it is the one command in this group that spends money, it batches
+~20 facts per request, and it only ever touches facts that have none, so
+running it again after adding a few is cheap. `--limit` splits a large memory
+into affordable pieces; a failed batch leaves its facts as candidates for the
+next run.
+
+Keywords are matched against, never injected and never shown to the model —
+`memory list` prints them under each pending candidate so you can see what you
+are approving. Global (cross-project) facts do not carry them: the sidecar that
+holds them is workspace-scoped, as is the lease that guards it.
 
 **Tips:** `--type` is one of `command | path | convention | tech | task_pattern`.
 

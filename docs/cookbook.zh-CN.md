@@ -220,9 +220,15 @@ seekforge memory approve <candidate-id>  # mc-... id; --user for user memory
 seekforge memory reject <candidate-id>
 seekforge memory stats                   # extraction-quality stats
 seekforge memory compact --dry-run       # collapse duplicates deterministically
+seekforge memory keywords --dry-run      # 有多少条事实还没有检索关键词
+seekforge memory keywords                # 给它们补上（会调用模型）
 ```
 
 自动提取的事实会一直处于**待定（pending）**状态，直到你批准——除非设置了 `memoryAutoApproveConfidence`。参见 [Configuration → memoryAutoApproveConfidence](configuration.zh-CN.md#memoryautoapproveconfidence)。
+
+**检索关键词。** 每条事实会带上若干条中英双语的检索词，好让一个用某种语言问出来的问题，能够命中用另一种语言写下的答案。抽取阶段会在本来就要发出的那次模型调用里顺带拿到它们——这意味着你手敲的事实一条都没有，在这个字段存在之前记住的事实也一样。`memory keywords` 就是用来按需补齐这个缺口的：它是这一组命令里唯一花钱的，每次请求批量处理约 20 条，并且只碰那些还没有关键词的事实，所以新增几条之后再跑一次很便宜。`--limit` 可以把一份很大的记忆拆成负担得起的几批；某一批失败了，它里面的事实会留到下一次继续补。
+
+关键词只用于匹配，绝不会被注入、也不会展示给模型——`memory list` 会在每条待定候选下面把它们打印出来，好让你看清自己批准的到底是什么。全局（跨项目）事实不带关键词：存放它们的 sidecar 是工作区级的，守护它的租约也是。
 
 **提示：** `--type` 取值为 `command | path | convention | tech | task_pattern` 之一。
 

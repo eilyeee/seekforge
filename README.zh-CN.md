@@ -105,6 +105,7 @@ VS Code 用户可以使用 [`apps/vscode`](apps/vscode/README.md) 中的轻量�
 | `seekforge agent list\|show <id>\|import <path>` | 管理子代理；主 agent 通过 `dispatch_agent` 委派有边界的子任务 |
 | `seekforge memory list\|approve <id>\|reject <id>` | 审阅提取的事实进入长期项目记忆 |
 | `seekforge memory compact [--dry-run] [--prune-unused <days>]` | 合并 project.md 中的重复/近重复事实（确定性）；`--prune-unused` 需要非负整数，把超过 `<days>` 天未使用的事实归档到 `project-archive.md` |
+| `seekforge memory keywords [--dry-run] [--limit <n>]` | 给还没有检索关键词的事实补上中英双语关键词，让一种语言问出的问题能命中另一种语言写下的答案；这是 memory 组里唯一会调用模型的命令（`--dry-run` 只统计数量） |
 | `seekforge memory stats` | 打印记忆提取质量统计——已批准/待定/已拒绝数量、使用率、拒绝率（只读）；调整 `memoryAutoApproveConfidence` 前先看这个 |
 | `seekforge config show\|set <key> <value> [-g]` | `set` 接受：`apiKey`、`model`、`baseUrl`、`provider`、`runtimeBin`、`commandAllowlist`、`sandbox`、`thinking` / `reasoningEffort`、`compaction`。Server/Desktop 还可管理模型选择列表 `models`。结构化键（`permissionRules`、`hooks`、`mcpServers`、`planModel`）**直接编辑 `.seekforge/config.json`**——不经 CLI `config set`。配置层级：环境变量 > CLI flag > [`--settings <file>`](docs/cli-reference.zh-CN.md#settings-layering) > 个人 `.seekforge/config.local.json` > 项目 `.seekforge/config.json` > 全局 `~/.seekforge/config.json`。完整参考：[docs/configuration.zh-CN.md](docs/configuration.zh-CN.md) |
 

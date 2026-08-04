@@ -1,5 +1,8 @@
 import {
   addMemoryFact,
+  backfillFactKeywords,
+  buildProvider,
+  factsMissingKeywords,
   approveMemoryCandidate,
   compactProjectMemory,
   listMemoryCandidates,
@@ -14,6 +17,7 @@ import {
   type MemoryCandidateType,
 } from "@seekforge/core";
 import { loadConfig } from "../config.js";
+import { fail } from "../colors.js";
 import { t } from "../i18n.js";
 
 export function memoryListCommand(): void {
@@ -177,4 +181,59 @@ export function memoryCompactCommand(opts: { dryRun?: boolean; pruneUnusedDays?:
   } else if (opts.dryRun) {
     console.log(t("cmd.memory.dryRunNote"));
   }
+}
+
+/**
+ * `seekforge memory keywords` — give bilingual retrieval keywords to the facts
+ * that have none.
+ *
+ * Keywords normally arrive with extraction, in the model call it was already
+ * making. Facts added by hand involve no model at all, and every fact
+ * remembered before keywords existed predates the field — so without this,
+ * whether a fact can be found from the other language depends on how it
+ * happened to be created. This is the one command in the memory group that
+ * spends money, so it says what it will do before doing it.
+ */
+export async function memoryKeywordsCommand(opts: { limit?: number; dryRun?: boolean } = {}): Promise<void> {
+  const workspace = process.cwd();
+  const config = loadConfig(workspace);
+
+  if (opts.dryRun) {
+    console.log(t("cmd.memory.keywordsMissing", { count: factsMissingKeywords(workspace).length }));
+    return;
+  }
+
+  if (!config.apiKey) {
+    fail(t("err.noApiKey"));
+    return;
+  }
+  const provider = buildProvider(
+    {
+      provider: config.provider,
+      apiKey: config.apiKey,
+      baseUrl: config.baseUrl,
+      modelPricing: config.modelPricing,
+    },
+    config.model,
+  );
+
+  const result = await backfillFactKeywords(provider, workspace, {
+    ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+  });
+  console.log(
+    t("cmd.memory.keywordsDone", {
+      updated: result.updated,
+      missing: result.missing,
+      batches: result.batches,
+    }),
+  );
+  // What it cost. A command that spends money silently leaves a bill nobody
+  // can attribute — and this is the only one in the memory group that does.
+  console.log(
+    t("cmd.memory.keywordsUsage", {
+      prompt: result.usage.promptTokens,
+      completion: result.usage.completionTokens,
+      cost: result.usage.costUsd.toFixed(4),
+    }),
+  );
 }

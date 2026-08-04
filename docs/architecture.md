@@ -135,7 +135,10 @@ fact in `fact-meta.json` and folded into what the ranker matches against —
 never into what is injected or displayed. Measured on
 `tests/memory/xlingual-retrieval.test.ts`: 3/12 cross-lingual queries reached
 their fact without them, 12/12 with. Facts added by hand and facts remembered
-before this existed carry none and score exactly as they did.
+before this existed carry none and score exactly as they did, until
+`seekforge memory keywords` backfills them — an explicit, batched pass over
+only the facts that lack keywords, which is the one memory command that spends
+money and reports what it spent.
 Autonomous Loop state is a separate orchestration checkpoint that points to a
 session and owns the frozen requirement specification, acceptance evidence, and
 optional approval gate. Requirement analysis and acceptance review run through

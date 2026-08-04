@@ -36,6 +36,7 @@ export {
   type SubdirMemory,
 } from "./store.js";
 
+export { backfillFactKeywords, factsMissingKeywords, type BackfillResult } from "./keywords.js";
 export {
   addMemoryFact,
   listProjectFacts,

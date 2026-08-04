@@ -241,7 +241,7 @@ const MAX_KEYWORD_CHARS = 32;
  * enough to be a sentence is dropped rather than truncated — half a sentence is
  * not a keyword.
  */
-function sanitizeKeywords(value: unknown): string[] {
+export function sanitizeKeywords(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   // The transcript these are distilled from can contain a fetched page or a
   // repository file, so a keyword is as untrusted as the fact's own content and

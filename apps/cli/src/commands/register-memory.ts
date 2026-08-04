@@ -3,6 +3,7 @@ import {
   memoryAddCommand,
   memoryApproveCommand,
   memoryCompactCommand,
+  memoryKeywordsCommand,
   memoryListCommand,
   memoryRejectCommand,
   memoryRemoveCommand,
@@ -73,5 +74,13 @@ export function registerMemoryCommands(program: Command): void {
     .description("collapse duplicate and near-duplicate facts in project.md (deterministic)")
     .action((opts: { dryRun?: boolean; pruneUnused?: number }) => {
       memoryCompactCommand({ dryRun: opts.dryRun, pruneUnusedDays: opts.pruneUnused });
+    });
+  memory
+    .command("keywords")
+    .option("--dry-run", "report how many facts lack keywords, without calling the model")
+    .option("--limit <n>", "backfill at most this many facts", parseNonNegativeInt)
+    .description("give bilingual retrieval keywords to facts that have none (calls the model)")
+    .action(async (opts: { dryRun?: boolean; limit?: number }) => {
+      await memoryKeywordsCommand({ dryRun: opts.dryRun, limit: opts.limit });
     });
 }
