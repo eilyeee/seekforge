@@ -62,6 +62,15 @@ export type PermissionRequest = {
    * omit this field — behavior is unchanged.
    */
   hunks?: { index: number; preview: string }[];
+  /**
+   * The exact rule that answering `remember: "always"` would write to the
+   * user's own config — computed by core, which owns rule semantics, so the
+   * text a frontend SHOWS and the rule that gets WRITTEN are the same object.
+   * A frontend must not offer "always" when this is absent: absent means core
+   * judged this call unsafe to grant durably (a compound shell command, say),
+   * and it must not offer a rule it invented itself either.
+   */
+  rememberRule?: PermissionRule;
 };
 
 /**
@@ -74,13 +83,19 @@ export type PermissionRequest = {
  * subsequent matching calls auto-allow. `remember` is ignored when allow is
  * false. Additive: the boolean form keeps working unchanged.
  *
+ * `remember: "always"` additionally asks the host to PERSIST the approval as a
+ * permission rule, so it survives the run. It is only honored when the request
+ * carried a `rememberRule` (core decides what may be granted durably) and only
+ * when the host supplied a `persistRule` sink; the session grant happens either
+ * way, so a host that cannot persist still behaves like "session".
+ *
  * When a frontend supports per-hunk selection for apply_patch, it may return
  * `{ allow: true, selectedHunks: number[] }` to apply only the chosen edits.
  * `selectedHunks` is ignored when allow is false.
  */
 export type ConfirmResult =
   | boolean
-  | { allow: boolean; remember?: "session" }
+  | { allow: boolean; remember?: "session" | "always" }
   | { allow: true; selectedHunks: number[] };
 
 /**

@@ -104,6 +104,7 @@ import { expandExtraFileRefs, formatExtraDirLines, normalizeExtraDir } from "./w
 import { checkBudget, type BudgetState } from "./budget.js";
 import { detectTerminal, terminalSetupInstructions } from "./terminal-setup.js";
 import { keyHints, turnSummaryLine } from "./render-helpers.js";
+import { describeRule, persistPermissionRule } from "./permission-store.js";
 import { t } from "./strings.js";
 import { runSession } from "./agent/run-session.js";
 import { resumeLoop, runLoop } from "./agent/run-loop.js";
@@ -740,6 +741,24 @@ export function App({
             ...(usageBus ? { usageBus } : {}),
             confirm: sessionConfirm,
             askUser: sessionAskUser,
+            // "A" on the permission panel writes the rule core proposed into
+            // the user's own config. The notice names the file, because a
+            // permission that outlives the run is one the user has to be able
+            // to find and remove.
+            persistRule: (rule) => {
+              try {
+                const path = persistPermissionRule(rule);
+                dispatchTab({ type: "notice", text: `${t("permission.saved")} ${describeRule(rule)} → ${path}` });
+              } catch (err) {
+                // Reported, not swallowed: the run continues on the session
+                // grant, and the user learns their config was not touched.
+                dispatchTab({
+                  type: "notice",
+                  tone: "error",
+                  text: `${t("permission.saveFailed")} ${err instanceof Error ? err.message : String(err)}`,
+                });
+              }
+            },
           });
         } finally {
           channels?.release(runChannels);
@@ -2438,11 +2457,11 @@ export function App({
       }
 
       // Single-hunk / no-hunk: original behavior unchanged.
-      const result: ConfirmResult = permissionResultForKey(rawInput);
+      const result: ConfirmResult = permissionResultForKey(rawInput, pending.request.rememberRule !== undefined);
       // "a" (allow for session) also mirrors the command prefix into the local
       // allowlist for /permissions display and command-prefix matching; CORE's
       // canonical sessionAllowlist grows from the remember:"session" result.
-      if (typeof result === "object" && result.remember === "session" && pending.request.command) {
+      if (typeof result === "object" && result.remember !== undefined && pending.request.command) {
         const prefix = sessionAllowPrefix(pending.request.command);
         if (prefix && !allowlistRef.current.includes(prefix)) {
           allowlistRef.current.push(prefix);

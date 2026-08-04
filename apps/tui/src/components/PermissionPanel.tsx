@@ -3,6 +3,7 @@ import { Box, Text } from "ink";
 import type { PermissionRequest } from "@seekforge/shared";
 import { clipLine } from "@seekforge/shared/format";
 import { classifyUnifiedDiff } from "../diff.js";
+import { describeRule } from "../permission-store.js";
 import { t } from "../strings.js";
 import { DiffCard } from "./DiffCard.js";
 
@@ -98,6 +99,14 @@ export function PermissionPanel({
         </Text>
       ) : null}
       {!request.command && !request.path ? <Text>{request.description}</Text> : null}
+      {/* The rule "A" would write, verbatim — the same object core hands to the
+          host's persistRule sink, so nothing here is a description of it. */}
+      {request.rememberRule ? (
+        <Text>
+          <Text dimColor>{t("permission.allowAlways")} </Text>
+          <Text bold>{describeRule(request.rememberRule)}</Text>
+        </Text>
+      ) : null}
       <Text dimColor>
         {t("permission.allowOnce")}
         {request.command ? ` · ${t("permission.allowSession")}` : ""} · {t("permission.deny")}

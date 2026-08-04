@@ -9,6 +9,7 @@ import type {
   ConfirmResult,
   PermissionPolicy,
   PermissionRequest,
+  PermissionRule,
   ToolCall,
   ToolDefinitionForModel,
   ToolResult,
@@ -35,6 +36,18 @@ export type ToolContext = {
    * enforcePermission treats `true`/`false` exactly as before.
    */
   confirm: (req: PermissionRequest) => Promise<ConfirmResult>;
+  /**
+   * Where a `remember: "always"` approval is written. Absent = the frontend is
+   * never offered the durable choice (core omits `rememberRule` from the
+   * request), so a host that has nowhere trustworthy to write cannot be talked
+   * into pretending otherwise.
+   *
+   * It must be a USER-owned config layer. A repository-owned one would be
+   * pointless and misleading: sanitizeProjectConfig strips every allow rule
+   * from a project layer on load, so the rule would be written, displayed as
+   * saved, and silently ignored forever after.
+   */
+  persistRule?: (rule: PermissionRule) => Promise<void> | void;
   /** Cancels foreground work when the current agent run is aborted. */
   signal?: AbortSignal;
   /**
@@ -110,7 +123,7 @@ export function createDefaultDispatcher(extraTools: ToolSpec[] = []): ToolDispat
 export { ToolError } from "./errors.js";
 export { createDispatcher, defineTool, TOOL_NAME_PATTERN } from "./registry.js";
 export type { ClassifiedCall, PreparedCall, ToolRunOutput, ToolSpec } from "./registry.js";
-export { enforcePermission } from "./permissions.js";
+export { enforcePermission, proposeDurableRule } from "./permissions.js";
 export type { PermissionDecision, PermissionOutcome } from "./permissions.js";
 export {
   DEFAULT_IGNORE_DIRS,

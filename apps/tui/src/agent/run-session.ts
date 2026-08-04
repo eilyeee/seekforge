@@ -7,7 +7,7 @@ import {
   type PluginContributions,
   type ToolSpec,
 } from "@seekforge/core";
-import type { ApprovalMode, ConfirmResult, PermissionRequest } from "@seekforge/shared";
+import type { ApprovalMode, ConfirmResult, PermissionRequest, PermissionRule } from "@seekforge/shared";
 import type { TuiConfig } from "../config.js";
 import { expandFileRefs } from "@seekforge/shared/file-refs";
 import { createTuiAgent } from "./factory.js";
@@ -39,6 +39,8 @@ export type RunSessionDeps = {
    * { allow: true, remember: "session" } so CORE grows its session allowlist.
    */
   confirm: (req: PermissionRequest) => Promise<ConfirmResult>;
+  /** Writes a durable ("always") approval to the user config; absent = never offered. */
+  persistRule?: (rule: PermissionRule) => Promise<void> | void;
   /** Resolves the current session id for resume chaining. */
   getSessionId: () => string | undefined;
   /** Binds controls to this exact run; undefined clears them during cleanup. */
@@ -64,6 +66,7 @@ export async function runSession(task: string, signal: AbortSignal, deps: RunSes
     workspace: deps.projectPath,
     model: deps.model,
     confirm: deps.confirm,
+    ...(deps.persistRule ? { persistRule: deps.persistRule } : {}),
     onModelDelta: (chunk) => buffered.dispatch({ type: "model-delta", chunk }),
     onReasoningDelta: (chunk) => buffered.dispatch({ type: "thinking-delta", chunk }),
     extractMemory: true,

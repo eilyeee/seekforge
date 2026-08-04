@@ -52,7 +52,49 @@ function sessionAllowed(toolName: string, cls: ClassifiedCall, ctx: ToolContext)
   return list.includes(token);
 }
 
+/**
+ * The rule an "allow always" answer would write — or undefined when this call
+ * must not be granted durably.
+ *
+ * Three decisions are encoded here, and all three are narrower than what the
+ * rule engine would accept, because a rule created by pressing one key
+ * deserves less reach than one a person typed into their own config.
+ *
+ * **Only shell commands.** A command is an identity a person recognizes a year
+ * later ("pnpm test"), and `ruleMatches` anchors it on a token boundary. The
+ * other things that carry a `command` do not have that property: web_fetch
+ * classifies as `GET <url>` and web_search as `SEARCH <query>`, both matched by
+ * an unanchored prefix — deliberately, because a hand-written rule for a docs
+ * domain is meant to cover its sub-paths. A rule generated from ONE url the
+ * model chose is not that: `GET https://host/doc.md` would also match
+ * `https://host/doc.md.attacker.example/leak?secret=…`, forever, in every
+ * project. Paths are excluded for the neighboring reason — a path is a location
+ * whose contents change under a grant that outlives them, and `acceptEdits` is
+ * the deliberate way to edit freely.
+ *
+ * **Never a compound command.** enforcePermission already refuses to let an
+ * allow rule match a command containing shell control syntax, so persisting
+ * `pnpm test && curl … | sh` would write a rule that can never fire: a grant
+ * that reads as broad and behaves as nothing. Refusing to offer it is honest;
+ * writing a decorative rule is not.
+ *
+ * **Never a dangerous call.** Those are refused before any prompt; a durable
+ * grant must not be the thing that reopens them.
+ */
+export function proposeDurableRule(toolName: string, cls: ClassifiedCall): PermissionRule | undefined {
+  if (cls.permission === "dangerous") return undefined;
+  // Restricted to the tools whose allow rules are matched on a token boundary
+  // — the same scoping ruleMatches and sessionAllowed use.
+  if (toolName !== "run_command" && toolName !== "task_kill") return undefined;
+  if (cls.command === undefined) return undefined;
+  const match = normalizeWhitespace(cls.command);
+  if (match === "") return undefined;
+  if (hasShellControlSyntax(match)) return undefined;
+  return { action: "allow", tool: toolName, match };
+}
+
 async function confirmWithUser(toolName: string, cls: ClassifiedCall, ctx: ToolContext): Promise<PermissionOutcome> {
+  const durable = ctx.persistRule ? proposeDurableRule(toolName, cls) : undefined;
   const answer = await ctx.confirm({
     toolName,
     permission: cls.permission,
@@ -62,6 +104,9 @@ async function confirmWithUser(toolName: string, cls: ClassifiedCall, ctx: ToolC
     ...(cls.path !== undefined ? { path: cls.path } : {}),
     ...(cls.preview !== undefined ? { preview: cls.preview } : {}),
     ...(cls.hunks !== undefined ? { hunks: cls.hunks } : {}),
+    // The rule the frontend may offer to persist — computed here so what it
+    // shows and what gets written are the same object, never a paraphrase.
+    ...(durable !== undefined ? { rememberRule: durable } : {}),
   });
   // Normalize the boolean | { allow, remember } | { allow, selectedHunks }
   // contract. A bare boolean is treated exactly as before.
@@ -69,7 +114,18 @@ async function confirmWithUser(toolName: string, cls: ClassifiedCall, ctx: ToolC
   const remember = typeof answer !== "boolean" && "remember" in answer ? answer.remember : undefined;
   const selectedHunks = typeof answer !== "boolean" && "selectedHunks" in answer ? answer.selectedHunks : undefined;
   if (allow) {
-    if (remember === "session") {
+    if (remember === "always" && durable !== undefined) {
+      // Persist first, then fall through to the session grant: a rule that
+      // failed to write must not leave the run believing it was remembered,
+      // and a run that keeps working after a failed write is better than one
+      // that dies over a config file. The host reports what it did.
+      try {
+        await ctx.persistRule?.(durable);
+      } catch {
+        // Ignored on purpose — the session grant below still applies.
+      }
+    }
+    if (remember === "session" || remember === "always") {
       // Grow the run's in-memory session allowlist in place so the next
       // matching call auto-allows. Mutating the array the caller shares
       // across the session's calls is the whole point of the channel.

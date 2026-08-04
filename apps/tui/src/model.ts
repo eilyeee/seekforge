@@ -183,10 +183,20 @@ export function approvalModeFor(setting: ApprovalSetting): "auto" | "acceptEdits
 /**
  * Permission-panel keypress → core ConfirmResult. "y" allows once, "a" allows
  * this (and similar) for the rest of the session (the richer remember result
- * that grows CORE's session allowlist), anything else denies. Pure so the
+ * that grows CORE's session allowlist), "A" (shift) also writes it to the
+ * user's config so it outlives the run, anything else denies. Pure so the
  * return shape is unit-testable without rendering Ink.
+ *
+ * Case is the ONLY difference between the session grant and the durable one,
+ * so `durable` gates the capital: when core did not propose a rule (no
+ * `rememberRule` on the request), a stray shift must degrade to the session
+ * answer rather than request a persistence the host would have to invent.
  */
-export function permissionResultForKey(key: string): boolean | { allow: true; remember: "session" } {
+export function permissionResultForKey(
+  key: string,
+  durable = false,
+): boolean | { allow: true; remember: "session" | "always" } {
+  if (key === "A" && durable) return { allow: true, remember: "always" };
   const choice = key.toLowerCase();
   if (choice === "y") return true;
   if (choice === "a") return { allow: true, remember: "session" };

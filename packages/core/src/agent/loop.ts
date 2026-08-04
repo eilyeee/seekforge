@@ -151,6 +151,13 @@ export type AgentCoreDeps = {
    */
   confirm: (req: PermissionRequest) => Promise<ConfirmResult>;
   /**
+   * Where a `remember: "always"` approval is written (a user-owned config
+   * layer). Absent = the durable choice is never offered. Only the top-level
+   * run gets it: a nested subagent's approval should not outlive the run that
+   * spawned it, which is the same reason it never gets `askUser`.
+   */
+  persistRule?: (rule: PermissionRule) => Promise<void> | void;
+  /**
    * Interactive question channel (TUI), backing the ask_user tool. Absent in
    * non-interactive runs; never forwarded to nested subagent runs (they must
    * not block on user input).
@@ -843,6 +850,9 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           // Only the top-level run may block on the user; nested subagent runs
           // never get the channel (see executeNestedRun).
           ...(depth === 0 && askUserWithNotify ? { askUser: askUserWithNotify } : {}),
+          // Same rule for durable approvals: a subagent may ask, but what it is
+          // granted expires with the run.
+          ...(depth === 0 && deps.persistRule ? { persistRule: deps.persistRule } : {}),
         };
 
         const allToolDefs =

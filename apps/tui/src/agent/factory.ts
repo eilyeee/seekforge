@@ -24,7 +24,7 @@ import {
   type McpServerRequestHandlers,
   type UsageBus,
 } from "@seekforge/core";
-import type { ConfirmResult, PermissionRequest } from "@seekforge/shared";
+import type { ConfirmResult, PermissionRequest, PermissionRule } from "@seekforge/shared";
 import type { TuiConfig } from "../config.js";
 
 export type TuiAgentOptions = {
@@ -33,6 +33,8 @@ export type TuiAgentOptions = {
   workspace?: string;
   model?: string;
   confirm: (req: PermissionRequest) => Promise<ConfirmResult>;
+  /** Writes a `remember: "always"` approval to the user config. */
+  persistRule?: (rule: PermissionRule) => Promise<void> | void;
   onModelDelta?: (chunk: string) => void;
   /** Streamed chain-of-thought deltas (V4 thinking mode). */
   onReasoningDelta?: (chunk: string) => void;
@@ -113,6 +115,7 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
     ),
     dispatcher: createDefaultDispatcher(opts.mcpToolSpecs ?? []),
     confirm: opts.confirm,
+    ...(opts.persistRule ? { persistRule: opts.persistRule } : {}),
     onModelDelta: opts.onModelDelta,
     ...(opts.onReasoningDelta ? { onReasoningDelta: opts.onReasoningDelta } : {}),
     extractMemory: opts.extractMemory,

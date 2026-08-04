@@ -613,7 +613,44 @@ may contain both actions.
 }
 ```
 
-Settable via `config set`? **No** — edit the file directly.
+Settable via `config set`? **No** — edit the file directly, or let the
+permission prompt write one for you (below).
+
+#### Saving a rule from the permission prompt
+
+The TUI permission panel offers three answers, not two:
+
+| Key | Effect |
+| --- | --- |
+| `y` | allow this call once |
+| `a` | allow this and similar calls for the rest of the session (not persisted) |
+| `A` | allow always — writes the rule to `~/.seekforge/config.json` |
+
+`A` appears only when the prompt shows the rule it would write, and the rule
+shown is exactly what lands in the file. It is deliberately narrower than what
+you may write by hand:
+
+- **Shell commands only** (`run_command`, `task_kill`). A command is an identity
+  you still recognize a year later, and an allow rule matches it on a token
+  boundary, so `pnpm test` never covers `pnpm test-all`. The other rule
+  subjects have no such anchor: a URL rule is matched by an unanchored prefix
+  on purpose — that is what makes a hand-written docs-domain rule cover its
+  sub-paths — which is far too wide for a rule generated from one URL the model
+  happened to request. Paths are excluded for the neighboring reason: a path is
+  a location whose contents change under a grant that outlives them, and
+  `acceptEdits` is the deliberate way to edit freely.
+- **Never a compound command.** `pnpm test && curl … | sh` is not offered,
+  because an allow rule never matches a command containing shell control
+  syntax: the rule would save, read as a grant, and never fire.
+- **Never `dangerous`.** Those calls are refused before any prompt.
+
+The rule is always written to your own `~/.seekforge/config.json`, never the
+project's — a repository layer contributes `deny` rules only, so an allow rule
+written there would save and then be stripped on every load. The confirmation
+notice names the file, because a permission that outlives the run is one you
+have to be able to find and delete. If the write fails (unparseable config,
+read-only home), the approval degrades to session scope and the run continues;
+the failure is reported rather than swallowed.
 
 ### `mcpServers`
 

