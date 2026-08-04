@@ -33,6 +33,8 @@ const NAMES = [
   "lsp_format",
   "lsp_rename",
   "lsp_symbols",
+  "lsp_call_hierarchy",
+  "lsp_type_hierarchy",
 ];
 
 describe("lsp wire framing (pure)", () => {

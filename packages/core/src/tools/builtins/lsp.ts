@@ -5,6 +5,7 @@ import { ToolError } from "../errors.js";
 import { resolveForRead } from "../sandbox.js";
 import { defineTool, type ToolSpec } from "../registry.js";
 import {
+  lspCallHierarchy,
   lspCodeActions,
   lspDefinition,
   lspDiagnostics,
@@ -14,6 +15,7 @@ import {
   lspReferences,
   lspRename,
   lspResolveCodeAction,
+  lspTypeHierarchy,
   lspWorkspaceSymbols,
   severityLabel,
   type LspLocation,
@@ -58,6 +60,20 @@ const positionSchema = {
 
 const definitionSchema = z.object(positionSchema);
 const referencesSchema = z.object(positionSchema);
+const callHierarchySchema = z.object({
+  ...positionSchema,
+  direction: z
+    .enum(["incoming", "outgoing"])
+    .optional()
+    .describe("incoming = who calls this symbol (default); outgoing = what this symbol calls."),
+});
+const typeHierarchySchema = z.object({
+  ...positionSchema,
+  direction: z
+    .enum(["supertypes", "subtypes"])
+    .optional()
+    .describe("subtypes = what implements/extends this type (default); supertypes = what it extends."),
+});
 const diagnosticsSchema = z.object({
   path: z.string().describe("Workspace-relative path to the source file to analyze (e.g. src/app.ts)."),
 });
@@ -625,6 +641,72 @@ const lspFormatTool = defineTool({
   },
 });
 
+const lspCallHierarchyTool = defineTool({
+  name: "lsp_call_hierarchy",
+  description:
+    "Who calls the function at `path` + `line` (direction: incoming, the default), or what it calls (outgoing) — resolved by the compiler, with the exact call sites. " +
+    "lsp_references tells you a name is mentioned somewhere; this tells you which function the mention is inside, which is the question you actually have when tracing how code is reached. " +
+    "Requires a language server on PATH (typescript-language-server, pyright/pylsp, gopls); returns an install hint if absent. Read-only.",
+  schema: callHierarchySchema,
+  classify: (args) => ({
+    permission: "readonly",
+    description: `LSP ${args.direction ?? "incoming"} calls at ${args.path}:${args.line}`,
+    path: args.path,
+  }),
+  async run(args, ctx) {
+    const abs = resolveForRead(ctx.workspace, args.path);
+    const direction = args.direction ?? "incoming";
+    const edges = await lspCallHierarchy(
+      ctx.workspace,
+      abs,
+      { line: args.line - 1, character: args.character ?? 0 },
+      direction,
+      ctx.signal,
+    );
+    const calls = edges.map((edge) => ({
+      name: edge.name,
+      kind: edge.kind,
+      ...formatLocation(ctx.workspace, { uri: edge.uri, range: edge.range }),
+      // Where inside that symbol the call happens — the line to open.
+      callSites: edge.callSites.map((range) => formatLocation(ctx.workspace, { uri: edge.uri, range }).line),
+      ...(edge.detail ? { detail: edge.detail } : {}),
+    }));
+    return { data: { direction, calls, count: calls.length } };
+  },
+});
+
+const lspTypeHierarchyTool = defineTool({
+  name: "lsp_type_hierarchy",
+  description:
+    "What implements or extends the type at `path` + `line` (direction: subtypes, the default), or what it extends (supertypes) — the compiler's answer, not a text search for the name. " +
+    "Use before changing an interface or an abstract class to see everything that has to change with it. " +
+    "Requires a language server on PATH (typescript-language-server, pyright/pylsp, gopls); returns an install hint if absent. Read-only.",
+  schema: typeHierarchySchema,
+  classify: (args) => ({
+    permission: "readonly",
+    description: `LSP ${args.direction ?? "subtypes"} at ${args.path}:${args.line}`,
+    path: args.path,
+  }),
+  async run(args, ctx) {
+    const abs = resolveForRead(ctx.workspace, args.path);
+    const direction = args.direction ?? "subtypes";
+    const relatives = await lspTypeHierarchy(
+      ctx.workspace,
+      abs,
+      { line: args.line - 1, character: args.character ?? 0 },
+      direction,
+      ctx.signal,
+    );
+    const types = relatives.map((item) => ({
+      name: item.name,
+      kind: item.kind,
+      ...formatLocation(ctx.workspace, { uri: item.uri, range: item.range }),
+      ...(item.detail ? { detail: item.detail } : {}),
+    }));
+    return { data: { direction, types, count: types.length } };
+  },
+});
+
 export const lspTools: ToolSpec[] = [
   lspDefinitionTool,
   lspReferencesTool,
@@ -636,4 +718,6 @@ export const lspTools: ToolSpec[] = [
   lspFormatTool,
   lspRenameTool,
   lspSymbolsTool,
+  lspCallHierarchyTool,
+  lspTypeHierarchyTool,
 ];

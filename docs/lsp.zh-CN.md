@@ -52,6 +52,8 @@ Install the TypeScript/JavaScript language server: `npm i -g typescript-language
 | `lsp_apply_code_action` | `path`, `line`, `endLine?`, `title` | `write` | 在你批准其 diff 之后，按标题应用其中一个。 |
 | `lsp_format` | `path`, `tabSize?`, `insertSpaces?` | `write` | 在你批准 diff 之后，用服务器自带的格式化器格式化该文件。 |
 | `lsp_rename` | `path`, `line`, `character?`, `newName` | `write` | 在你批准 diff 之后，把该符号在服务器能解析到的所有位置改名，跨文件。 |
+| `lsp_call_hierarchy` | `path`, `line`, `character?`, `direction?` | `readonly` | 谁调用了这个函数（`incoming`，默认），或者它调用了谁（`outgoing`）—— 每个调用方都有名字，并给出调用发生在哪一行。 |
+| `lsp_type_hierarchy` | `path`, `line`, `character?`, `direction?` | `readonly` | 谁实现或继承了这个类型（`subtypes`，默认），或者它继承自谁（`supertypes`）。 |
 
 `lsp_symbols` 问的是**服务器级**的问题，因此需要知道该问哪个语言服务器。它会使用当前工作区里已经在运行的服务器——通常就是之前的 `lsp_*` 调用启动的那个。如果一个都没有，它会以 `lsp_no_session` 失败；传 `path`（该语言的任意一个文件）即可启动一个。
 

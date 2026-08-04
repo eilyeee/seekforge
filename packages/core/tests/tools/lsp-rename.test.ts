@@ -58,6 +58,19 @@ function handle(message) {
     send({ jsonrpc: "2.0", id: message.id, result: { ...message.params, edit: fixture.resolvedEdit } });
   } else if (message.method === "textDocument/formatting") {
     send({ jsonrpc: "2.0", id: message.id, result: fixture.formatting ?? [] });
+  } else if (
+    message.method === "textDocument/prepareCallHierarchy" ||
+    message.method === "textDocument/prepareTypeHierarchy"
+  ) {
+    send({ jsonrpc: "2.0", id: message.id, result: fixture.prepared ?? null });
+  } else if (message.method === "callHierarchy/incomingCalls") {
+    send({ jsonrpc: "2.0", id: message.id, result: fixture.incomingCalls ?? [] });
+  } else if (message.method === "callHierarchy/outgoingCalls") {
+    send({ jsonrpc: "2.0", id: message.id, result: fixture.outgoingCalls ?? [] });
+  } else if (message.method === "typeHierarchy/subtypes") {
+    send({ jsonrpc: "2.0", id: message.id, result: fixture.subtypes ?? [] });
+  } else if (message.method === "typeHierarchy/supertypes") {
+    send({ jsonrpc: "2.0", id: message.id, result: fixture.supertypes ?? [] });
   } else if (message.id !== undefined) {
     send({ jsonrpc: "2.0", id: message.id, result: null });
   }
@@ -626,5 +639,100 @@ describe("lsp_symbols", () => {
     const res = await dispatcher.execute(call("lsp_symbols", { query: "Widget" }), ctxWith());
     expect(res.ok, JSON.stringify(res.error)).toBe(true);
     expect(res.data).toMatchObject({ count: 1 });
+  });
+});
+
+describe("lsp_call_hierarchy", () => {
+  const item = (name: string, relative: string, line: number) => ({
+    name,
+    kind: 12,
+    uri: uri(relative),
+    range: { start: { line, character: 0 }, end: { line, character: 20 } },
+    selectionRange: { start: { line, character: 9 }, end: { line, character: 9 + name.length } },
+  });
+
+  it("names the function each call is inside, and where the call is", async () => {
+    // This is the question lsp_references cannot answer: it reports that a name
+    // appears at a line, not which function that line belongs to.
+    setFixture({
+      prepared: [item("render", "widget.ts", 0)],
+      incomingCalls: [
+        {
+          from: item("mount", "uses.ts", 4),
+          fromRanges: [{ start: { line: 6, character: 2 }, end: { line: 6, character: 8 } }],
+        },
+      ],
+    });
+    const res = await createDefaultDispatcher().execute(
+      call("lsp_call_hierarchy", { path: "widget.ts", line: 1, character: 9 }),
+      ctxWith(),
+    );
+    expect(res.ok).toBe(true);
+    const data = res.data as { direction: string; calls: Array<Record<string, unknown>>; count: number };
+    expect(data.direction).toBe("incoming");
+    expect(data.count).toBe(1);
+    expect(data.calls[0]).toMatchObject({ name: "mount", path: "uses.ts", line: 5, callSites: [7] });
+  });
+
+  it("asks the other direction when told to", async () => {
+    setFixture({
+      prepared: [item("mount", "uses.ts", 4)],
+      outgoingCalls: [{ to: item("render", "widget.ts", 0), fromRanges: [] }],
+    });
+    const res = await createDefaultDispatcher().execute(
+      call("lsp_call_hierarchy", { path: "uses.ts", line: 5, direction: "outgoing" }),
+      ctxWith(),
+    );
+    const data = res.data as { calls: Array<Record<string, unknown>> };
+    expect(data.calls[0]).toMatchObject({ name: "render", path: "widget.ts" });
+  });
+
+  it("returns nothing, not an error, for a position with no symbol", async () => {
+    // Whitespace and keywords prepare to nothing. That is an answer, not a
+    // failure, and failing would make the tool unusable for exploration.
+    setFixture({ prepared: null });
+    const res = await createDefaultDispatcher().execute(
+      call("lsp_call_hierarchy", { path: "widget.ts", line: 1 }),
+      ctxWith(),
+    );
+    expect(res.ok).toBe(true);
+    expect((res.data as { count: number }).count).toBe(0);
+  });
+});
+
+describe("lsp_type_hierarchy", () => {
+  it("lists what implements the type, with where each lives", async () => {
+    setFixture({
+      prepared: [
+        {
+          name: "Widget",
+          kind: 11,
+          uri: uri("widget.ts"),
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 30 } },
+        },
+      ],
+      subtypes: [
+        {
+          name: "Panel",
+          kind: 5,
+          uri: uri("uses.ts"),
+          range: { start: { line: 2, character: 0 }, end: { line: 2, character: 20 } },
+          selectionRange: { start: { line: 2, character: 6 }, end: { line: 2, character: 11 } },
+          detail: "class Panel implements Widget",
+        },
+      ],
+    });
+    const res = await createDefaultDispatcher().execute(
+      call("lsp_type_hierarchy", { path: "widget.ts", line: 1, character: 13 }),
+      ctxWith(),
+    );
+    const data = res.data as { direction: string; types: Array<Record<string, unknown>> };
+    expect(data.direction).toBe("subtypes");
+    expect(data.types[0]).toMatchObject({
+      name: "Panel",
+      path: "uses.ts",
+      line: 3,
+      detail: "class Panel implements Widget",
+    });
   });
 });

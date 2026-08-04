@@ -223,6 +223,26 @@ export type LspSymbol = {
   container?: string;
 };
 
+/** One end of a call edge: the symbol, where it lives, and where the call sites are. */
+export type LspCallEdge = {
+  name: string;
+  kind: string;
+  uri: string;
+  range: LspRange;
+  /** Call sites inside `name` (incoming) or inside the queried symbol (outgoing). */
+  callSites: LspRange[];
+  detail?: string;
+};
+
+/** A super- or subtype of the queried symbol. */
+export type LspTypeRelative = {
+  name: string;
+  kind: string;
+  uri: string;
+  range: LspRange;
+  detail?: string;
+};
+
 const SEVERITY: Record<number, string> = { 1: "error", 2: "warning", 3: "information", 4: "hint" };
 
 export function severityLabel(severity?: number): string {
@@ -363,6 +383,49 @@ function normalizeSymbols(result: unknown): LspSymbol[] {
   return out;
 }
 
+/**
+ * A hierarchy item is the same shape in both the call and type protocols, and
+ * both answer with `{ from | to | item, fromRanges? }` wrappers. Reading the
+ * item out of either wrapper keeps one normalizer for four requests.
+ */
+function hierarchyItem(
+  value: unknown,
+): { name: string; kind: string; uri: string; range: LspRange; detail?: string } | undefined {
+  if (!isRecord(value)) return undefined;
+  const name = value["name"];
+  const uri = value["uri"];
+  if (typeof name !== "string" || typeof uri !== "string") return undefined;
+  const range = isRecord(value["selectionRange"]) ? value["selectionRange"] : value["range"];
+  return {
+    name,
+    kind: symbolKindLabel(typeof value["kind"] === "number" ? value["kind"] : undefined),
+    uri,
+    range: (range as LspRange | undefined) ?? ZERO_RANGE,
+    ...(typeof value["detail"] === "string" && value["detail"] ? { detail: value["detail"] } : {}),
+  };
+}
+
+function normalizeCallEdges(result: unknown, side: "from" | "to"): LspCallEdge[] {
+  if (!Array.isArray(result)) return [];
+  const out: LspCallEdge[] = [];
+  for (const entry of result) {
+    if (!isRecord(entry)) continue;
+    const item = hierarchyItem(entry[side]);
+    if (!item) continue;
+    const ranges = entry["fromRanges"];
+    out.push({
+      ...item,
+      callSites: Array.isArray(ranges) ? (ranges.filter(isRecord) as LspRange[]) : [],
+    });
+  }
+  return out;
+}
+
+function normalizeTypeRelatives(result: unknown): LspTypeRelative[] {
+  if (!Array.isArray(result)) return [];
+  return result.map(hierarchyItem).filter((item): item is LspTypeRelative => item !== undefined);
+}
+
 // ---------------------------------------------------------------------------
 // Session: one long-lived server process per languageId + workspace.
 // ---------------------------------------------------------------------------
@@ -471,6 +534,10 @@ class LspSession {
               resolveSupport: { properties: ["edit"] },
             },
             formatting: { dynamicRegistration: false },
+            // Both hierarchies are two-step protocols: prepare returns an item,
+            // and the item is what the follow-up request takes.
+            callHierarchy: { dynamicRegistration: false },
+            typeHierarchy: { dynamicRegistration: false },
           },
           workspace: {
             // documentChanges gets the versioned edit shape; the empty
@@ -719,6 +786,54 @@ class LspSession {
   async formatting(absPath: string, options: LspFormattingOptions, signal?: AbortSignal): Promise<unknown> {
     const { uri } = this.syncDocument(absPath);
     return this.request("textDocument/formatting", { textDocument: { uri }, options }, REQUEST_TIMEOUT_MS, signal);
+  }
+
+  /**
+   * Who calls this, and what does it call.
+   *
+   * Two round trips by protocol: prepare resolves the position to a hierarchy
+   * item, and only that item may be passed on. A position that resolves to no
+   * item (whitespace, a keyword) is not an error — there is simply nothing at
+   * the cursor to ask about.
+   */
+  async callHierarchy(
+    absPath: string,
+    position: LspPosition,
+    direction: "incoming" | "outgoing",
+    signal?: AbortSignal,
+  ): Promise<LspCallEdge[]> {
+    const { uri } = this.syncDocument(absPath);
+    const prepared = await this.request(
+      "textDocument/prepareCallHierarchy",
+      { textDocument: { uri }, position },
+      REQUEST_TIMEOUT_MS,
+      signal,
+    );
+    const item = Array.isArray(prepared) ? prepared[0] : undefined;
+    if (!isRecord(item)) return [];
+    const method = direction === "incoming" ? "callHierarchy/incomingCalls" : "callHierarchy/outgoingCalls";
+    const result = await this.request(method, { item }, REQUEST_TIMEOUT_MS, signal);
+    return normalizeCallEdges(result, direction === "incoming" ? "from" : "to");
+  }
+
+  /** What this type extends, or what extends it. Same two-step shape as the call hierarchy. */
+  async typeHierarchy(
+    absPath: string,
+    position: LspPosition,
+    direction: "supertypes" | "subtypes",
+    signal?: AbortSignal,
+  ): Promise<LspTypeRelative[]> {
+    const { uri } = this.syncDocument(absPath);
+    const prepared = await this.request(
+      "textDocument/prepareTypeHierarchy",
+      { textDocument: { uri }, position },
+      REQUEST_TIMEOUT_MS,
+      signal,
+    );
+    const item = Array.isArray(prepared) ? prepared[0] : undefined;
+    if (!isRecord(item)) return [];
+    const method = direction === "supertypes" ? "typeHierarchy/supertypes" : "typeHierarchy/subtypes";
+    return normalizeTypeRelatives(await this.request(method, { item }, REQUEST_TIMEOUT_MS, signal));
   }
 
   async workspaceSymbols(query: string, signal?: AbortSignal): Promise<LspSymbol[]> {
@@ -998,6 +1113,28 @@ export async function lspDefinition(
 ): Promise<LspLocation[]> {
   const { session } = await getSession(workspace, absPath, signal);
   return session.definition(absPath, position, signal);
+}
+
+export async function lspCallHierarchy(
+  workspace: string,
+  absPath: string,
+  position: LspPosition,
+  direction: "incoming" | "outgoing",
+  signal?: AbortSignal,
+): Promise<LspCallEdge[]> {
+  const { session } = await getSession(workspace, absPath, signal);
+  return session.callHierarchy(absPath, position, direction, signal);
+}
+
+export async function lspTypeHierarchy(
+  workspace: string,
+  absPath: string,
+  position: LspPosition,
+  direction: "supertypes" | "subtypes",
+  signal?: AbortSignal,
+): Promise<LspTypeRelative[]> {
+  const { session } = await getSession(workspace, absPath, signal);
+  return session.typeHierarchy(absPath, position, direction, signal);
 }
 
 export async function lspReferences(

@@ -68,6 +68,8 @@ installed. A file type with no configured server returns `lsp_unsupported`.
 | `lsp_apply_code_action` | `path`, `line`, `endLine?`, `title` | `write` | Apply one of them by title, after you approve its diff. |
 | `lsp_format` | `path`, `tabSize?`, `insertSpaces?` | `write` | Format the file with the server's formatter, after you approve the diff. |
 | `lsp_rename` | `path`, `line`, `character?`, `newName` | `write` | Rename the symbol everywhere the server resolves it, across files, after you approve the diff. |
+| `lsp_call_hierarchy` | `path`, `line`, `character?`, `direction?` | `readonly` | Who calls that function (`incoming`, default) or what it calls (`outgoing`) — each caller named, with the lines the calls are on. |
+| `lsp_type_hierarchy` | `path`, `line`, `character?`, `direction?` | `readonly` | What implements or extends that type (`subtypes`, default) or what it extends (`supertypes`). |
 
 `path` is workspace-relative and must stay inside the workspace (same sandbox as
 every other file tool; sensitive files like `.env`/keys are refused). `line` is
