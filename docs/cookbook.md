@@ -157,6 +157,18 @@ seekforge audit <session-id> --json      # raw SessionAudit JSON
 
 TUI: `/audit [sessionId]` writes the audit for the current (or named) session.
 
+The summary carries a **prompt-cache** line: what share of the prompt was read
+from cache rather than billed as fresh input, and how many tokens were written.
+That number is how the design gets checked — the system prompt, the tool
+catalog and the conversation are ordered the way they are to keep a stable
+cached prefix, and a session that reports a low rate means something is
+invalidating it (a per-turn change early in the prompt, a model switch, a gap
+longer than the provider's cache TTL).
+
+A session whose provider reports no cache counts at all says "no cache activity
+reported" instead of `0%` — an unreported cache and a cache that missed every
+time are different facts, and only the first one is known.
+
 **Tips:**
 - `seekforge replay <session-id>` re-renders the whole session to the terminal;
   `seekforge rewind <session-id>` undoes a session's file changes (`--dry-run`

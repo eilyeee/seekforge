@@ -105,7 +105,7 @@ describe("buildSessionAudit / renderSessionAuditMarkdown", () => {
     expect(a.totals.assistantMessages).toBe(2);
     expect(a.totals.toolCalls).toBe(3);
     expect(a.totals.filesChanged).toBe(2);
-    expect(a.totals.tokens).toEqual({ prompt: 1200, completion: 340, cacheHit: 800 });
+    expect(a.totals.tokens).toEqual({ prompt: 1200, completion: 340, cacheHit: 800, cacheWrite: 0 });
     expect(a.totals.costUsd).toBe(0.0123);
   });
 
@@ -180,6 +180,64 @@ describe("buildSessionAudit / renderSessionAuditMarkdown", () => {
     const a = buildSessionAudit(ws, "nometa")!;
     expect(a.meta.id).toBe("nometa");
     expect(a.totals.costUsd).toBe(0);
-    expect(a.totals.tokens).toEqual({ prompt: 0, completion: 0, cacheHit: 0 });
+    expect(a.totals.tokens).toEqual({ prompt: 0, completion: 0, cacheHit: 0, cacheWrite: 0 });
+  });
+});
+
+describe("audit: prompt-cache readout", () => {
+  let ws: string;
+  beforeEach(() => {
+    ws = mkdtempSync(join(tmpdir(), "seekforge-audit-cache-"));
+  });
+  afterEach(() => {
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  function seedUsage(usage: Record<string, number>): void {
+    writeSessionMeta(ws, {
+      id: "c1",
+      task: "t",
+      mode: "edit",
+      status: "completed",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:01:00.000Z",
+      usage: { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0, ...usage },
+    });
+    createSessionTrace(ws, "c1").message({ role: "user", content: "t" });
+  }
+
+  it("reports the share of the prompt that was read from cache", () => {
+    // Everything about how the prompt is ordered — system prompt, then the tool
+    // catalog, then the conversation — is an argument that this number should be
+    // high. Until it was reported, nobody could check the argument.
+    seedUsage({ promptTokens: 10_000, cacheHitTokens: 8_500, cacheWriteTokens: 1_500 });
+    const a = buildSessionAudit(ws, "c1")!;
+    expect(a.totals.cacheHitRate).toBeCloseTo(0.85, 5);
+    expect(a.totals.tokens.cacheWrite).toBe(1_500);
+    expect(renderSessionAuditMarkdown(a)).toContain("85% of the prompt read from cache");
+  });
+
+  it("says nothing was reported rather than claiming a 0% hit rate", () => {
+    // A provider that does not report cache counts and a cache that missed
+    // every time are different facts; "0%" would state the second when only the
+    // first is known.
+    seedUsage({ promptTokens: 10_000 });
+    const a = buildSessionAudit(ws, "c1")!;
+    expect(a.totals.cacheHitRate).toBeNull();
+    expect(renderSessionAuditMarkdown(a)).toContain("no cache activity reported");
+  });
+
+  it("distinguishes a real miss from an unreported one", () => {
+    // Writes but no reads IS a real 0%: the first turn of a session, or a
+    // prefix that changed. That must not be silenced.
+    seedUsage({ promptTokens: 10_000, cacheWriteTokens: 10_000 });
+    const a = buildSessionAudit(ws, "c1")!;
+    expect(a.totals.cacheHitRate).toBe(0);
+    expect(renderSessionAuditMarkdown(a)).toContain("0% of the prompt read from cache");
+  });
+
+  it("never reports more cache than prompt", () => {
+    seedUsage({ promptTokens: 100, cacheHitTokens: 500 });
+    expect(buildSessionAudit(ws, "c1")!.totals.cacheHitRate).toBe(1);
   });
 });

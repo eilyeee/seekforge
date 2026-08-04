@@ -69,10 +69,37 @@ export type SessionAudit = {
     assistantMessages: number;
     toolCalls: number;
     filesChanged: number;
-    tokens: { prompt: number; completion: number; cacheHit: number };
+    tokens: { prompt: number; completion: number; cacheHit: number; cacheWrite: number };
     costUsd: number;
+    /**
+     * Share of the prompt that was READ FROM CACHE rather than billed as fresh
+     * input, 0..1 — or null when this session reports no cache activity at all,
+     * which is not the same as a cache that missed. Some providers do not
+     * report cache counts, and "0%" would read as a broken cache rather than an
+     * unreported one.
+     *
+     * This is the number that turns the prefix-caching design into something
+     * observable: everything about how the system prompt, the tool catalog and
+     * the conversation are ordered is an argument that this should be high.
+     */
+    cacheHitRate: number | null;
   };
 };
+
+/**
+ * Cache reads as a share of the whole prompt, or null when the session shows no
+ * cache activity. `promptTokens` is the WHOLE prompt — providers that bill the
+ * uncached remainder have their read/write counts added back before this point
+ * — so the ratio is over the same denominator the reader expects.
+ */
+function cacheHitRate(usage: TokenUsage | undefined): number | null {
+  if (!usage) return null;
+  const hit = usage.cacheHitTokens;
+  const write = usage.cacheWriteTokens ?? 0;
+  if (hit === 0 && write === 0) return null;
+  if (usage.promptTokens <= 0) return null;
+  return Math.min(1, hit / usage.promptTokens);
+}
 
 /** Collapse whitespace and truncate `text` to `max` chars with an ellipsis. */
 function compactTruncate(text: string, max = 200): string {
@@ -222,8 +249,10 @@ export function buildSessionAudit(workspace: string, sessionId: string): Session
         prompt: usage?.promptTokens ?? 0,
         completion: usage?.completionTokens ?? 0,
         cacheHit: usage?.cacheHitTokens ?? 0,
+        cacheWrite: usage?.cacheWriteTokens ?? 0,
       },
       costUsd: usage?.costUsd ?? 0,
+      cacheHitRate: cacheHitRate(usage),
     },
   };
 }
@@ -252,6 +281,14 @@ export function renderSessionAuditMarkdown(audit: SessionAudit): string {
   lines.push(
     `- Tokens: ${totals.tokens.prompt} prompt, ${totals.tokens.completion} completion, ` +
       `${totals.tokens.cacheHit} cache-hit — cost $${totals.costUsd.toFixed(4)}`,
+  );
+  // The prefix-caching design says this should be high; without it, "we cache
+  // the prompt" is a claim nobody ever checks against a real session.
+  lines.push(
+    totals.cacheHitRate === null
+      ? "- Prompt cache: no cache activity reported for this session"
+      : `- Prompt cache: ${(totals.cacheHitRate * 100).toFixed(0)}% of the prompt read from cache` +
+          `, ${totals.tokens.cacheWrite} token(s) written`,
   );
   lines.push("");
 

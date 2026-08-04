@@ -130,6 +130,10 @@ seekforge audit <session-id> --json      # raw SessionAudit JSON
 
 TUI：`/audit [sessionId]` 会为当前（或指定）会话写出审计报告。
 
+摘要里带有一行**提示缓存**：这次会话的 prompt 有多大比例是从缓存读取的（而不是按新输入计费），以及写入了多少 token。这个数字正是用来检验设计的——系统提示词、工具目录和对话之所以按现在的顺序排列，就是为了维持一个稳定的缓存前缀；如果某次会话的命中率很低，说明有什么东西在让它失效（prompt 靠前的位置每回合都在变、中途换了模型、或者两次调用间隔超过了 provider 的缓存 TTL）。
+
+如果某个 provider 根本不上报缓存计数，这行会写「no cache activity reported」而不是 `0%`——「没有上报」和「每次都没命中」是两件不同的事，而我们只知道第一件。
+
 **提示：**
 - `seekforge replay <session-id>` 会把整个会话重新渲染到终端；`seekforge rewind <session-id>` 撤销某个会话的文件改动（建议先 `--dry-run`）。
 

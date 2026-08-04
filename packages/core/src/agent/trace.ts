@@ -273,7 +273,15 @@ function parseSessionMeta(value: unknown, expectedId: string): SessionMeta | und
     (!isRecord(usage) ||
       !["promptTokens", "completionTokens", "cacheHitTokens", "costUsd"].every(
         (key) => typeof usage[key] === "number" && Number.isFinite(usage[key]) && usage[key] >= 0,
-      ))
+      ) ||
+      // Optional (only providers that report cache writes set it), but held to
+      // the same shape as the rest — it is read back and rendered, and a
+      // negative or non-numeric value would surface as a nonsense cache rate
+      // rather than as a rejected file.
+      (usage["cacheWriteTokens"] !== undefined &&
+        (typeof usage["cacheWriteTokens"] !== "number" ||
+          !Number.isFinite(usage["cacheWriteTokens"]) ||
+          usage["cacheWriteTokens"] < 0)))
   ) {
     return undefined;
   }
