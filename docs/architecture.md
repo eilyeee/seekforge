@@ -121,7 +121,12 @@ active sessions or memory writers skip the tick instead of being queued behind
 housekeeping. One-shot CLI processes retain the write-triggered fallback. The
 read-only memory governance report adds per-fact decay/quality/provenance,
 retrieval effectiveness, bounded near-duplicate groups, and conservative
-contradiction candidates; it never deletes facts automatically.
+contradiction candidates; it never deletes facts automatically. A contradiction
+is either a fact its replacement negates or the same claim carrying a different
+value, judged over the whole set so that a numbered list is not mistaken for a
+disagreement. The same check runs while the brief is built, so when two facts
+about to be injected disagree the brief says so instead of presenting both as
+equally true — which fact is stale stays a human decision.
 Autonomous Loop state is a separate orchestration checkpoint that points to a
 session and owns the frozen requirement specification, acceptance evidence, and
 optional approval gate. Requirement analysis and acceptance review run through

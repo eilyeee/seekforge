@@ -1,35 +1,12 @@
 import type { MemoryGovernanceFact, MemoryGovernanceReport } from "@seekforge/shared";
 import { listProjectFacts } from "./direct.js";
 import { readCandidates, readFactMeta } from "./store.js";
+// Deciding whether two facts disagree is the same question here and while
+// building the brief; one implementation means the report and the warning the
+// model actually sees can never drift apart.
+import { findConflicts, similarity } from "./conflict.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-function normalize(value: string): string {
-  return value
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/[\p{P}\p{S}\s]+/gu, " ")
-    .trim();
-}
-
-function tokens(value: string): Set<string> {
-  const words = normalize(value).split(" ").filter(Boolean);
-  if (words.length > 1) return new Set(words);
-  return new Set(Array.from(words[0] ?? ""));
-}
-
-function similarity(left: string, right: string): number {
-  const a = tokens(left);
-  const b = tokens(right);
-  if (a.size === 0 || b.size === 0) return 0;
-  let overlap = 0;
-  for (const token of a) if (b.has(token)) overlap++;
-  return overlap / (a.size + b.size - overlap);
-}
-
-function negated(value: string): boolean {
-  return /(?:\b(?:not|no|never|disable|avoid)\b|不要|禁止|不应|不能|不可|无需)/iu.test(value);
-}
 
 /** Produces read-only quality signals; it never removes or rewrites memory. */
 export function memoryGovernance(workspace: string, now = Date.now()): MemoryGovernanceReport {
@@ -88,10 +65,13 @@ export function memoryGovernance(workspace: string, now = Date.now()): MemoryGov
         grouped.add(a.index);
         grouped.add(b.index);
       }
-      if (score >= 0.55 && negated(a.content) !== negated(b.content)) {
-        contradictionCandidates.push({ left: a.index, right: b.index });
-      }
     }
+  }
+  // Contradictions are decided over the whole compared set, not pair by pair:
+  // two facts differing only by a number are a replacement, but a dozen of them
+  // are a numbered list.
+  for (const pair of findConflicts(compared.map((fact) => ({ key: fact.type ?? "", text: fact.content })))) {
+    contradictionCandidates.push({ left: compared[pair.left]!.index, right: compared[pair.right]!.index });
   }
   const exposedFacts = facts.filter((fact) => fact.exposures > 0);
   const retrievedFacts = facts.filter((fact) => fact.retrievals > 0);

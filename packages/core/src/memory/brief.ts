@@ -24,6 +24,7 @@
  * fact and the reverse — the one thing no lexical scorer reaches.
  */
 
+import { findConflicts } from "./conflict.js";
 import { readGlobalMemory, readProjectMemory, readSubdirMemories } from "./store.js";
 
 // Injection budget. Raised from (8 / 800 / 12) as the curated corpus grows so
@@ -354,6 +355,7 @@ export function buildMemoryBrief(workspace: string, task: string): string | unde
 
   const lines: string[] = [STALE_WARNING];
   let chars = STALE_WARNING.length;
+  const injected: string[] = [];
   for (const { line } of selected) {
     // The bullet cap only applies to large corpora; a small set is injected
     // whole (bounded by MAX_CHARS regardless).
@@ -364,8 +366,37 @@ export function buildMemoryBrief(workspace: string, task: string): string | unde
     // single oversized top bullet would suppress the whole brief).
     if (chars + cost > MAX_CHARS) continue;
     lines.push(line);
+    injected.push(line);
     chars += cost;
   }
   if (lines.length === 1) return undefined; // Header alone is not a brief.
+  const conflict = conflictNotice(injected);
+  // Only when it fits: a warning that displaced a fact would trade the problem
+  // for a different one.
+  if (conflict && chars + conflict.length + 1 <= MAX_CHARS) lines.push(conflict);
   return lines.join("\n");
+}
+
+/**
+ * Say so when two facts about to be injected disagree.
+ *
+ * Memory is append-only, so the fact a later one replaced is still there and
+ * both can rank highly for the same task. Presenting them side by side as
+ * equally true is the one failure mode of remembering things: the model is
+ * confidently told two incompatible things and cannot know which is current.
+ *
+ * This warns rather than drops. Which fact is stale is a human judgement (see
+ * `seekforge memory`), and silently picking one would be a memory system
+ * quietly rewriting itself.
+ */
+function conflictNotice(bullets: string[]): string | undefined {
+  // Only the bullets actually injected are compared — a few dozen at most, and
+  // the set is what makes a replaced value distinguishable from a numbered list.
+  const parsed = bullets.map(parseBullet);
+  const candidates = parsed.flatMap((bullet) => (bullet ? [{ key: bullet.type, text: bullet.text }] : []));
+  const conflict = findConflicts(candidates)[0];
+  if (!conflict) return undefined;
+  const left = candidates[conflict.left]!.text;
+  const right = candidates[conflict.right]!.text;
+  return `NOTE: two facts above disagree ("${left}" vs "${right}") — at most one is current; verify before relying on either.`;
 }
