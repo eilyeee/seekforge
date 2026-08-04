@@ -50,6 +50,7 @@ export {
   ALWAYS_INCLUDE_TYPES,
   buildMemoryBrief,
   parseMemoryBullet,
+  factKeywords,
   rankMemoryBullets,
   RELEVANCE_FLOOR,
   taskKeywords,

@@ -127,6 +127,15 @@ value, judged over the whole set so that a numbered list is not mistaken for a
 disagreement. The same check runs while the brief is built, so when two facts
 about to be injected disagree the brief says so instead of presenting both as
 equally true — which fact is stale stays a human decision.
+Retrieval into the brief is lexical and therefore blind across a language
+boundary: a question asked in Chinese cannot reach a fact written in English by
+sharing words with it. Extraction now asks the model, in the call it was already
+making, for a handful of retrieval keywords in both languages, stored beside the
+fact in `fact-meta.json` and folded into what the ranker matches against —
+never into what is injected or displayed. Measured on
+`tests/memory/xlingual-retrieval.test.ts`: 3/12 cross-lingual queries reached
+their fact without them, 12/12 with. Facts added by hand and facts remembered
+before this existed carry none and score exactly as they did.
 Autonomous Loop state is a separate orchestration checkpoint that points to a
 session and owns the frozen requirement specification, acceptance evidence, and
 optional approval gate. Requirement analysis and acceptance review run through

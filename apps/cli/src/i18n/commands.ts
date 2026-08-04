@@ -56,6 +56,7 @@ export const commands = {
     "cmd.memory.pendingHeader": "Pending candidates (approve with `seekforge memory approve <id>`):",
     "cmd.memory.noPending": "No pending memory candidates.",
     "cmd.memory.pendingCandidate": "  {id}  [{type}] ({confidence})  {content}",
+    "cmd.memory.candidateKeywords": "      keywords (matched, never shown to the model): {keywords}",
     "cmd.memory.addedQueued":
       "queued pending candidate {id}: [{type}] {content}\napprove with `seekforge memory approve {id}`",
     "cmd.memory.addedTo": "added to {path}:",
@@ -263,6 +264,7 @@ export const commands = {
     "cmd.memory.pendingHeader": "待定候选（使用 `seekforge memory approve <id>` 批准）：",
     "cmd.memory.noPending": "暂无待定的记忆候选。",
     "cmd.memory.pendingCandidate": "  {id}  [{type}]（{confidence}）  {content}",
+    "cmd.memory.candidateKeywords": "      检索关键词（仅用于匹配，不会展示给模型）：{keywords}",
     "cmd.memory.addedQueued": "已排队待定候选 {id}：[{type}] {content}\n使用 `seekforge memory approve {id}` 批准",
     "cmd.memory.addedUser": "已添加到用户记忆（~/.seekforge）：[{type}] {content}",
     "cmd.memory.addedTo": "已添加到 {path}：",

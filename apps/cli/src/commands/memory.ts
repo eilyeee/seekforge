@@ -43,6 +43,12 @@ export function memoryListCommand(): void {
         content: c.content,
       }),
     );
+    // Shown because approving a fact also approves these: they widen what the
+    // fact will be retrieved by, and a reviewer who cannot see them cannot
+    // reject them.
+    if (c.keywords && c.keywords.length > 0) {
+      console.log(t("cmd.memory.candidateKeywords", { keywords: c.keywords.join(", ") }));
+    }
   }
 }
 

@@ -25,7 +25,7 @@
  */
 
 import { findConflicts } from "./conflict.js";
-import { readGlobalMemory, readProjectMemory, readSubdirMemories } from "./store.js";
+import { readFactMeta, readGlobalMemory, readProjectMemory, readSubdirMemories } from "./store.js";
 
 // Injection budget. Raised from (8 / 800 / 12) as the curated corpus grows so
 // more facts can surface — including per-package subdir facts (see the cascade
@@ -174,6 +174,21 @@ function escapeRegExp(text: string): string {
  * only specific compared to the other facts on offer. Both callers already have
  * the full candidate set before they score anything.
  */
+/**
+ * `corpus` is the same text the returned function scores — including each
+ * fact's retrieval keywords. Judging rarity over a NARROWER corpus was tried
+ * and is worse: a keyword-only term then has document frequency 0, which this
+ * function deliberately treats as "not rare", so exactly the cross-lingual
+ * matches keywords exist for lose the boost that carries them over the
+ * relevance floor (measured: 11/12 instead of 12/12 on
+ * tests/memory/xlingual-retrieval.test.ts).
+ *
+ * The cost of keeping them in is that one fact's keywords raise the document
+ * frequency of a word another fact uses distinctively, demoting it from rare to
+ * common. That is the ordinary meaning of the measure rather than a bug — if
+ * two facts both answer to a word, it discriminates less between them — and the
+ * lists are 8 short terms at most.
+ */
 export function createRelevanceScorer(query: string, corpus: string[]): (haystack: string) => number {
   const bigrams = taskBigrams(query);
   const pathTokens = taskPathTokens(query);
@@ -232,6 +247,11 @@ export type MemoryCandidateBullet = {
    * task references — without altering `line`.
    */
   pathContext?: string;
+  /**
+   * Bilingual retrieval keywords for this fact (fact-meta), folded into the
+   * scoring haystack only — never into `line`, which is what a caller shows.
+   */
+  keywords?: string;
 };
 
 /** A ranked bullet: its candidate fields plus the relevance score. */
@@ -250,7 +270,7 @@ export function rankMemoryBullets<T extends MemoryCandidateBullet>(
   query: string,
   candidates: T[],
 ): Array<T & { score: number }> {
-  const haystacks = candidates.map((c) => (c.pathContext ? `${c.pathContext} ${c.line}` : c.line).toLowerCase());
+  const haystacks = candidates.map((c) => [c.pathContext, c.line, c.keywords].filter(Boolean).join(" ").toLowerCase());
   const score = createRelevanceScorer(query, haystacks);
   const scored = candidates.map((c, i) => ({ ...c, score: score(haystacks[i]!) }));
   // Stable sort by score (highest first); ties keep input order.
@@ -263,6 +283,24 @@ export function rankMemoryBullets<T extends MemoryCandidateBullet>(
 /** Parse a memory bullet line; exported for reuse by the search_memory tool. */
 export function parseMemoryBullet(line: string): { type: string; text: string } | undefined {
   return parseBullet(line);
+}
+
+/**
+ * Bullet body -> its retrieval keywords, joined into one string ready to append
+ * to a scoring haystack. Never throws: memory is non-essential, and a corrupt
+ * or unreadable sidecar must degrade to the plain lexical behavior rather than
+ * cost the session its brief.
+ */
+export function factKeywords(workspace: string): Map<string, string> {
+  const out = new Map<string, string>();
+  try {
+    for (const [key, meta] of Object.entries(readFactMeta(workspace))) {
+      if (meta.keywords && meta.keywords.length > 0) out.set(key, meta.keywords.join(" "));
+    }
+  } catch {
+    // A sidecar we cannot read is the same as one that has no keywords.
+  }
+  return out;
 }
 
 export function buildMemoryBrief(workspace: string, task: string): string | undefined {
@@ -288,6 +326,14 @@ export function buildMemoryBrief(workspace: string, task: string): string | unde
   // Sources are collected in precedence order (root project, then subdir, then
   // global) so the first copy of an identical line wins (project > subdir >
   // global). The merged set feeds the same small-corpus + floor logic.
+  // Retrieval keywords the extractor attached to each fact (fact-meta sidecar,
+  // project-scoped). They are the one thing in this file that is not lexical:
+  // a fact written in English carries its Chinese search terms and the reverse,
+  // which is what lets a question asked in one language reach an answer stored
+  // in the other. Read once; absent for hand-added and pre-existing facts, and
+  // for global/subdir memory, which have no project sidecar.
+  const keywordsByFact = factKeywords(workspace);
+
   const all: ScoredBullet[] = [];
   const seen = new Set<string>();
   const collect = (
@@ -306,9 +352,10 @@ export function buildMemoryBrief(workspace: string, task: string): string | unde
       const line = `- [${bullet.type}] ${bullet.text}`;
       if (seen.has(line)) return; // identical bullet already collected (higher source wins)
       seen.add(line);
-      const haystack = pathContext
-        ? `${pathContext} [${bullet.type}] ${bullet.text}`
-        : `[${bullet.type}] ${bullet.text}`;
+      // Keywords widen only the HAYSTACK — never `line`, which is the text
+      // injected into the prompt and read by a person.
+      const extra = isProject ? keywordsByFact.get(`[${bullet.type}] ${bullet.text}`) : undefined;
+      const haystack = [pathContext, `[${bullet.type}] ${bullet.text}`, extra].filter(Boolean).join(" ");
       all.push({
         line,
         type: bullet.type,

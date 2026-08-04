@@ -36,6 +36,15 @@ export type MemoryCandidate = {
   sourceSessionId: string;
   createdAt: string;
   status: "pending" | "approved" | "rejected";
+  /**
+   * Bilingual retrieval keywords from the extractor. They exist for the one
+   * failure a lexical scorer cannot reach: a question asked in Chinese whose
+   * answer is a fact written in English, and the reverse. Matched against,
+   * never displayed and never injected. Absent on hand-added facts and on
+   * everything remembered before this existed. Mirrored in
+   * @seekforge/shared for the server/desktop wire.
+   */
+  keywords?: string[];
 };
 
 export function projectMemoryPath(workspace: string): string {
@@ -77,6 +86,13 @@ export type FactMeta = {
   retrievals?: number;
   lastExposedAt?: string;
   lastUsedAt?: string;
+  /**
+   * Bilingual retrieval keywords carried over from the candidate
+   * (MemoryCandidate.keywords). They live here rather than in project.md
+   * because project.md is a file people read and hand-edit — a fact is a
+   * sentence, not a sentence plus a machine-readable tail.
+   */
+  keywords?: string[];
 };
 
 const MAX_CANDIDATE_ID_CHARS = 256;
@@ -136,6 +152,18 @@ function isNonNegativeSafeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
+/** Same bounds the extractor applies, re-checked at the file boundary. */
+const MAX_FACT_KEYWORDS = 8;
+const MAX_FACT_KEYWORD_CHARS = 32;
+
+function isKeywordList(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= MAX_FACT_KEYWORDS &&
+    value.every((entry) => typeof entry === "string" && entry.length > 0 && entry.length <= MAX_FACT_KEYWORD_CHARS)
+  );
+}
+
 function isFactMeta(value: unknown): value is FactMeta {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const meta = value as Record<string, unknown>;
@@ -145,7 +173,8 @@ function isFactMeta(value: unknown): value is FactMeta {
     (meta.exposures === undefined || isNonNegativeSafeInteger(meta.exposures)) &&
     (meta.retrievals === undefined || isNonNegativeSafeInteger(meta.retrievals)) &&
     (meta.lastExposedAt === undefined || isIsoTimestamp(meta.lastExposedAt)) &&
-    (meta.lastUsedAt === undefined || isIsoTimestamp(meta.lastUsedAt))
+    (meta.lastUsedAt === undefined || isIsoTimestamp(meta.lastUsedAt)) &&
+    (meta.keywords === undefined || isKeywordList(meta.keywords))
   );
 }
 
@@ -209,13 +238,26 @@ function writeFactMeta(workspace: string, meta: Record<string, FactMeta>): void 
   }
 }
 
-/** First-seen time for a freshly approved/added fact (no-op if already known). */
-export function recordFactAdded(workspace: string, bullet: string): void {
+/**
+ * First-seen time for a freshly approved/added fact (no-op if already known),
+ * plus the retrieval keywords the fact arrived with.
+ *
+ * Keywords are also filled in for a fact already known: re-approving the same
+ * content is how a fact remembered before this existed acquires them.
+ */
+export function recordFactAdded(workspace: string, bullet: string, keywords?: string[]): void {
   withMemoryTransaction(workspace, () => {
     const key = bullet.replace(/^-\s*/, "").trim();
     const meta = readFactMetaForMutation(workspace);
-    if (!meta[key]) {
-      meta[key] = { addedAt: new Date().toISOString(), uses: 0 };
+    const usable = keywords !== undefined && isKeywordList(keywords) && keywords.length > 0;
+    const existing = meta[key];
+    if (!existing) {
+      meta[key] = { addedAt: new Date().toISOString(), uses: 0, ...(usable ? { keywords } : {}) };
+      writeFactMeta(workspace, meta);
+      return;
+    }
+    if (usable && existing.keywords === undefined) {
+      existing.keywords = keywords;
       writeFactMeta(workspace, meta);
     }
   });
@@ -487,7 +529,8 @@ function isCandidateRecord(value: unknown): value is MemoryCandidate {
     c.confidence <= 1 &&
     isBoundedText(c.sourceSessionId, MAX_SOURCE_SESSION_ID_CHARS) &&
     isIsoTimestamp(c.createdAt) &&
-    (c.status === "pending" || c.status === "approved" || c.status === "rejected")
+    (c.status === "pending" || c.status === "approved" || c.status === "rejected") &&
+    (c.keywords === undefined || isKeywordList(c.keywords))
   );
 }
 
@@ -584,11 +627,18 @@ export function appendProjectFact(workspace: string, candidate: MemoryCandidate)
         `# Project Memory\n${bullet}\n`,
         MAX_MEMORY_DOCUMENT_BYTES,
       );
-      recordFactAdded(workspace, bullet);
+      recordFactAdded(workspace, bullet, candidate.keywords);
       return;
     }
-    // Dedupe: skip when an identical content line already exists.
-    if (existing.split("\n").some((line) => line.trim() === bullet)) return;
+    // Dedupe: the bullet is already there, so project.md does not change — but
+    // the candidate may still carry keywords the existing fact lacks, and
+    // re-approving the same content is exactly how a fact remembered before
+    // keywords existed acquires them. Returning before this is what made that
+    // sentence in recordFactAdded's contract untrue.
+    if (existing.split("\n").some((line) => line.trim() === bullet)) {
+      recordFactAdded(workspace, bullet, candidate.keywords);
+      return;
+    }
     const sep = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
     writeMemoryStateFile(
       workspace,
@@ -596,7 +646,7 @@ export function appendProjectFact(workspace: string, candidate: MemoryCandidate)
       `${existing}${sep}${bullet}\n`,
       MAX_MEMORY_DOCUMENT_BYTES,
     );
-    recordFactAdded(workspace, bullet);
+    recordFactAdded(workspace, bullet, candidate.keywords);
   });
 }
 

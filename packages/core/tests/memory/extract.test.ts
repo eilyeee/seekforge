@@ -158,7 +158,7 @@ describe("extractMemoryFromSession (happy path)", () => {
     expect(system.content).toContain("still true next month? If unsure, drop it");
     // Format contract unchanged.
     expect(system.content).toContain(
-      '{"summary": "<markdown>", "facts": [{"content": "...", "type": "command|path|convention|tech|task_pattern", "confidence": 0.0}]}',
+      '{"summary": "<markdown>", "facts": [{"content": "...", "type": "command|path|convention|tech|task_pattern", "confidence": 0.0, "keywords": ["...", "..."]}]}',
     );
   });
 
@@ -335,5 +335,85 @@ describe("extractMemoryFromSession (degraded path)", () => {
       fs.closeSync(fd);
     }
     expect(fs.existsSync(path.join(ws, ".seekforge", "sessions", "sess1", "summary.md"))).toBe(false);
+  });
+});
+
+describe("bilingual retrieval keywords", () => {
+  it("carries the keywords a fact arrived with onto its candidate", async () => {
+    const ws = makeWorkspace();
+    const provider = makeFakeProvider([
+      fencedResponse([
+        {
+          content: "compaction triggers on the token budget, not the message count",
+          type: "convention",
+          confidence: 0.9,
+          keywords: ["compaction", "压缩", "token budget"],
+        },
+      ]),
+    ]);
+    await extractMemoryFromSession(provider, makeInput(ws));
+    expect(listMemoryCandidates(ws)[0]?.keywords).toEqual(["compaction", "压缩", "token budget"]);
+  });
+
+  it("asks for both languages, or the field would only ever hold one", () => {
+    // The whole point is a query in one language reaching a fact in the other;
+    // a prompt that just said "keywords" would get the fact's own language back.
+    const provider = makeFakeProvider([fencedResponse([])]);
+    return extractMemoryFromSession(provider, makeInput(makeWorkspace())).then(() => {
+      const system = provider.requests[0]?.messages[0]?.content ?? "";
+      expect(system).toContain("BOTH ENGLISH AND");
+      expect(system).toContain("keywords");
+    });
+  });
+
+  it("bounds what the model can put there", async () => {
+    const ws = makeWorkspace();
+    const provider = makeFakeProvider([
+      fencedResponse([
+        {
+          content: "a fact",
+          type: "convention",
+          confidence: 0.9,
+          keywords: [
+            "one",
+            "two",
+            "three",
+            "four",
+            "five",
+            "six",
+            "seven",
+            "eight",
+            "nine",
+            "ten",
+            "  ",
+            "TWO",
+            "x".repeat(64),
+            42,
+            null,
+          ],
+        },
+      ]),
+    ]);
+    await extractMemoryFromSession(provider, makeInput(ws));
+    // Bounded in count, deduped case-insensitively, blanks and over-long terms
+    // and non-strings dropped: these are matched against every fact on every
+    // brief, so an unbounded list is an unbounded haystack.
+    expect(listMemoryCandidates(ws)[0]?.keywords).toEqual([
+      "one",
+      "two",
+      "three",
+      "four",
+      "five",
+      "six",
+      "seven",
+      "eight",
+    ]);
+  });
+
+  it("is absent, not empty, when the model omits it", async () => {
+    const ws = makeWorkspace();
+    const provider = makeFakeProvider([fencedResponse([{ content: "a fact", type: "tech", confidence: 0.9 }])]);
+    await extractMemoryFromSession(provider, makeInput(ws));
+    expect(listMemoryCandidates(ws)[0]).not.toHaveProperty("keywords");
   });
 });

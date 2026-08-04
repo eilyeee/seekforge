@@ -17,6 +17,7 @@ import { defineTool, type ToolSpec } from "../registry.js";
 import {
   ALWAYS_INCLUDE_TYPES,
   parseMemoryBullet,
+  factKeywords,
   rankMemoryBullets,
   recordFactRetrieval,
   readGlobalMemory,
@@ -39,6 +40,10 @@ type SourcedBullet = MemoryCandidateBullet & { source: string };
 function collectAllBullets(workspace: string): SourcedBullet[] {
   const out: SourcedBullet[] = [];
   const seen = new Set<string>();
+  // Same bilingual keywords the injected brief scores against, so asking
+  // search_memory in Chinese reaches an English fact exactly as the automatic
+  // brief does. Project facts only — the sidecar is project-scoped.
+  const keywordsByFact = factKeywords(workspace);
   const add = (memory: string | undefined, source: string, pathContext?: string): void => {
     if (!memory) return;
     for (const rawLine of memory.split("\n")) {
@@ -47,7 +52,14 @@ function collectAllBullets(workspace: string): SourcedBullet[] {
       const line = `- [${bullet.type}] ${bullet.text}`;
       if (seen.has(line)) continue; // identical bullet already collected (first source wins)
       seen.add(line);
-      out.push({ line, type: bullet.type, source, ...(pathContext ? { pathContext } : {}) });
+      const keywords = source === "project" ? keywordsByFact.get(`[${bullet.type}] ${bullet.text}`) : undefined;
+      out.push({
+        line,
+        type: bullet.type,
+        source,
+        ...(pathContext ? { pathContext } : {}),
+        ...(keywords ? { keywords } : {}),
+      });
     }
   };
 

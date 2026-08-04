@@ -595,6 +595,15 @@ export type MemoryCandidate = {
   sourceSessionId: string;
   createdAt: string;
   status: "pending" | "approved" | "rejected";
+  /**
+   * Retrieval keywords for this fact, in BOTH languages the project is worked
+   * in. They exist for one failure the lexical scorer cannot otherwise reach: a
+   * question asked in Chinese whose answer is a fact written in English, and the
+   * reverse. Never shown to anyone and never injected — they only widen what the
+   * ranker can match a query against. Absent on facts added by hand and on
+   * everything remembered before this existed.
+   */
+  keywords?: string[];
 };
 
 /** An approved project-memory fact joined with its lifecycle metadata. */

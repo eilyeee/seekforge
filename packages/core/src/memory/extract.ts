@@ -71,7 +71,7 @@ const SYSTEM_PROMPT = [
   "inside a ```json fence, with exactly this shape:",
   "",
   "```json",
-  '{"summary": "<markdown>", "facts": [{"content": "...", "type": "command|path|convention|tech|task_pattern", "confidence": 0.0}]}',
+  '{"summary": "<markdown>", "facts": [{"content": "...", "type": "command|path|convention|tech|task_pattern", "confidence": 0.0, "keywords": ["...", "..."]}]}',
   "```",
   "",
   "summary: at most 15 lines of markdown with the sections",
@@ -97,6 +97,12 @@ const SYSTEM_PROMPT = [
   "",
   "Self-check before emitting a fact: would this save a FUTURE session real",
   "time, and is it still true next month? If unsure, drop it.",
+  "",
+  "keywords: 3 to 8 short retrieval terms for the fact, IN BOTH ENGLISH AND",
+  "CHINESE — the words someone would search for in either language, including",
+  "the obvious translation of the fact's key nouns and verbs. This is what lets",
+  "a question asked in one language find a fact written in the other. Terms only,",
+  "never a sentence; omit the field if the fact is a bare command or path.",
   "",
   "confidence is 0..1. Output nothing outside the ```json fence.",
 ].join("\n");
@@ -218,8 +224,45 @@ function writeSummary(input: ExtractMemoryInput, markdown: string): void {
 
 type ParsedExtraction = {
   summary: string;
-  facts: { content: string; type: MemoryCandidateType; confidence: number }[];
+  facts: { content: string; type: MemoryCandidateType; confidence: number; keywords?: string[] }[];
 };
+
+/** Bounds on model-supplied retrieval keywords (see MemoryCandidate.keywords). */
+const MAX_KEYWORDS = 8;
+const MAX_KEYWORD_CHARS = 32;
+
+/**
+ * Keep the keywords a model returned, or nothing.
+ *
+ * These are matched against, never displayed, so the risk they carry is not
+ * what they say but how much of it there is: an unbounded list would be an
+ * unbounded haystack in the scorer and an unbounded field in the candidate
+ * file. Bounded in count and length, deduped, blanks dropped. A term long
+ * enough to be a sentence is dropped rather than truncated — half a sentence is
+ * not a keyword.
+ */
+function sanitizeKeywords(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  // The transcript these are distilled from can contain a fetched page or a
+  // repository file, so a keyword is as untrusted as the fact's own content and
+  // gets the same check. Keywords never reach the model's prompt, so this is
+  // not the load-bearing defense — but a fact whose content passed the filter
+  // must not smuggle the same text past it in a field nobody looks at.
+  if (value.some((entry) => typeof entry === "string" && INJECTION_PATTERN.test(entry))) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (out.length >= MAX_KEYWORDS) break;
+    if (typeof entry !== "string") continue;
+    const term = entry.trim();
+    if (term.length === 0 || term.length > MAX_KEYWORD_CHARS) continue;
+    const key = term.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(term);
+  }
+  return out;
+}
 
 /** Parses the fenced JSON response; returns undefined on any shape problem. */
 function parseExtraction(content: string): ParsedExtraction | undefined {
@@ -247,10 +290,12 @@ function parseExtraction(content: string): ParsedExtraction | undefined {
         typeof f.confidence === "number" && Number.isFinite(f.confidence)
           ? Math.min(1, Math.max(0, f.confidence))
           : 0.5;
+      const keywords = sanitizeKeywords(f.keywords);
       facts.push({
         content: f.content.trim(),
         type: f.type as MemoryCandidateType,
         confidence,
+        ...(keywords.length > 0 ? { keywords } : {}),
       });
     }
   }
@@ -332,6 +377,7 @@ export async function extractMemoryFromSession(
           sourceSessionId: input.sessionId,
           createdAt,
           status: autoApprove ? "approved" : "pending",
+          ...(fact.keywords ? { keywords: fact.keywords } : {}),
         };
         // High-confidence facts go straight to project.md (records fact-meta);
         // low-confidence ones stay pending for review. Both are audited in

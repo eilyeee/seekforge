@@ -389,6 +389,13 @@ function CandidateCard({
         )}
       </div>
       <p className="mt-2.5 text-sm leading-relaxed text-secondary">{candidate.content}</p>
+      {candidate.keywords && candidate.keywords.length > 0 && (
+        // Approving the fact approves these too: they widen what it will be
+        // retrieved by, so a reviewer has to be able to see them.
+        <p className="mt-2 font-mono text-2xs text-tertiary" title={t("memory.keywords")}>
+          {candidate.keywords.join(" · ")}
+        </p>
+      )}
       {candidate.status === "pending" && (
         <div className="mt-3 flex gap-2 border-t border-subtle pt-3">
           <Button variant="primary" size="sm" onClick={() => onAct(candidate.id, "approve")}>
