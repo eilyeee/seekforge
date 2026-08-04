@@ -30,6 +30,13 @@ export type Skill = {
   order?: number;
   /** Full SKILL.md content. */
   content: string;
+  /**
+   * Directory the skill was loaded from. Present for on-disk skills, absent
+   * for built-ins and plugin contributions, which have no files beside them.
+   * `read_skill` needs it to reach anything the skill ships next to SKILL.md,
+   * and it is the sandbox root for that read.
+   */
+  dir?: string;
 };
 
 export type SkillSelection = {

@@ -264,6 +264,7 @@ function readSkillDir(
       conflictsWith: json.conflictsWith ?? [],
       order: json.order ?? 0,
       content,
+      dir,
     },
     ...(json.apiVersion === undefined
       ? {

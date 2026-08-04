@@ -28,6 +28,9 @@ A native skill is a physical directory containing two regular files:
 `SKILL.md` contains the procedure; headings named Procedure, Workflow, Steps,
 Instructions, 步骤, 流程, or 操作步骤 are extracted preferentially.
 
+Any other file in the directory travels with the skill — a checklist, a
+template, a script — and is readable with `read_skill`.
+
 Layers resolve as builtin < enabled plugin roots < global
 `~/.seekforge/skills` < project `.seekforge/skills`. A higher layer replaces a
 same-id lower layer. An `enabled:false` marker can disable a builtin.
@@ -50,6 +53,30 @@ identity and modification stamp.
 Missing, disabled, high-risk, or cyclic dependencies reject the dependent
 bundle. `conflictsWith` is resolved by the higher-ranked candidate, then `order`
 provides deterministic phase ordering.
+
+## Two levels: the brief, then the rest
+
+What reaches the prompt is an excerpt. Each selected skill gets a share of the
+2,500-character budget, and a procedure longer than its share is cut — with a
+marker naming the tool that returns the rest:
+
+```text
+…[truncated — call read_skill("review-api") for the full procedure]
+```
+
+`read_skill(id)` returns the complete `SKILL.md` plus a list of the files the
+skill ships; `read_skill(id, file)` returns one of those files. Both are
+read-only. This is the point of the two levels: the brief is cheap enough to
+inject on every session and says what a skill is *for*, and the model pays for
+the full text only when it decides the skill applies.
+
+Bundled files are resolved inside the skill's own directory, with symlinks and
+`..` rejected — a skill can come from the repository, so its file names are as
+untrusted as any other repository content.
+
+A skill that does not fit the remaining budget is left out of the brief
+entirely rather than included as a fragment: an absent skill is something the
+model can reason about, a mutilated one is not.
 
 High-risk skills are excluded from automatic selection. They remain available
 only through an explicit caller opt-in or a direct skill invocation. Every
