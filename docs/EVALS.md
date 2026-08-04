@@ -130,7 +130,10 @@ iteration limits are validated while loading the dataset.
 **`verify-gate`** (enables the self-verification finalize gate, `verifyCommand=npm test`),
 **`no-auto-verify`** (verify-gate but nudge-only), **`no-retrieval`** (disables the
 task-relevant shortlist), **`review-gate`** (enables `finalizeReview`),
-**`model-pro`** (runs under `deepseek-v4-pro`), **`no-progress-guard`** (enables
+**`model-pro`** (runs under `deepseek-v4-pro`), **`provider-anthropic`** (runs the
+same tasks against Claude over the Anthropic Messages protocol — needs
+`ANTHROPIC_API_KEY`; brings its own endpoint and model rather than reusing the
+configured ones), **`no-progress-guard`** (enables
 the premature-finish guard), **`context-tight`** (shrinks the context window to
 `32000` tokens to force earlier compaction), and **`verify-and-review`** (stacks
 self-verify `npm test` + auto-run + final diff self-review). A/B a lever against

@@ -7,14 +7,23 @@
  */
 
 import { buildProvider, createAgentCore, createDefaultDispatcher, type AgentCoreDeps } from "@seekforge/core";
+import { apiKeyEnvVar } from "@seekforge/shared/provider-env";
 import type { EvalConfig } from "./config.js";
 import type { CreateAgentFn } from "./task-runner.js";
 import type { AgentBuildOptions } from "./variants.js";
 
 export function createDefaultAgentFactory(config: EvalConfig, options: AgentBuildOptions = {}): CreateAgentFn {
   return () => {
-    if (!config.apiKey) {
-      throw new Error("no DeepSeek API key configured (env DEEPSEEK_API_KEY or .seekforge/config.json)");
+    // A provider variant runs against a different vendor entirely, so it brings
+    // its own key and must NOT inherit a baseUrl written for the configured
+    // one. Without the override this is exactly the configured provider.
+    const provider = options.provider ?? config.provider;
+    const keyEnv = apiKeyEnvVar(provider);
+    const apiKey = options.provider === undefined ? config.apiKey : process.env[keyEnv];
+    if (!apiKey) {
+      throw new Error(
+        `no API key configured for provider "${provider ?? "deepseek"}" (env ${keyEnv} or .seekforge/config.json)`,
+      );
     }
     // Provider construction shared with the app factories (core buildProvider).
     // The rest of the skeleton deliberately stays NARROWER than the apps' core
@@ -22,9 +31,9 @@ export function createDefaultAgentFactory(config: EvalConfig, options: AgentBuil
     // eval event streams), no thinking controls, and providerForModel only
     // when a planModel variant asks for it — without the reasoner fallback.
     const providerInput = {
-      provider: config.provider,
-      apiKey: config.apiKey,
-      baseUrl: config.baseUrl,
+      provider,
+      apiKey,
+      ...(options.provider === undefined ? { baseUrl: config.baseUrl } : {}),
       ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
     };
     const deps: AgentCoreDeps = {

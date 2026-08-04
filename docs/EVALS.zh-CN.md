@@ -114,7 +114,9 @@ Desktop 的 **Eval 趋势** 面板通过 `GET /api/evals/trends?limit=<1..200>`
 **`verify-gate`**（启用自验证 finalize 门禁，`verifyCommand=npm test`）、
 **`no-auto-verify`**（verify-gate 但仅提示不强制）、**`no-retrieval`**（禁用
 任务相关候选清单）、**`review-gate`**（启用 `finalizeReview`）、
-**`model-pro`**（在 `deepseek-v4-pro` 下运行）、**`no-progress-guard`**（启用
+**`model-pro`**（在 `deepseek-v4-pro` 下运行）、**`provider-anthropic`**（把同一批任务
+放到 Claude 上、走 Anthropic Messages 协议运行 —— 需要 `ANTHROPIC_API_KEY`；它自带
+endpoint 和模型，不复用已配置的那一套）、**`no-progress-guard`**（启用
 过早结束防护）、**`context-tight`**（将上下文窗口收窄到 `32000` token 以强制
 更早压缩）以及 **`verify-and-review`**（叠加自验证 `npm test` + 自动运行 +
 最终 diff 自审查）。用某个开关与 `control` 做 A/B，例如 `--ab control,verify-gate`。

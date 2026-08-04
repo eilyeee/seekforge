@@ -32,6 +32,16 @@ describe("variant registry", () => {
     expect(out.taskSuffix).toBe("keep");
   });
 
+  it("provider-anthropic switches vendor and model together", () => {
+    // A model id only means something to the provider that serves it, so a
+    // provider arm that changed one without the other would fail at the first
+    // request rather than measure anything.
+    const out = getVariant("provider-anthropic").apply({ taskSuffix: "keep" });
+    expect(out.provider).toBe("anthropic");
+    expect(out.model).toMatch(/^claude-/);
+    expect(out.taskSuffix).toBe("keep");
+  });
+
   it("apply never mutates the input base", () => {
     const base: AgentBuildOptions = {};
     getVariant("terse-prompt").apply(base);

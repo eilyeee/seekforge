@@ -11,6 +11,8 @@
  * input (so the same base can be reused across variants in one A/B run).
  */
 
+import { PROVIDER_PRESETS } from "@seekforge/core";
+
 /**
  * The knobs a variant may transform. A subset of core's AgentCoreDeps that the
  * factory understands, plus harness-only task shaping. All optional; absent
@@ -38,6 +40,14 @@ export type AgentBuildOptions = {
    * the round-52 transparent levers are expected to help a weaker model more.
    */
   model?: string;
+  /**
+   * Run against a different provider preset entirely (its endpoint, its wire
+   * protocol, its own API key from that provider's environment variable). The
+   * configured `baseUrl` is NOT carried over — it belongs to the provider it
+   * was written for. Pair with `model`, since a model id is only meaningful to
+   * the provider that serves it.
+   */
+  provider?: string;
   /** Inject project-memory brief (default true). The no-memory variant sets false. */
   injectMemory?: boolean;
   /** Self-verification command (AgentCoreDeps.verifyCommand). The verify-gate variant sets it. */
@@ -166,6 +176,15 @@ export const VARIANTS: Variant[] = [
       "A/B vs control to see how much the model tier alone moves results (and re-run a capability " +
       "A/B under it to check whether a transparent lever helps the weaker model more).",
     apply: (base) => ({ ...base, model: "deepseek-v4-pro" }),
+  },
+  {
+    name: "provider-anthropic",
+    describe:
+      "Runs the suite against Claude over the Anthropic Messages protocol instead of the configured provider " +
+      "(needs ANTHROPIC_API_KEY). A/B vs control answers 'is the other provider worth it on this repo' with " +
+      "measured turns, cost and pass rate instead of an opinion — and exercises a second wire protocol end to end.",
+    // The model comes from the preset catalog so the two never drift apart.
+    apply: (base) => ({ ...base, provider: "anthropic", model: PROVIDER_PRESETS["anthropic"]!.models[0]! }),
   },
   {
     name: "context-tight",
