@@ -43,6 +43,13 @@ export type ProviderCapabilities = {
   costAccounting: boolean;
   /** Provider exposes a /user/balance endpoint (DeepSeek only). */
   balance: boolean;
+  /**
+   * The protocol can carry images in a request. Unset means it cannot, which
+   * is the honest default: an image sent to a text-only endpoint is a 400, and
+   * one silently dropped is worse — the model answers about a screenshot it
+   * never saw.
+   */
+  images?: boolean;
 };
 
 /** Full DeepSeek-direct capability set (the default when `capabilities` is unset). */

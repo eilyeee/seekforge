@@ -196,6 +196,12 @@ export type ToolResult<T = unknown> = {
     /** run_command: the command was rerun without the OS sandbox after a denial. */
     sandboxEscalated?: boolean;
   };
+  /**
+   * Images this tool produced, to be attached to the result the model sees.
+   * A tool always offers them; whether they travel is the provider's answer,
+   * not the tool's.
+   */
+  images?: ChatImage[];
 };
 
 /** What gets advertised to the model. */
@@ -219,6 +225,34 @@ export type ProviderToolCall = {
   argumentsJson: string;
 };
 
+/**
+ * An image attached to a turn. Held as bytes rather than a path because the
+ * message is what gets replayed: a path is only meaningful while the file is
+ * still there, and a resumed session is exactly the case where it is not.
+ */
+export type ChatImage = {
+  /** Narrow on purpose — these are the formats every vision model accepts. */
+  mediaType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+  /** Raw base64, no data: prefix. */
+  dataBase64: string;
+  /** Short human label for transcripts and UIs ("browser screenshot"). */
+  label?: string;
+};
+
+/**
+ * Opaque blocks a protocol emitted for this turn and requires back verbatim on
+ * the next one — reasoning blocks with their signatures, for instance.
+ *
+ * `protocol` is load-bearing, not decoration: blocks are only meaningful to the
+ * wire protocol that produced them, and a session resumed against a different
+ * provider must not replay them. Nothing outside a protocol adapter may read
+ * or construct `blocks`.
+ */
+export type ProviderBlocks = {
+  protocol: string;
+  blocks: unknown[];
+};
+
 export type ChatMessage = {
   role: ChatRole;
   content: string;
@@ -226,6 +260,14 @@ export type ChatMessage = {
   toolCallId?: string;
   /** Set on role:"assistant" messages that requested tool calls. */
   toolCalls?: ProviderToolCall[];
+  /**
+   * Images that belong to this turn (a screenshot answering a tool call, a
+   * picture the user attached). Sent only to providers whose protocol can
+   * carry them; the rest say so in text rather than dropping them silently.
+   */
+  images?: ChatImage[];
+  /** See ProviderBlocks. Written and read only by the protocol named in it. */
+  providerBlocks?: ProviderBlocks;
 };
 
 export type TokenUsage = {
@@ -287,6 +329,12 @@ export type ChatResponse = {
   finishReason: ChatFinishReason;
   /** Chain-of-thought text (DeepSeek V4 thinking mode). NEVER sent back. */
   reasoningContent?: string;
+  /**
+   * Protocol blocks this turn produced that the next request must carry back
+   * verbatim (see ProviderBlocks). The loop stores them on the assistant
+   * message and never looks inside.
+   */
+  providerBlocks?: ProviderBlocks;
 };
 
 // ---------------------------------------------------------------------------

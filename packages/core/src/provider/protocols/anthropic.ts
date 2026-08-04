@@ -25,7 +25,13 @@
  * framed — is imported, not restated.
  */
 
-import type { ChatFinishReason, ChatMessage, ProviderToolCall, ToolDefinitionForModel } from "@seekforge/shared";
+import type {
+  ChatFinishReason,
+  ChatImage,
+  ChatMessage,
+  ProviderToolCall,
+  ToolDefinitionForModel,
+} from "@seekforge/shared";
 import type { ModelPricing } from "../constants.js";
 import { isRecord } from "../../util/guards.js";
 import { DeepSeekApiError } from "../http.js";
@@ -97,11 +103,24 @@ export const DEFAULT_ANTHROPIC_MAX_TOKENS = 16_000;
 
 type CacheControl = { cache_control?: { readonly type: "ephemeral" } };
 
+type AnthropicImageBlock = {
+  type: "image";
+  source: { type: "base64"; media_type: string; data: string };
+};
+
 type AnthropicContentBlock = CacheControl &
   (
     | { type: "text"; text: string }
+    | AnthropicImageBlock
     | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
-    | { type: "tool_result"; tool_use_id: string; content: string }
+    | {
+        type: "tool_result";
+        tool_use_id: string;
+        content: string | Array<{ type: "text"; text: string } | AnthropicImageBlock>;
+      }
+    // A block this protocol emitted and requires back verbatim: replayed as
+    // received, never inspected, never rebuilt.
+    | { type: string; [key: string]: unknown }
   );
 
 type AnthropicMessage = { role: "user" | "assistant"; content: string | AnthropicContentBlock[] };
@@ -120,6 +139,35 @@ function parseToolInput(argumentsJson: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function imageBlock(image: ChatImage): AnthropicImageBlock {
+  return { type: "image", source: { type: "base64", media_type: image.mediaType, data: image.dataBase64 } };
+}
+
+/**
+ * Blocks this protocol emitted earlier in the conversation, handed back exactly
+ * as they arrived.
+ *
+ * Reasoning blocks carry a signature the server checks, so they cannot be
+ * rebuilt from the text SeekForge keeps — either the original block goes back
+ * or the turn is rejected. The protocol tag is what makes this safe to persist:
+ * a session resumed against another provider skips blocks it did not write.
+ */
+function replayedBlocks(message: ChatMessage): AnthropicContentBlock[] {
+  const carried = message.providerBlocks;
+  if (carried === undefined || carried.protocol !== "anthropic") return [];
+  return carried.blocks
+    .filter(
+      (block): block is Record<string, unknown> =>
+        // Only the block types this protocol actually emits go back out. A
+        // persisted session is a file, and a file can be edited: without the
+        // filter a forged `{type:"text"}` would be replayed as something the
+        // model itself had said.
+        isRecord(block) && typeof block["type"] === "string" && REPLAYABLE_BLOCK_TYPES.has(block["type"]),
+    )
+    .slice(0, MAX_REPLAYABLE_BLOCKS)
+    .map((block) => block as AnthropicContentBlock);
 }
 
 /**
@@ -150,18 +198,24 @@ export function toAnthropicMessages(messages: ChatMessage[]): { system?: string;
     }
     if (m.role === "tool") {
       if (m.toolCallId === undefined) continue;
+      const text = m.content === "" ? "(no output)" : m.content;
       pendingToolResults.push({
         type: "tool_result",
         tool_use_id: m.toolCallId,
         // A tool that returned nothing still has to say so: an empty block is
-        // rejected, and silently dropping the result orphans the call.
-        content: m.content === "" ? "(no output)" : m.content,
+        // rejected, and silently dropping the result orphans the call. An image
+        // the tool produced rides inside the result it belongs to, which is
+        // what lets a screenshot answer the call that took it.
+        content:
+          m.images && m.images.length > 0 ? [{ type: "text" as const, text }, ...m.images.map(imageBlock)] : text,
       });
       continue;
     }
     flushToolResults();
     if (m.role === "assistant") {
-      const blocks: AnthropicContentBlock[] = [];
+      // Replayed blocks come FIRST: this protocol requires a turn's reasoning
+      // to precede the text and tool calls it produced.
+      const blocks: AnthropicContentBlock[] = replayedBlocks(m);
       if (m.content) blocks.push({ type: "text", text: m.content });
       for (const call of m.toolCalls ?? []) {
         blocks.push({ type: "tool_use", id: call.id, name: call.name, input: parseToolInput(call.argumentsJson) });
@@ -171,7 +225,13 @@ export function toAnthropicMessages(messages: ChatMessage[]): { system?: string;
       if (blocks.length > 0) out.push({ role: "assistant", content: blocks });
       continue;
     }
-    if (m.content) out.push({ role: "user", content: m.content });
+    if (m.images && m.images.length > 0) {
+      const blocks: AnthropicContentBlock[] = m.images.map(imageBlock);
+      if (m.content) blocks.unshift({ type: "text", text: m.content });
+      out.push({ role: "user", content: blocks });
+    } else if (m.content) {
+      out.push({ role: "user", content: m.content });
+    }
   }
   flushToolResults();
 
@@ -295,10 +355,36 @@ type BlockCollector = {
   reasoningContent: string;
   toolBlocks: Map<number, { id: string; name: string; argumentsJson: string }>;
   totalToolArgumentChars: number;
+  /**
+   * Reasoning blocks exactly as the server sent them, kept whole because the
+   * next request has to hand them back and their signature is what the server
+   * checks. Never read — only carried.
+   */
+  replayable: Record<string, unknown>[];
 };
 
 function createBlockCollector(): BlockCollector {
-  return { content: "", reasoningContent: "", toolBlocks: new Map(), totalToolArgumentChars: 0 };
+  return { content: "", reasoningContent: "", toolBlocks: new Map(), totalToolArgumentChars: 0, replayable: [] };
+}
+
+/**
+ * Blocks a turn must return verbatim on the next request. Only reasoning blocks
+ * qualify: everything else in a response is reconstructed from the fields
+ * SeekForge already keeps.
+ */
+const REPLAYABLE_BLOCK_TYPES = new Set(["thinking", "redacted_thinking"]);
+
+/** How many reasoning blocks one turn may carry forward, so history stays bounded. */
+const MAX_REPLAYABLE_BLOCKS = 64;
+
+function collectReplayable(collector: BlockCollector, block: Record<string, unknown>): void {
+  if (typeof block["type"] !== "string" || !REPLAYABLE_BLOCK_TYPES.has(block["type"])) return;
+  if (collector.replayable.length >= MAX_REPLAYABLE_BLOCKS) return;
+  collector.replayable.push(block);
+}
+
+function carriedBlocks(collector: BlockCollector): { protocol: string; blocks: unknown[] } | undefined {
+  return collector.replayable.length > 0 ? { protocol: "anthropic", blocks: collector.replayable } : undefined;
 }
 
 function addText(collector: BlockCollector, text: string): void {
@@ -375,8 +461,9 @@ export function mapAnthropicResponse(
     if (!isRecord(block)) continue;
     if (block["type"] === "text" && typeof block["text"] === "string") {
       addText(collector, block["text"]);
-    } else if (block["type"] === "thinking" && typeof block["thinking"] === "string") {
-      addThinking(collector, block["thinking"]);
+    } else if (block["type"] === "thinking" || block["type"] === "redacted_thinking") {
+      if (typeof block["thinking"] === "string") addThinking(collector, block["thinking"]);
+      collectReplayable(collector, block);
     } else if (block["type"] === "tool_use") {
       const entry = toolBlock(collector, toolIndex++);
       if (typeof block["id"] === "string") entry.id = block["id"];
@@ -388,12 +475,14 @@ export function mapAnthropicResponse(
   if (rawStopReason === "refusal" && collector.content === "") {
     addText(collector, refusalNotice(json["stop_details"]));
   }
+  const carried = carriedBlocks(collector);
   return {
     content: collector.content,
     toolCalls: collectedToolCalls(collector),
     finishReason: mapAnthropicStopReason(rawStopReason),
     usage: mapAnthropicUsage(json["usage"], model, capabilities, modelPricing),
     ...(collector.reasoningContent ? { reasoningContent: collector.reasoningContent } : {}),
+    ...(carried ? { providerBlocks: carried } : {}),
   };
 }
 
@@ -401,6 +490,13 @@ export function mapAnthropicResponse(
 
 type AnthropicStreamState = SseFrameState & {
   collector: BlockCollector;
+  /**
+   * Reasoning blocks under construction, by block index. A streamed thinking
+   * block arrives as a start, some deltas and a signature, and only the
+   * assembled whole is replayable — a block missing its signature is rejected
+   * on the next request.
+   */
+  openThinking: Map<number, { type: string; thinking: string; signature?: string; data?: string }>;
   rawStopReason: string | null;
   stopDetails: unknown;
   usage: AnthropicUsage;
@@ -435,7 +531,16 @@ function processEvent(
     }
     case "content_block_start": {
       const block = event["content_block"];
-      if (!isRecord(block) || block["type"] !== "tool_use") return;
+      if (!isRecord(block)) return;
+      if (block["type"] === "thinking" || block["type"] === "redacted_thinking") {
+        state.openThinking.set(blockIndex(event["index"]), {
+          type: block["type"],
+          thinking: typeof block["thinking"] === "string" ? block["thinking"] : "",
+          ...(typeof block["data"] === "string" ? { data: block["data"] } : {}),
+        });
+        return;
+      }
+      if (block["type"] !== "tool_use") return;
       const entry = toolBlock(state.collector, blockIndex(event["index"]));
       if (typeof block["id"] === "string") entry.id = block["id"];
       if (typeof block["name"] === "string") entry.name = block["name"];
@@ -451,7 +556,16 @@ function processEvent(
       }
       if (delta["type"] === "thinking_delta" && typeof delta["thinking"] === "string" && delta["thinking"].length > 0) {
         addThinking(state.collector, delta["thinking"]);
+        const open = state.openThinking.get(blockIndex(event["index"]));
+        if (open) open.thinking += delta["thinking"];
         onReasoningDelta?.(delta["thinking"]);
+        return;
+      }
+      if (delta["type"] === "signature_delta" && typeof delta["signature"] === "string") {
+        // The signature is the whole point of carrying the block: without it
+        // the block cannot be replayed, so an unsigned one is not collected.
+        const open = state.openThinking.get(blockIndex(event["index"]));
+        if (open) open.signature = (open.signature ?? "") + delta["signature"];
         return;
       }
       if (delta["type"] === "input_json_delta" && typeof delta["partial_json"] === "string") {
@@ -469,6 +583,17 @@ function processEvent(
       mergeUsage(state, event["usage"]);
       return;
     }
+    case "content_block_stop": {
+      const open = state.openThinking.get(blockIndex(event["index"]));
+      if (open === undefined) return;
+      state.openThinking.delete(blockIndex(event["index"]));
+      // A redacted block has no signature of its own; a thinking block without
+      // one never finished arriving and would be rejected if sent back.
+      if (open.type === "redacted_thinking" || open.signature !== undefined) {
+        collectReplayable(state.collector, { ...open });
+      }
+      return;
+    }
     case "message_stop":
       state.done = true;
       return;
@@ -480,7 +605,7 @@ function processEvent(
       throw new ProviderProtocolError(`Provider protocol error: stream reported an error${message}`);
     }
     default:
-      return; // ping, content_block_stop, and anything added later
+      return; // ping and anything added later
   }
 }
 
@@ -492,6 +617,7 @@ function openAnthropicStream(
   const state: AnthropicStreamState = {
     ...createSseFrameState(),
     collector: createBlockCollector(),
+    openThinking: new Map(),
     rawStopReason: null,
     stopDetails: undefined,
     usage: {},
@@ -519,6 +645,7 @@ function openAnthropicStream(
       if (state.rawStopReason === "refusal" && state.collector.content === "") {
         addText(state.collector, refusalNotice(state.stopDetails));
       }
+      const carried = carriedBlocks(state.collector);
       return {
         content: state.collector.content,
         toolCalls,
@@ -530,6 +657,7 @@ function openAnthropicStream(
             : mapAnthropicStopReason(state.rawStopReason),
         usage: mapAnthropicUsage(state.usage, model, capabilities, modelPricing),
         ...(state.collector.reasoningContent ? { reasoningContent: state.collector.reasoningContent } : {}),
+        ...(carried ? { providerBlocks: carried } : {}),
       };
     },
   };
@@ -562,15 +690,9 @@ export const anthropicProtocol: WireProtocol = {
     // sampling parameters outright, so forwarding one would fail every request
     // on exactly the models this preset exists to reach.
     if (!capabilities.thinking) return body;
-    // KNOWN LIMITATION. When thinking is on, this protocol expects the client to
-    // echo the assistant turn's thinking blocks back with the tool results that
-    // answer it. A SeekForge ChatMessage has nowhere to keep them (role,
-    // content, toolCalls, toolCallId — see @seekforge/shared), so they are not
-    // replayed, and a tool-using turn may be rejected for the missing block.
-    // Enabling thinking on a model whose default is off is therefore an opt-in
-    // with that caveat; unset keeps the endpoint's own default, exactly as on
-    // the DeepSeek line. Carrying the blocks through history is the real fix and
-    // needs a shared type change.
+    // When thinking is on, this protocol expects the assistant turn's reasoning
+    // blocks back alongside the tool results that answer it — see
+    // ChatMessage.providerBlocks, which is how they survive the round trip.
     if (thinking.thinking !== undefined) {
       // Without display: "summarized" the thinking blocks stream with empty
       // text on current models, so the reasoning pane would sit blank for the

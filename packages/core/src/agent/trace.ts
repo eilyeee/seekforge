@@ -317,8 +317,48 @@ function parseChatMessage(value: unknown): ChatMessage | undefined {
   ) {
     return undefined;
   }
+  if (!parseChatImages(value["images"]) || !parseProviderBlocks(value["providerBlocks"])) return undefined;
   const { ts: _ts, ...message } = value;
   return message as ChatMessage;
+}
+
+/** Media types an attached image may claim; anything else is not a picture we send. */
+const IMAGE_MEDIA_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+/** Base64 ceiling per attached image, matching the capture-side limit plus base64 overhead. */
+const MAX_IMAGE_BASE64_CHARS = 6 * 1024 * 1024;
+const MAX_IMAGES_PER_MESSAGE = 8;
+const MAX_PROVIDER_BLOCKS = 64;
+
+/**
+ * A replayed message goes straight into the next provider request, so anything
+ * it carries is attacker-controlled the moment a session file is. These two
+ * fields are new carriers and are validated for the same reason the rest of the
+ * message is: a forged block would otherwise be handed to the model as if the
+ * model had written it.
+ */
+function parseChatImages(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value) || value.length > MAX_IMAGES_PER_MESSAGE) return false;
+  return value.every(
+    (image) =>
+      isRecord(image) &&
+      typeof image["mediaType"] === "string" &&
+      IMAGE_MEDIA_TYPES.has(image["mediaType"]) &&
+      typeof image["dataBase64"] === "string" &&
+      image["dataBase64"].length > 0 &&
+      image["dataBase64"].length <= MAX_IMAGE_BASE64_CHARS &&
+      (image["label"] === undefined || typeof image["label"] === "string"),
+  );
+}
+
+function parseProviderBlocks(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!isRecord(value) || typeof value["protocol"] !== "string") return false;
+  const blocks = value["blocks"];
+  if (!Array.isArray(blocks) || blocks.length > MAX_PROVIDER_BLOCKS) return false;
+  // Structural only: WHICH block types may be replayed is the protocol's own
+  // rule (see protocols/anthropic.ts), enforced again where they are rendered.
+  return blocks.every((block) => isRecord(block) && typeof block["type"] === "string");
 }
 
 export function writeSessionMeta(workspace: string, meta: SessionMeta): void {

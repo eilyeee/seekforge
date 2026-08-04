@@ -89,14 +89,30 @@ export function supportsThinking(model: string): boolean {
 
 // --- request mapping --------------------------------------------------------
 
+/**
+ * An image cannot travel on this protocol as SeekForge models it, and a model
+ * asked about a screenshot it never received answers confidently about nothing.
+ * Saying so in the text is the smallest honest substitute.
+ */
+function noteOmittedImages(content: string, images: ChatMessage["images"]): string {
+  if (images === undefined || images.length === 0) return content;
+  const what = images.length === 1 ? "1 image" : `${images.length} images`;
+  const note = `[${what} omitted: this provider cannot receive images]`;
+  return content
+    ? `${content}
+${note}`
+    : note;
+}
+
 export function toWireMessages(messages: ChatMessage[]): WireMessage[] {
   // Unanswered tool calls and orphan results are dropped first (see
   // tool-pairing.ts) — the OpenAI-compatible API rejects either.
   return withPairedToolCalls(messages).flatMap((m) => {
+    const content = noteOmittedImages(m.content, m.images);
     if (m.role === "tool") {
-      return m.toolCallId === undefined ? [] : [{ role: m.role, content: m.content, tool_call_id: m.toolCallId }];
+      return m.toolCallId === undefined ? [] : [{ role: m.role, content, tool_call_id: m.toolCallId }];
     }
-    const wire: WireMessage = { role: m.role, content: m.content };
+    const wire: WireMessage = { role: m.role, content };
     if (m.toolCalls && m.toolCalls.length > 0) {
       wire.tool_calls = m.toolCalls.map((c) => ({
         id: c.id,

@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { ChatImage } from "@seekforge/shared";
 import { z } from "zod";
 import { ToolError } from "../errors.js";
 import { defineTool } from "../registry.js";
@@ -20,11 +21,20 @@ const screenshotSchema = z.object({
     .describe("Optional workspace-relative path for the PNG (default: .seekforge/uploads/screenshot-<ts>.png)."),
 });
 
+/**
+ * Ceiling on an attached screenshot. Base64 inflates it by a third, and the
+ * result is written into the session transcript and resent on later turns until
+ * micro-compaction clears it — so the bound is about what a conversation can
+ * afford to carry, not what the API would accept. A full-page PNG is normally
+ * well under this; a page that renders to megabytes stays a path.
+ */
+const MAX_ATTACHED_IMAGE_BYTES = 1024 * 1024;
+
 export const browserScreenshot = defineTool({
   name: "browser_screenshot",
   description:
     "Capture a full-page PNG of the currently loaded browser page and save it under the workspace (default .seekforge/uploads/, or a given path); returns the saved path. " +
-    "Read-only on the page — call browser_navigate first. Pass the path to image_analyze to inspect it visually.",
+    "Read-only on the page — call browser_navigate first. On a provider that accepts images the screenshot is attached to this result and you can simply look at it; otherwise pass the path to image_analyze.",
   schema: screenshotSchema,
   // Writes a PNG artifact into the workspace but takes no new outward action;
   // classify as "execute" (the page was already loaded via a confirmed navigate).
@@ -52,9 +62,31 @@ export const browserScreenshot = defineTool({
         `Screenshot failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    return { data: { path: rel } };
+    // Attach the bytes, not just the path. A path is only useful while the file
+    // is still there and only to a tool that can open it; the attachment is
+    // what lets a model with eyes see the page directly. Providers that cannot
+    // carry images ignore it (and say so), so this costs them nothing.
+    const image = attachScreenshot(resolved, rel);
+    return { data: { path: rel }, ...(image ? { images: [image] } : {}) };
   },
 });
+
+/**
+ * Read a just-written screenshot back as an attachable image, or nothing.
+ *
+ * Bounded and best effort on purpose: a screenshot too large to attach is
+ * still on disk and still reachable through image_analyze, so failing the whole
+ * tool call over the attachment would take away more than it gives.
+ */
+function attachScreenshot(resolved: string, rel: string): ChatImage | undefined {
+  try {
+    const bytes = fs.statSync(resolved).size;
+    if (bytes <= 0 || bytes > MAX_ATTACHED_IMAGE_BYTES) return undefined;
+    return { mediaType: "image/png", dataBase64: fs.readFileSync(resolved).toString("base64"), label: rel };
+  } catch {
+    return undefined;
+  }
+}
 
 export const browserSnapshot = defineTool({
   name: "browser_snapshot",

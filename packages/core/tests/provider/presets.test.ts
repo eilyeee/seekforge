@@ -105,6 +105,8 @@ describe("resolveProviderPreset", () => {
       cacheHitTokens: true,
       costAccounting: true,
       balance: false,
+      // The only preset whose protocol can carry an image today.
+      images: true,
     });
     expect(preset?.models).toContain("claude-opus-5");
     expect(resolveProviderPreset("Anthropic")).toBe(preset);

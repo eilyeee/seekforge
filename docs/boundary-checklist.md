@@ -4490,6 +4490,21 @@ and the gap only appears on the second turn of a specific feature combination.
   `ChatMessage` has nowhere to keep them; enabling thinking is opt-in with that
   caveat documented.
 
+## 409. Rebuilding a record field-by-field drops whatever is added later
+
+A transform that constructs its output by listing the fields it keeps is
+complete only on the day it is written. The next field added to the type is
+silently absent from every record that passes through, and nothing fails: the
+type still checks, because every listed field is still there.
+
+- **Do:** spread the input and override only what the function is actually
+  about. Reserve an explicit field list for the case where dropping the unknown
+  is the point (a trust boundary), and say so.
+- **Caught:** `packages/core/src/provider/tool-pairing.ts` rebuilt each message
+  from role/content/toolCallId/toolCalls, so the images and reasoning blocks a
+  turn later gained never reached the request — a screenshot silently became a
+  screenshot the model could not see.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

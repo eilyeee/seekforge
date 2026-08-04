@@ -467,3 +467,27 @@ describe("user-supplied modelPricing (cost on non-DeepSeek providers)", () => {
     expect(res.usage.costUsd).toBeCloseTo((1000 * 2 + 500 * 6) / 1_000_000, 12);
   });
 });
+
+describe("images on a protocol that cannot carry them", () => {
+  it("says the image was omitted instead of dropping it silently", () => {
+    // A model asked about a screenshot it never received answers confidently
+    // about nothing; the note is the smallest honest substitute.
+    const wire = toWireMessages([
+      { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "browser_screenshot", argumentsJson: "{}" }] },
+      {
+        role: "tool",
+        content: '{"path":"shot.png"}',
+        toolCallId: "c1",
+        images: [{ mediaType: "image/png", dataBase64: "AAAA" }],
+      },
+    ]);
+    const result = wire.find((m) => m.role === "tool");
+    expect(result?.content).toContain('{"path":"shot.png"}');
+    expect(result?.content).toContain("1 image omitted");
+  });
+
+  it("leaves a message without images byte-for-byte unchanged", () => {
+    const [wire] = toWireMessages([{ role: "user", content: "plain" }]);
+    expect(wire).toEqual({ role: "user", content: "plain" });
+  });
+});

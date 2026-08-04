@@ -51,7 +51,7 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
   anthropic: {
     baseUrl: "https://api.anthropic.com/v1",
     protocol: "anthropic",
-    capabilities: { thinking: true, cacheHitTokens: true, costAccounting: true, balance: false },
+    capabilities: { thinking: true, cacheHitTokens: true, costAccounting: true, balance: false, images: true },
     models: ANTHROPIC_MODELS,
   },
   // The presets below are generic OpenAI-compatible endpoints. Like `ark`, they

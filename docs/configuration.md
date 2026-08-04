@@ -176,12 +176,12 @@ What differs from the OpenAI-compatible presets:
 | `temperature` | Never sent — the current Claude models reject sampling parameters |
 | `maxTokens` | Required by the API, so an unset value becomes a default (16000) rather than being omitted |
 
-> **Thinking and tool calls.** When thinking is on, this API expects the
-> assistant turn's thinking blocks to be sent back alongside the tool results
-> that answer it. SeekForge's message history has nowhere to keep them, so they
-> are not replayed and a tool-using turn may be rejected for the missing block.
-> If a run fails that way, set `"thinking": false` (accepted on every current
-> Claude model except `claude-fable-5`, which cannot turn thinking off).
+> **Images.** On this provider a screenshot goes straight to the model:
+> `browser_screenshot` attaches the PNG to the tool result that produced it, so
+> the agent can look at the page instead of describing it through a second
+> model. Providers whose protocol cannot carry an image say so in the result
+> text rather than dropping it silently, and `image_analyze` remains the way to
+> inspect an image on those.
 
 ### What "OpenAI-compatible" actually covers
 

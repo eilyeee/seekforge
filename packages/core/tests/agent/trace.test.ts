@@ -183,6 +183,45 @@ describe("loadSessionMessages robustness", () => {
     expect(messages[0]?.content).toBe("hello");
   });
 
+  it.each([
+    // A replayed message goes straight into the next provider request, so a
+    // forged carrier is a forged request. An image that is not one of the
+    // formats we send, or a block with no type, must stop the replay exactly
+    // like a malformed role does.
+    '{"role":"user","content":"x","images":"not-an-array"}',
+    '{"role":"user","content":"x","images":[{"mediaType":"image/svg+xml","dataBase64":"AAAA"}]}',
+    '{"role":"user","content":"x","images":[{"mediaType":"image/png"}]}',
+    '{"role":"assistant","content":"x","providerBlocks":{"blocks":[]}}',
+    '{"role":"assistant","content":"x","providerBlocks":{"protocol":"anthropic","blocks":"nope"}}',
+    '{"role":"assistant","content":"x","providerBlocks":{"protocol":"anthropic","blocks":[{"no":"type"}]}}',
+  ])("stops before a message carrying a malformed attachment %s", (invalid) => {
+    const dir = join(ws, ".seekforge", "sessions", "s2b");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "messages.jsonl"),
+      [JSON.stringify({ role: "user", content: "before" }), invalid].join("\n"),
+    );
+    expect(loadSessionMessages(ws, "s2b")).toEqual([{ role: "user", content: "before" }]);
+  });
+
+  it("replays a well-formed image and reasoning block", () => {
+    const dir = join(ws, ".seekforge", "sessions", "s2c");
+    mkdirSync(dir, { recursive: true });
+    const image = { mediaType: "image/png", dataBase64: "AAAA", label: "shot.png" };
+    const blocks = { protocol: "anthropic", blocks: [{ type: "thinking", thinking: "t", signature: "s" }] };
+    writeFileSync(
+      join(dir, "messages.jsonl"),
+      [
+        JSON.stringify({ role: "user", content: "look", images: [image] }),
+        JSON.stringify({ role: "assistant", content: "ok", providerBlocks: blocks }),
+      ].join("\n"),
+    );
+    expect(loadSessionMessages(ws, "s2c")).toEqual([
+      { role: "user", content: "look", images: [image] },
+      { role: "assistant", content: "ok", providerBlocks: blocks },
+    ]);
+  });
+
   it.each(["null", "42", '"text"', "[]", '{"role":"user"}', '{"role":"bogus","content":"x"}'])(
     "stops before a valid-JSON non-message record %s",
     (invalid) => {

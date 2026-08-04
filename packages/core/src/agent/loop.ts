@@ -1306,6 +1306,10 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               role: "assistant",
               content: res.content,
               toolCalls: res.toolCalls,
+              // Opaque protocol blocks (reasoning with its signature) ride with
+              // the turn that produced them: the next request has to hand them
+              // back, and only the protocol that wrote them can read them.
+              ...(res.providerBlocks ? { providerBlocks: res.providerBlocks } : {}),
             };
             messages.push(assistantMsg);
             trace.message(assistantMsg);
@@ -1524,10 +1528,15 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             // Tool results are appended in the ORIGINAL call order regardless
             // of dispatch completion order (the model matches by toolCallId).
             for (let i = 0; i < turnCalls.length; i++) {
+              const images = callResults[i]!.images;
               const toolMsg: ChatMessage = {
                 role: "tool",
                 content: toolResultForModel(callResults[i]!, limits.toolOutputMaxChars),
                 toolCallId: turnCalls[i]!.id,
+                // A screenshot belongs to the call that took it. Whether it
+                // reaches the model is the provider's answer, not the tool's —
+                // a protocol that cannot carry images says so in the text.
+                ...(images && images.length > 0 ? { images } : {}),
               };
               messages.push(toolMsg);
               trace.message(toolMsg);

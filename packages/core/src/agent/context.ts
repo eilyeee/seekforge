@@ -63,12 +63,37 @@ const PER_MESSAGE_OVERHEAD = 8;
  */
 const messageTokensCache = new WeakMap<ChatMessage, number>();
 
+/**
+ * What an attached image costs the context window.
+ *
+ * Providers charge by rendered tile count, which depends on dimensions this
+ * layer never sees — but an image is emphatically not free, and counting it as
+ * zero is how a "comfortably within budget" history overflows on the request
+ * that carries a screenshot. Derived from the encoded size, floored so a tiny
+ * icon still costs something and capped near the per-image ceiling of current
+ * vision models.
+ */
+const MIN_IMAGE_TOKENS = 400;
+const MAX_IMAGE_TOKENS = 4_800;
+const IMAGE_BASE64_CHARS_PER_TOKEN = 750;
+
+export function estimateImageTokens(image: { dataBase64: string }): number {
+  const derived = Math.ceil(image.dataBase64.length / IMAGE_BASE64_CHARS_PER_TOKEN);
+  return Math.min(MAX_IMAGE_TOKENS, Math.max(MIN_IMAGE_TOKENS, derived));
+}
+
 function estimateMessageTokens(m: ChatMessage): number {
   const cached = messageTokensCache.get(m);
   if (cached !== undefined) return cached;
   let total = PER_MESSAGE_OVERHEAD + estimateTokens(m.content);
   if (m.toolCalls) {
     for (const tc of m.toolCalls) total += estimateTokens(tc.argumentsJson) + 4;
+  }
+  for (const image of m.images ?? []) total += estimateImageTokens(image);
+  // Replayed protocol blocks are sent verbatim and are usually reasoning text,
+  // so they occupy the window like anything else the request carries.
+  for (const block of m.providerBlocks?.blocks ?? []) {
+    total += estimateTokens(typeof block === "string" ? block : JSON.stringify(block ?? ""));
   }
   messageTokensCache.set(m, total);
   return total;
@@ -238,8 +263,8 @@ function clearedNoteFor(call: ProviderToolCall | undefined): string {
 
 /**
  * Micro-compaction: blanks role:"tool" message contents OLDER than the last
- * `keepLastTurns` (default 2) user turns when they exceed 200 chars, replacing
- * them with a short JSON note. Cheaper than full compaction — assistant
+ * `keepLastTurns` (default 2) user turns when they exceed 200 chars — or carry
+ * an image, whatever their length — replacing them with a short JSON note. Cheaper than full compaction — assistant
  * reasoning and message structure stay intact, only stale tool payloads go.
  * Pure: returns a new array (input untouched) and the number of cleared
  * results. Idempotent — the replacement note is below the length threshold.
@@ -286,9 +311,16 @@ export function clearOldToolResults(
 
   let cleared = 0;
   const out = messages.map((m, i) => {
-    if (i >= boundary || m.role !== "tool" || m.content.length <= CLEAR_MIN_CHARS) return m;
+    if (i >= boundary || m.role !== "tool") return m;
+    // An attached image is the expensive half of a tool result and the half a
+    // short JSON payload hides: clearing the text while keeping the screenshot
+    // would leave the cost and remove the explanation. A result carrying one is
+    // therefore worth clearing however short its text is.
+    const carriesImage = (m.images?.length ?? 0) > 0;
+    if (!carriesImage && m.content.length <= CLEAR_MIN_CHARS) return m;
     cleared++;
-    return { ...m, content: clearedNoteFor(callsByResultIndex.get(i)) };
+    const { images: _cleared, ...rest } = m;
+    return { ...rest, content: clearedNoteFor(callsByResultIndex.get(i)) };
   });
   return cleared > 0 ? { messages: out, cleared } : { messages, cleared: 0 };
 }

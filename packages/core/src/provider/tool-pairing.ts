@@ -47,12 +47,12 @@ export function withPairedToolCalls(messages: ChatMessage[]): ChatMessage[] {
       keptToolMessages.add(resultIndex);
       return true;
     });
-    out.push({
-      role: m.role,
-      content: m.content,
-      ...(m.toolCallId !== undefined ? { toolCallId: m.toolCallId } : {}),
-      ...(kept.length > 0 ? { toolCalls: kept } : {}),
-    });
+    // Spread the message and override only what this function is about. Listing
+    // the fields to keep instead would silently drop every field added to
+    // ChatMessage afterwards — which is exactly what happened to the images and
+    // reasoning blocks a turn now carries.
+    const { toolCalls: _replaced, ...rest } = m;
+    out.push({ ...rest, ...(kept.length > 0 ? { toolCalls: kept } : {}) });
   }
   return out;
 }

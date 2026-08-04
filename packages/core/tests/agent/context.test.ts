@@ -554,3 +554,43 @@ describe("llmCompactSessionNow", () => {
     expect(loadSessionMessages(workspace, sessionId)).toHaveLength(conversation(2).length);
   });
 });
+
+describe("clearing a tool result that carried an image", () => {
+  const withImage = (): ChatMessage[] => [
+    { role: "user", content: "look" },
+    { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "browser_screenshot", argumentsJson: "{}" }] },
+    {
+      role: "tool",
+      content: '{"path":"a.png"}',
+      toolCallId: "c1",
+      images: [{ mediaType: "image/png", dataBase64: "A".repeat(5000) }],
+    },
+    { role: "user", content: "next" },
+    { role: "user", content: "next again" },
+  ];
+
+  it("drops the image with the text, however short the text is", () => {
+    // The screenshot is the expensive half and the JSON payload is short:
+    // clearing only the text would keep the whole cost and remove the reason.
+    const { messages, cleared } = clearOldToolResults(withImage(), 2);
+    expect(cleared).toBe(1);
+    const result = messages.find((m) => m.role === "tool")!;
+    expect(result.images).toBeUndefined();
+    expect(result.content).toContain("cleared");
+  });
+
+  it("counts an attached image against the context window", () => {
+    // A history that reports itself as tiny while carrying a megabyte of
+    // base64 is how a run overflows on the turn that took a screenshot.
+    const withoutImage: ChatMessage[] = [{ role: "tool", content: "x", toolCallId: "c1" }];
+    const carrying: ChatMessage[] = [
+      {
+        role: "tool",
+        content: "x",
+        toolCallId: "c1",
+        images: [{ mediaType: "image/png", dataBase64: "A".repeat(5000) }],
+      },
+    ];
+    expect(estimateMessagesTokens(carrying)).toBeGreaterThan(estimateMessagesTokens(withoutImage) + 300);
+  });
+});

@@ -164,11 +164,10 @@ seekforge config set model claude-opus-5
 | `temperature` | 从不发送 —— 当前的 Claude 模型会拒绝采样参数 |
 | `maxTokens` | API 要求必填，因此未设置时会取默认值（16000），而不是省略 |
 
-> **思考与工具调用。** 开启思考时，该 API 期望客户端把 assistant 轮次的 thinking
-> block 连同回应它的工具结果一起回传。SeekForge 的消息历史没有地方保存这些
-> block，因此不会回传；带工具调用的轮次可能因为缺少该 block 被拒绝。若运行因此
-> 失败，请设置 `"thinking": false`（当前所有 Claude 模型都接受，唯独
-> `claude-fable-5` 无法关闭思考）。
+> **图像。** 在该 provider 上截图会直接进入主模型：`browser_screenshot` 会把 PNG
+> 附到产生它的那条工具结果上，agent 可以直接「看」页面，而不必再借另一个模型转述。
+> 协议无法携带图像的 provider 会在结果文本里说明，而不是悄悄丢掉；在那些 provider
+> 上仍然用 `image_analyze` 查看图片。
 
 ### 「OpenAI 兼容」到底覆盖了什么
 
