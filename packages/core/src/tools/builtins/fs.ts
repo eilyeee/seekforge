@@ -170,7 +170,14 @@ const listFiles = defineTool({
         { path: args.path ?? ".", maxDepth: args.maxDepth ?? 10 },
       );
       return {
-        data: { entries: res.entries, count: res.entries.length, truncated: res.truncated },
+        // The same in-band sentinel the local walk appends. Without it the two
+        // backends of one tool answer differently: a runtime-backed session
+        // showed exactly 500 entries and nothing in the list saying so.
+        data: {
+          entries: res.truncated ? [...res.entries, `... [truncated at ${res.entries.length} entries]`] : res.entries,
+          count: res.entries.length,
+          truncated: res.truncated,
+        },
         meta: { truncated: res.truncated },
       };
     }

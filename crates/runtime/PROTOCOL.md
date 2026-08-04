@@ -86,6 +86,29 @@ Unparseable request lines get a response with `"id": null`, code
 - Permissions/approval live in the TypeScript dispatcher. The runtime's
   checks are a second line of defense, not the policy source.
 
+## Why enumeration is not a runtime method
+
+`search_text` and `glob` walk the tree in TypeScript even when a runtime is
+configured, and that is deliberate rather than an omission. Measured on this
+repository (20,813 files, warm runtime process, macOS):
+
+| | walk |
+|---|---|
+| TypeScript `readdirSync` recursion | 682 ms |
+| runtime `list_files` (cap lifted) + JSON round trip | 1877 ms |
+
+The Rust walk itself is faster; serializing ~22,000 paths as JSON and parsing
+them back in Node is not, and it dominates. Every method above returns a
+*bounded* payload — one file's contents, a 500-entry listing, a git diff — which
+is the shape that survives this boundary. Whole-repository enumeration is the
+shape that does not.
+
+There is a second reason to keep the regex in TypeScript: the tool accepts
+JavaScript regular expressions, and Rust's `regex` crate rejects lookahead and
+backreferences. A Rust-side matcher would accept a different language than the
+tool documents, and which one you got would depend on whether a runtime happened
+to be configured.
+
 ## Error codes
 
 `bad_request unknown_method outside_workspace sensitive_path exists no_match

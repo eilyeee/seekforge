@@ -119,6 +119,19 @@ describe.skipIf(!hasBinary)("rust runtime backend (integration)", () => {
     const entries = (r.data as { entries: string[] }).entries;
     expect(entries).toContain("visible.txt");
   });
+
+  it("marks a truncated listing in the list itself, as the local walk does", async () => {
+    // Both backends answer the same tool, so they have to answer it the same
+    // way. The runtime caps at 500 entries and reported `truncated: true` in a
+    // field beside the list — while the list itself looked like a complete
+    // directory of exactly 500 files.
+    for (let i = 0; i < 520; i++) writeFileSync(join(workspace, `f${i}.txt`), "x");
+    const r = await exec("list_files", {});
+    expect(r.ok).toBe(true);
+    const data = r.data as { entries: string[]; truncated: boolean };
+    expect(data.truncated).toBe(true);
+    expect(data.entries[data.entries.length - 1]).toMatch(/^\.\.\. \[truncated at \d+ entries\]$/);
+  });
 });
 
 if (!hasBinary) {
