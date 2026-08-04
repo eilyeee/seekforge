@@ -30,6 +30,7 @@
 
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { formatCommandLine } from "./runner.js";
 import type { AgentRunner, RunnerOptions, RunnerResult } from "./runner.js";
 
 /** Default runner image tag (built from the repo `Dockerfile`). */
@@ -132,8 +133,7 @@ export function buildDockerRunArgs(opts: DockerRunnerOptions): string[] {
 
 /** Render an argv as a copy-pasteable `docker …` command line (for `--check`). */
 export function formatDockerCommand(args: string[]): string {
-  const quote = (a: string): string => (/[\s"'$]/.test(a) ? JSON.stringify(a) : a);
-  return ["docker", ...args].map(quote).join(" ");
+  return formatCommandLine("docker", args);
 }
 
 /**

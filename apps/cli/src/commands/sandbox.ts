@@ -19,6 +19,7 @@ import {
   spawnDockerRun,
   type DockerNetwork,
 } from "../docker-runner.js";
+import { buildSshRunArgs, formatSshCommand, spawnSshRun, type SshRunnerOptions } from "../ssh-runner.js";
 
 export type SandboxRunOptions = {
   image?: string;
@@ -59,6 +60,68 @@ export async function sandboxRunCommand(task: string, opts: SandboxRunOptions): 
     const msg = err instanceof Error ? err.message : String(err);
     fail(`docker run failed: ${msg}`, {
       hint: "Is Docker installed and running? Build the image first: docker build -t seekforge-runner .",
+    });
+  }
+}
+
+export type RemoteRunOptions = {
+  host: string;
+  workspace: string;
+  port?: number;
+  identity?: string;
+  binary?: string;
+  model?: string;
+  provider?: string;
+  maxCost?: number;
+  permissionMode?: string;
+  /** Print the ssh argv and exit without connecting (dry-run). */
+  check?: boolean;
+};
+
+/**
+ * `seekforge remote-run <task> --host <user@host> --workspace <remote path>` —
+ * run one task on a machine you own.
+ *
+ * The workspace path is REMOTE and cannot be checked from here, which is why it
+ * must be absolute and why `--check` prints the exact command first. The remote
+ * host uses its OWN provider credentials: nothing about a key is sent.
+ */
+export async function remoteRunCommand(task: string, opts: RemoteRunOptions): Promise<void> {
+  const sshOpts: SshRunnerOptions = {
+    task,
+    host: opts.host,
+    workspacePath: opts.workspace,
+    ...(opts.port !== undefined ? { port: opts.port } : {}),
+    ...(opts.identity ? { identityFile: opts.identity } : {}),
+    ...(opts.binary ? { binary: opts.binary } : {}),
+    ...(opts.model ? { model: opts.model } : {}),
+    ...(opts.provider ? { provider: opts.provider } : {}),
+    ...(opts.maxCost !== undefined ? { maxCostUsd: opts.maxCost } : {}),
+    ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
+  };
+
+  let args: string[];
+  try {
+    args = buildSshRunArgs(sshOpts);
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err), {
+      hint: "remote-run needs --host and an absolute --workspace path on that host",
+    });
+    return;
+  }
+
+  if (opts.check) {
+    console.log(formatSshCommand(args));
+    return;
+  }
+
+  try {
+    const result = await spawnSshRun(sshOpts);
+    if (result.exitCode !== 0) process.exitCode = result.exitCode;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    fail(`ssh run failed: ${msg}`, {
+      hint: "Check that ssh reaches the host non-interactively and that SeekForge is installed there with its own API key.",
     });
   }
 }

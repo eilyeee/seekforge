@@ -6,6 +6,7 @@ SeekForge 可以将**同一个任务**运行在你的本地机器上，或运行
 
 - [Runner 契约](#runner-契约)
 - [Docker 参考 runner](#docker-参考-runner)
+- [SSH runner](#ssh-runner)
 - [构建 runner 镜像](#构建-runner-镜像)
 - [在容器中运行任务](#在容器中运行任务)
 - [安全模型](#安全模型)
@@ -58,6 +59,45 @@ docker run --rm --network <net> \
 ```
 
 一个轻薄的非纯包装（`spawnDockerRun`）用这些参数启动 `docker` 并透传 stdio。`createDockerRunner()` 将该后端以 `AgentRunner` 形式暴露。
+
+## SSH runner
+
+第二个后端在
+[`apps/cli/src/ssh-runner.ts`](../apps/cli/src/ssh-runner.ts)，把同一个任务放到
+**你自己的机器**上执行 —— CPU 更强的那台工作站、能连到 staging 的那台机器。没有
+服务、没有调度器、没有账号：一台主机、你自己的 ssh key、一个已经存在于那边的工作区。
+
+```sh
+# 只打印将要执行的 ssh 命令，不连接（不运行、不花钱）：
+seekforge remote-run "run the full suite" \
+  --host dev@build-box --workspace /srv/repo --check
+
+# 真正执行：
+seekforge remote-run "fix the failing test" \
+  --host dev@build-box --workspace /srv/repo --max-cost 2
+```
+
+`--workspace` 是**远端主机上**的路径，必须是绝对路径：本地无法解析或校验它，而按本地
+文件系统去解析会把 agent 悄悄送到一个你从未指定过的地方。`--check` 先打印命令，正是
+为了这个原因。
+
+### 它不会发送什么
+
+**你的 API key 永远不会离开本机。** Docker 之所以能只按变量名转发密钥，是因为容器与
+宿主共享环境；ssh 做不到 —— 转发意味着把密钥送上网络、写进远端环境，通常还会进入那台
+主机的 shell 历史。远端主机必须已经配置了它自己的凭据，就像你登录上去手动运行
+SeekForge 一样。一台你不放心交给它自己密钥的机器，也不该交给它一个编码 agent。
+
+连接本身同样被刻意收窄：`BatchMode=yes`（无人值守运行时，宁可失败也不要卡在密码提示
+上）、不分配 TTY、不转发 X11，并且**不转发 ssh-agent** —— 否则等于把本地 agent 里的
+每一把密钥都交给远端主机使用。
+
+### 引号
+
+ssh 总是把命令交给远端的登录 shell 执行，因此任务文本 —— 自由格式的散文，经常包含引号
+和反引号 —— 无论你愿不愿意都是 shell 输入。每一个被插入的值都用单引号包裹并对内部引号
+做转义，而且 `buildSshRunArgs` 是纯函数，所以远端 shell 收到的内容与 `--check` 打印
+出来的完全一致。
 
 ## 构建 runner 镜像
 

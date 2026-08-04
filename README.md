@@ -91,6 +91,7 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge schedule add\|list\|run\|next\|history\|install\|uninstall\|status` | manage scheduled jobs, history, retries, and the crontab tick — see [Scheduling](docs/scheduling.md) |
 | `seekforge graph validate\|run\|resume\|list\|show\|history\|delete` | run durable heterogeneous Agent/Loop/function/router/gate/subgraph workflows — see [Graph Engineering](docs/graph-engineering.md) |
 | `seekforge sandbox-run "<task>"` | run a task through the Docker runner contract — see [Remote execution](docs/remote.md) |
+| `seekforge remote-run "<task>" --host <user@host> --workspace <path>` | run the same task on a machine you own over ssh; that host uses its own API key — see [Remote execution](docs/remote.md) |
 | `seekforge evolve analyze\|list\|show\|accept\|reject\|apply` | score sessions and review self-evolution proposals (human-gated) |
 
 VS Code users can run the thin local extension in

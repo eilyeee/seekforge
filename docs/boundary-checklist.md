@@ -4505,6 +4505,20 @@ type still checks, because every listed field is still there.
   turn later gained never reached the request — a screenshot silently became a
   screenshot the model could not see.
 
+## 410. A "copy-pasteable" rendering must be quoted for the shell that will paste it
+
+A dry-run prints a command so a human can inspect and paste it. Quoting that
+line the way a string literal is quoted looks correct and is not: double quotes
+stop word splitting but not command substitution, so the backticks and `$(…)`
+inside a task run the instant the line is pasted — from a feature whose entire
+purpose was to let someone check the command before running it.
+
+- **Do:** render with the quoting rules of the shell the output is destined for
+  (single quotes, with embedded quotes escaped), not JSON's.
+- **Caught:** `formatDockerCommand` and `formatSshCommand` both rendered the
+  task with `JSON.stringify`, so `--check` on a task containing backticks
+  printed a line that executed them when pasted.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

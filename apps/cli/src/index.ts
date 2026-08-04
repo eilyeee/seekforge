@@ -14,7 +14,7 @@ import { replCommand } from "./commands/repl.js";
 import { rewindCommand } from "./commands/rewind.js";
 import { resolveCommand, resolveReviewCommand } from "./commands/resolve.js";
 import { runTaskCommand } from "./commands/run.js";
-import { sandboxRunCommand } from "./commands/sandbox.js";
+import { remoteRunCommand, sandboxRunCommand } from "./commands/sandbox.js";
 import {
   scheduleAddCommand,
   scheduleHistoryCommand,
@@ -348,6 +348,54 @@ program
         permissionMode: opts.permissionMode,
         maxCost: opts.maxCost,
         check: opts.check,
+      });
+    },
+  );
+
+// The same runner contract, pointed at a machine you own instead of a
+// container. No service and no credential transfer: the remote host runs
+// SeekForge with its own key, exactly as a person logging in would.
+program
+  .command("remote-run")
+  .argument("<task>", "development task to perform on the remote host")
+  .requiredOption("--host <user@host>", "ssh destination (or an ssh_config host alias)")
+  .requiredOption("--workspace <path>", "ABSOLUTE path of the workspace ON THE REMOTE HOST")
+  .option("--port <n>", "ssh port (else ssh_config decides)", parsePositiveInt)
+  .option("-i, --identity <file>", "ssh private key file (else ssh-agent / ssh_config decide)")
+  .option("--binary <path>", "remote seekforge binary (default: seekforge on the remote PATH)")
+  .option("-m, --model <model>", "override model on the remote host")
+  .option("--provider <name>", "override provider on the remote host")
+  .option("--permission-mode <mode>", "remote permission mode (e.g. acceptEdits)")
+  .option("--max-cost <usd>", "stop the run once cumulative cost reaches this budget (USD)", parsePositiveFloat)
+  .option("--check", "dry-run: print the `ssh` command without connecting (no run/spend)")
+  .description("run a task on a remote host you own over ssh (the host uses its own API key)")
+  .action(
+    async (
+      task: string,
+      opts: {
+        host: string;
+        workspace: string;
+        port?: number;
+        identity?: string;
+        binary?: string;
+        model?: string;
+        provider?: string;
+        permissionMode?: string;
+        maxCost?: number;
+        check?: boolean;
+      },
+    ) => {
+      await remoteRunCommand(task, {
+        host: opts.host,
+        workspace: opts.workspace,
+        ...(opts.port !== undefined ? { port: opts.port } : {}),
+        ...(opts.identity ? { identity: opts.identity } : {}),
+        ...(opts.binary ? { binary: opts.binary } : {}),
+        ...(opts.model ? { model: opts.model } : {}),
+        ...(opts.provider ? { provider: opts.provider } : {}),
+        ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
+        ...(opts.maxCost !== undefined ? { maxCost: opts.maxCost } : {}),
+        ...(opts.check ? { check: true } : {}),
       });
     },
   );

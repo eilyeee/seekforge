@@ -135,10 +135,19 @@ test("argv begins with `run` (follows the `docker` binary)", () => {
 });
 
 // --- formatting / dry-run rendering -----------------------------------------
-test("formatDockerCommand prefixes `docker` and quotes the task", () => {
+test("formatDockerCommand prefixes `docker` and prints a line safe to paste", () => {
   const line = formatDockerCommand(buildDockerRunArgs({ task: "fix a bug", workspacePath: WS }));
   assert.ok(line.startsWith("docker run "));
-  assert.ok(line.includes('"fix a bug"'));
+  assert.ok(line.includes("'fix a bug'"));
+});
+
+test("--check output cannot execute the task it is quoting", () => {
+  // The point of --check is that a human copies the line. Double quotes do not
+  // stop command substitution, so a JSON-quoted rendering would run the
+  // backticks in the task the moment it was pasted.
+  const line = formatDockerCommand(buildDockerRunArgs({ task: "fix `whoami` in $HOME", workspacePath: WS }));
+  assert.equal(line.includes('"'), false);
+  assert.ok(line.includes("'fix `whoami` in $HOME'"));
 });
 
 // --- the sandbox-run --check dry-run prints argv and never spawns docker ----
@@ -160,7 +169,7 @@ test("sandbox-run --check prints the argv and returns without spawning docker", 
   assert.equal(logs.length, 1, "dry-run prints exactly one command line");
   assert.ok(logs[0]!.startsWith("docker run "), "dry-run prints a docker run command");
   assert.ok(logs[0]!.includes("--network none"));
-  assert.ok(logs[0]!.includes('"hello world"'));
+  assert.ok(logs[0]!.includes("'hello world'"));
   // --check must not fail the process (no docker interaction happened).
   assert.equal(process.exitCode, exitCodeBefore);
 });

@@ -88,6 +88,7 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge schedule add\|list\|run\|next\|history\|install\|uninstall\|status` | 管理定时任务、历史、重试与 crontab tick——见[定时任务](docs/scheduling.zh-CN.md) |
 | `seekforge graph validate\|run\|resume\|list\|show\|history\|delete` | 运行持久化的异构 Agent/Loop/函数/路由/审批门/子图工作流——见[图工程](docs/graph-engineering.zh-CN.md) |
 | `seekforge sandbox-run "<task>"` | 通过 Docker runner 契约执行任务——见[远程执行](docs/remote.zh-CN.md) |
+| `seekforge remote-run "<task>" --host <user@host> --workspace <path>` | 通过 ssh 在你自己的机器上执行同一个任务；该主机使用它自己的 API key——见[远程执行](docs/remote.zh-CN.md) |
 | `seekforge evolve analyze\|list\|show\|accept\|reject\|apply` | 会话打分与自我进化提案审阅（人工把关） |
 
 VS Code 用户可以使用 [`apps/vscode`](apps/vscode/README.md) 中的轻量本地扩展。

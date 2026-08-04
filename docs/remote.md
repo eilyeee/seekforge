@@ -10,6 +10,7 @@ session.
 
 - [The runner contract](#the-runner-contract)
 - [The Docker reference runner](#the-docker-reference-runner)
+- [The SSH runner](#the-ssh-runner)
 - [Building the runner image](#building-the-runner-image)
 - [Running a task in a container](#running-a-task-in-a-container)
 - [Security model](#security-model)
@@ -70,6 +71,51 @@ docker run --rm --network <net> \
 A thin impure wrapper (`spawnDockerRun`) spawns `docker` with those args and
 streams stdio through. `createDockerRunner()` exposes the backend as an
 `AgentRunner`.
+
+## The SSH runner
+
+The second backend, in
+[`apps/cli/src/ssh-runner.ts`](../apps/cli/src/ssh-runner.ts), runs the same
+task on **a machine you own** — the workstation with the big CPU, the box that
+can reach staging. No service, no scheduler, no account: one host, your ssh key,
+a workspace that already exists there.
+
+```sh
+# Print the exact ssh command WITHOUT connecting (no run, no spend):
+seekforge remote-run "run the full suite" \
+  --host dev@build-box --workspace /srv/repo --check
+
+# Actually run it:
+seekforge remote-run "fix the failing test" \
+  --host dev@build-box --workspace /srv/repo --max-cost 2
+```
+
+`--workspace` is a path **on the remote host** and must be absolute: nothing
+here can resolve or verify it, and resolving it locally would silently send the
+agent somewhere you never named. `--check` prints the command first for exactly
+that reason.
+
+### What it does not send
+
+**Your API key never leaves this machine.** Docker can forward a secret by NAME
+because the container shares the host's environment; ssh cannot — forwarding
+would put the key on the wire, into the remote environment, and usually into
+that host's shell history. The remote host must already have its own
+credentials, exactly as it would if you logged in and ran SeekForge by hand. A
+machine you would not trust with its own key is not one to hand a coding agent.
+
+The connection is also deliberately narrow: `BatchMode=yes` (fail instead of
+blocking on a password prompt, since this runs unattended), no TTY, no X11, and
+**no agent forwarding** — which would otherwise hand the remote host the use of
+every key in your local ssh-agent.
+
+### Quoting
+
+ssh always runs its command through the remote login shell, so the task text —
+free-form prose, routinely containing quotes and backticks — is shell input
+whether anyone wants it to be. Every interpolated value is single-quoted with
+embedded quotes escaped, and `buildSshRunArgs` is pure, so what the remote shell
+receives is exactly what `--check` shows you.
 
 ## Building the runner image
 

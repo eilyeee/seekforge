@@ -18,6 +18,26 @@
  * backend's own option type, which extends {@link RunnerOptions}.
  */
 
+/**
+ * Quote one argument for a POSIX shell.
+ *
+ * Single quotes take everything literally except a single quote itself, which
+ * is closed, escaped and reopened. Two places need this and they need it for
+ * different reasons: a backend whose transport hands the command to a remote
+ * shell, and every backend's `--check` output, which is printed so a human can
+ * paste it into their own shell. A rendering quoted for JSON instead would look
+ * right and execute the backticks in a task the moment it was pasted.
+ */
+export function shellQuote(value: string): string {
+  // close the quote, emit an escaped quote, reopen: it's -> 'it'\''s'
+  return `'${value.split("'").join("'\\''")}'`;
+}
+
+/** Render an argv as a copy-pasteable command line, safe to paste as printed. */
+export function formatCommandLine(binary: string, args: string[]): string {
+  return [binary, ...args.map((arg) => (/^[\w./:@=-]+$/.test(arg) ? arg : shellQuote(arg)))].join(" ");
+}
+
 /** Ask (read-only Q&A) vs. edit (can write files / run commands). Mirrors the CLI. */
 export type RunnerMode = "ask" | "edit";
 
