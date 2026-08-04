@@ -1,6 +1,6 @@
 import type { ToolSpec } from "../registry.js";
 import { browserNavigate } from "./navigate.js";
-import { browserConsole, browserScreenshot, browserSnapshot } from "./inspect.js";
+import { browserConsole, browserNetwork, browserScreenshot, browserSnapshot } from "./inspect.js";
 import { browserInteractionTools } from "./interact.js";
 
 /**
@@ -16,6 +16,7 @@ export const browserTools: ToolSpec[] = [
   browserScreenshot,
   browserSnapshot,
   browserConsole,
+  browserNetwork,
   ...browserInteractionTools,
 ];
 

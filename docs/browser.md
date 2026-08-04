@@ -53,6 +53,7 @@ export SEEKFORGE_PLAYWRIGHT=/path/to/node_modules/playwright-core/index.mjs
 | `browser_screenshot` | `path?` | `execute` | Saves a full-page PNG under `.seekforge/uploads/` (or `path`) and returns the path. Read-only on the page. |
 | `browser_snapshot` | — | `readonly` | Returns a concise text snapshot (title, url, headings, links, buttons, inputs, visible text) so the agent can "see" the page without an image. |
 | `browser_console` | — | `readonly` | Returns console messages, uncaught page errors, and failed network requests captured since the last navigate — the key signal for "did my change break the page". Interactions do not clear it. |
+| `browser_network` | `urlContains?`, `failedOnly?` | `readonly` | Returns the requests the page **completed** since the last navigate — method, URL, status. A fetch that returns 500 raises no console message and no page error, so this is the half `browser_console` cannot show. |
 
 ## Acting on the page
 
@@ -63,6 +64,7 @@ export SEEKFORGE_PLAYWRIGHT=/path/to/node_modules/playwright-core/index.mjs
 | `browser_select` | `selector`, `value?` \| `label?`, `index?`, `timeoutMs?` | see below | Chooses an option in a `<select>`; fails with `option_not_found` if nothing matched. |
 | `browser_press` | `key`, `selector?`, `index?`, `timeoutMs?` | see below | Presses a key or chord (`Enter`, `Escape`, `Control+A`), optionally focusing an element first. |
 | `browser_wait_for` | `selector?` \| `text?`, `state?`, `timeoutMs?` | `readonly` | Waits until something appears (or is hidden) before you look at the page. |
+| `browser_upload` | `selector`, `path`, `index?`, `timeoutMs?` | `execute` / `env` | Attaches a workspace file to a file input, so an upload flow can be exercised end to end. The path is shown raw in the prompt and resolved through the workspace sandbox. |
 
 `selector` is a Playwright selector: CSS (`#login button`), text (`text=Sign in`)
 or role (`role=button[name="Save"]`). Take them from `browser_snapshot`.

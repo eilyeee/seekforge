@@ -23,7 +23,8 @@
   以及前端验证循环。
 - [LSP / 精确符号智能](lsp.zh-CN.md) — 可选的、基于语言服务器的工具：读取编译器的视角
   （`lsp_definition` / `lsp_references` / `lsp_diagnostics` / `lsp_hover` /
-  `lsp_document_symbols` / `lsp_symbols` / `lsp_code_actions`），而非词法层面的
+  `lsp_document_symbols` / `lsp_symbols` / `lsp_code_actions` /
+  `lsp_call_hierarchy` / `lsp_type_hierarchy`），而非词法层面的
   `repo_map`/`find_definition`；也让它来改（`lsp_rename` / `lsp_apply_code_action` /
   `lsp_format`），改动都要经过 diff 审阅。
 - [Loop 工程](loop-engineering.zh-CN.md) — 自主的「运行→验证→继续」循环及其护栏机制。

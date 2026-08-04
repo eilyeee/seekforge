@@ -22,6 +22,8 @@ const MAX_CAPTURED = 200;
 
 export type ConsoleEntry = { type: string; text: string };
 export type FailedRequest = { url: string; failure: string };
+/** One completed request/response pair the page made. */
+export type NetworkEntry = { method: string; url: string; status: number; resourceType?: string };
 
 let browser: PlaywrightBrowser | null = null;
 let context: PlaywrightContext | null = null;
@@ -35,6 +37,7 @@ const browserLeases = new Set<symbol>();
 let consoleMessages: ConsoleEntry[] = [];
 let pageErrors: string[] = [];
 let failedRequests: FailedRequest[] = [];
+let networkResponses: NetworkEntry[] = [];
 
 /** Launch (or reuse) the shared headless browser + page, attaching listeners. */
 export async function getPage(): Promise<PlaywrightPage> {
@@ -72,6 +75,24 @@ export async function getPage(): Promise<PlaywrightPage> {
     });
     page.on("pageerror", (err) => {
       if (pageErrors.length < MAX_CAPTURED) pageErrors.push(err?.message ? String(err.message) : String(err));
+    });
+    // A request that COMPLETED is the half the console never shows: a 500 from
+    // an XHR leaves no console message and no page error, so a run watching
+    // only those reports a page that "loaded fine" while its data call failed.
+    page.on("response", (res) => {
+      if (networkResponses.length >= MAX_CAPTURED) return;
+      try {
+        const request = res.request?.();
+        networkResponses.push({
+          method: String(request?.method?.() ?? "GET"),
+          url: String(res.url?.() ?? ""),
+          status: Number(res.status?.() ?? 0),
+          ...(request?.resourceType ? { resourceType: String(request.resourceType()) } : {}),
+        });
+      } catch {
+        // A response object can outlive its page during teardown; a capture
+        // buffer is never worth failing a tool call over.
+      }
     });
     page.on("requestfailed", (req) => {
       if (failedRequests.length < MAX_CAPTURED) {
@@ -122,14 +143,16 @@ export function resetCapture(): void {
   consoleMessages = [];
   pageErrors = [];
   failedRequests = [];
+  networkResponses = [];
 }
 
 export function capturedActivity(): {
   console: ConsoleEntry[];
   errors: string[];
   failedRequests: FailedRequest[];
+  network: NetworkEntry[];
 } {
-  return { console: consoleMessages, errors: pageErrors, failedRequests };
+  return { console: consoleMessages, errors: pageErrors, failedRequests, network: networkResponses };
 }
 
 /**

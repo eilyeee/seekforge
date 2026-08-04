@@ -40,6 +40,9 @@ const PAGE = `<!doctype html>
       const user = document.getElementById("user").value;
       const team = document.getElementById("team").value;
       console.log("submitting", user, team);
+      // A data call that fails without saying anything to the console — the
+      // exact case browser_network exists to surface.
+      fetch("/api/missing").catch(() => {});
       setTimeout(() => {
         document.getElementById("result").textContent = "Welcome " + user + " (" + team + ")";
       }, 150);
@@ -131,9 +134,35 @@ try {
     );
     assert(console_.errors.length === 0, `page raised errors: ${console_.errors.join("; ")}`);
 
-    const shot = (await run("browser_screenshot", { path: "smoke.png" })).data as { path: string };
+    // A request that COMPLETED with a 404 leaves no console message and no page
+    // error; only browser_network sees it.
+    const network = (await run("browser_network", {})).data as {
+      requests: { url: string; status: number; method: string }[];
+      totalCaptured: number;
+      failures: number;
+    };
+    assert(network.totalCaptured > 0, "browser_network captured nothing at all");
+    const failed = (await run("browser_network", { failedOnly: true })).data as {
+      requests: { url: string; status: number }[];
+    };
+    assert(
+      failed.requests.some((r) => r.url.includes("/api/missing") && r.status === 404),
+      `browser_network missed the failing data call: ${JSON.stringify(failed.requests)}`,
+    );
+
+    const screenshot = await run("browser_screenshot", { path: "smoke.png" });
+    const shot = screenshot.data as { path: string };
     const bytes = readFileSync(join(workspace, shot.path)).length;
     assert(bytes > 1000, `screenshot looks empty (${bytes} bytes)`);
+    // The attachment is what lets a model with eyes look at the page, and it
+    // only exists if the file was read back within its size bound.
+    const attached = screenshot.images ?? [];
+    assert(attached.length === 1, `screenshot did not attach an image (${attached.length})`);
+    assert(attached[0]!.mediaType === "image/png", `unexpected media type: ${attached[0]!.mediaType}`);
+    assert(
+      Buffer.from(attached[0]!.dataBase64, "base64").length === bytes,
+      "attached image bytes do not match the file on disk",
+    );
 
     // Interacting with a page that is NOT loopback must be gated, whatever the
     // approval mode says. Deny the confirmation and expect a refusal.

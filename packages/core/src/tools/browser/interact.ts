@@ -1,6 +1,8 @@
+import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { ToolError } from "../errors.js";
 import { defineTool } from "../registry.js";
+import { resolveForRead } from "../sandbox.js";
 import type { PermissionName } from "@seekforge/shared";
 import { loadPlaywright, type PlaywrightPage } from "./playwright.js";
 import {
@@ -16,7 +18,7 @@ import {
  *
  * browser_navigate + the inspect tools can only observe a URL. Verifying real
  * behaviour — log in, fill the form, submit, assert the result — needs the
- * agent to act on the page, which is what these five tools add.
+ * agent to act on the page, which is what these tools add.
  *
  * Permission: an interaction is classified from WHERE the loaded page points.
  * Clicking around your own dev server is ordinary work ("execute"); clicking on
@@ -373,4 +375,53 @@ export const browserWaitFor = defineTool({
   },
 });
 
-export const browserInteractionTools = [browserClick, browserFill, browserSelect, browserPress, browserWaitFor];
+const uploadSchema = z.object({
+  selector: selectorField,
+  path: z.string().describe("Workspace-relative path of the file to attach (e.g. fixtures/avatar.png)."),
+  index: indexField,
+  timeoutMs: timeoutField,
+});
+
+export const browserUpload = defineTool({
+  name: "browser_upload",
+  description:
+    "Attach a workspace file to the file input matched by selector on the loaded page, so an upload flow can be exercised end to end. " +
+    "Returns the resulting url, whether it navigated, and any page errors. Requires browser_navigate first; uploading on a page outside loopback is always confirmed.",
+  schema: uploadSchema,
+  prepare: capturePage,
+  classify: (args) => ({
+    permission: interactionPermission(),
+    // The path is shown raw: handing a file to a page is the one interaction
+    // that takes something out of the workspace, and which file it is decides
+    // whether that is fine.
+    description: `Upload ${args.path} to ${describeTarget(args.selector)}${onPage()}`,
+    path: args.path,
+  }),
+  async run(args, ctx) {
+    // Resolved through the sandbox for the same reason every read is: the page
+    // is untrusted input, and "../../.ssh/id_rsa" is a plausible thing for it
+    // to have asked for.
+    const resolved = resolveForRead(ctx.workspace, args.path);
+    // Playwright first, so a missing browser reports itself the same way it
+    // does for every other tool here rather than as a file problem.
+    await loadPlaywright();
+    if (!existsSync(resolved) || !statSync(resolved).isFile()) {
+      throw new ToolError("not_found", `File not found: ${args.path}`);
+    }
+    const selector = composeSelector(args.selector, args.index);
+    const timeout = args.timeoutMs ?? DEFAULT_ACTION_TIMEOUT_MS;
+    const { outcome } = await act(ctx, "Upload", selector, (page) =>
+      page.setInputFiles(selector, resolved, { timeout }),
+    );
+    return { data: { selector, path: args.path, ...outcome } };
+  },
+});
+
+export const browserInteractionTools = [
+  browserClick,
+  browserFill,
+  browserSelect,
+  browserPress,
+  browserWaitFor,
+  browserUpload,
+];

@@ -31,8 +31,21 @@ import { call, makeCtx, makeWorkspace } from "./helpers.js";
  * A real Chromium drives the same tools end to end in scripts/browser-tools-smoke.mjs.
  */
 
-const INSPECT_NAMES = ["browser_navigate", "browser_screenshot", "browser_snapshot", "browser_console"];
-const INTERACT_NAMES = ["browser_click", "browser_fill", "browser_select", "browser_press", "browser_wait_for"];
+const INSPECT_NAMES = [
+  "browser_navigate",
+  "browser_screenshot",
+  "browser_snapshot",
+  "browser_console",
+  "browser_network",
+];
+const INTERACT_NAMES = [
+  "browser_click",
+  "browser_fill",
+  "browser_select",
+  "browser_press",
+  "browser_wait_for",
+  "browser_upload",
+];
 const NAMES = [...INSPECT_NAMES, ...INTERACT_NAMES];
 
 describe("browser tools registration", () => {
@@ -75,6 +88,7 @@ describe("browser tools registration", () => {
       browserTools.find((t) => t.name === name)!.classify({} as never, makeCtx(makeWorkspace())).permission;
     expect(level("browser_snapshot")).toBe("readonly");
     expect(level("browser_console")).toBe("readonly");
+    expect(level("browser_network")).toBe("readonly");
     expect(level("browser_screenshot")).toBe("execute");
     // Waiting only observes, so it stays read-only whatever the page is.
     expect(level("browser_wait_for")).toBe("readonly");
@@ -183,6 +197,7 @@ describe("browser tools graceful degradation (Playwright absent)", () => {
   });
 
   const ARGS: Record<string, Record<string, unknown>> = {
+    browser_upload: { selector: "#file", path: "a.txt" },
     browser_screenshot: { path: "shot.png" },
     browser_click: { selector: "#save" },
     browser_fill: { selector: "#name", text: "hello" },
@@ -246,5 +261,27 @@ describe("browser tools graceful degradation (Playwright absent)", () => {
     const res = await dispatcher.execute(call("browser_navigate", {}), makeCtx(makeWorkspace()));
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("invalid_args");
+  });
+});
+
+describe("browser_upload", () => {
+  it("shows the raw path it is about to hand to the page", () => {
+    // Uploading is the one interaction that takes something OUT of the
+    // workspace, so which file it is has to be visible before it is approved.
+    const upload = browserTools.find((t) => t.name === "browser_upload")!;
+    const cls = upload.classify({ selector: "#file", path: "fixtures/a.png" } as never, makeCtx(makeWorkspace()));
+    expect(cls.description).toContain("fixtures/a.png");
+    expect(cls.path).toBe("fixtures/a.png");
+  });
+
+  it("refuses a path that escapes the workspace before touching the page", async () => {
+    const ws = makeWorkspace();
+    const res = await createDefaultDispatcher().execute(
+      call("browser_upload", { selector: "#file", path: "../../etc/passwd" }),
+      makeCtx(ws),
+    );
+    expect(res.ok).toBe(false);
+    // The sandbox rejects it; the browser is never even asked.
+    expect(res.error?.code).not.toBe("browser_unavailable");
   });
 });

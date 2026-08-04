@@ -170,12 +170,47 @@ export const browserConsole = defineTool({
   name: "browser_console",
   description:
     "Return console messages, uncaught page errors, and failed network requests captured since the last browser_navigate — the key signal for whether your change broke the page. " +
-    "Interactions do not clear it, so a click's errors are still here afterwards. Read-only — call browser_navigate first.",
+    "Interactions do not clear it, so a click's errors are still here afterwards. Use browser_network for requests that completed (including ones that returned 4xx/5xx). Read-only — call browser_navigate first.",
   schema: z.object({}),
   classify: () => ({ permission: "readonly", description: "Read the current browser page's console" }),
   async run() {
     await loadPlaywright();
     requirePage();
-    return { data: capturedActivity() };
+    const { console: consoleEntries, errors, failedRequests } = capturedActivity();
+    return { data: { console: consoleEntries, errors, failedRequests } };
+  },
+});
+
+const networkSchema = z.object({
+  urlContains: z.string().max(200).optional().describe("Only report requests whose URL contains this substring."),
+  failedOnly: z.boolean().optional().describe("Only report responses with a status of 400 or above (default false)."),
+});
+
+export const browserNetwork = defineTool({
+  name: "browser_network",
+  description:
+    "Return the requests the page COMPLETED since the last browser_navigate — method, URL and status — optionally narrowed with urlContains or failedOnly. " +
+    "This is the half browser_console cannot show: a fetch that returns 500 raises no console message and no page error, so a page that 'loaded fine' can still have a broken data call. Read-only — call browser_navigate first.",
+  schema: networkSchema,
+  classify: () => ({ permission: "readonly", description: "Read the current browser page's network activity" }),
+  async run(args) {
+    await loadPlaywright();
+    requirePage();
+    const all = capturedActivity().network;
+    const matching = all.filter(
+      (entry) =>
+        (args.urlContains === undefined || entry.url.includes(args.urlContains)) &&
+        (args.failedOnly !== true || entry.status >= 400),
+    );
+    return {
+      data: {
+        requests: matching,
+        count: matching.length,
+        // A filtered view that silently hid the rest would read as "the page
+        // made four requests" when it made four hundred.
+        totalCaptured: all.length,
+        failures: all.filter((entry) => entry.status >= 400).length,
+      },
+    };
   },
 });

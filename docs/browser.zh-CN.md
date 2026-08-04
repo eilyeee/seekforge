@@ -37,6 +37,7 @@ export SEEKFORGE_PLAYWRIGHT=/path/to/node_modules/playwright-core/index.mjs
 | `browser_screenshot` | `path?` | `execute` | 将整页 PNG 保存到 `.seekforge/uploads/`（或 `path`）并返回路径。对页面本身只读。 |
 | `browser_snapshot` | — | `readonly` | 返回一份简洁的文本快照（标题、url、标题层级、链接、按钮、输入框、可见文本），让智能体无需图片即可「看到」页面。 |
 | `browser_console` | — | `readonly` | 返回自上次 navigate 以来捕获的控制台消息、未捕获的页面错误与失败的网络请求——这是判断「我的改动是否弄坏了页面」的关键信号。交互不会清空它。 |
+| `browser_network` | `urlContains?`、`failedOnly?` | `readonly` | 返回自上次 navigate 以来页面**完成**的请求——方法、URL、状态码。返回 500 的 fetch 既不会产生控制台消息也不会产生页面错误，因此这是 `browser_console` 看不到的另一半。 |
 
 ## 操作页面
 
@@ -47,6 +48,7 @@ export SEEKFORGE_PLAYWRIGHT=/path/to/node_modules/playwright-core/index.mjs
 | `browser_select` | `selector`、`value?` \| `label?`、`index?`、`timeoutMs?` | 见下 | 在 `<select>` 中选择某一项；没有匹配项时以 `option_not_found` 失败。 |
 | `browser_press` | `key`、`selector?`、`index?`、`timeoutMs?` | 见下 | 按下某个键或组合键（`Enter`、`Escape`、`Control+A`），可先聚焦到某元素。 |
 | `browser_wait_for` | `selector?` \| `text?`、`state?`、`timeoutMs?` | `readonly` | 等到某元素/文本出现（或消失）之后再去看页面。 |
+| `browser_upload` | `selector`、`path`、`index?`、`timeoutMs?` | `execute` / `env` | 把工作区中的文件挂到 file input 上，从而端到端地跑通上传流程。路径会原样出现在权限提示里，并经过工作区沙箱解析。 |
 
 `selector` 是 Playwright 选择器：CSS（`#login button`）、文本（`text=Sign in`）或角色（`role=button[name="Save"]`）。从 `browser_snapshot` 的输出里挑。Playwright 是严格模式——选择器匹配到多个元素是错误，而不是静默取第一个——所以用 `index` 指定第几个。这类失败会报 `ambiguous_selector` 并给出匹配数量；始终没出现的选择器则报 `element_not_found`。
 

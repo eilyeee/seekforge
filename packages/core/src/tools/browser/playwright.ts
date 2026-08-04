@@ -29,14 +29,19 @@ export const INSTALL_HINT =
   "browser tools need Playwright: pnpm add -w playwright-core && npx playwright install chromium " +
   "(or point SEEKFORGE_PLAYWRIGHT at an existing playwright-core installation)";
 
-export type PlaywrightRequest = { url(): string; failure(): { errorText: string } | null };
+export type PlaywrightRequest = {
+  url(): string;
+  failure(): { errorText: string } | null;
+  method?(): string;
+  resourceType?(): string;
+};
 export type PlaywrightRoute = {
   request(): PlaywrightRequest;
   continue(): Promise<void>;
   abort(errorCode?: string): Promise<void>;
 };
 export type PlaywrightConsoleMessage = { type(): string; text(): string };
-export type PlaywrightResponse = { status(): number };
+export type PlaywrightResponse = { status(): number; url?(): string; request?(): PlaywrightRequest };
 
 /** Options every action-scoped Playwright call accepts. */
 export type ActionOptions = { timeout?: number };
@@ -45,6 +50,7 @@ export type PlaywrightPage = {
   on(event: "console", cb: (msg: PlaywrightConsoleMessage) => void): void;
   on(event: "pageerror", cb: (err: Error) => void): void;
   on(event: "requestfailed", cb: (req: PlaywrightRequest) => void): void;
+  on(event: "response", cb: (res: PlaywrightResponse) => void): void;
   goto(url: string, opts?: { waitUntil?: "load"; timeout?: number }): Promise<PlaywrightResponse | null>;
   title(): Promise<string>;
   url(): string;
@@ -57,6 +63,7 @@ export type PlaywrightPage = {
     values: string | { label: string } | Array<string | { label: string }>,
     opts?: ActionOptions,
   ): Promise<string[]>;
+  setInputFiles(selector: string, files: string | string[], opts?: ActionOptions): Promise<void>;
   press(selector: string, key: string, opts?: ActionOptions): Promise<void>;
   waitForSelector(
     selector: string,

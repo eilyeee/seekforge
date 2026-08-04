@@ -30,7 +30,7 @@ and quick start; this folder holds the reference docs.
 - [LSP / precise symbol intelligence](lsp.md) — the optional language-server-backed
   tools: read the compiler's view (`lsp_definition` / `lsp_references` /
   `lsp_diagnostics` / `lsp_hover` / `lsp_document_symbols` / `lsp_symbols` /
-  `lsp_code_actions`) instead of the lexical `repo_map`/`find_definition`, and
+  `lsp_code_actions` / `lsp_call_hierarchy` / `lsp_type_hierarchy`) instead of the lexical `repo_map`/`find_definition`, and
   let it edit (`lsp_rename` / `lsp_apply_code_action` / `lsp_format`) behind a
   reviewed diff.
 - [Loop engineering](loop-engineering.md) — the autonomous run→verify→continue
