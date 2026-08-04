@@ -63,6 +63,14 @@
         "title": "SeekForge: Show Workspace Diff"
       },
       {
+        "command": "seekforge.reviewMemory",
+        "title": "SeekForge: Review Memory Candidates"
+      },
+      {
+        "command": "seekforge.showSession",
+        "title": "SeekForge: Open Session Transcript"
+      },
+      {
         "command": "seekforge.showOutput",
         "title": "SeekForge: Show Activity Output"
       }

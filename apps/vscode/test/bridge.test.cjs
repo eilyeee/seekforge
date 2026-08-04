@@ -4,6 +4,7 @@ const test = require("node:test");
 const {
   SeekForgeBridge,
   formatAgentEvent,
+  formatTranscript,
   hasDiffPreview,
   normalizeServerUrl,
   permissionHunkItems,
@@ -216,4 +217,58 @@ test("cancelling an active run sends cancel before closing the socket", async ()
 
   await assert.rejects(running, (error) => error.name === "AbortError");
   assert.deepEqual(FakeSocket.instance.sent, [{ type: "start", task: "x" }, { type: "cancel" }]);
+});
+
+test("lists only the memory candidates still awaiting a decision", async () => {
+  const fetchImpl = async (url) => {
+    assert.equal(url, "http://localhost/api/memory?ws=repo");
+    return new Response(
+      JSON.stringify({
+        candidates: [
+          { id: "a", text: "uses vitest", status: "pending" },
+          { id: "b", text: "old fact", status: "approved" },
+          { id: "c", text: "another", status: "pending" },
+        ],
+      }),
+      { status: 200 },
+    );
+  };
+  const bridge = new SeekForgeBridge({ serverUrl: "http://localhost", token: "", WebSocketImpl: class {}, fetchImpl });
+
+  const pending = await bridge.pendingMemory("repo");
+  assert.deepEqual(
+    pending.map((candidate) => candidate.id),
+    ["a", "c"],
+  );
+});
+
+test("posts a memory decision to the workspace it belongs to", async () => {
+  const seen = [];
+  const fetchImpl = async (url, init) => {
+    seen.push({ url, method: init.method });
+    return new Response(JSON.stringify({ id: "a b", status: "approved" }), { status: 200 });
+  };
+  const bridge = new SeekForgeBridge({ serverUrl: "http://localhost", token: "t", WebSocketImpl: class {}, fetchImpl });
+
+  await bridge.decideMemory("repo", "a b", "approve");
+  // The id is user data that reaches a URL path — encoded, not interpolated raw.
+  assert.deepEqual(seen, [{ url: "http://localhost/api/memory/a%20b/approve?ws=repo", method: "POST" }]);
+  await assert.rejects(bridge.decideMemory("repo", "a", "delete"), /Unknown memory decision/);
+});
+
+test("renders a transcript for reading rather than replay", () => {
+  const out = formatTranscript({ id: "s1", title: "Fix the login bug", createdAt: "2026-08-04T00:00:00Z" }, [
+    { role: "system", content: "SYSTEM PROMPT THAT SHOULD NOT APPEAR" },
+    { role: "user", content: "the button does nothing" },
+    { role: "assistant", content: "checking", toolCalls: [{ id: "c1", name: "read_file" }] },
+    { role: "tool", content: "…file…", toolCallId: "c1", images: [{ label: "shot.png" }] },
+  ]);
+
+  assert.match(out, /# Fix the login bug/);
+  assert.doesNotMatch(out, /SYSTEM PROMPT/);
+  assert.match(out, /## user/);
+  assert.match(out, /called `read_file`/);
+  // An attachment the reader cannot see still has to be visible AS an omission:
+  // the model saw something this transcript does not show.
+  assert.match(out, /image attached: shot\.png/);
 });

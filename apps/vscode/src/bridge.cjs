@@ -233,6 +233,10 @@ class SeekForgeBridge {
     this.runTimeoutMs = runTimeoutMs;
   }
 
+  /**
+   * One REST call. `method`/`body` are for the few routes that change something
+   * (approving a remembered fact); everything else is a plain GET.
+   */
   async request(pathname, options = {}) {
     const controller = new AbortController();
     const onAbort = () => controller.abort(options.signal?.reason);
@@ -241,7 +245,12 @@ class SeekForgeBridge {
     const timer = setTimeout(() => controller.abort(abortError("SeekForge request timed out")), this.requestTimeoutMs);
     try {
       const response = await this.fetchImpl(`${this.serverUrl}${pathname}`, {
-        headers: this.token ? { authorization: `Bearer ${this.token}` } : {},
+        method: options.method ?? "GET",
+        headers: {
+          ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
+          ...(options.body === undefined ? {} : { "content-type": "application/json" }),
+        },
+        ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
         signal: controller.signal,
       });
       if (!response.ok) throw new Error(`SeekForge HTTP ${response.status}`);
@@ -266,6 +275,39 @@ class SeekForgeBridge {
       throw new Error(`SeekForge server does not host the VS Code workspace: ${workspacePath}`);
     }
     return match.id;
+  }
+
+  /**
+   * Facts waiting for a human decision. Memory is human-gated by design, so the
+   * queue is only useful where the reviewer already is — which, while coding,
+   * is the editor rather than another app.
+   */
+  async pendingMemory(workspaceId, options = {}) {
+    const body = await this.request(withWorkspace("/api/memory", workspaceId), options);
+    const candidates = Array.isArray(body?.candidates) ? body.candidates : [];
+    return candidates.filter((candidate) => candidate?.status === "pending");
+  }
+
+  async decideMemory(workspaceId, id, decision, options = {}) {
+    if (decision !== "approve" && decision !== "reject") throw new Error(`Unknown memory decision: ${decision}`);
+    return this.request(withWorkspace(`/api/memory/${encodeURIComponent(id)}/${decision}`, workspaceId), {
+      ...options,
+      method: "POST",
+    });
+  }
+
+  async sessions(workspaceId, options = {}) {
+    const body = await this.request(withWorkspace("/api/sessions", workspaceId), options);
+    return Array.isArray(body?.sessions) ? body.sessions : [];
+  }
+
+  /** One session's transcript, as the messages a reader would want to see. */
+  async sessionTranscript(workspaceId, id, options = {}) {
+    const body = await this.request(withWorkspace(`/api/sessions/${encodeURIComponent(id)}`, workspaceId), options);
+    return {
+      meta: body?.meta ?? {},
+      messages: Array.isArray(body?.messages) ? body.messages : [],
+    };
   }
 
   run(frame, onFrame, options = {}) {
@@ -326,6 +368,31 @@ class SeekForgeBridge {
   }
 }
 
+/**
+ * Render a transcript for reading, not for replay: roles as headers, tool calls
+ * named rather than dumped. A reviewer opening a past session wants to see what
+ * happened, and the raw JSONL is the thing they were trying to avoid.
+ */
+function formatTranscript(meta, messages) {
+  const lines = [`# ${meta?.title || meta?.id || "SeekForge session"}`];
+  if (meta?.createdAt) lines.push(`_${meta.createdAt}_`);
+  for (const message of messages) {
+    const role = String(message?.role ?? "");
+    if (role === "system") continue; // the prompt, not the conversation
+    const calls = Array.isArray(message?.toolCalls) ? message.toolCalls : [];
+    const header = role === "tool" ? "tool result" : role;
+    lines.push("", `## ${header}`);
+    const content = typeof message?.content === "string" ? message.content : "";
+    if (content) lines.push(content);
+    for (const call of calls) lines.push(`- called \`${call?.name ?? "?"}\``);
+    const images = Array.isArray(message?.images) ? message.images : [];
+    // The bytes are not printable, but their absence would misrepresent the
+    // turn: the model saw something this reader cannot.
+    for (const image of images) lines.push(`- [image attached: ${image?.label ?? image?.mediaType ?? "image"}]`);
+  }
+  return lines.join("\n");
+}
+
 module.exports = {
   DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_RUN_TIMEOUT_MS,
@@ -334,6 +401,7 @@ module.exports = {
   SeekForgeBridge,
   clipLine,
   formatAgentEvent,
+  formatTranscript,
   hasDiffPreview,
   normalizeServerUrl,
   permissionHunkItems,

@@ -3,6 +3,7 @@ const WebSocket = require("ws");
 const {
   SeekForgeBridge,
   formatAgentEvent,
+  formatTranscript,
   hasDiffPreview,
   permissionHunkItems,
   permissionSummary,
@@ -207,6 +208,22 @@ async function runSafely(action) {
   }
 }
 
+/**
+ * The three-step preamble every workspace-scoped command shares: a configured
+ * bridge, a workspace folder, and the server's id for it. Returns an empty
+ * bridge (after telling the user why) rather than throwing, because "no folder
+ * open" is a state, not a failure.
+ */
+async function connected(context, what) {
+  const bridge = await configuredBridge(context);
+  const workspaceRoot = workspaceRootForEditor(vscode.workspace, vscode.window.activeTextEditor);
+  if (!workspaceRoot) {
+    void vscode.window.showErrorMessage(`Open a workspace folder before ${what}.`);
+    return {};
+  }
+  return { bridge, workspaceRoot, workspaceId: await bridge.workspaceId(workspaceRoot) };
+}
+
 function activate(context) {
   const output = vscode.window.createOutputChannel("SeekForge");
   const statusBar = createStatusBar();
@@ -250,6 +267,61 @@ function activate(context) {
             workspaceId,
           });
         }
+      }),
+    ),
+    vscode.commands.registerCommand("seekforge.reviewMemory", () =>
+      runSafely(async () => {
+        // Remembering a fact is a human decision by design. Making that decision
+        // where the code is beats switching apps to make it.
+        const { bridge, workspaceId } = await connected(context, "reviewing SeekForge memory");
+        if (!bridge) return;
+        const pending = await bridge.pendingMemory(workspaceId);
+        if (pending.length === 0) {
+          void vscode.window.showInformationMessage("No SeekForge memory candidates are waiting for review.");
+          return;
+        }
+        const picked = await vscode.window.showQuickPick(
+          pending.map((candidate) => ({
+            label: candidate.text,
+            description: candidate.type,
+            detail: candidate.source ? `from ${candidate.source}` : undefined,
+            candidate,
+          })),
+          { placeHolder: `${pending.length} fact(s) waiting — pick one to decide` },
+        );
+        if (!picked) return;
+        const decision = await vscode.window.showQuickPick(
+          [
+            { label: "Approve", detail: "Inject this fact into future sessions", value: "approve" },
+            { label: "Reject", detail: "Discard it", value: "reject" },
+          ],
+          { placeHolder: picked.candidate.text },
+        );
+        if (!decision) return;
+        await bridge.decideMemory(workspaceId, picked.candidate.id, decision.value);
+        void vscode.window.showInformationMessage(`SeekForge memory ${decision.value}d.`);
+      }),
+    ),
+    vscode.commands.registerCommand("seekforge.showSession", () =>
+      runSafely(async () => {
+        const { bridge, workspaceId } = await connected(context, "opening a SeekForge session");
+        if (!bridge) return;
+        const sessions = await bridge.sessions(workspaceId);
+        if (sessions.length === 0) {
+          void vscode.window.showInformationMessage("No SeekForge sessions recorded for this workspace yet.");
+          return;
+        }
+        const picked = await vscode.window.showQuickPick(
+          sessions.map((session) => ({ label: session.task ?? session.id, description: session.id, session })),
+          { placeHolder: "Open a SeekForge session transcript" },
+        );
+        if (!picked) return;
+        const { meta, messages } = await bridge.sessionTranscript(workspaceId, picked.session.id);
+        const document = await vscode.workspace.openTextDocument({
+          language: "markdown",
+          content: formatTranscript(meta, messages),
+        });
+        await vscode.window.showTextDocument(document, { preview: true });
       }),
     ),
     vscode.commands.registerCommand("seekforge.showDiff", () =>

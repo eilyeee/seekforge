@@ -29,7 +29,7 @@ SeekForge 已经具备了较为完整的本地优先编码智能体能力面。�
 | Rust runtime 与 Docker runner | 已实现，可选 | 每周真实二进制/容器门禁已交付；扩大平台矩阵与发布冒烟覆盖。 |
 | Eval 框架 | 已实现 | 真实 Loop/恢复/记忆场景、成对多样本 A/B、CI 历史恢复、Desktop 趋势可视化、带来源标记的 dogfood 回归，以及携带来源并支持 CI 漂移门禁的生态/执行/故障编排矩阵已交付。 |
 | `@seekforge/core` 嵌入 API | 按策略保持内部使用 | 0.x 包继续私有；[公开发布条件](core-package-policy.zh-CN.md)明确了编译产物、导出、semver、消费者测试、示例与安全文档。 |
-| VS Code / JetBrains 集成 | VS Code 客户端已交付；JetBrains 待实现 | 轻量 VS Code 客户端以带版本号的 .vsix 随发布提供：工具活动流、以 diff 文档呈现并支持逐 hunk 批准的权限审阅、成本/缓存读数、会话续接、问题回答与 `@file` 上下文。Marketplace 发布仍需手动（发布者令牌）。 |
+| VS Code / JetBrains 集成 | VS Code 客户端已交付；JetBrains 待实现 | 轻量 VS Code 客户端以带版本号的 .vsix 随发布提供：工具活动流、以 diff 文档呈现并支持逐 hunk 批准的权限审阅、成本/缓存读数、会话续接、问题回答、`@file` 上下文、记忆候选审阅，以及可读的会话记录。Marketplace 发布仍需手动（发布者令牌）。 |
 | 远程/团队执行服务 | 设计阶段 | 在不削弱本地优先默认设置的前提下，稳定一套自托管 runner 契约。 |
 
 ## 近期优先级

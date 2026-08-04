@@ -7,7 +7,8 @@ Thin local client for the versioned `seekforge serve` REST/WebSocket contract.
 3. Set `seekforge.serverUrl`, then run **SeekForge: Set Server Token**. The
    bearer token is stored in VS Code SecretStorage; legacy `seekforge.token`
    settings are migrated and removed automatically.
-4. Run **SeekForge: New Task**, **Resume Session**, **Show Workspace Diff**, or
+4. Run **SeekForge: New Task**, **Resume Session**, **Show Workspace Diff**,
+   **Review Memory Candidates**, **Open Session Transcript**, or
    **Show Activity Output**.
 
 The extension streams model output, thinking, tool activity (`⏺ tool(arg)` /
@@ -20,6 +21,12 @@ Permission prompts always show the raw command or path. A proposed diff opens as
 its own `diff` document beside the editor instead of being squeezed into a modal
 that would elide it, and multi-edit `apply_patch` requests offer **Allow selected
 edits…** to approve individual hunks (dismissing that picker approves nothing).
+
+**Review Memory Candidates** lists the facts a run proposed and is waiting on a
+human for, and approves or rejects one — memory is human-gated by design, and
+the review belongs where the code is. **Open Session Transcript** renders a past
+session as readable Markdown (roles as headers, tool calls named, attachments
+noted) instead of the raw JSONL.
 
 It deliberately remains a thin client: orchestration, permissions, traces, and
 workspace coordination stay inside the local SeekForge server.
