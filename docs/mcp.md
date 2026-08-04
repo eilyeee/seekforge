@@ -433,7 +433,7 @@ The `confirm` callback **auto-allows** permission levels:
 |---|---|
 | `mcp_config`       | Missing or invalid configuration              |
 | `mcp_crashed`      | Server process exited unexpectedly            |
-| `mcp_timeout`      | No response within timeout (30s req, 120s h/s) |
+| `mcp_timeout`      | No response within the idle timeout (30s), or past the 10-minute total |
 | `mcp_error`        | Server returned a JSON-RPC error              |
 | `mcp_tool_error`   | Tool call returned `isError: true`            |
 | `mcp_http_error`   | HTTP transport: unreachable or non-200        |
@@ -488,4 +488,16 @@ The implementation spans two packages:
 | Phase                             | Timeout |
 |---|---|
 | Handshake (stdio, covers npx)     | 120s    |
-| Regular requests (all transports) | 30s     |
+| Regular requests (all transports) | 30s idle |
+| One request in total, progress included | 10 min |
+
+The 30s is an **idle** timeout, not a deadline. Every request carries a
+`_meta.progressToken`, and a `notifications/progress` naming that token re-arms
+the clock: a build, a migration or a deploy that says "still working" every few
+seconds is alive, and cutting it off for being slow is the wrong answer. A
+server that ignores the token behaves exactly as it did before.
+
+A heartbeat that can extend a deadline needs its own ceiling, or a server holds
+the call open for as long as it likes — hence the total, which no amount of
+progress extends past. Both are configurable per client
+(`requestTimeoutMs`, `maxRequestTotalMs`).

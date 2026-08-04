@@ -55,11 +55,12 @@ afterAll(() => {
   cleanup();
 });
 
-function makeClient(timeoutMs?: number) {
+function makeClient(timeoutMs?: number, extra: { maxRequestTotalMs?: number } = {}) {
   return createMcpClient({
     name: "fake",
     config: { command: process.execPath, args: [serverPath] },
     requestTimeoutMs: timeoutMs,
+    ...extra,
   });
 }
 
@@ -139,6 +140,29 @@ describe("mcp client", () => {
       await expect(client.callTool("slow", {})).rejects.toMatchObject({ code: "mcp_timeout" });
       const cancelled = JSON.parse(await client.callTool("__getCancelled", {})) as number[];
       expect(cancelled).toEqual([2]);
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("keeps a call alive while the server reports progress", async () => {
+    // A build or a migration that says "still working" every few hundred ms is
+    // alive. Killing it at the idle timeout is killing it for being slow — and
+    // the timeout would fire twice over before this call finishes.
+    const client = makeClient(400);
+    try {
+      await expect(client.callTool("working", {})).resolves.toContain("finished after 3");
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("still gives up on a server that reports progress forever", async () => {
+    // A heartbeat that can extend a deadline needs its own ceiling, or a
+    // server holds the call open for as long as it likes.
+    const client = makeClient(300, { maxRequestTotalMs: 900 });
+    try {
+      await expect(client.callTool("endless", {})).rejects.toMatchObject({ code: "mcp_timeout" });
     } finally {
       client.dispose();
     }

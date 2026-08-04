@@ -7,6 +7,12 @@ import { clientCapabilities, createServerRequestResponder } from "./server-reque
 import { SEEKFORGE_VERSION } from "../version.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+/**
+ * Ceiling on one request including whatever its progress reports add. The
+ * timeout above becomes an IDLE timeout once a server reports progress; this is
+ * what stops a server holding a call open forever by dripping it.
+ */
+const MAX_REQUEST_TOTAL_MS = 10 * 60_000;
 const MAX_SSE_EVENT_CHARS = 1_048_576;
 const MAX_JSON_RESPONSE_BYTES = 1_048_576;
 // Latest stable MCP spec revision; servers version-fallback to their own.
@@ -174,6 +180,9 @@ export function createMcpHttpTransport(options: McpClientOptions): {
   /** Same endpoint, already narrowed — stored credentials are keyed by it. */
   const serverUrl: string = url;
   const timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  const maxTotal = options.maxRequestTotalMs ?? MAX_REQUEST_TOTAL_MS;
+  /** Per in-flight request id: re-arm its idle timer. */
+  const progressWaiters = new Map<string | number, () => void>();
   const respondToServer = createServerRequestResponder({
     name: options.name,
     ...(options.workspaceRoots !== undefined ? { workspaceRoots: options.workspaceRoots } : {}),
@@ -369,6 +378,7 @@ export function createMcpHttpTransport(options: McpClientOptions): {
       throw error;
     } finally {
       clearTimeout(timer);
+      progressWaiters.delete(id ?? -1);
       offAbort();
       inflight.delete(controller);
     }
@@ -377,6 +387,12 @@ export function createMcpHttpTransport(options: McpClientOptions): {
   async function handleServerMessage(message: JsonRpcMessage, signal: AbortSignal): Promise<void> {
     if (typeof message.method !== "string") return;
     if (message.id === undefined || message.id === null) {
+      if (message.method === "notifications/progress") {
+        const params = isRecord(message.params) ? message.params : undefined;
+        const token = params?.["progressToken"];
+        // Only the request the token names is kept alive.
+        if (typeof token === "number" || typeof token === "string") progressWaiters.get(token)?.();
+      }
       try {
         options.onNotification?.({
           method: message.method,
@@ -436,7 +452,22 @@ export function createMcpHttpTransport(options: McpClientOptions): {
     const controller = new AbortController();
     const offAbort = onAbortOnce(signal, () => controller.abort());
     inflight.add(controller);
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // The single timer used to cover the whole exchange INCLUDING the event
+    // stream a long call reports progress on, so a server that said "still
+    // working" was cut off anyway. It is now an idle timer, re-armed by
+    // progress for this request and bounded by the total deadline.
+    const deadline = Date.now() + maxTotal;
+    let timer = setTimeout(() => controller.abort(), timeoutMs);
+    const extendDeadline = (): void => {
+      const remaining = deadline - Date.now();
+      clearTimeout(timer);
+      if (remaining <= 0) {
+        controller.abort();
+        return;
+      }
+      timer = setTimeout(() => controller.abort(), Math.min(timeoutMs, remaining));
+    };
+    progressWaiters.set(id ?? -1, extendDeadline);
     try {
       let res: Response;
       try {
@@ -444,7 +475,17 @@ export function createMcpHttpTransport(options: McpClientOptions): {
           fetch(url!, {
             method: "POST",
             headers: headers(),
-            body: JSON.stringify({ jsonrpc: "2.0", ...(id !== undefined ? { id } : {}), method, params }),
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              ...(id !== undefined ? { id } : {}),
+              method,
+              // Tell the server it may report progress and which request owns
+              // it. A server that ignores this behaves exactly as before.
+              params:
+                id !== undefined && isRecord(params)
+                  ? { ...params, _meta: { ...(isRecord(params["_meta"]) ? params["_meta"] : {}), progressToken: id } }
+                  : params,
+            }),
             signal: controller.signal,
           });
         res = await send();

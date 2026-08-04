@@ -392,7 +392,7 @@ seekforge mcp-serve: FULL ACCESS (trusted callers only) on /path/to/workspace
 |---|---|
 | `mcp_config`       | 配置缺失或无效              |
 | `mcp_crashed`      | 服务器进程意外退出            |
-| `mcp_timeout`      | 超时未响应（请求 30s，握手 120s） |
+| `mcp_timeout`      | 超过空闲超时（30s）未响应，或超过 10 分钟总时长 |
 | `mcp_error`        | 服务器返回了 JSON-RPC 错误              |
 | `mcp_tool_error`   | 工具调用返回了 `isError: true`            |
 | `mcp_http_error`   | HTTP 传输：不可达或非 200        |
@@ -445,4 +445,14 @@ seekforge mcp-serve: FULL ACCESS (trusted callers only) on /path/to/workspace
 | 阶段                             | 超时 |
 |---|---|
 | 握手（stdio，涵盖 npx 安装）     | 120s    |
-| 常规请求（所有传输方式） | 30s     |
+| 常规请求（所有传输方式） | 30s 空闲 |
+| 单个请求总时长（含进度） | 10 分钟 |
+
+这 30s 是**空闲**超时，不是截止时间。每个请求都会带上 `_meta.progressToken`，只要收到
+指明该 token 的 `notifications/progress`，计时就会重新开始：一个每隔几秒说一声「还在干」
+的构建、迁移或部署是活着的，因为它慢就掐掉它是错误的答案。不理会这个 token 的服务端，
+行为与以前完全一致。
+
+能延长截止时间的心跳必须有自己的上限，否则服务端想把调用挂多久就挂多久 —— 所以还有一个
+总时长，任何数量的进度通知都无法把它推过去。两者都可以按客户端配置
+（`requestTimeoutMs`、`maxRequestTotalMs`）。

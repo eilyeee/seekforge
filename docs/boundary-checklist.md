@@ -4519,6 +4519,21 @@ purpose was to let someone check the command before running it.
   task with `JSON.stringify`, so `--check` on a task containing backticks
   printed a line that executed them when pasted.
 
+## 411. A deadline that a heartbeat can extend needs its own ceiling
+
+A flat request timeout kills a peer that is working correctly but slowly, so the
+fix is to let its progress reports re-arm the clock. That fix, alone, hands the
+peer an unbounded hold: a server that emits progress forever keeps the call —
+and whatever is waiting on it — alive forever.
+
+- **Do:** make the original timeout an IDLE timeout and add a separate total,
+  which no amount of progress extends past. Both bounds, or neither.
+- **Caught:** `packages/core/src/mcp/client.ts` and `mcp/http.ts` — a 30s flat
+  timeout failed every MCP tool that legitimately took longer (a build, a
+  migration), while the protocol's own progress notifications went unread.
+- **Precedent:** the provider stream already had exactly this shape, with an
+  idle timeout for a stalled stream and a total timeout independent of progress.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

@@ -78,7 +78,7 @@ rl.on("line", (line) => {
     const requestId = msg.params && msg.params.requestId;
     cancelledRequests.push(requestId);
     const timer = slowCalls.get(requestId);
-    if (timer) { clearTimeout(timer); slowCalls.delete(requestId); }
+    if (timer) { clearTimeout(timer); clearInterval(timer); slowCalls.delete(requestId); }
     return;
   }
   if (msg.id === undefined) return;
@@ -208,6 +208,37 @@ rl.on("line", (line) => {
         send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "too late" }] } });
       }, 5000);
       slowCalls.set(msg.id, timer);
+      return;
+    }
+    // Like a build or a migration: takes longer than one idle window, and says
+    // so. The token comes back from the _meta the client attached.
+    if (name === "working") {
+      const token = msg.params?._meta?.progressToken ?? msg.params?.arguments?.token;
+      let ticks = 0;
+      const beat = setInterval(() => {
+        ticks++;
+        send({
+          jsonrpc: "2.0",
+          method: "notifications/progress",
+          params: { progressToken: token, progress: ticks, total: 3 },
+        });
+        if (ticks >= 3) {
+          clearInterval(beat);
+          slowCalls.delete(msg.id);
+          send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "finished after " + ticks }] } });
+        }
+      }, 200);
+      slowCalls.set(msg.id, beat);
+      return;
+    }
+    // Reports progress forever and never answers: the case the total ceiling
+    // exists for.
+    if (name === "endless") {
+      const token = msg.params?._meta?.progressToken;
+      const beat = setInterval(() => {
+        send({ jsonrpc: "2.0", method: "notifications/progress", params: { progressToken: token, progress: 1 } });
+      }, 100);
+      slowCalls.set(msg.id, beat);
       return;
     }
     if (name === "boom") {

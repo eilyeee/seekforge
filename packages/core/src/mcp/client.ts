@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { isRecord } from "../util/guards.js";
 import { McpError } from "./errors.js";
 import { abortablePromise, onAbortOnce } from "../util/abort.js";
 import { createMcpHttpTransport } from "./http.js";
@@ -15,6 +16,11 @@ export type McpClientOptions = {
   config: McpServerConfig;
   /** Default per-request timeout. */
   requestTimeoutMs?: number;
+  /**
+   * Ceiling on one request including everything a server's progress reports
+   * add to it. Default {@link MAX_REQUEST_TOTAL_MS}.
+   */
+  maxRequestTotalMs?: number;
   /**
    * Absolute workspace path(s) advertised to the server as filesystem roots
    * (capabilities.roots + answers to server-initiated roots/list). When unset,
@@ -66,9 +72,22 @@ type Pending = {
   reject: (err: Error) => void;
   timer: NodeJS.Timeout;
   cleanup: () => void;
+  /** Re-arm the idle timer after a progress notification. */
+  extend: () => void;
 };
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+/**
+ * Ceiling on one request no matter how much progress it reports.
+ *
+ * The timeout above is an IDLE timeout once a server reports progress: a build
+ * or a migration that says "still working" every few seconds is alive, and
+ * killing it at thirty seconds is killing it for being slow. But a heartbeat
+ * that can extend a deadline needs its own ceiling, or a server that drips
+ * progress forever holds the call open forever — the same reason the provider
+ * stream has both an idle and a total timeout.
+ */
+const MAX_REQUEST_TOTAL_MS = 10 * 60_000;
 // After SIGTERM, wait this long for the child to exit on its own before
 // escalating to SIGKILL, so a server that ignores SIGTERM cannot orphan itself.
 const DISPOSE_GRACE_MS = 5_000;
@@ -187,6 +206,7 @@ type McpTransport = {
  */
 function createStdioTransport(options: McpClientOptions): McpTransport {
   const defaultTimeout = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  const maxTotal = options.maxRequestTotalMs ?? MAX_REQUEST_TOTAL_MS;
   const respondToServer = createServerRequestResponder({
     name: options.name,
     ...(options.workspaceRoots !== undefined ? { workspaceRoots: options.workspaceRoots } : {}),
@@ -260,6 +280,13 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
         if (typeof msg["method"] === "string") {
           const method = msg["method"];
           if (id === undefined || id === null) {
+            if (method === "notifications/progress") {
+              const progressParams = isRecord(msg["params"]) ? msg["params"] : undefined;
+              const token = progressParams?.["progressToken"];
+              // Only the request the token names is kept alive: a progress
+              // notification for an unknown token says nothing about ours.
+              if (typeof token === "number") pending.get(token)?.extend();
+            }
             try {
               options.onNotification?.({
                 method,
@@ -321,15 +348,30 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
         return;
       }
       let cleanup: () => void = () => {};
-      const timer = setTimeout(() => {
+      const deadline = Date.now() + maxTotal;
+      const expire = (reason: string): void => {
         pending.delete(id);
         cleanup();
         notify(proc, "notifications/cancelled", { requestId: id, reason: "request timed out" });
-        reject(
-          new McpError("mcp_timeout", `MCP server "${options.name}" did not answer ${method} within ${timeoutMs}ms`),
-        );
-      }, timeoutMs);
-      pending.set(id, { resolve: resolve as (d: unknown) => void, reject, timer, cleanup: () => cleanup() });
+        reject(new McpError("mcp_timeout", `MCP server "${options.name}" did not answer ${method} ${reason}`));
+      };
+      const entry: Pending = {
+        resolve: resolve as (d: unknown) => void,
+        reject,
+        timer: setTimeout(() => expire(`within ${timeoutMs}ms`), timeoutMs),
+        cleanup: () => cleanup(),
+        extend: () => {
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) {
+            clearTimeout(entry.timer);
+            expire(`within ${maxTotal}ms including progress`);
+            return;
+          }
+          clearTimeout(entry.timer);
+          entry.timer = setTimeout(() => expire(`within ${timeoutMs}ms`), Math.min(timeoutMs, remaining));
+        },
+      };
+      pending.set(id, entry);
       cleanup = onAbortOnce(signal, () => {
         const p = pending.get(id);
         if (!p) return;
@@ -341,10 +383,15 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
       // An already-aborted signal fired synchronously above: rejected, entry
       // removed — do not write the request at all.
       if (signal?.aborted) return;
-      proc.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`, (err) => {
+      // Tell the server it may report progress, and which request that progress
+      // belongs to. A server that ignores this behaves exactly as before.
+      const withToken = isRecord(params)
+        ? { ...params, _meta: { ...(isRecord(params["_meta"]) ? params["_meta"] : {}), progressToken: id } }
+        : params;
+      proc.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params: withToken })}\n`, (err) => {
         if (err) {
           pending.delete(id);
-          clearTimeout(timer);
+          clearTimeout(entry.timer);
           cleanup();
           reject(new McpError("mcp_write_failed", err.message));
         }
