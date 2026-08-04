@@ -28,6 +28,7 @@ export type SandboxRunOptions = {
   cpus?: string;
   model?: string;
   maxCost?: number;
+  maxDuration?: number;
   permissionMode?: string;
   /** Print the docker argv and exit without spawning (dry-run). */
   check?: boolean;
@@ -44,6 +45,7 @@ export async function sandboxRunCommand(task: string, opts: SandboxRunOptions): 
     ...(opts.cpus ? { cpus: opts.cpus } : {}),
     ...(opts.model ? { model: opts.model } : {}),
     ...(opts.maxCost !== undefined ? { maxCostUsd: opts.maxCost } : {}),
+    ...(opts.maxDuration !== undefined ? { maxDurationSeconds: opts.maxDuration } : {}),
     ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
   };
 
@@ -73,6 +75,7 @@ export type RemoteRunOptions = {
   model?: string;
   provider?: string;
   maxCost?: number;
+  maxDuration?: number;
   permissionMode?: string;
   /** Print the ssh argv and exit without connecting (dry-run). */
   check?: boolean;
@@ -97,6 +100,7 @@ export async function remoteRunCommand(task: string, opts: RemoteRunOptions): Pr
     ...(opts.model ? { model: opts.model } : {}),
     ...(opts.provider ? { provider: opts.provider } : {}),
     ...(opts.maxCost !== undefined ? { maxCostUsd: opts.maxCost } : {}),
+    ...(opts.maxDuration !== undefined ? { maxDurationSeconds: opts.maxDuration } : {}),
     ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
   };
 

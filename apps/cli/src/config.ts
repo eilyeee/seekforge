@@ -48,6 +48,14 @@ export type CliConfig = {
    */
   maxCostUsd?: number;
   /**
+   * Default per-run wall-clock budget in seconds: a `run`/`ask` stops once the
+   * deadline passes, whether or not the run is still producing events (that is
+   * the case it exists for). Overridden by the CLI `--max-duration` flag. Off
+   * when unset/non-positive. Edit the file directly; not settable via
+   * `config set`.
+   */
+  maxDurationSeconds?: number;
+  /**
    * User-supplied per-model price table (model id → { inputCacheMissPer1M,
    * inputCacheHitPer1M, outputPer1M } in USD per 1M tokens). Enables cost and
    * `maxCostUsd` budget tracking on providers with no built-in price table

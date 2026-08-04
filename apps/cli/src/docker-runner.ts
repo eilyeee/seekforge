@@ -125,6 +125,7 @@ export function buildDockerRunArgs(opts: DockerRunnerOptions): string[] {
   // The in-container command: a normal, headless, auto-approved SeekForge run.
   args.push("seekforge", "run", opts.task, "-y");
   if (opts.maxCostUsd !== undefined) args.push("--max-cost", String(opts.maxCostUsd));
+  if (opts.maxDurationSeconds !== undefined) args.push("--max-duration", String(opts.maxDurationSeconds));
   if (opts.model) args.push("-m", opts.model);
   if (opts.permissionMode) args.push("--permission-mode", opts.permissionMode);
 

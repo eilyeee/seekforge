@@ -90,6 +90,9 @@ export function buildSshRunArgs(opts: SshRunnerOptions): string[] {
   const binary = opts.binary ?? DEFAULT_REMOTE_BINARY;
   const remote = ["cd", shellQuote(opts.workspacePath), "&&", shellQuote(binary), "run", shellQuote(opts.task), "-y"];
   if (opts.maxCostUsd !== undefined) remote.push("--max-cost", shellQuote(String(opts.maxCostUsd)));
+  if (opts.maxDurationSeconds !== undefined) {
+    remote.push("--max-duration", shellQuote(String(opts.maxDurationSeconds)));
+  }
   if (opts.model) remote.push("-m", shellQuote(opts.model));
   if (opts.provider) remote.push("--provider", shellQuote(opts.provider));
   if (opts.permissionMode) remote.push("--permission-mode", shellQuote(opts.permissionMode));

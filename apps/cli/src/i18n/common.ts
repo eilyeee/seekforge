@@ -27,6 +27,9 @@ export const common = {
     "err.maxTurnsPositive": "--max-turns must be a positive integer",
     "err.maxCostUsdNumber": "config maxCostUsd must be a number",
     "err.maxCostUsdNumberHint": 'edit .seekforge/config.json and set maxCostUsd to a number, e.g. 0.5 (not "0.5")',
+    "err.maxDurationNumber": "config maxDurationSeconds must be a number",
+    "err.maxDurationNumberHint":
+      'edit .seekforge/config.json and set maxDurationSeconds to a number of seconds, e.g. 900 (not "900")',
     "render.authorizeWorkspacePrompt": "Authorize SeekForge to read & edit files in {dir}? [y/N] ",
     "err.workspaceNotAuthorized": "this directory is not authorized for SeekForge access: {dir}",
     "err.workspaceNotAuthorizedHint":
@@ -102,6 +105,7 @@ export const common = {
     "render.cancelling": "\ncancelling\u2026 (press Ctrl+C again to force quit)",
     "render.cancellingRepl": "\ncancelling\u2026",
     "render.costBudgetReached": "\ncost budget ${budget} reached \u2014 stopping",
+    "render.durationBudgetReached": "\ntime budget {budget}s reached after {elapsed}s \u2014 stopping",
     "render.planKept": "plan kept, nothing executed (resume later: seekforge resume {sessionId})",
     "render.screenCleared": "screen cleared",
     "render.setConfig": "set {key} in {path}",
@@ -134,6 +138,9 @@ export const common = {
     "err.maxTurnsPositive": "--max-turns 必须是正整数",
     "err.maxCostUsdNumber": "配置项 maxCostUsd 必须是数字",
     "err.maxCostUsdNumberHint": '请编辑 .seekforge/config.json，将 maxCostUsd 设为数字，例如 0.5（不要写成 "0.5"）',
+    "err.maxDurationNumber": "配置项 maxDurationSeconds 必须是数字",
+    "err.maxDurationNumberHint":
+      '请编辑 .seekforge/config.json，将 maxDurationSeconds 设为秒数，例如 900（不要写成 "900"）',
     "render.authorizeWorkspacePrompt": "授权 SeekForge 读取并修改该目录下的文件？{dir}  [y/N] ",
     "err.workspaceNotAuthorized": "该目录尚未授权 SeekForge 访问：{dir}",
     "err.workspaceNotAuthorizedHint": "先在该目录交互式运行一次 `seekforge` 以授权，或加 -y 直接授权",
@@ -205,6 +212,7 @@ export const common = {
     "render.cancelling": "\n正在取消…（再次按 Ctrl+C 强制退出）",
     "render.cancellingRepl": "\n正在取消…",
     "render.costBudgetReached": "\n已达成本预算 ${budget} — 正在停止",
+    "render.durationBudgetReached": "\n已达时间预算 {budget} 秒（实际用时 {elapsed} 秒）— 正在停止",
     "render.planKept": "计划已保留，未执行（稍后恢复：seekforge resume {sessionId}）",
     "render.screenCleared": "屏幕已清空",
     "render.setConfig": "已在 {path} 中设置 {key}",

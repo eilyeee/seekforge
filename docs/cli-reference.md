@@ -25,6 +25,7 @@ Flag reference for `seekforge run`, `seekforge ask`, and `-p` headless mode.
 | `--add-dir <path>` | run, ask, -p | Extra read-only root for `@`-references (repeatable) |
 | `--max-turns <n>` | run, ask, -p | Cap agent turns |
 | `--max-cost <usd>` | run, -p | Stop the run once cumulative cost reaches this budget (USD); graceful cancel, trace kept. Also settable as the `maxCostUsd` config key (applies to all modes) |
+| `--max-duration <seconds>` | run, -p, sandbox-run, remote-run | Stop the run once this much wall-clock time has passed — a timer, so it fires while a hung command or a silent MCP server is producing no events at all. Covers the whole invocation, not one turn. Graceful cancel, trace kept. Also settable as the `maxDurationSeconds` config key |
 | `--settings <file>` | run, ask, -p, chat | Path to JSON settings file (layered over project config but below env/CLI flags) |
 | `--profile <name>` ✦ | run, ask, -p, chat | Apply a named `profiles` overlay from the config files; also `SEEKFORGE_PROFILE` env (flag wins). The overlay slots just below `--settings`. Available as a global flag and on `run` / `ask` / `loop` |
 

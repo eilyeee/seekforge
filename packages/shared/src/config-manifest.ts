@@ -27,7 +27,15 @@ export const COMMON_CONFIG_KEYS = [
 ] as const;
 
 export const SURFACE_CONFIG_KEYS = {
-  cli: ["maxCostUsd", "verifyCommand", "autoVerify", "finalizeReview", "guardNoProgress", "profiles"],
+  cli: [
+    "maxCostUsd",
+    "maxDurationSeconds",
+    "verifyCommand",
+    "autoVerify",
+    "finalizeReview",
+    "guardNoProgress",
+    "profiles",
+  ],
   tui: [
     "accent",
     "bell",

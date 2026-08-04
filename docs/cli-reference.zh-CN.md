@@ -25,6 +25,7 @@
 | `--add-dir <path>` | run, ask, -p | 为 `@` 引用增加只读根目录（可重复） |
 | `--max-turns <n>` | run, ask, -p | 限制 agent 轮次上限 |
 | `--max-cost <usd>` | run, -p | 累计成本达到该预算（USD）即停止运行；平缓取消，追踪记录保留。也可通过配置键 `maxCostUsd` 设置（对所有模式生效） |
+| `--max-duration <seconds>` | run, -p, sandbox-run, remote-run | 墙钟时间达到该预算即停止运行 —— 它是一个定时器，所以即使运行已经完全不再产生事件（命令卡死、MCP 服务器沉默）也照样触发。作用于整次调用，而不是单个回合。平缓取消，追踪记录保留。也可通过配置键 `maxDurationSeconds` 设置 |
 | `--settings <file>` | run, ask, -p, chat | JSON 设置文件路径（叠加在项目配置之上、env/CLI flag 之下） |
 | `--profile <name>` ✦ | run, ask, -p, chat | 应用配置文件中名为 `profiles` 的覆盖层；也可用 `SEEKFORGE_PROFILE` 环境变量（flag 优先）。该覆盖层位于 `--settings` 之下一层。作为全局 flag 提供，也可用于 `run` / `ask` / `loop` |
 

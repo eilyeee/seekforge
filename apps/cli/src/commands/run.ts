@@ -20,6 +20,7 @@ import { resolvePermissionMode, UnknownPermissionModeError } from "../permission
 import { confirmInTerminal, createRenderer } from "../render.js";
 import { authorizeDir, isAuthorizedDir } from "../authorized-dirs.js";
 import { isCostBudgetExceeded } from "../cost-budget.js";
+import { elapsedSeconds, resolveDurationBudgetMs } from "../run-deadline.js";
 import { resolveOutputStyle } from "../output-style.js";
 import { readStreamJsonInput } from "../stream-input.js";
 import { buildToolGatingRules, parseToolList } from "../tool-gating.js";
@@ -84,6 +85,12 @@ export type RunOptions = {
    * are absent/non-positive.
    */
   maxCostUsd?: number;
+  /**
+   * Per-run wall-clock budget in seconds (CLI --max-duration). The run aborts
+   * gracefully once the deadline passes, whether or not anything is happening.
+   * Falls back to config.maxDurationSeconds; off when both are absent.
+   */
+  maxDurationSeconds?: number;
   /**
    * Suppress the final result envelope on stdout even in a machine format.
    * The scheduler uses `outputFormat: "json"` only to force confirm-auto-deny
@@ -175,6 +182,16 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
     return false;
   }
 
+  // Same fail-fast for a hand-written maxDurationSeconds: silently ignoring a
+  // budget someone configured is the one behavior a budget must never have.
+  if (
+    config.maxDurationSeconds !== undefined &&
+    (typeof config.maxDurationSeconds !== "number" || !Number.isFinite(config.maxDurationSeconds))
+  ) {
+    fail(t("err.maxDurationNumber"), { hint: t("err.maxDurationNumberHint") });
+    return false;
+  }
+
   // Folder-access consent: SeekForge must be authorized for this directory once
   // (interactively, or via -y) before it reads/edits files here.
   if (!(await ensureWorkspaceAuthorized(projectPath, { yes: opts.yes === true, machine }))) {
@@ -218,6 +235,9 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
     console.error(t("render.cancelling"));
     controller.abort();
   };
+  // Resolved here with the other budgets; armed further down, next to the try
+  // that clears it (see the deadline block).
+  const durationBudgetMs = resolveDurationBudgetMs(opts.maxDurationSeconds, config.maxDurationSeconds);
   // --max-cost (or config.maxCostUsd): stop the run once cumulative cost
   // reaches the budget by aborting the same controller Ctrl+C uses (graceful
   // cancel, trace kept). Off when unset/non-positive. costUsd reported on
@@ -443,6 +463,35 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
     }
   };
 
+  // --max-duration (or config.maxDurationSeconds). Unlike every other cap this
+  // is a timer, not a check on the event stream: the runs worth bounding by
+  // wall clock are precisely the ones that stopped producing events — a command
+  // with no timeout, a silent MCP server, a retry loop. Aborting the same
+  // controller Ctrl+C uses keeps the trace and the session.
+  //
+  // Armed HERE, immediately before the try that clears it, so the two are
+  // structurally paired. Setup above (config, workspace consent, MCP spawn,
+  // agent construction) is deliberately outside the clock: it can block on a
+  // human answering a prompt, and `schedule run` calls this function once per
+  // due job in one long-lived process, where a timer left behind by an early
+  // return would fire during somebody else's run.
+  const deadlineStartedAt = Date.now();
+  const deadlineTimer =
+    durationBudgetMs === undefined
+      ? undefined
+      : setTimeout(() => {
+          if (controller.signal.aborted) return;
+          console.error(
+            t("render.durationBudgetReached", {
+              budget: String(Math.round(durationBudgetMs / 1_000)),
+              elapsed: elapsedSeconds(deadlineStartedAt, Date.now()),
+            }),
+          );
+          controller.abort();
+        }, durationBudgetMs);
+  // The deadline must never be the reason the process stays alive past its run.
+  deadlineTimer?.unref();
+
   try {
     // --input-format stream-json: read line-delimited user turns from stdin and
     // drive a multi-turn session, chaining each turn onto the prior session id.
@@ -509,6 +558,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
     if (!run.completed) process.exitCode = 1;
     return run.completed;
   } finally {
+    if (deadlineTimer) clearTimeout(deadlineTimer);
     process.removeListener("SIGINT", onSigint);
     dispose();
     mcp.dispose();

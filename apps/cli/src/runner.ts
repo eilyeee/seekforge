@@ -59,6 +59,12 @@ export interface RunnerOptions {
   /** Per-run cost cap in USD. The run aborts once cumulative cost reaches it. */
   maxCostUsd?: number;
   /**
+   * Per-run wall-clock cap in seconds. Enforced by the run INSIDE the backend,
+   * not by the launcher: a container or a remote host that stops answering is
+   * exactly the case a launcher-side timer cannot see.
+   */
+  maxDurationSeconds?: number;
+  /**
    * Runner image/identifier. For Docker this is the image tag; a VM/remote
    * backend may reuse it as a base image / host id. Optional — each backend
    * has a sane default.

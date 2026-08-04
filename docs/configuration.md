@@ -385,6 +385,37 @@ with a clear error rather than crashing mid-run.
 
 Settable via `config set`? **No** — edit the file directly.
 
+### `maxDurationSeconds`
+
+**Default off.** A per-run wall-clock budget in seconds. Once the deadline
+passes, the run stops via the same graceful cancel path (the trace is kept, so
+you can `resume`). Overridden by the `--max-duration <seconds>` CLI flag, which
+`sandbox-run` and `remote-run` forward into the container / remote host so the
+budget is enforced by the run that is actually spending the time.
+
+This is the one cap that is a **timer** rather than a check. The cost, turn and
+tool-call caps are all evaluated when something happens; the runs worth bounding
+by wall clock are the ones where nothing is happening — a command with no
+timeout, an MCP server that stopped answering, a provider retry loop. Those emit
+no events, so an event-driven check would never fire.
+
+The deadline covers the whole invocation, not one turn: a multi-turn
+`--input-format stream-json` session is still one thing you launched and walked
+away from. The clock starts when the run does — startup (config, workspace
+consent, MCP server spawn) is outside it, since that phase can legitimately be
+waiting on you to answer a prompt. The stop is graceful, so an in-flight tool call is cancelled rather
+than killed — the run can overshoot slightly, and the stop message reports the
+elapsed time it actually took.
+
+Must be a number — a string like `"900"` is rejected with a clear error rather
+than silently ignored. Off when unset or non-positive.
+
+```json
+{ "maxDurationSeconds": 900 }
+```
+
+Settable via `config set`? **No** — edit the file directly.
+
 ### `modelPricing` (cost tracking on other providers)
 
 **Default off.** The `deepseek` and `anthropic` providers ship built-in price

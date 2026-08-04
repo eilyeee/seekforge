@@ -176,6 +176,11 @@ program
     parsePositiveFloat,
   )
   .option(
+    "--max-duration <seconds>",
+    "with -p: stop the run once this much wall-clock time has passed",
+    parsePositiveFloat,
+  )
+  .option(
     "--output-format <fmt>",
     "with -p: text | json (Claude-style result) | stream-json (Claude-style envelopes) | stream-json-raw (raw events)",
   )
@@ -274,12 +279,14 @@ program
   .option("--profile <name>", "use a named config profile (also SEEKFORGE_PROFILE env)")
   .option("--plan", "plan first (read-only), confirm, then execute in the same session")
   .option("--max-cost <usd>", "stop the run once cumulative cost reaches this budget (USD)", parsePositiveFloat)
+  .option("--max-duration <seconds>", "stop the run once this much wall-clock time has passed", parsePositiveFloat)
   .description("run a development task in the current project")
-  .action(async (task: string, opts: SharedRunOpts & { plan?: boolean; maxCost?: number }) => {
+  .action(async (task: string, opts: SharedRunOpts & { plan?: boolean; maxCost?: number; maxDuration?: number }) => {
     await runTaskCommand(task, {
       mode: "edit",
       yes: opts.yes,
       maxCostUsd: opts.maxCost,
+      maxDurationSeconds: opts.maxDuration,
       model: opts.model,
       outputFormat: resolveOutputFormatOrExit(opts),
       continueLast: opts.continue,
@@ -323,6 +330,7 @@ program
   .option("-m, --model <model>", "override model inside the container")
   .option("--permission-mode <mode>", "in-container permission mode (e.g. acceptEdits)")
   .option("--max-cost <usd>", "stop the run once cumulative cost reaches this budget (USD)", parsePositiveFloat)
+  .option("--max-duration <seconds>", "stop the run once this much wall-clock time has passed", parsePositiveFloat)
   .option("--check", "dry-run: print the `docker run` command without executing it (no Docker/spend)")
   .description("run a task inside an isolated Docker container (mounts only this workspace)")
   .action(
@@ -336,6 +344,7 @@ program
         model?: string;
         permissionMode?: string;
         maxCost?: number;
+        maxDuration?: number;
         check?: boolean;
       },
     ) => {
@@ -347,6 +356,7 @@ program
         model: opts.model,
         permissionMode: opts.permissionMode,
         maxCost: opts.maxCost,
+        maxDuration: opts.maxDuration,
         check: opts.check,
       });
     },
@@ -367,6 +377,7 @@ program
   .option("--provider <name>", "override provider on the remote host")
   .option("--permission-mode <mode>", "remote permission mode (e.g. acceptEdits)")
   .option("--max-cost <usd>", "stop the run once cumulative cost reaches this budget (USD)", parsePositiveFloat)
+  .option("--max-duration <seconds>", "stop the run once this much wall-clock time has passed", parsePositiveFloat)
   .option("--check", "dry-run: print the `ssh` command without connecting (no run/spend)")
   .description("run a task on a remote host you own over ssh (the host uses its own API key)")
   .action(
@@ -382,6 +393,7 @@ program
         provider?: string;
         permissionMode?: string;
         maxCost?: number;
+        maxDuration?: number;
         check?: boolean;
       },
     ) => {
@@ -395,6 +407,7 @@ program
         ...(opts.provider ? { provider: opts.provider } : {}),
         ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
         ...(opts.maxCost !== undefined ? { maxCost: opts.maxCost } : {}),
+        ...(opts.maxDuration !== undefined ? { maxDuration: opts.maxDuration } : {}),
         ...(opts.check ? { check: true } : {}),
       });
     },
@@ -788,6 +801,7 @@ program
       yes?: boolean;
       model?: string;
       maxCost?: number;
+      maxDuration?: number;
       outputFormat?: string;
       json?: boolean;
       continue?: boolean;
@@ -818,6 +832,7 @@ program
         yes: root.yes ?? opts.yes,
         model: root.model ?? opts.model,
         maxCost: root.maxCost,
+        maxDuration: root.maxDuration,
         outputFormat: root.outputFormat,
         json: root.json,
         continueLast: root.continue,

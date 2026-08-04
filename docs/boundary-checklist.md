@@ -4577,6 +4577,29 @@ way, in every project, forever.
 - **Related:** [412] — that entry is about writing to a layer the reader
   discards; this one is about writing a rule the matcher reads too generously.
 
+## 414. Arm a timer in the same block that clears it, or it fires into the next run
+
+A one-shot CLI hides this: whatever the function returns, the process exits and
+a stray timer never runs. The same function called twice in one process does
+not hide it. A deadline armed near the top, cleared in a `finally` further down,
+and skipped by any early return in between survives its own run — and then
+fires, printing a stop message about a run that ended and aborting a controller
+nobody is listening to, in the middle of the next one.
+
+- **Do:** create the timer immediately before the `try` whose `finally` clears
+  it, so the pairing is structural rather than a list of return paths someone
+  has to keep in sync. If the work before that point also needs bounding, give
+  it its own bounded step — do not stretch one timer over both.
+- **Caught:** in review of `--max-duration`. `apps/cli/src/commands/run.ts`
+  armed the deadline beside the cost budget, well above the `try`; five early
+  returns (bad permission mode, bad output style, unreadable --mcp-config, a
+  failed MCP spawn, a throwing agent construction) each left it running.
+  `schedule run` calls `runTaskCommand` once per due job in one long-lived
+  process, so the leftover timer had somebody else's run to land in.
+- **Also:** starting the clock later turned out to be the more honest semantic
+  anyway — the setup it used to cover can legitimately be waiting on a human to
+  answer a prompt.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the
