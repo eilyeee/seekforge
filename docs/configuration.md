@@ -176,6 +176,25 @@ What differs from the OpenAI-compatible presets:
 | `temperature` | Never sent — the current Claude models reject sampling parameters |
 | `maxTokens` | Required by the API, so an unset value becomes a default (16000) rather than being omitted |
 
+> **Why the tool catalog is not narrowed per turn.** An obvious-looking saving
+> is to send the model only the tools a task seems to need — SeekForge ships 53
+> builtins, measured at 10,858 tokens of definitions, on every request. The
+> arithmetic says not to. Tool definitions sit at the FRONT of the cached
+> prefix, so changing them mid-run invalidates the cache for everything behind
+> them, conversation included. At Opus 5 rates a cached prefix bills at a tenth
+> of input, which makes the full catalog cost 1,086 tokens-equivalent per turn —
+> less than a narrowed 15-tool catalog costs *uncached* (2,970). The break-even
+> conversation size is negative: there is none. Measured against a 30k-token
+> conversation, narrowing the catalog per turn costs about 8x more than sending
+> all of it and keeping the cache.
+>
+> What does pay is narrowing ONCE, before the first request, where the prefix
+> stays stable and cached — which is what `--allowedTools` already does. And
+> the catalog is not free even cached, so `tests/agent/tool-catalog.test.ts`
+> pins its size: a large MCP server can add more definition tokens than every
+> builtin combined, and that should be a visible event rather than a silent
+> per-turn tax.
+
 > **Images.** On this provider a screenshot goes straight to the model:
 > `browser_screenshot` attaches the PNG to the tool result that produced it, so
 > the agent can look at the page instead of describing it through a second
