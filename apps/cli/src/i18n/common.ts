@@ -27,6 +27,7 @@ export const common = {
     "err.maxTurnsPositive": "--max-turns must be a positive integer",
     "err.maxCostUsdNumber": "config maxCostUsd must be a number",
     "err.maxCostUsdNumberHint": 'edit .seekforge/config.json and set maxCostUsd to a number, e.g. 0.5 (not "0.5")',
+    "err.configBusy": "another SeekForge process is updating the global config — try again",
     "err.maxDurationNumber": "config maxDurationSeconds must be a number",
     "err.maxDurationNumberHint":
       'edit .seekforge/config.json and set maxDurationSeconds to a number of seconds, e.g. 900 (not "900")',
@@ -138,6 +139,7 @@ export const common = {
     "err.maxTurnsPositive": "--max-turns 必须是正整数",
     "err.maxCostUsdNumber": "配置项 maxCostUsd 必须是数字",
     "err.maxCostUsdNumberHint": '请编辑 .seekforge/config.json，将 maxCostUsd 设为数字，例如 0.5（不要写成 "0.5"）',
+    "err.configBusy": "另一个 SeekForge 进程正在更新全局配置 —— 请重试",
     "err.maxDurationNumber": "配置项 maxDurationSeconds 必须是数字",
     "err.maxDurationNumberHint":
       '请编辑 .seekforge/config.json，将 maxDurationSeconds 设为秒数，例如 900（不要写成 "900"）',

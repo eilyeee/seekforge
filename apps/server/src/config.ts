@@ -24,6 +24,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
+  acquireSessionLease,
   DEPRECATED_MODELS,
   MODEL_PRICING,
   type HookConfig,
@@ -33,6 +34,7 @@ import {
   resolveMemoryMaintenanceConfig,
 } from "@seekforge/core";
 import type { HookStage, PermissionRule } from "@seekforge/shared";
+import { GLOBAL_CONFIG_LOCK_ID } from "@seekforge/shared/config-layers";
 import { readFileBounded, readFileDescriptorBounded } from "@seekforge/shared/bounded-file-read";
 import {
   isProjectConfigKeyAllowed,
@@ -586,7 +588,36 @@ export function setConfigValue(workspace: string, key: string, value: unknown, g
  * setConfigValue does — writing a fresh document would discard every other key.
  */
 export function appendGlobalPermissionRule(rule: PermissionRule): string {
-  const path = join(seekforgeHome(), ".seekforge", "config.json");
+  const home = seekforgeHome();
+  const path = join(home, ".seekforge", "config.json");
+  // Read-modify-write of a file several processes edit — a CLI `config set
+  // --global`, a TUI approval, this. Without the lease two of them landing
+  // together silently drop one edit.
+  const lease = acquireGlobalConfigLease(home);
+  try {
+    return writeAppendedRule(path, rule);
+  } finally {
+    lease.release();
+  }
+}
+
+/**
+ * The cross-process lease around `~/.seekforge/config.json`, or a clear failure.
+ *
+ * It does not wait: a collision means another SeekForge process is writing the
+ * same file this instant, which is rare and resolves by trying again. Blocking
+ * a request on it would trade a rare, explicable error for an occasional
+ * unexplained stall.
+ */
+function acquireGlobalConfigLease(home: string): { release: () => void } {
+  try {
+    return acquireSessionLease(realpathSync(resolve(home)), GLOBAL_CONFIG_LOCK_ID);
+  } catch {
+    throw new ConfigValueError("another SeekForge process is updating the global config — try again");
+  }
+}
+
+function writeAppendedRule(path: string, rule: PermissionRule): string {
   let current: Record<string, unknown> = {};
   if (existsSync(path)) {
     try {

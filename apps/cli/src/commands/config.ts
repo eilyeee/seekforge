@@ -1,7 +1,8 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { isProjectConfigKeyAllowed } from "@seekforge/shared/config-layers";
+import { GLOBAL_CONFIG_LOCK_ID, isProjectConfigKeyAllowed } from "@seekforge/shared/config-layers";
+import { acquireSessionLease } from "@seekforge/core";
 import { availableProfiles, loadConfig } from "../config.js";
 import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "../bounded-file.js";
 import { t } from "../i18n.js";
@@ -61,6 +62,28 @@ export function configSetCommand(key: string, value: string, opts: { global?: bo
     return;
   }
   const path = configPath(opts.global ?? false);
+  // The global file is read-modify-written by several processes — a TUI or
+  // Desktop "always allow" writes permissionRules into the same document. The
+  // lease keeps two of them from silently dropping one edit. Project config is
+  // this process's own workspace, so it needs none.
+  let lease: { release: () => void } | undefined;
+  if (opts.global) {
+    try {
+      lease = acquireSessionLease(realpathSync(homedir()), GLOBAL_CONFIG_LOCK_ID);
+    } catch {
+      console.error(t("err.configBusy"));
+      process.exitCode = 1;
+      return;
+    }
+  }
+  try {
+    writeConfigKey(path, key, value);
+  } finally {
+    lease?.release();
+  }
+}
+
+function writeConfigKey(path: string, key: string, value: string): void {
   let current: Record<string, unknown> = {};
   if (existsSync(path)) {
     try {

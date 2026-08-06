@@ -138,16 +138,27 @@ export function createEngineeringGraphLogWriter(workspace: string, graphId: stri
   }
   let sequence = lastGraphLogSequence(workspace, target);
 
+  /**
+   * Rotation is the one write here that keeps its fsyncs.
+   *
+   * An append is one file: losing its tail to a power cut costs the tail. A
+   * rotation is several files that have to agree — the reader walks segments
+   * expecting sequence numbers to strictly increase across them, and a
+   * half-applied shuffle can make it truncate far more than the last few lines.
+   * It is also rare: only once the log passes a megabyte. Paying for ordering
+   * on the rare multi-file step and not on every append is the whole point of
+   * having the choice.
+   */
   const rotate = (current: string): void => {
     for (let segment = MAX_GRAPH_HISTORY_SEGMENTS - 1; segment >= 1; segment--) {
       const source = segment === 1 ? target : `${target}.${segment - 1}`;
       const destination = `${target}.${segment}`;
       try {
         const value = segment === 1 ? current : readWorkspaceStateFile(workspace, source, MAX_GRAPH_LOG_BYTES);
-        writeWorkspaceStateFileAtomic(workspace, destination, value ?? "", NOT_DURABLE);
+        writeWorkspaceStateFileAtomic(workspace, destination, value ?? "");
       } catch {
         // A damaged older segment must not prevent the current trace from rotating.
-        writeWorkspaceStateFileAtomic(workspace, destination, "", NOT_DURABLE);
+        writeWorkspaceStateFileAtomic(workspace, destination, "");
       }
     }
   };

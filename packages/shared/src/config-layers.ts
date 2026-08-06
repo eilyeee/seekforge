@@ -99,6 +99,19 @@ export function isProjectConfigKeyAllowed(key: string): boolean {
   return PROJECT_PREFERENCE_KEYS.has(key);
 }
 
+/**
+ * Lock id for read-modify-write of the USER-owned `~/.seekforge/config.json`.
+ *
+ * Several processes edit that one file: `seekforge config set --global`, a TUI
+ * "always allow", a Desktop approval reaching the server. Each reads the whole
+ * document, changes one key, and writes it back, so two of them landing
+ * together silently drops one edit — the file stays valid, and the setting the
+ * user just made is simply not there. Everyone takes this lease first, keyed on
+ * the SeekForge home, so the id has to be identical across all of them: it
+ * lives here rather than being retyped in three apps.
+ */
+export const GLOBAL_CONFIG_LOCK_ID = "seekforge-global-config";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

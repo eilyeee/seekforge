@@ -1,5 +1,7 @@
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { acquireSessionLease } from "@seekforge/core";
+import { GLOBAL_CONFIG_LOCK_ID } from "@seekforge/shared/config-layers";
 import { describe, expect, it } from "vitest";
 import { appendGlobalPermissionRule, ConfigValueError, loadConfig, setConfigValue } from "../src/config.js";
 import { makeWorkspace, writeFileIn } from "./helpers.js";
@@ -116,6 +118,24 @@ describe("appendGlobalPermissionRule", () => {
       // far worse than one un-persisted approval.
       expect(() => appendGlobalPermissionRule(rule)).toThrow(ConfigValueError);
       expect(readFileSync(join(home, ".seekforge", "config.json"), "utf8")).toBe("{ not json");
+    });
+  });
+
+  it("refuses rather than silently dropping an edit while another process writes", () => {
+    withHome((home) => {
+      // Several processes edit this one file — a CLI `config set --global`, a
+      // TUI approval, this. Each reads the whole document, changes one key and
+      // writes it back, so two landing together lose one edit with no trace:
+      // the file stays valid and the setting simply is not there.
+      const held = acquireSessionLease(realpathSync(resolve(home)), GLOBAL_CONFIG_LOCK_ID);
+      try {
+        expect(() => appendGlobalPermissionRule(rule)).toThrow(/another SeekForge process/);
+      } finally {
+        held.release();
+      }
+      // Released: the same call now succeeds, so the lease is a gate and not a
+      // permanent refusal.
+      expect(() => appendGlobalPermissionRule(rule)).not.toThrow();
     });
   });
 

@@ -22,10 +22,12 @@
  * wrote.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { acquireSessionLease } from "@seekforge/core";
 import type { PermissionRule } from "@seekforge/shared";
+import { GLOBAL_CONFIG_LOCK_ID } from "@seekforge/shared/config-layers";
 import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 import { writeStateFile } from "./state-file.js";
 
@@ -49,6 +51,23 @@ export function sameRule(a: PermissionRule, b: PermissionRule): boolean {
  * than one un-persisted approval.
  */
 export function persistPermissionRule(rule: PermissionRule, home: string = homedir()): string {
+  // Read-modify-write of a file several processes edit — `seekforge config set
+  // --global`, a Desktop approval reaching the server, this. Without the lease
+  // two of them landing together silently drop one edit: the file stays valid
+  // and the rule the user just approved is simply not in it.
+  //
+  // It does not wait. A collision means another SeekForge process is writing
+  // this instant, which is rare; the approval degrades to session scope with a
+  // notice naming the reason, which is a better answer than a stall.
+  const lease = acquireSessionLease(realpathSync(home), GLOBAL_CONFIG_LOCK_ID);
+  try {
+    return writeRule(rule, home);
+  } finally {
+    lease.release();
+  }
+}
+
+function writeRule(rule: PermissionRule, home: string): string {
   const path = userConfigPath(home);
   let doc: Record<string, unknown> = {};
   if (existsSync(path)) {
