@@ -109,6 +109,17 @@ transient `session.continuing` event is observable, but its
 harness nudge is not written as a synthetic user turn. Plan mode and direct
 CLI/SDK runs retain single-slice semantics, and the existing tool, context,
 cost, cancellation, and final continuation bounds still terminate the run.
+Workspace state is written atomically — temp file, rename — and by default
+fsynced twice, once for the file and once for its parent directory. That is the
+dominant cost of a durable run: a single-node Graph performs nine such writes,
+and on an ordinary filesystem each fsync is tens of milliseconds. Files whose
+own contract calls them observability opt out of the fsyncs while keeping the
+rename, so a reader still never sees a torn file: the Graph history log (the
+checkpoint beside it is authoritative) and the scheduling observations (advisory
+by documented contract, never used for eligibility). Measured on a two-node
+Graph: 658ms to 494ms per run. Checkpoints keep both fsyncs — replaying work
+because a crash lost the record of it is what a durable engine exists to
+prevent.
 Approved project-memory writes may trigger opt-in deterministic maintenance.
 It shares the cross-process memory transaction lease, checks count/byte and
 persisted interval gates, and stores only the last successful summary in

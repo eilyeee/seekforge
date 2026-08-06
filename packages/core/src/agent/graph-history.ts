@@ -4,6 +4,16 @@ import { isValidLoopDagId } from "./loop-dag-validation.js";
 import { MAX_GRAPH_HISTORY_SEGMENTS } from "./graph-contract.js";
 import { type GraphEvent, parseGraphEvent } from "./graph-state.js";
 
+/**
+ * This file is the history LOG, and the line further down already states the
+ * contract it depends on: "History is observability; the checkpoint remains
+ * authoritative." So its writes stay atomic — a reader never sees a torn
+ * file — but skip the two fsyncs an atomic write otherwise costs. A power cut
+ * can lose the last few log lines; the checkpoint that says what actually
+ * happened is written durably elsewhere.
+ */
+const NOT_DURABLE = { durable: false } as const;
+
 const MAX_GRAPH_LOG_BYTES = 1024 * 1024;
 const GRAPH_LOG_FLUSH_INTERVAL_MS = 100;
 
@@ -124,7 +134,7 @@ export function createEngineeringGraphLogWriter(workspace: string, graphId: stri
       kept.push(line);
     }
     const repaired = kept.length > 0 ? `${kept.join("\n")}\n` : "";
-    if (repaired !== raw) writeWorkspaceStateFileAtomic(workspace, target, repaired);
+    if (repaired !== raw) writeWorkspaceStateFileAtomic(workspace, target, repaired, NOT_DURABLE);
   }
   let sequence = lastGraphLogSequence(workspace, target);
 
@@ -134,10 +144,10 @@ export function createEngineeringGraphLogWriter(workspace: string, graphId: stri
       const destination = `${target}.${segment}`;
       try {
         const value = segment === 1 ? current : readWorkspaceStateFile(workspace, source, MAX_GRAPH_LOG_BYTES);
-        writeWorkspaceStateFileAtomic(workspace, destination, value ?? "");
+        writeWorkspaceStateFileAtomic(workspace, destination, value ?? "", NOT_DURABLE);
       } catch {
         // A damaged older segment must not prevent the current trace from rotating.
-        writeWorkspaceStateFileAtomic(workspace, destination, "");
+        writeWorkspaceStateFileAtomic(workspace, destination, "", NOT_DURABLE);
       }
     }
   };
@@ -151,9 +161,9 @@ export function createEngineeringGraphLogWriter(workspace: string, graphId: stri
       const current = readWorkspaceStateFile(workspace, target, MAX_GRAPH_LOG_BYTES) ?? "";
       if (Buffer.byteLength(current) + Buffer.byteLength(batch) > MAX_GRAPH_LOG_BYTES) {
         rotate(current);
-        writeWorkspaceStateFileAtomic(workspace, target, batch);
+        writeWorkspaceStateFileAtomic(workspace, target, batch, NOT_DURABLE);
       } else {
-        writeWorkspaceStateFileAtomic(workspace, target, `${current}${batch}`);
+        writeWorkspaceStateFileAtomic(workspace, target, `${current}${batch}`, NOT_DURABLE);
       }
     } catch (error) {
       pending = `${batch}${pending}`;

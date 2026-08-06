@@ -4620,6 +4620,28 @@ free to exit, and the write is still in flight.
   session with a broken one. "Cancel" means forget what I was doing, and a
   teardown flag now says which kind this is.
 
+## 416. A process-wide seam is a per-workspace bug waiting for a second workspace
+
+A module-level setter is a reasonable way to hand a builtin something the tool
+context must not carry — a credential, a user path. It stays reasonable exactly
+as long as the process serves one workspace. Wire the same seam into a host that
+serves many, and it becomes last-write-wins across concurrent runs: the value
+one run installed is read by whichever run happens to call the tool next.
+
+- **Do:** before wiring a module-level seam into a new host, ask how many
+  workspaces that host serves AT ONCE, and check what its locks actually
+  serialize. Key the seam by workspace if the answer is more than one — and if
+  the resource behind the seam is itself a singleton, do not wire it at all.
+- **Caught:** in review of `configureVision` on the server. `image_analyze`'s
+  endpoint and API key were one process-wide value; the server's coordinator
+  serializes per REPOSITORY, so two workspaces run their agent loops
+  simultaneously. Workspace A's screenshot would have gone to workspace B's
+  endpoint under B's key. Keyed by workspace now.
+- **The other half:** `browserProfile` was left unwired there, because the
+  browser session is one Chromium per process. A per-workspace profile path
+  cannot be honored by a shared context — scoping the setting would only have
+  moved the leak from the config into the cookie jar.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

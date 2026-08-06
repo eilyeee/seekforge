@@ -124,8 +124,28 @@ export function readWorkspaceStateFile(
   }
 }
 
-/** Atomically replaces a workspace-owned state file after physical revalidation. */
-export function writeWorkspaceStateFileAtomic(workspace: string, relPath: string, data: string): void {
+/**
+ * Atomically replaces a workspace-owned state file after physical revalidation.
+ *
+ * `durable` (default true) controls the fsyncs, not the atomicity: the temp
+ * file and rename are unconditional, so a reader never sees a torn file either
+ * way. What the fsyncs buy is survival of a power cut or kernel panic, and they
+ * are the dominant cost here — two per write, tens of milliseconds each on a
+ * normal filesystem.
+ *
+ * A checkpoint needs them: replaying work because a crash lost the record of it
+ * is exactly what a durable engine exists to prevent. A file the code itself
+ * calls observability does not — losing the last few forecast samples after a
+ * power cut costs a slightly worse forecast, and nothing else. Passing
+ * `durable: false` is a claim about the FILE, so make it where the file's
+ * meaning is documented, not at a call site that happens to be hot.
+ */
+export function writeWorkspaceStateFileAtomic(
+  workspace: string,
+  relPath: string,
+  data: string,
+  opts: { durable?: boolean } = {},
+): void {
   const target = stateTarget(workspace, relPath, true);
   const parent = dirname(target);
   const parentBefore = statSync(parent);
@@ -151,7 +171,7 @@ export function writeWorkspaceStateFileAtomic(workspace: string, relPath: string
     }
 
     writeAllSync(fd, Buffer.from(data, "utf8"));
-    fsyncSync(fd);
+    if (opts.durable !== false) fsyncSync(fd);
     closeSync(fd);
     fd = undefined;
 
@@ -164,14 +184,16 @@ export function writeWorkspaceStateFileAtomic(workspace: string, relPath: string
     }
     renameSync(temp, target);
 
-    let parentFd: number | undefined;
-    try {
-      parentFd = openSync(parent, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-      fsyncSync(parentFd);
-    } catch {
-      // Directory fsync is unavailable on some supported filesystems.
-    } finally {
-      if (parentFd !== undefined) closeSync(parentFd);
+    if (opts.durable !== false) {
+      let parentFd: number | undefined;
+      try {
+        parentFd = openSync(parent, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+        fsyncSync(parentFd);
+      } catch {
+        // Directory fsync is unavailable on some supported filesystems.
+      } finally {
+        if (parentFd !== undefined) closeSync(parentFd);
+      }
     }
   } finally {
     if (fd !== undefined) closeSync(fd);

@@ -187,7 +187,12 @@ export function recordGraphSchedulingObservation(
   try {
     // Reload under ownership so concurrent recorders cannot commit a stale snapshot.
     const observations = chronologicalObservations([...readGraphSchedulingObservations(workspace), observation]);
-    writeWorkspaceStateFileAtomic(workspace, HISTORY_PATH, serializeObservations(observations));
+    // Observations calibrate later forecasts and nothing else — this module's
+    // own estimate is documented as advisory, and callers must not use it for
+    // eligibility. Atomic, so a reader never sees half a file; not fsynced,
+    // because losing the last few samples to a power cut costs a slightly worse
+    // forecast and no correctness.
+    writeWorkspaceStateFileAtomic(workspace, HISTORY_PATH, serializeObservations(observations), { durable: false });
   } finally {
     lease.release();
   }
