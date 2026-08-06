@@ -50,6 +50,13 @@ pub fn is_sensitive_basename(name: &str) -> bool {
 /// Workspace-relative paths whose contents are secrets despite a generic
 /// basename (SeekForge's own config.json / triggers.json, and .git/config).
 /// Mirrors the TS isSensitiveRelPath. `rel` uses "/" separators.
+///
+/// Both lists in this file are hand-maintained copies of rules that also exist
+/// in TypeScript (@seekforge/shared). Two copies of a security rule in two
+/// languages drift, so they are cross-checked behaviourally rather than by
+/// eye: tests/runtime/backend-integration.test.ts asks THIS binary to read
+/// each name and requires the answer to match the TS predicate. Add an entry
+/// on one side and that test fails naming the file.
 pub fn is_sensitive_rel_path(rel: &str) -> bool {
     matches!(
         rel,

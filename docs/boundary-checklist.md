@@ -4666,6 +4666,28 @@ prevent, moved one level down.
   gets unstuck — it ignores AbortSignal — but doing it while another member is
   mid-call turns their work into a raw "target closed" they did nothing to earn.
 
+## 418. A security rule written twice in two languages needs a test that speaks both
+
+A second implementation of a guard is a real defence — the Rust runtime mirrors
+the TypeScript sandbox precisely so a bug in one does not open the door. It is
+also a second copy of a list that someone will edit on one side only. Reading
+both and agreeing they match is not a check; it is a check that expires the
+moment either file changes.
+
+- **Do:** cross-check them BEHAVIOURALLY, at the boundary. Drive the second
+  implementation directly — not through the first, which would refuse before
+  the second ever sees the input — and require its answer to match the first
+  implementation's predicate, case by case. Then break one side on purpose and
+  confirm the test names the case.
+- **Caught:** auditing crates/runtime/src/sandbox.rs against
+  @seekforge/shared. The sensitive-file lists agreed exactly, and nothing kept
+  them agreeing; the same repository had already produced one such divergence
+  this session, where the two backends of list_files answered differently about
+  truncation. The test asks the real binary to read each name and compares
+  against isSensitiveBasename / isSensitiveRelPath.
+- **Note:** "they agree today" is worth verifying and worth saying, but it is
+  the gate that makes it stay true.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

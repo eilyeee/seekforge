@@ -1,8 +1,8 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { PermissionPolicy } from "@seekforge/shared";
+import { isSensitiveBasename, isSensitiveRelPath, type PermissionPolicy } from "@seekforge/shared";
 import { createDefaultDispatcher, type ToolContext } from "../../src/tools/index.js";
 import { createRuntimeClient, type RuntimeClient } from "../../src/runtime/client.js";
 
@@ -118,6 +118,62 @@ describe.skipIf(!hasBinary)("rust runtime backend (integration)", () => {
     expect(r.ok).toBe(true);
     const entries = (r.data as { entries: string[] }).entries;
     expect(entries).toContain("visible.txt");
+  });
+
+  /**
+   * The sensitive-file list exists TWICE — as regexes in @seekforge/shared and
+   * as string comparisons in crates/runtime/src/sandbox.rs, whose own header
+   * calls itself a second line of defense that "mirrors the TypeScript
+   * sandbox". Two hand-maintained copies of a security rule in two languages
+   * drift; this session already found one such divergence in list_files, where
+   * the two backends of one tool answered differently about truncation.
+   *
+   * So this asks the RUNTIME directly — not through the dispatcher, which
+   * would refuse in TypeScript before Rust ever saw the path — and requires it
+   * to agree with the TS predicate file by file.
+   */
+  it("refuses exactly the files the TypeScript sandbox calls sensitive", async () => {
+    const names = [
+      ".env",
+      ".env.local",
+      "server.pem",
+      "private.key",
+      "id_rsa",
+      "id_ed25519",
+      ".npmrc",
+      ".netrc",
+      ".pgpass",
+      ".git-credentials",
+      // Not sensitive: the guard must not be a blanket refusal of dotfiles or
+      // of anything that merely looks credential-adjacent.
+      "README.md",
+      ".gitignore",
+      "env.example",
+      "keyboard.ts",
+      "id_rsa_notes.md.txt",
+    ];
+    for (const name of names) writeFileSync(join(workspace, name), "x");
+
+    for (const name of names) {
+      const expected = isSensitiveBasename(name);
+      const result = await runtime
+        .call<{ content: string }>("read_file", { workspace, path: name })
+        .then(() => "read" as const)
+        .catch(() => "refused" as const);
+      expect(result, `${name} (TS says sensitive=${expected})`).toBe(expected ? "refused" : "read");
+    }
+  });
+
+  it("refuses the sensitive workspace-relative paths too", async () => {
+    // Generic basenames whose CONTENTS are secrets — SeekForge's own config
+    // holds the provider key. Basename matching cannot catch these, so both
+    // implementations carry the same short list of relative paths.
+    for (const rel of [".seekforge/config.json", ".seekforge/triggers.json", ".git/config"]) {
+      mkdirSync(join(workspace, dirname(rel)), { recursive: true });
+      writeFileSync(join(workspace, rel), "secret");
+      expect(isSensitiveRelPath(rel)).toBe(true);
+      await expect(runtime.call("read_file", { workspace, path: rel })).rejects.toThrow();
+    }
   });
 
   it("marks a truncated listing in the list itself, as the local walk does", async () => {
