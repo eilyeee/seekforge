@@ -315,6 +315,8 @@ export function MemoryView() {
                 onApplied={() => refresh(ws)}
               />
 
+              <KeywordControl key={`kw-${ws}`} workspaceId={ws} onApplied={() => refresh(ws)} />
+
               <section>
                 <div className="mb-3 flex items-center gap-2">
                   <IconCornerDownRight size={13} className="text-tertiary" />
@@ -599,6 +601,84 @@ function StatRow({ label, value }: { label: string; value: string }) {
       <dt className="text-tertiary">{label}</dt>
       <dd className="font-mono text-sm font-medium text-primary">{value}</dd>
     </div>
+  );
+}
+
+/**
+ * Backfill bilingual retrieval keywords onto the facts that have none.
+ *
+ * Keywords normally arrive with extraction, in the model call it was already
+ * making — so a fact added by hand here has none, and neither does anything
+ * remembered before the field existed. This is the only control in this view
+ * that spends money, so it shows the count first and reports the cost after.
+ */
+function KeywordControl({ workspaceId, onApplied }: { workspaceId: string; onApplied: () => void }) {
+  const t = useT();
+  const [missing, setMissing] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const requests = useRef(new LatestRequest()).current;
+
+  useEffect(() => {
+    const request = requests.begin();
+    api
+      .memoryKeywordsMissing(workspaceId)
+      .then((r) => {
+        if (requests.isCurrent(request)) setMissing(r.missing);
+      })
+      .catch(() => {
+        if (requests.isCurrent(request)) setMissing(null);
+      });
+    return () => requests.invalidate();
+  }, [requests, workspaceId]);
+
+  const run = () => {
+    const request = requests.begin();
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    api
+      .memoryBackfillKeywords({}, workspaceId)
+      .then((r) => {
+        if (!requests.isCurrent(request)) return;
+        setMissing(Math.max(0, r.missing - r.updated));
+        setNote(
+          t("memory.keywords.done", {
+            updated: r.updated,
+            missing: r.missing,
+            cost: r.usage.costUsd.toFixed(4),
+          }),
+        );
+        onApplied();
+      })
+      .catch((cause: unknown) => {
+        if (requests.isCurrent(request)) setError(String(cause));
+      })
+      .finally(() => {
+        if (requests.isCurrent(request)) setBusy(false);
+      });
+  };
+
+  // Nothing to do and nothing to explain: a workspace whose facts all carry
+  // keywords should not grow a control that does nothing.
+  if (missing === null || missing === 0) return null;
+
+  return (
+    <section>
+      <div className="mb-3 flex items-center gap-2">
+        <h2 className="text-2xs uppercase tracking-wider text-tertiary">{t("memory.keywords.title")}</h2>
+        <span className="h-px flex-1 border-t border-subtle" />
+      </div>
+      <Card className="p-4">
+        <p className="text-xs leading-relaxed text-tertiary">{t("memory.keywords.description", { count: missing })}</p>
+        <Button variant="primary" size="sm" className="mt-3" onClick={run} disabled={busy}>
+          {busy ? t("memory.keywords.running") : t("memory.keywords.runBtn")}
+        </Button>
+        {note && <p className="mt-2 text-2xs text-ok">{note}</p>}
+        {error && <p className="mt-2 text-2xs text-danger">{error}</p>}
+      </Card>
+    </section>
   );
 }
 

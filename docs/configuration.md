@@ -890,7 +890,10 @@ OpenAI-compatible, base URL without the trailing `/chat/completions`.
 fails with `vision_unconfigured` rather than pretending to look at the picture.
 
 User-owned: it names a credential destination, so a repository config cannot
-set it. Applies to every frontend — CLI, TUI and the server alike.
+set it. Applies to every frontend — CLI, TUI and the server alike; on the server
+it is scoped per workspace, because that process runs several workspaces'
+agents at the same time and a shared endpoint would send one project's image to
+another project's provider.
 
 Settable via `config set`? **No** — edit the file directly.
 
@@ -909,6 +912,14 @@ It is a name, not a path, and the file it names holds live session cookies —
 see [Browser / visual verification](browser.md) for why that distinction
 matters, how to create the file with `playwright codegen` instead of the agent,
 and what happens when a run is cancelled.
+
+**CLI and TUI only.** `seekforge serve` (and therefore the Desktop) ignores
+this key. The browser session is a single Chromium per process — one context,
+one page — while the server runs several workspaces' agents concurrently, so
+pointing that shared session at one workspace's cookie file would let another
+workspace's run inherit the login and write its own session back into the same
+file. It stays unsupported there until the browser session itself is
+per-workspace.
 
 Settable via `config set`? **No** — edit the file directly.
 

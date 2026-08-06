@@ -1,12 +1,12 @@
 import type React from "react";
 import { createRequire } from "node:module";
-import { homedir } from "node:os";
 import { render } from "ink";
 import {
   buildProvider,
   configureBrowserProfile,
   configureVision,
   resolveBrowserProfilePath,
+  seekforgeHome,
   createMcpElicitationHandler,
   createMcpSamplingHandler,
   createUsageBus,
@@ -69,12 +69,17 @@ async function main(): Promise<void> {
           ...(config.visionModel.apiKey ? { apiKey: config.visionModel.apiKey } : {}),
         }
       : null,
+    projectPath,
   );
   // Browser-session persistence, off unless the user named a profile. Resolved
   // once here, so an invalid name is a startup error the user sees rather than
   // a tool failure three prompts into a run.
   try {
-    configureBrowserProfile(config.browserProfile ? resolveBrowserProfilePath(homedir(), config.browserProfile) : null);
+    // seekforgeHome(), not homedir(): one resolution of where user-owned state
+    // lives, so all three frontends read and write the same profile file.
+    configureBrowserProfile(
+      config.browserProfile ? resolveBrowserProfilePath(seekforgeHome(), config.browserProfile) : null,
+    );
   } catch (error) {
     process.stdout.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(1);

@@ -8,6 +8,8 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   addMemoryFact,
   approveMemoryCandidate,
+  backfillFactKeywords,
+  buildProvider,
   buildSessionAudit,
   renderSessionAuditMarkdown,
   compactSessionNow,
@@ -15,6 +17,7 @@ import {
   discoverLoopVerificationPlan,
   createBackgroundTasks,
   createMemoryMaintenanceScheduler,
+  factsMissingKeywords,
   listMemoryCandidates,
   listProjectFacts,
   listSessions,
@@ -1434,6 +1437,45 @@ export function App({
             setRawMode(true);
             if (!result.ok) notice(`editor failed: ${result.error}`, "error");
             else notice("memory file saved");
+            break;
+          }
+          if (command.arg === "keywords") {
+            // "/memory keywords" — give bilingual retrieval keywords to the
+            // facts that have none, so a question asked in one language reaches
+            // an answer written in the other. Facts typed by hand never get
+            // them from extraction, which is the whole reason this exists.
+            const pendingFacts = factsMissingKeywords(projectPath);
+            if (pendingFacts.length === 0) {
+              notice("every remembered fact already has retrieval keywords");
+              break;
+            }
+            const cfg = runConfigRef.current;
+            if (!cfg.apiKey) {
+              notice("no API key configured — /memory keywords calls the model", "error");
+              break;
+            }
+            notice(`asking the model for keywords for ${pendingFacts.length} fact(s)…`);
+            void backfillFactKeywords(
+              buildProvider(
+                {
+                  provider: cfg.provider,
+                  apiKey: cfg.apiKey,
+                  baseUrl: cfg.baseUrl,
+                  modelPricing: cfg.modelPricing,
+                },
+                cfg.model,
+              ),
+              projectPath,
+            )
+              .then((r) => {
+                notice(
+                  `added keywords to ${r.updated} of ${r.missing} fact(s) in ${r.batches} request(s)` +
+                    ` — cost $${r.usage.costUsd.toFixed(4)}`,
+                );
+              })
+              .catch((err: unknown) => {
+                notice(`keyword backfill failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+              });
             break;
           }
           const facts = listProjectFacts(projectPath);

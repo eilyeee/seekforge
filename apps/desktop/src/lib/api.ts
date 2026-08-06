@@ -1,5 +1,5 @@
 /** REST client per SERVER-API.md; attaches Authorization: Bearer <token>. */
-import type { AgentEvent, ChatMessage } from "@seekforge/shared";
+import type { AgentEvent, ChatMessage, TokenUsage } from "@seekforge/shared";
 import { isMock } from "../mock";
 import type {
   AccountBalance,
@@ -617,6 +617,16 @@ export const api = {
     request<MemoryGovernanceReport>("GET", withWorkspace("/api/memory/governance", ws)),
   memoryCompact: (opts?: { dryRun?: boolean; pruneUnusedDays?: number }, ws?: string) =>
     request<CompactResult>("POST", withWorkspace("/api/memory/compact", ws), opts ?? {}),
+  /** How many facts carry no bilingual retrieval keywords. Free — no model call. */
+  memoryKeywordsMissing: (ws?: string) =>
+    request<{ missing: number }>("GET", withWorkspace("/api/memory/keywords", ws)),
+  /** Ask the model for keywords for the facts that have none. Spends money. */
+  memoryBackfillKeywords: (opts?: { limit?: number }, ws?: string) =>
+    request<{ missing: number; updated: number; batches: number; usage: TokenUsage }>(
+      "POST",
+      withWorkspace("/api/memory/keywords", ws),
+      opts ?? {},
+    ),
 
   // Skills lifecycle (workspace-scoped). Builtin skills are read-only.
   skillSetEnabled: (id: string, enabled: boolean, scope?: SkillScope, ws?: string) =>

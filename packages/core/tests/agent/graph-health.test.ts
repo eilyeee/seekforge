@@ -1,19 +1,10 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { runEngineeringGraph } from "../../src/agent/graph-engineering.js";
 import { buildEngineeringGraphHealthReport } from "../../src/agent/graph-health.js";
 import type { AgentCoreDeps } from "../../src/agent/loop.js";
-
-/**
- * Durable-engine suite: every state transition is an atomic write with two
- * fsyncs, which on a slow filesystem puts a single run at hundreds of
- * milliseconds and a multi-run test past Vitest's 5s default. See the note in
- * graph-engineering.test.ts for the measurement. Headroom, not a hang
- * workaround.
- */
-vi.setConfig({ testTimeout: 30_000 });
 
 describe("Engineering Graph health", () => {
   it("reports unknown health when the current fingerprint has no observations", async () => {

@@ -35,17 +35,39 @@ export type VisionConfig = {
 };
 
 // Module-level seam: ToolContext deliberately carries no provider credentials
-// (tools must not see API keys), so apps inject the vision endpoint once at
-// assembly time instead. configureVision(null) disables the tool again.
-let visionConfig: VisionConfig | null = null;
+// (tools must not see API keys), so apps inject the vision endpoint at assembly
+// time instead.
+//
+// Keyed BY WORKSPACE, not a single value. A CLI or TUI process serves one
+// workspace and could get away with a scalar; a server serves many, and its
+// runs overlap — its locks serialize per repository, so two workspaces execute
+// their agent loops at the same time. A scalar there is last-write-wins across
+// concurrent runs, which means one workspace's screenshot going to another
+// workspace's endpoint under another workspace's key.
+const visionConfigs = new Map<string, VisionConfig>();
+/** Fallback for callers that configured before workspaces were a concept. */
+let defaultVisionConfig: VisionConfig | null = null;
 
 /**
- * Configures the vision endpoint for the image_analyze builtin. Call once at
- * app assembly time (before the first tool run); pass null to disable.
- * Unconfigured, image_analyze fails with code "vision_unconfigured".
+ * Configures the vision endpoint for the image_analyze builtin. Pass a
+ * workspace to scope it to that workspace (what a multi-workspace host must
+ * do); omit it to set the process-wide default (single-workspace hosts).
+ * `null` clears — with a workspace, only that workspace's entry; without one,
+ * every entry, so a test or a host teardown can reset completely.
  */
-export function configureVision(config: VisionConfig | null): void {
-  visionConfig = config;
+export function configureVision(config: VisionConfig | null, workspace?: string): void {
+  if (workspace === undefined) {
+    defaultVisionConfig = config;
+    if (config === null) visionConfigs.clear();
+    return;
+  }
+  if (config === null) visionConfigs.delete(workspace);
+  else visionConfigs.set(workspace, config);
+}
+
+/** The endpoint that applies to this workspace, or null when none does. */
+function visionConfigFor(workspace: string): VisionConfig | null {
+  return visionConfigs.get(workspace) ?? defaultVisionConfig;
 }
 
 const imageAnalyzeSchema = z.object({
@@ -78,10 +100,13 @@ const imageAnalyze = defineTool({
     path: args.path,
   }),
   async run(args, ctx) {
-    if (!visionConfig) {
+    // By workspace: on a server, the run next to this one may belong to a
+    // different project with a different endpoint and key.
+    const endpoint = visionConfigFor(ctx.workspace);
+    if (!endpoint) {
       throw new ToolError("vision_unconfigured", "set visionModel in config to enable image analysis");
     }
-    const { model, baseUrl, apiKey } = visionConfig;
+    const { model, baseUrl, apiKey } = endpoint;
 
     const ext = path.extname(args.path).toLowerCase();
     const mime = MIME_BY_EXTENSION[ext];

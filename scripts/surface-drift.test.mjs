@@ -97,12 +97,24 @@ test("every REST route path is described in SERVER-API.md", () => {
   for (const name of readdirSync(dir)) {
     if (!name.endsWith(".ts") || name.includes(".test.")) continue;
     const source = readFileSync(join(dir, name), "utf8");
-    for (const match of source.matchAll(/\.(get|post|put|patch|delete)\(\s*"(\/api\/[^"]*)"/g)) {
+    // Two registration styles exist, and this check used to see only the first:
+    // a router call (`.post("/api/x")`) and a hand-rolled dispatch
+    // (`method === "POST" && path === "/api/x"`). Every route in memory.ts,
+    // files.ts, git.ts, security.ts, sessions.ts and settings.ts is written the
+    // second way, so 48 routes were exempt from a check whose name promises
+    // "every REST route" — and 8 of them were in fact undocumented.
+    const routes = [
+      ...[...source.matchAll(/\.(get|post|put|patch|delete)\(\s*"(\/api\/[^"]*)"/g)].map((m) => ({
+        method: m[1].toUpperCase(),
+        path: m[2],
+      })),
+      ...[...source.matchAll(/path === "(\/api\/[^"]*)"/g)].map((m) => ({ method: "", path: m[1] })),
+    ];
+    for (const route of routes) {
       // Path parameters are named freely in docs (:id vs :sessionId), so compare
       // on the static prefix before the first parameter.
-      const path = match[2];
-      const prefix = path.split("/:")[0];
-      if (!documented.includes(prefix)) missing.push(`${name}: ${match[1].toUpperCase()} ${path}`);
+      const prefix = route.path.split("/:")[0];
+      if (!documented.includes(prefix)) missing.push(`${name}: ${route.method} ${route.path}`.trim());
     }
   }
   assert.deepEqual(missing, [], "REST routes missing from apps/server/SERVER-API.md");

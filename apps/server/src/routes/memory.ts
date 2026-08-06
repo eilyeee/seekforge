@@ -5,9 +5,12 @@
 
 import {
   addMemoryFact,
+  backfillFactKeywords,
+  buildProvider,
   approveMemoryCandidate,
   compactProjectMemory,
   listMemoryCandidates,
+  factsMissingKeywords,
   listProjectFacts,
   MEMORY_CANDIDATE_TYPES,
   memoryStats,
@@ -20,6 +23,7 @@ import {
   type MemoryCandidateType,
 } from "@seekforge/core";
 import { readJsonBody, sendApiError, sendJson } from "../http.js";
+import { loadConfig } from "../config.js";
 import type { RouteCtx } from "./context.js";
 
 export type ApprovedFact = {
@@ -143,6 +147,39 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
 
   if (method === "GET" && path === "/api/memory/governance") {
     return sendJson(res, 200, memoryGovernance(workspace));
+  }
+
+  // Bilingual retrieval keywords for the facts that have none. GET reports how
+  // many would be touched and needs no provider; POST spends money, which is
+  // why the two are separate verbs rather than a dryRun flag on one.
+  if (method === "GET" && path === "/api/memory/keywords") {
+    return sendJson(res, 200, { missing: factsMissingKeywords(workspace).length });
+  }
+  if (method === "POST" && path === "/api/memory/keywords") {
+    const body = await readJsonBody(req, res, { emptyOk: true });
+    if (body === undefined) return;
+    const { limit } = (body ?? {}) as { limit?: unknown };
+    if (limit !== undefined && (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1)) {
+      return sendApiError(res, 400, "bad_request", "limit must be a positive integer");
+    }
+    const config = loadConfig(workspace);
+    if (!config.apiKey) {
+      return sendApiError(res, 400, "bad_request", "no API key configured for the keyword backfill");
+    }
+    const provider = buildProvider(
+      {
+        provider: config.provider,
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        modelPricing: config.modelPricing,
+      },
+      config.model,
+    );
+    return sendJson(
+      res,
+      200,
+      await backfillFactKeywords(provider, workspace, { ...(limit !== undefined ? { limit } : {}) }),
+    );
   }
 
   // Deterministic project-memory compaction (dedupe/merge, optional prune).

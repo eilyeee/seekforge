@@ -9,6 +9,7 @@
 import { existsSync } from "node:fs";
 import {
   buildAgentCoreDeps,
+  configureVision,
   graphHandlersWithPlugins,
   createAgentCore,
   createDefaultDispatcher,
@@ -41,7 +42,7 @@ import {
   type RunEngineeringGraphOptions,
 } from "@seekforge/core";
 import type { ConfirmResult, PermissionRequest, PermissionRule, RunOverrides } from "@seekforge/shared";
-import { loadConfig } from "./config.js";
+import { loadConfig, type ServerConfig } from "./config.js";
 
 export type { RunOverrides } from "@seekforge/shared";
 
@@ -105,6 +106,28 @@ export type RunGraphFn = (
  * feeds it to createAgentCore) and runDefaultLoop (which feeds it to
  * runAutoLoop) so a loop's inner runs use the exact same plumbing as a run.
  */
+/**
+ * Apply the config keys that configure builtin tools, scoped to one workspace.
+ * Exported so a test can assert the mapping without assembling a whole agent,
+ * and idempotent because a fresh agent is built per run.
+ */
+export function configureServerTools(workspace: string, config: ServerConfig): void {
+  configureVision(
+    config.visionModel?.baseUrl
+      ? {
+          model: config.visionModel.model,
+          baseUrl: config.visionModel.baseUrl,
+          ...(config.visionModel.apiKey ? { apiKey: config.visionModel.apiKey } : {}),
+        }
+      : null,
+    // Scoped to THIS workspace. The server's locks serialize per repository, so
+    // the run beside this one may belong to a different project — a single
+    // process-wide endpoint would send one workspace's screenshot to another
+    // workspace's provider, under its key.
+    workspace,
+  );
+}
+
 export function buildAgentDeps(
   opts: CreateAgentOptions,
   mcpToolSpecs: ToolSpec[] = [],
@@ -113,6 +136,22 @@ export function buildAgentDeps(
   const config = loadConfig(opts.workspace);
   const pluginContributions = pluginSnapshot ?? loadPluginContributions(opts.workspace);
   const hooks = mergePluginHooks(opts.workspace, config.hooks, pluginContributions);
+
+  // Builtin tools that need app-level configuration. Module-level seams rather
+  // than deps, because ToolContext carries no credentials — so every entry
+  // point that assembles an agent has to apply them, and this is the server's.
+  // Until this existed, `visionModel` did nothing in the Desktop, which is
+  // served from here: image_analyze reported "vision_unconfigured" no matter
+  // what the config said.
+  //
+  // `browserProfile` is deliberately NOT applied here. The browser session is
+  // one Chromium instance per PROCESS — one context, one page — while this
+  // server runs several workspaces' agents at once. Pointing that single shared
+  // session at one workspace's cookie file would let another workspace's run
+  // inherit the login, and write its own session back into the same file. It
+  // stays a CLI/TUI setting until the browser session itself is per-workspace;
+  // see docs/browser.md.
+  configureServerTools(opts.workspace, config);
 
   let runtime: RuntimeClient | undefined;
   if (config.runtimeBin && existsSync(config.runtimeBin)) {

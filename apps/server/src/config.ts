@@ -108,6 +108,14 @@ export type ServerConfig = {
    * Mirrors the CLI/TUI config key. Edit the file directly.
    */
   editFormat?: "patch" | "whole";
+  /**
+   * Vision endpoint for the `image_analyze` builtin (OpenAI-compatible). The
+   * main model usually cannot see images, so this is normally a separate model
+   * and key. Unset leaves the tool reporting "vision_unconfigured".
+   * User-owned: it names a credential destination, so a repository config
+   * cannot point it anywhere.
+   */
+  visionModel?: { model: string; baseUrl?: string; apiKey?: string };
   /** User-owned shell hooks fired around tool calls / lifecycle. */
   hooks?: HookConfig;
   /** MCP servers (Claude Code-compatible). Edit the file directly; not settable via `config set`. */

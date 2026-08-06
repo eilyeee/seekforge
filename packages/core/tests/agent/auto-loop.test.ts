@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChatMessage, ChatResponse, ToolCall, ToolResult } from "@seekforge/shared";
 import type { ChatRequest } from "../../src/provider/index.js";
 import type { ToolContext, ToolDispatcher } from "../../src/tools/index.js";
@@ -125,15 +125,6 @@ const baseOpts = (workspace: string, verify: LoopOptions["verify"]): LoopOptions
   verifyCommand: "echo test",
   verify,
 });
-
-/**
- * Durable-engine suite: every state transition is an atomic write with two
- * fsyncs, which on a slow filesystem puts a single run at hundreds of
- * milliseconds and a multi-run test past Vitest's 5s default. See the note in
- * graph-engineering.test.ts for the measurement. Headroom, not a hang
- * workaround.
- */
-vi.setConfig({ testTimeout: 30_000 });
 
 describe("runAutoLoop", () => {
   let workspace: string;

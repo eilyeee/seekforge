@@ -101,8 +101,9 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
   },
   {
     name: "memory",
-    args: "[candidates | edit <file>]",
-    summary: "list project memory facts (candidates reviews pending; edit opens a memory file)",
+    args: "[candidates | keywords | edit <file>]",
+    summary:
+      "list project memory facts (candidates reviews pending; keywords backfills bilingual search terms; edit opens a memory file)",
     group: "context",
   },
   {

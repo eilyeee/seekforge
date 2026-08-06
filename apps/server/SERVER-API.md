@@ -200,8 +200,18 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | DELETE /api/plugins/:id | uninstall a user plugin and remove its approval state |
 | GET /api/memory | `{projectMd: string \| null, candidates: MemoryCandidate[], facts: MemoryFact[], maintenance: MemoryMaintenanceState \| null}`; maintenance is the last successful automatic-compaction summary, never a live mutation |
 | GET /api/memory/governance | read-only decay/quality/provenance, retrieval effectiveness, duplicate groups, and conflict candidates |
+| GET /api/memory/stats | extraction-quality stats — approved/pending/rejected counts, used fraction, rejection rate (read-only) |
+| POST /api/memory/fact | body `{content, type?, pending?, scope?}` — adds a fact directly (no model). 400 on empty `content` or an unknown `type` |
+| DELETE /api/memory/fact | body with exactly one of `{index}` or `{match}` → `{removed}`; a missing or ambiguous match is a 400, not a 500 |
+| POST /api/memory/compact | body `{dryRun?, pruneUnusedDays?}` — deterministic dedupe/merge over project.md, optionally archiving facts unused for `<days>` |
+| GET /api/memory/keywords | `{missing}` — how many facts carry no bilingual retrieval keywords. Read-only and provider-free, so the count never costs anything |
+| POST /api/memory/keywords | body `{limit?}` → `{missing, updated, batches, usage}` — asks the model for bilingual retrieval keywords for the facts that have none, ~20 per request. The one memory route that spends money; 400 when no API key is configured |
 | POST /api/memory/:id/approve | updated `MemoryCandidate` |
 | POST /api/memory/:id/reject | updated `MemoryCandidate` |
+| GET /api/doctor | environment report — `{nodeVersion, git, runtimeBin: {set, exists}, mcpServerCount, modelCount, workspace}`; `git` is null when git is absent |
+| GET /api/git/status | `{notGit?, branch, files}` — working-tree status with the paths the UI stages/discards by |
+| POST /api/git/commit | body `{message}` → `{ok, commit}` — commits the staged tree and returns the new HEAD |
+| POST /api/sessions/prune | body `{olderThanDays?, keepLast?, dryRun?}` — removes stored sessions; 409 `session_busy` while a session is running |
 | GET /api/output-styles | `{styles: [{name, kind: "builtin"\|"custom"}]}` — selectable output styles: the in-package built-ins plus every custom `.seekforge/output-styles/*.md` of the workspace |
 | POST /api/commands/expand | body `{name, args}` → `{text}` — expands a custom slash command server-side: interpolates `args` into `$ARGUMENTS` / `$1`..`$9` and runs any ``!`shell` `` injections in the workspace (`/bin/sh -c`, 10 s timeout, 1 MB stdout cap; cwd = workspace), returning the final text. Shell expansion shares the repository/workspace mutation guard and returns 409 while another process owns the workspace. `name` resolves over the project + user command layers (project wins); 400 on missing/empty `name`, 404 `unknown command: <name>` |
 | GET /api/hooks | `{hooks}` — the user-owned hooks block from `~/.seekforge/config.json` (`{}` when none) |

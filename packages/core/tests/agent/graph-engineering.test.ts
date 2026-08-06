@@ -52,23 +52,16 @@ const deps = {} as AgentCoreDeps;
 /**
  * These tests drive the DURABLE engine, and durability is what makes them slow:
  * every state transition is an atomic write — temp file, fsync, rename, fsync
- * the parent directory — so each one costs two fsyncs. Measured on this
- * repository's macOS dev machine, a single-node graph run performs 9 such
- * writes (5 of them the graph checkpoint itself) at roughly 40ms per fsync,
- * putting one trivial run at ~600ms and a test that runs a graph twice with a
- * retry at 3-8s.
+ * the parent directory — so each one costs two fsyncs. Measured on a macOS dev
+ * machine, a single-node graph run performs 9 such writes (5 of them the graph
+ * checkpoint itself) at roughly 40ms per fsync, putting one trivial run at
+ * ~600ms and a test that runs a graph twice with a retry at 3-8s.
  *
- * Vitest's default 5s timeout therefore does not fit this file, and the tests
- * that sat just under it turned into failures whenever the machine was busy
- * (33 of them at once, under a load average of 79). This is headroom for a slow
- * filesystem, not a workaround for a hang: if a graph test ever takes 30s,
- * something is genuinely wrong.
- *
- * Do NOT "fix" a timeout here by weakening the write path. The fsyncs are the
- * feature — a checkpoint that survives a crash is the entire point of a durable
- * graph.
+ * The timeout that accommodates this lives in packages/core/vitest.config.ts,
+ * so every entry point agrees on it. Do NOT "fix" a timeout here by weakening
+ * the write path: the fsyncs are the feature — a checkpoint that survives a
+ * crash is the entire point of a durable graph.
  */
-vi.setConfig({ testTimeout: 30_000 });
 
 describe("runEngineeringGraph", () => {
   const workspaces: string[] = [];
