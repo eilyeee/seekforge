@@ -165,6 +165,11 @@ once, and every later run starts authenticated:
 npx playwright codegen --save-storage ~/.seekforge/browser-profiles/work.json https://example.com
 ```
 
+Two projects may name the same profile — that is how you say "both of these use
+my work login". They then share the file, so the run that finishes LAST writes
+it back: if one logged in while the other was open, the later teardown replaces
+that session. Give them different names to keep their logins apart.
+
 The profile is written when a run **finishes**. Cancelling a run (Ctrl+C, stop)
 closes the browser without saving: stopping halfway through a login redirect, or
 just after a cookie rotated, would otherwise replace a working session with a

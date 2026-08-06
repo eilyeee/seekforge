@@ -27,7 +27,18 @@ import { readFactMeta, recordFactAdded } from "./store.js";
 
 /** Facts per request. Small enough that one bad response costs little. */
 const BATCH_SIZE = 20;
-/** Hard ceiling on facts touched by one call, regardless of `limit`. */
+/**
+ * How many facts one unqualified call touches.
+ *
+ * This is the number a button press, a slash command or a bare `memory
+ * keywords` spends, so it is deliberately small: two requests, a predictable
+ * bill, and press again to continue — the pass only ever touches facts that
+ * still have none, so repeating it finishes the job instead of redoing it. The
+ * default used to be the hard ceiling below, which meant one click could issue
+ * 25 requests against a memory nobody had counted.
+ */
+const DEFAULT_LIMIT = 40;
+/** Hard ceiling on facts touched by one call, whatever `limit` asks for. */
 const MAX_FACTS = 500;
 
 const SYSTEM_PROMPT = [
@@ -122,7 +133,7 @@ export async function backfillFactKeywords(
   opts: { limit?: number; signal?: AbortSignal } = {},
 ): Promise<BackfillResult> {
   const missing = factsMissingKeywords(workspace).map((line) => ({ body: bulletBody(line), line }));
-  const limit = Math.min(opts.limit ?? MAX_FACTS, MAX_FACTS);
+  const limit = Math.min(opts.limit ?? DEFAULT_LIMIT, MAX_FACTS);
   const targets = missing.slice(0, limit);
   if (targets.length === 0) return { missing: missing.length, updated: 0, batches: 0, usage: ZERO_USAGE };
 

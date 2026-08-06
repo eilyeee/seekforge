@@ -59,6 +59,7 @@ export const commands = {
     "cmd.memory.candidateKeywords": "      keywords (matched, never shown to the model): {keywords}",
     "cmd.memory.keywordsMissing": "{count} fact(s) have no retrieval keywords (run without --dry-run to add them)",
     "cmd.memory.keywordsDone": "added keywords to {updated} of {missing} fact(s) in {batches} request(s)",
+    "cmd.memory.keywordsRemaining": "  {remaining} fact(s) still have none — run it again, or pass --limit",
     "cmd.memory.keywordsUsage": "  tokens: {prompt} prompt, {completion} completion — cost ${cost}",
     "cmd.memory.addedQueued":
       "queued pending candidate {id}: [{type}] {content}\napprove with `seekforge memory approve {id}`",
@@ -270,6 +271,7 @@ export const commands = {
     "cmd.memory.candidateKeywords": "      检索关键词（仅用于匹配，不会展示给模型）：{keywords}",
     "cmd.memory.keywordsMissing": "有 {count} 条事实没有检索关键词（去掉 --dry-run 即可补齐）",
     "cmd.memory.keywordsDone": "已为 {missing} 条缺关键词的事实中的 {updated} 条补齐关键词，共 {batches} 次请求",
+    "cmd.memory.keywordsRemaining": "  还有 {remaining} 条没有关键词 —— 再跑一次，或用 --limit 指定数量",
     "cmd.memory.keywordsUsage": "  token：{prompt} 输入，{completion} 输出 —— 成本 ${cost}",
     "cmd.memory.addedQueued": "已排队待定候选 {id}：[{type}] {content}\n使用 `seekforge memory approve {id}` 批准",
     "cmd.memory.addedUser": "已添加到用户记忆（~/.seekforge）：[{type}] {content}",

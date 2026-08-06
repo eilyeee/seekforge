@@ -108,6 +108,10 @@ export SEEKFORGE_PLAYWRIGHT=/path/to/node_modules/playwright-core/index.mjs
 npx playwright codegen --save-storage ~/.seekforge/browser-profiles/work.json https://example.com
 ```
 
+两个项目可以取同一个 profile 名 —— 这正是「这两个项目都用我的工作登录」的表达方式。
+它们于是共用同一个文件，因此**最后结束**的那次运行写回：如果其中一个在另一个还开着时
+登录了，后结束的那次销毁会把它替换掉。想让两份登录互不干扰，就取不同的名字。
+
 profile 是在一次运行**正常结束**时写入的。取消运行（Ctrl+C、停止）会关闭浏览器但
 不保存：在登录跳转跑到一半、或某个 cookie 刚刚轮换之后停下来，否则就会用一个坏掉的
 会话覆盖掉本来能用的那个。留在磁盘上的，始终是最后一次正常结束的运行。

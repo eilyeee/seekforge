@@ -207,6 +207,34 @@ describe("browser sessions are per workspace", () => {
     expect(currentPageUrl(A)).toBeUndefined();
   });
 
+  it("closes a session opened while disposal was already running", async () => {
+    await reset();
+    await getPage(A);
+    // Closing is async. Iterating one snapshot of the map would leave a session
+    // opened during that await running — and its page with it.
+    const disposing = disposeBrowser();
+    const late = getPage(B);
+    await Promise.all([disposing, late]);
+    await disposeBrowser();
+    expect(currentPageUrl(A)).toBeUndefined();
+    expect(currentPageUrl(B)).toBeUndefined();
+    expect(fake.browserCloses).toBeGreaterThanOrEqual(1);
+  });
+
+  it("lets two workspaces share one named profile, last finish winning", async () => {
+    await reset();
+    // Naming the same profile in two projects is a request to share one login,
+    // and sharing means the later teardown writes back. Pinned so it stays a
+    // decision rather than becoming a surprise.
+    configureBrowserProfile("/nowhere/shared.json", A);
+    configureBrowserProfile("/nowhere/shared.json", B);
+    await getPage(A);
+    await getPage(B);
+    expect(fake.contexts).toBe(2);
+    await disposeBrowser();
+    configureBrowserProfile(null);
+  });
+
   it("scopes the session profile by workspace too", async () => {
     await reset();
     // A profile configured for one workspace must not become another's login.

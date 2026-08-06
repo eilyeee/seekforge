@@ -96,6 +96,17 @@ export function configureBrowserProfile(path: string | null, workspace?: string)
   else storageStatePaths.set(workspace, path);
 }
 
+/**
+ * The profile file this workspace loads from and writes back to.
+ *
+ * Two workspaces may name the same profile, and that is the point of naming
+ * one: "both of these projects use my work login". They then share the file,
+ * which means the LAST run to finish writes back — if one of them logged in
+ * while the other was also open, the later teardown replaces it. That is how a
+ * shared browser profile behaves anywhere, it is atomic (temp file, rename), so
+ * the file is never torn — but it is worth knowing before naming two projects
+ * the same thing. Give them different names to keep their logins apart.
+ */
 function storageStatePathFor(workspace: string): string | null {
   return storageStatePaths.get(workspace) ?? defaultStorageStatePath;
 }
@@ -329,7 +340,14 @@ export async function runBrowserOperation<T>(
  */
 export async function disposeBrowser(): Promise<void> {
   leases.clear();
-  await Promise.all([...sessions.keys()].map((workspace) => closeSession(workspace)));
+  // Until the map is empty, not once over a snapshot of it: closing is async,
+  // and a caller can open a session while this is awaiting the previous ones —
+  // a snapshot would leave that one running and its Chromium page with it. The
+  // bound is a backstop against a pathological open/close loop keeping this
+  // spinning; disposal is teardown, not a place to hang.
+  for (let pass = 0; pass < 10 && sessions.size > 0; pass++) {
+    await Promise.all([...sessions.keys()].map((workspace) => closeSession(workspace)));
+  }
   await closeBrowserProcess();
 }
 

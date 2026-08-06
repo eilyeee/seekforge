@@ -612,17 +612,6 @@ function StatRow({ label, value }: { label: string; value: string }) {
  * remembered before the field existed. This is the only control in this view
  * that spends money, so it shows the count first and reports the cost after.
  */
-/**
- * How many facts one press may touch.
- *
- * The backfill batches ~20 facts per model request and would otherwise walk up
- * to 500 — 25 requests from a single click, on a memory the user has never
- * counted. A bounded press costs a predictable amount and can simply be pressed
- * again: the command only ever touches facts that still have no keywords, so
- * repeating it finishes the job instead of redoing it.
- */
-const KEYWORD_BATCH = 40;
-
 function KeywordControl({ workspaceId, onApplied }: { workspaceId: string; onApplied: () => void }) {
   const t = useT();
   const [missing, setMissing] = useState<number | null>(null);
@@ -650,7 +639,9 @@ function KeywordControl({ workspaceId, onApplied }: { workspaceId: string; onApp
     setError(null);
     setNote(null);
     api
-      .memoryBackfillKeywords({ limit: KEYWORD_BATCH }, workspaceId)
+      // No limit passed: core's default is what bounds one press, so the
+      // number lives in one place rather than in each caller.
+      .memoryBackfillKeywords({}, workspaceId)
       .then((r) => {
         if (!requests.isCurrent(request)) return;
         const left = Math.max(0, r.missing - r.updated);

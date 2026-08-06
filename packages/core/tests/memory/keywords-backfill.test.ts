@@ -95,6 +95,23 @@ describe("backfillFactKeywords", () => {
     expect(factsMissingKeywords(ws)).toHaveLength(20);
   });
 
+  it("bounds an unqualified call, so no single press spends the whole memory", async () => {
+    const ws = makeWorkspace();
+    seedFacts(ws, 100);
+    // 40 facts = two requests. Before this default, a bare call walked up to
+    // 500 — 25 requests from one button press or slash command, on a memory
+    // nobody had counted.
+    const answers: Record<string, string[]> = {};
+    for (let i = 1; i <= 20; i++) answers[String(i)] = ["kw", "关键词"];
+    const provider = makeFakeProvider([fenced(answers), fenced(answers)]);
+    const result = await backfillFactKeywords(provider, ws);
+    expect(result.batches).toBe(2);
+    expect(result.updated).toBe(40);
+    // And it says how much is left, so "press again" is an informed choice.
+    expect(result.missing).toBe(100);
+    expect(factsMissingKeywords(ws)).toHaveLength(60);
+  });
+
   it("honors a limit, so a big memory can be done in affordable pieces", async () => {
     const ws = makeWorkspace();
     seedFacts(ws, 10);

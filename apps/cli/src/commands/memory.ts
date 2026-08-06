@@ -234,6 +234,8 @@ export async function memoryKeywordsCommand(
   );
   // What it cost. A command that spends money silently leaves a bill nobody
   // can attribute — and this is the only one in the memory group that does.
+  const left = Math.max(0, result.missing - result.updated);
+  if (left > 0) console.log(t("cmd.memory.keywordsRemaining", { remaining: left }));
   console.log(
     t("cmd.memory.keywordsUsage", {
       prompt: result.usage.promptTokens,
