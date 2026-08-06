@@ -312,6 +312,8 @@ export const views = {
     "memory.keywords.runBtn": "Add keywords",
     "memory.keywords.running": "Asking the model…",
     "memory.keywords.done": "added keywords to {updated} of {missing} fact(s) — cost ${cost}",
+    "memory.keywords.donePartial":
+      "added keywords to {updated} of {missing} fact(s) — cost ${cost}. {remaining} left; press again to continue.",
     "memory.factsSection": "approved facts ({count})",
     "memory.factsEmpty": "No approved facts yet.",
     "memory.factUsage": "used {count} · added {age}",
@@ -981,6 +983,8 @@ export const views = {
     "memory.keywords.runBtn": "补齐关键词",
     "memory.keywords.running": "正在询问模型…",
     "memory.keywords.done": "已为 {missing} 条中的 {updated} 条补齐关键词 —— 成本 ${cost}",
+    "memory.keywords.donePartial":
+      "已为 {missing} 条中的 {updated} 条补齐关键词 —— 成本 ${cost}。还剩 {remaining} 条，可再次点击继续。",
     "memory.factsSection": "已批准的事实（{count}）",
     "memory.factsEmpty": "暂无已批准的事实。",
     "memory.factUsage": "已使用 {count} 次 · 添加于 {age}",

@@ -19,10 +19,10 @@ import { readFactMeta, recordFactAdded } from "./store.js";
  * user-initiated pass over the facts that lack keywords, batched into as few
  * requests as possible.
  *
- * SCOPE: project memory only. The fact-meta sidecar is workspace-scoped, as is
- * the transaction lease that guards it, so global (cross-project) facts have
- * nowhere to put keywords and are left alone rather than silently skipped —
- * `backfillFactKeywords` reports what it examined.
+ * SCOPE: whichever root it is given. A workspace holds a project's facts; the
+ * SeekForge home holds the global ones beside their own project.md, with the
+ * same sidecar and the same lease — so `backfillFactKeywords(provider,
+ * seekforgeHome())` backfills cross-project memory with no special case.
  */
 
 /** Facts per request. Small enough that one bad response costs little. */

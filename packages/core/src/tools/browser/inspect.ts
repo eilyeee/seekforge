@@ -45,12 +45,13 @@ export const browserScreenshot = defineTool({
   }),
   async run(args, ctx) {
     await loadPlaywright();
-    const p = requirePage();
+    const p = requirePage(ctx.workspace);
     const rel = args.path ?? path.join(".seekforge", "uploads", `screenshot-${Date.now()}.png`);
     const resolved = resolveForWrite(ctx.workspace, rel);
     fs.mkdirSync(path.dirname(resolved), { recursive: true });
     try {
       await runBrowserOperation(
+        ctx.workspace,
         p.screenshot({ path: resolved, fullPage: true, timeout: ACTION_TIMEOUT_MS }),
         ctx.signal,
         "Browser screenshot",
@@ -98,7 +99,7 @@ export const browserSnapshot = defineTool({
   classify: () => ({ permission: "readonly", description: "Snapshot the current browser page" }),
   async run(_args, ctx) {
     await loadPlaywright();
-    const p = requirePage();
+    const p = requirePage(ctx.workspace);
     // Extract a compact accessibility-ish summary in the page context. DOM
     // globals are reached through globalThis so this typechecks without the
     // "dom" lib (the body runs in the browser, not in Node).
@@ -111,6 +112,7 @@ export const browserSnapshot = defineTool({
     // alone, so everything below stays inline. scripts/browser-tools-smoke.mts
     // runs under tsx and fails if this regresses.
     const snap = (await runBrowserOperation(
+      ctx.workspace,
       p.evaluate((max: number) => {
         type ElementLike = {
           textContent?: string | null;
@@ -173,10 +175,10 @@ export const browserConsole = defineTool({
     "Interactions do not clear it, so a click's errors are still here afterwards. Use browser_network for requests that completed (including ones that returned 4xx/5xx). Read-only — call browser_navigate first.",
   schema: z.object({}),
   classify: () => ({ permission: "readonly", description: "Read the current browser page's console" }),
-  async run() {
+  async run(_args, ctx) {
     await loadPlaywright();
-    requirePage();
-    const { console: consoleEntries, errors, failedRequests } = capturedActivity();
+    requirePage(ctx.workspace);
+    const { console: consoleEntries, errors, failedRequests } = capturedActivity(ctx.workspace);
     return { data: { console: consoleEntries, errors, failedRequests } };
   },
 });
@@ -193,10 +195,10 @@ export const browserNetwork = defineTool({
     "This is the half browser_console cannot show: a fetch that returns 500 raises no console message and no page error, so a page that 'loaded fine' can still have a broken data call. Read-only — call browser_navigate first.",
   schema: networkSchema,
   classify: () => ({ permission: "readonly", description: "Read the current browser page's network activity" }),
-  async run(args) {
+  async run(args, ctx) {
     await loadPlaywright();
-    requirePage();
-    const all = capturedActivity().network;
+    requirePage(ctx.workspace);
+    const all = capturedActivity(ctx.workspace).network;
     const matching = all.filter(
       (entry) =>
         (args.urlContains === undefined || entry.url.includes(args.urlContains)) &&

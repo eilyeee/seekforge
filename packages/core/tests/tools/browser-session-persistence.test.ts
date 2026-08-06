@@ -31,6 +31,7 @@ vi.mock("../../src/tools/browser/playwright.js", async (importActual) => {
   const context = {
     newPage: async () => page,
     route: async () => {},
+    close: async () => {},
     storageState: async () => {
       fake.stateCalls += 1;
       if (fake.releaseState) {
@@ -66,6 +67,9 @@ const { acquireBrowserLease, configureBrowserProfile, disposeBrowser, resolveBro
 // getPage/runBrowserOperation are session-internal (the tools use them, not apps).
 const { getPage, runBrowserOperation } = await import("../../src/tools/browser/session.js");
 
+/** One workspace for these tests; isolation across workspaces has its own file. */
+const WS = "/ws/persistence";
+
 function fakeHome(): string {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "seekforge-home-")));
 }
@@ -85,24 +89,24 @@ describe("browser session persistence", () => {
     const profile = resolveBrowserProfilePath(home, "work");
     configureBrowserProfile(profile);
 
-    const lease = acquireBrowserLease();
-    await getPage();
+    const lease = acquireBrowserLease(WS);
+    await getPage(WS);
     // A first run has nothing to restore from — the context starts logged out.
     expect(fake.contextOptions[0]).toBeUndefined();
     await lease.release();
 
     expect(JSON.parse(fs.readFileSync(profile, "utf8")).cookies).toHaveLength(1);
 
-    const second = acquireBrowserLease();
-    await getPage();
+    const second = acquireBrowserLease(WS);
+    await getPage(WS);
     expect(fake.contextOptions[1]).toEqual({ storageState: profile });
     await second.release();
   });
 
   it("keeps every run ephemeral when no profile is configured", async () => {
     configureBrowserProfile(null);
-    const lease = acquireBrowserLease();
-    await getPage();
+    const lease = acquireBrowserLease(WS);
+    await getPage(WS);
     await lease.release();
     // Not merely "wrote nowhere" — it never asked the context for its cookies.
     expect(fake.stateCalls).toBe(0);
@@ -116,9 +120,9 @@ describe("browser session persistence", () => {
     fs.writeFileSync(profile, JSON.stringify({ cookies: [{ name: "session", value: "the good one" }] }));
 
     const controller = new AbortController();
-    const lease = acquireBrowserLease();
-    await getPage();
-    const pending = runBrowserOperation(new Promise(() => {}), controller.signal, "navigate").catch(() => {});
+    const lease = acquireBrowserLease(WS);
+    await getPage(WS);
+    const pending = runBrowserOperation(WS, new Promise(() => {}), controller.signal, "navigate").catch(() => {});
     controller.abort();
     await pending;
     await lease.release();
@@ -135,8 +139,8 @@ describe("browser session persistence", () => {
     // Hold storageState() open so the first teardown is provably mid-write.
     fake.releaseState = () => {};
 
-    const lease = acquireBrowserLease();
-    await getPage();
+    const lease = acquireBrowserLease(WS);
+    await getPage(WS);
     const first = lease.release();
     await new Promise((resolve) => setImmediate(resolve));
 

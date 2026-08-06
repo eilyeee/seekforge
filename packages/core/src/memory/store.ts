@@ -508,6 +508,11 @@ export function readSubdirMemories(workspace: string): SubdirMemory[] {
   return results;
 }
 
+/** Per-fact metadata for the GLOBAL memory file (its own sidecar, same shape). */
+export function readGlobalFactMeta(): Record<string, FactMeta> {
+  return readFactMeta(seekforgeHome());
+}
+
 /**
  * Reads the global (cross-project) memory file under the SeekForge home, with
  * `@import` lines expanded. Returns undefined when the file is absent.
@@ -682,11 +687,21 @@ export function appendGlobalFact(candidate: MemoryCandidate): void {
         `# Global Memory\n${bullet}\n`,
         MAX_MEMORY_DOCUMENT_BYTES,
       );
+      recordFactAdded(home, bullet, candidate.keywords);
       return;
     }
-    if (existing.split("\n").some((line) => line.trim() === bullet)) return;
+    if (existing.split("\n").some((line) => line.trim() === bullet)) {
+      // Already present, but the candidate may carry keywords it lacks — the
+      // same backfill-on-re-add the project path does.
+      recordFactAdded(home, bullet, candidate.keywords);
+      return;
+    }
     const sep = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
     writeMemoryStateFile(home, memoryRelPath("project.md"), `${existing}${sep}${bullet}\n`, MAX_MEMORY_DOCUMENT_BYTES);
+    // The SeekForge home is a state root exactly like a workspace, so the same
+    // sidecar lives beside the global project.md. Without this a fact promoted
+    // to global silently lost its retrieval keywords — and its addedAt/uses.
+    recordFactAdded(home, bullet, candidate.keywords);
   });
 }
 

@@ -531,7 +531,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       try {
         if (depth === 0) {
           lspLease = acquireLspServerLease(input.projectPath);
-          browserLease = acquireBrowserLease();
+          browserLease = acquireBrowserLease(input.projectPath);
         }
         const trace = createSessionTrace(input.projectPath, sessionId);
         const emit = (e: AgentEvent): AgentEvent => {

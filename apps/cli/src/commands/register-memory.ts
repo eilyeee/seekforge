@@ -79,8 +79,9 @@ export function registerMemoryCommands(program: Command): void {
     .command("keywords")
     .option("--dry-run", "report how many facts lack keywords, without calling the model")
     .option("--limit <n>", "backfill at most this many facts", parseNonNegativeInt)
+    .option("-g, --global", "backfill the global (cross-project) memory instead of this project's")
     .description("give bilingual retrieval keywords to facts that have none (calls the model)")
-    .action(async (opts: { dryRun?: boolean; limit?: number }) => {
-      await memoryKeywordsCommand({ dryRun: opts.dryRun, limit: opts.limit });
+    .action(async (opts: { dryRun?: boolean; limit?: number; global?: boolean }) => {
+      await memoryKeywordsCommand({ dryRun: opts.dryRun, limit: opts.limit, global: opts.global });
     });
 }

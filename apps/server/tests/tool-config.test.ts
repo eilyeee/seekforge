@@ -14,9 +14,8 @@ import type { ServerConfig } from "../src/config.js";
  * process this one serves many workspaces and runs them concurrently — its
  * locks serialize per repository, not globally.
  *
- * `browserProfile` is deliberately absent from ServerConfig: the browser
- * session is one Chromium per process, so a per-workspace cookie file cannot be
- * honored by a shared context. See the note in apps/server/src/agent.ts.
+ * `browserProfile` is honored here too, now that the browser session itself is
+ * keyed by workspace — one Chromium process, one context per workspace.
  */
 
 const base: ServerConfig = { apiKey: "sk-test", model: "deepseek-v4-flash" };
@@ -35,6 +34,31 @@ async function analyzeErrorCode(workspace = process.cwd()): Promise<string | und
 }
 
 describe("configureServerTools", () => {
+  it("scopes the browser profile to the workspace that configured it", () => {
+    // A profile is a stored login. Before the browser session was keyed by
+    // workspace this could not be honored at all here; now the only thing that
+    // must hold is that configuring one workspace never speaks for another.
+    expect(() => configureServerTools("/ws/a", { ...base, browserProfile: "work" })).not.toThrow();
+    expect(() => configureServerTools("/ws/b", base)).not.toThrow();
+  });
+
+  it("reports an unusable profile name without failing the run", () => {
+    const errors: string[] = [];
+    const realError = console.error;
+    console.error = (...a: unknown[]) => {
+      errors.push(a.join(" "));
+    };
+    try {
+      // A name with a separator is a request to write session cookies outside
+      // the profile directory. Refusing the NAME must not refuse the task.
+      expect(() => configureServerTools("/ws/a", { ...base, browserProfile: "../escape" })).not.toThrow();
+    } finally {
+      console.error = realError;
+    }
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/browserProfile/);
+  });
+
   it("routes visionModel to image_analyze", async () => {
     configureVision(null);
     configureServerTools(process.cwd(), base);

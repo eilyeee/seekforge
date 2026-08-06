@@ -231,14 +231,14 @@ describe("permission level follows the loaded page", () => {
 
   it("treats acting on a loopback dev server as ordinary work", async () => {
     await navigate("http://localhost:5173/");
-    expect(interactionPermission()).toBe("execute");
+    expect(interactionPermission(workspace)).toBe("execute");
     expect(permissionOf("browser_click", { selector: "#save" })).toBe("execute");
     expect(permissionOf("browser_fill", { selector: "#name", text: "x" })).toBe("execute");
   });
 
   it("always confirms acting on a page that is not the developer's own machine", async () => {
     await navigate("https://example.com/checkout");
-    expect(interactionPermission()).toBe("env");
+    expect(interactionPermission(workspace)).toBe("env");
     expect(permissionOf("browser_click", { selector: "#buy" })).toBe("env");
     expect(permissionOf("browser_press", { key: "Enter" })).toBe("env");
     // Waiting changes nothing, so it stays read-only wherever the page is.

@@ -58,8 +58,8 @@ describe("browser tools registration", () => {
   });
 
   it("exports idempotent per-run browser and workspace LSP leases", async () => {
-    const firstBrowserRun = acquireBrowserLease();
-    const secondBrowserRun = acquireBrowserLease();
+    const firstBrowserRun = acquireBrowserLease(makeWorkspace());
+    const secondBrowserRun = acquireBrowserLease(makeWorkspace());
     const lspRun = acquireLspServerLease(makeWorkspace());
 
     await firstBrowserRun.release();
@@ -175,7 +175,7 @@ describe("interaction targeting and failure translation", () => {
   it("keeps interactions at execute while no page is loaded", () => {
     // Nothing to act on yet: run() fails with no_page, so prompting would be
     // asking the user to approve an action with no possible effect.
-    expect(interactionPermission()).toBe("execute");
+    expect(interactionPermission(makeWorkspace())).toBe("execute");
   });
 });
 

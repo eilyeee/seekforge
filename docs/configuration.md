@@ -913,13 +913,11 @@ see [Browser / visual verification](browser.md) for why that distinction
 matters, how to create the file with `playwright codegen` instead of the agent,
 and what happens when a run is cancelled.
 
-**CLI and TUI only.** `seekforge serve` (and therefore the Desktop) ignores
-this key. The browser session is a single Chromium per process — one context,
-one page — while the server runs several workspaces' agents concurrently, so
-pointing that shared session at one workspace's cookie file would let another
-workspace's run inherit the login and write its own session back into the same
-file. It stays unsupported there until the browser session itself is
-per-workspace.
+Honored by every frontend, including `seekforge serve` and the Desktop. That
+took making the browser session itself per-workspace: one Chromium process, but
+one context — Playwright's isolation primitive, with its own cookies and its own
+pages — per workspace. Before that, a server running several workspaces at once
+shared a single page between them, so a profile could not be scoped to anything.
 
 Settable via `config set`? **No** — edit the file directly.
 

@@ -170,9 +170,10 @@ closes the browser without saving: stopping halfway through a login redirect, or
 just after a cookie rotated, would otherwise replace a working session with a
 broken one. The last run that finished stays the one on disk.
 
-`seekforge serve` and the Desktop do not support this setting: one Chromium
-serves the whole process while the server runs several workspaces at once, so a
-per-workspace cookie file cannot be honored by a shared session.
+Sessions are per workspace: one Chromium process serves everything, but each
+workspace gets its own browser context — separate cookies, separate pages — so
+two workspaces running at once on `seekforge serve` never see each other's page
+or each other's login.
 
 To forget a session, delete the file.
 

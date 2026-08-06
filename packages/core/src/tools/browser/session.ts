@@ -7,13 +7,27 @@ import { assertBrowserUrlAllowed, isLoopbackHost } from "./url-guard.js";
 import { loadPlaywright, type PlaywrightBrowser, type PlaywrightContext, type PlaywrightPage } from "./playwright.js";
 
 /**
- * The shared headless browser session.
+ * The headless browser session — one per WORKSPACE.
  *
- * One browser + one page is shared across every browser tool, so navigate →
- * inspect → interact → inspect is a single live page the agent can drive, the
- * way a person would. Agent runs retain the instance through
- * `acquireBrowserLease()`; the final release tears it down, and a process-exit
- * fallback ensures a headless browser process is never leaked.
+ * One browser + one page is shared across every browser tool of a workspace, so
+ * navigate → inspect → interact → inspect is a single live page the agent can
+ * drive, the way a person would.
+ *
+ * The workspace keying is the part that is easy to get wrong, and was: browser,
+ * context, page and the capture buffers used to be plain module variables. A
+ * CLI or TUI process serves one workspace and never noticed. The server serves
+ * many and runs them AT ONCE — its locks serialize per repository, so two
+ * workspaces execute their agent loops simultaneously — and they shared one
+ * page. Workspace B's snapshot read whatever workspace A had open, B's navigate
+ * wiped the console evidence A had just captured, and either could steer the
+ * other's page mid-flow. The LSP session one import away had been keyed by
+ * workspace all along.
+ *
+ * What is shared and what is not follows from what each thing costs and what it
+ * exposes. The browser PROCESS is shared: launching Chromium is expensive and a
+ * process leaks nothing by itself. The CONTEXT is per workspace, which is
+ * exactly what Playwright's contexts are for — separate cookies, separate
+ * storage, separate pages.
  *
  * This module owns lifecycle and capture only. The tools live next to it and
  * hold no state of their own.
@@ -27,14 +41,34 @@ export type FailedRequest = { url: string; failure: string };
 /** One completed request/response pair the page made. */
 export type NetworkEntry = { method: string; url: string; status: number; resourceType?: string };
 
+/** Everything one workspace owns. The browser process below is shared. */
+type WorkspaceSession = {
+  context: PlaywrightContext;
+  page: PlaywrightPage | null;
+  /**
+   * Capture buffers, reset on every navigate so `browser_console` reports only
+   * what happened since the current page loaded. Interactions deliberately do
+   * NOT reset them: a click that triggers an error should still be visible.
+   */
+  console: ConsoleEntry[];
+  errors: string[];
+  failedRequests: FailedRequest[];
+  network: NetworkEntry[];
+  /** Teardown in flight for this workspace, so a second caller joins it. */
+  closing: Promise<void> | null;
+};
+
+/** The Chromium process. Shared: expensive to launch, and isolating nothing. */
 let browser: PlaywrightBrowser | null = null;
-let context: PlaywrightContext | null = null;
-let page: PlaywrightPage | null = null;
-let activeBrowserSignal: AbortSignal | undefined;
-const browserLeases = new Set<symbol>();
+const sessions = new Map<string, WorkspaceSession>();
+const leases = new Map<string, Set<symbol>>();
+/** The signal of the operation currently running, per workspace. */
+const activeSignals = new Map<string, AbortSignal | undefined>();
+/** How many operations are in flight per workspace (see runBrowserOperation). */
+const inFlight = new Map<string, number>();
 
 /**
- * Where this session loads and stores its cookies, or null for the default:
+ * Where each workspace loads and stores its cookies, or absent for the default:
  * a context that starts logged out and forgets everything when it closes.
  *
  * Module-level for the same reason the vision endpoint is — ToolContext carries
@@ -42,38 +76,81 @@ const browserLeases = new Set<symbol>();
  * time. Nothing the model can call reaches it: the agent cannot decide to start
  * persisting cookies, or to persist them somewhere else.
  */
-let storageStatePath: string | null = null;
+const storageStatePaths = new Map<string, string>();
+let defaultStorageStatePath: string | null = null;
 
 /**
- * Configure browser-session persistence. Call once at app assembly time with an
- * absolute path (see resolveBrowserProfilePath), or null to keep every run
- * ephemeral. Off by default: a stored session is a stored login.
+ * Configure browser-session persistence. Call at app assembly time with an
+ * absolute path (see resolveBrowserProfilePath), or null to keep runs
+ * ephemeral. Pass a workspace to scope it — what a host serving more than one
+ * must do; omit it for the process-wide default. Off by default: a stored
+ * session is a stored login.
  */
-export function configureBrowserProfile(path: string | null): void {
-  storageStatePath = path;
+export function configureBrowserProfile(path: string | null, workspace?: string): void {
+  if (workspace === undefined) {
+    defaultStorageStatePath = path;
+    if (path === null) storageStatePaths.clear();
+    return;
+  }
+  if (path === null) storageStatePaths.delete(workspace);
+  else storageStatePaths.set(workspace, path);
 }
 
-// Capture buffers, reset on every navigate so `browser_console` reports only
-// what happened since the current page loaded. Interactions deliberately do NOT
-// reset them: a click that triggers an error should still be visible afterwards.
-let consoleMessages: ConsoleEntry[] = [];
-let pageErrors: string[] = [];
-let failedRequests: FailedRequest[] = [];
-let networkResponses: NetworkEntry[] = [];
+function storageStatePathFor(workspace: string): string | null {
+  return storageStatePaths.get(workspace) ?? defaultStorageStatePath;
+}
 
-/** Launch (or reuse) the shared headless browser + page, attaching listeners. */
-export async function getPage(): Promise<PlaywrightPage> {
+/**
+ * The workspace's session, or undefined when it has none — including while one
+ * is tearing down. The entry outlives `closeSession` deliberately (see there),
+ * so every reader has to ask for a LIVE one rather than whatever is in the map.
+ */
+function liveSession(workspace: string): WorkspaceSession | undefined {
+  const session = sessions.get(workspace);
+  return session && session.closing === null ? session : undefined;
+}
+
+/**
+ * Openings in flight, per workspace.
+ *
+ * One workspace can have several callers at once: dispatch_team runs its
+ * members concurrently and they all share the workspace string. Creating a
+ * context is async, so a plain check-then-act would let two of them each build
+ * one, with only the second landing in the map — the first orphaned (never
+ * closed, never disposed) and its owner then reading the other's page through
+ * every subsequent tool call. Everyone joins the same opening instead.
+ */
+const opening = new Map<string, Promise<PlaywrightPage>>();
+
+/** Launch (or reuse) this workspace's page, attaching listeners. */
+export function getPage(workspace: string): Promise<PlaywrightPage> {
+  const inFlight = opening.get(workspace);
+  if (inFlight) return inFlight;
+  const started = openPage(workspace).finally(() => {
+    if (opening.get(workspace) === started) opening.delete(workspace);
+  });
+  opening.set(workspace, started);
+  return started;
+}
+
+async function openPage(workspace: string): Promise<PlaywrightPage> {
+  // A session mid-teardown is finished first: reusing its context would race
+  // the close, and starting a second one behind its back would leak it.
+  const closing = sessions.get(workspace)?.closing;
+  if (closing) await closing;
   const pw = await loadPlaywright();
   if (!browser) {
     browser = await pw.chromium.launch({ headless: true });
     installExitHook();
   }
-  if (!context) {
+  let session = liveSession(workspace);
+  if (!session) {
     // A configured profile that does not exist yet is the normal first run, not
     // an error — Playwright would throw on a missing storageState file, so the
     // absence is checked here and the context simply starts logged out.
-    const restore = storageStatePath !== null && existsSync(storageStatePath);
-    context = await browser.newContext(restore ? { storageState: storageStatePath } : undefined);
+    const profile = storageStatePathFor(workspace);
+    const restore = profile !== null && existsSync(profile);
+    const context = await browser.newContext(restore ? { storageState: profile } : undefined);
     // Re-check every navigation/subresource so a public URL cannot redirect the
     // browser into an unapproved private network target. This validates the
     // request host with a DNS lookup, but unlike web_fetch it cannot PIN the
@@ -84,32 +161,35 @@ export async function getPage(): Promise<PlaywrightPage> {
     // the compensating control for this residual risk.
     await context.route("**/*", async (route) => {
       try {
-        await assertBrowserUrlAllowed(String(route.request().url()), undefined, activeBrowserSignal);
+        await assertBrowserUrlAllowed(String(route.request().url()), undefined, activeSignals.get(workspace));
         await route.continue();
       } catch {
         await route.abort("blockedbyclient");
       }
     });
+    session = { context, page: null, console: [], errors: [], failedRequests: [], network: [], closing: null };
+    sessions.set(workspace, session);
   }
-  if (!page) {
-    page = await context.newPage();
+  if (!session.page) {
+    const page = await session.context.newPage();
+    const own = session;
     // Attach capture listeners once per page; buffers are reset on navigate.
     page.on("console", (msg) => {
-      if (consoleMessages.length < MAX_CAPTURED) {
-        consoleMessages.push({ type: String(msg.type?.() ?? "log"), text: String(msg.text?.() ?? "") });
+      if (own.console.length < MAX_CAPTURED) {
+        own.console.push({ type: String(msg.type?.() ?? "log"), text: String(msg.text?.() ?? "") });
       }
     });
     page.on("pageerror", (err) => {
-      if (pageErrors.length < MAX_CAPTURED) pageErrors.push(err?.message ? String(err.message) : String(err));
+      if (own.errors.length < MAX_CAPTURED) own.errors.push(err?.message ? String(err.message) : String(err));
     });
     // A request that COMPLETED is the half the console never shows: a 500 from
     // an XHR leaves no console message and no page error, so a run watching
     // only those reports a page that "loaded fine" while its data call failed.
     page.on("response", (res) => {
-      if (networkResponses.length >= MAX_CAPTURED) return;
+      if (own.network.length >= MAX_CAPTURED) return;
       try {
         const request = res.request?.();
-        networkResponses.push({
+        own.network.push({
           method: String(request?.method?.() ?? "GET"),
           url: String(res.url?.() ?? ""),
           status: Number(res.status?.() ?? 0),
@@ -121,19 +201,21 @@ export async function getPage(): Promise<PlaywrightPage> {
       }
     });
     page.on("requestfailed", (req) => {
-      if (failedRequests.length < MAX_CAPTURED) {
-        failedRequests.push({
+      if (own.failedRequests.length < MAX_CAPTURED) {
+        own.failedRequests.push({
           url: String(req.url?.() ?? ""),
           failure: String(req.failure?.()?.errorText ?? "failed"),
         });
       }
     });
+    session.page = page;
   }
-  return page;
+  return session.page;
 }
 
-/** The live page; every tool but browser_navigate needs one to already exist. */
-export function requirePage(): PlaywrightPage {
+/** This workspace's live page; every tool but browser_navigate needs one. */
+export function requirePage(workspace: string): PlaywrightPage {
+  const page = liveSession(workspace)?.page;
   if (!page) {
     throw new ToolError("no_page", "No page loaded — call browser_navigate first.");
   }
@@ -141,10 +223,11 @@ export function requirePage(): PlaywrightPage {
 }
 
 /**
- * The current page's URL, or undefined when no page is loaded. Synchronous, so
+ * This workspace's page URL, or undefined when it has no page. Synchronous, so
  * `classify` can decide a permission level from where the page actually points.
  */
-export function currentPageUrl(): string | undefined {
+export function currentPageUrl(workspace: string): string | undefined {
+  const page = liveSession(workspace)?.page;
   if (!page) return undefined;
   try {
     return page.url();
@@ -153,9 +236,9 @@ export function currentPageUrl(): string | undefined {
   }
 }
 
-/** True when the loaded page is the developer's own machine. */
-export function currentPageIsLoopback(): boolean {
-  const url = currentPageUrl();
+/** True when this workspace's loaded page is the developer's own machine. */
+export function currentPageIsLoopback(workspace: string): boolean {
+  const url = currentPageUrl(workspace);
   if (!url) return false;
   try {
     return isLoopbackHost(new URL(url).hostname);
@@ -164,110 +247,160 @@ export function currentPageIsLoopback(): boolean {
   }
 }
 
-/** Drop everything captured so far; called when a navigation loads a new page. */
-export function resetCapture(): void {
-  consoleMessages = [];
-  pageErrors = [];
-  failedRequests = [];
-  networkResponses = [];
+/** Drop what this workspace captured; called when a navigation loads a new page. */
+export function resetCapture(workspace: string): void {
+  const session = liveSession(workspace);
+  if (!session) return;
+  session.console = [];
+  session.errors = [];
+  session.failedRequests = [];
+  session.network = [];
 }
 
-export function capturedActivity(): {
+export function capturedActivity(workspace: string): {
   console: ConsoleEntry[];
   errors: string[];
   failedRequests: FailedRequest[];
   network: NetworkEntry[];
 } {
-  return { console: consoleMessages, errors: pageErrors, failedRequests, network: networkResponses };
+  const session = liveSession(workspace);
+  if (!session) return { console: [], errors: [], failedRequests: [], network: [] };
+  return {
+    console: session.console,
+    errors: session.errors,
+    failedRequests: session.failedRequests,
+    network: session.network,
+  };
 }
 
 /**
  * Run one Playwright call under the agent's cancellation signal. An abort tears
- * the browser down rather than leaving a half-finished action on a live page.
+ * THIS WORKSPACE's session down rather than leaving a half-finished action on a
+ * live page — and leaves every other workspace's session alone, which is the
+ * whole point of the keying.
  */
 export async function runBrowserOperation<T>(
+  workspace: string,
   operation: Promise<T>,
   signal: AbortSignal | undefined,
   label: string,
 ): Promise<T> {
-  activeBrowserSignal = signal;
-  // Cancellation does not persist the session — see closeBrowser.
-  const offAbort = onAbortOnce(signal, () => void closeBrowser(false));
+  activeSignals.set(workspace, signal);
+  inFlight.set(workspace, (inFlight.get(workspace) ?? 0) + 1);
+  // Leaving the count has to happen in whichever comes first — the abort
+  // handler or the finally — and exactly once. An AbortSignal delivers to every
+  // listener SYNCHRONOUSLY, in one call stack, so when a parent cancellation
+  // cascades to several siblings of one workspace, all their handlers run
+  // before any of their finallys. Decrementing only in the finally would have
+  // every one of them read the pre-abort count, conclude a sibling was still
+  // working, and skip the teardown — leaving the hung call that prompted the
+  // abort exactly as stuck as it was.
+  let counted = true;
+  const leave = (): number => {
+    if (!counted) return inFlight.get(workspace) ?? 0;
+    counted = false;
+    const remaining = (inFlight.get(workspace) ?? 1) - 1;
+    if (remaining <= 0) inFlight.delete(workspace);
+    else inFlight.set(workspace, remaining);
+    return remaining;
+  };
+  // Closing the context is how a hung Playwright call gets unstuck — it does
+  // not answer an AbortSignal. But this workspace may have siblings mid-call
+  // (dispatch_team members share it), and closing under them turns their work
+  // into a raw "target closed" failure they did nothing to earn. So the teardown
+  // happens only when the aborting call is the last one out; the caller's own
+  // promise is already rejected by abortablePromise either way. Cancellation
+  // also does not persist the session — see closeSession.
+  const offAbort = onAbortOnce(signal, () => {
+    if (leave() <= 0) void closeSession(workspace, false);
+  });
   try {
     return await abortablePromise(operation, signal, () => new ToolError("cancelled", `${label} cancelled`));
   } finally {
     offAbort();
-    if (activeBrowserSignal === signal) activeBrowserSignal = undefined;
+    leave();
+    if (activeSignals.get(workspace) === signal) activeSignals.delete(workspace);
   }
 }
 
 /**
- * Force-close the shared browser and invalidate all leases. Normal agent-run
- * cleanup releases its BrowserLease instead.
+ * Force-close every workspace's session and the browser, invalidating all
+ * leases. Normal agent-run cleanup releases its BrowserLease instead.
  */
 export async function disposeBrowser(): Promise<void> {
-  browserLeases.clear();
-  await closeBrowser();
+  leases.clear();
+  await Promise.all([...sessions.keys()].map((workspace) => closeSession(workspace)));
+  await closeBrowserProcess();
 }
 
 /**
- * The teardown in flight, if any.
+ * Close one workspace's context.
  *
- * Teardown nulls the module state synchronously and then awaits — a CDP round
- * trip for the session state, then the browser close. Without this, a second
- * caller arriving during that window sees `browser === null`, concludes there
- * is nothing to do, and returns immediately: the run's cleanup would report
- * "browser released" while the profile write was still in flight, and a process
- * that exited right after would lose it. Everyone joins the same promise
- * instead.
- */
-let teardown: Promise<void> | null = null;
-
-/**
- * Close the shared browser.
- *
- * `persist` decides whether the session is written to the configured profile.
+ * `persist` decides whether its session is written to the configured profile.
  * A cancelled run passes false, and that is a deliberate answer to a question
  * with two defensible sides: stopping mid-flow — halfway through a login
  * redirect, just after a cookie rotated — would otherwise overwrite a good
  * saved login with a broken one. Cancel means "forget what I was doing", so the
  * last successfully finished run stays the one on disk.
+ *
+ * A teardown already in flight is returned rather than started again: it nulls
+ * its state synchronously and then awaits — a CDP round trip for the session
+ * state, then the close — so a second caller arriving in that window would
+ * otherwise see nothing to do and report "released" while the profile write was
+ * still going.
  */
-function closeBrowser(persist = true): Promise<void> {
-  if (teardown) return teardown;
-  const b = browser;
-  const ctx = context;
-  browser = null;
-  context = null;
-  page = null;
-  resetCapture();
-  if (!b && !ctx) return Promise.resolve();
-  teardown = (async () => {
+function closeSession(workspace: string, persist = true): Promise<void> {
+  const session = sessions.get(workspace);
+  if (!session) return Promise.resolve();
+  if (session.closing) return session.closing;
+  const { context } = session;
+  const profile = storageStatePathFor(workspace);
+  session.closing = (async () => {
     // While the context still exists. A failure must not become a tool error —
     // teardown runs on the cancellation path too — but it must not be silent
     // either, or the next run would start logged out with no explanation.
-    if (persist && ctx && storageStatePath !== null) {
+    if (persist && profile !== null) {
       try {
-        writeBrowserProfile(await ctx.storageState(), storageStatePath);
+        writeBrowserProfile(await context.storageState(), profile);
       } catch (error) {
         console.error(
-          `[browser] could not save the session profile (${storageStatePath}): ${
+          `[browser] could not save the session profile (${profile}): ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
       }
     }
-    if (b) {
-      try {
-        await b.close();
-      } catch {
-        // Best-effort teardown — a failed close must not surface as an error.
-      }
+    try {
+      await context.close();
+    } catch {
+      // Best-effort teardown — a failed close must not surface as an error.
     }
   })().finally(() => {
-    teardown = null;
+    // Only now: the entry had to stay reachable so a second caller arriving
+    // mid-teardown could join this promise instead of concluding there was
+    // nothing left to wait for and reporting "released" over a write still in
+    // flight. `liveSession` is what keeps it invisible to readers meanwhile.
+    //
+    // By IDENTITY, not by key: a fresh session for the same workspace can have
+    // replaced this one while it was closing, and deleting by key would evict
+    // the live one — leaving its owner told "no page" and letting
+    // closeBrowserProcess see an empty map and kill Chromium under it.
+    if (sessions.get(workspace) === session) sessions.delete(workspace);
   });
-  return teardown;
+  return session.closing;
+}
+
+/** Close the Chromium process once no workspace is using it. */
+async function closeBrowserProcess(): Promise<void> {
+  if (sessions.size > 0) return;
+  const b = browser;
+  browser = null;
+  if (!b) return;
+  try {
+    await b.close();
+  } catch {
+    // Best-effort teardown — a failed close must not surface as an error.
+  }
 }
 
 export type BrowserLease = {
@@ -275,17 +408,29 @@ export type BrowserLease = {
   release(): Promise<void>;
 };
 
-/** Retain the shared browser for one top-level agent run. */
-export function acquireBrowserLease(): BrowserLease {
+/**
+ * Retain the browser for one top-level agent run of one workspace. The last
+ * lease of a workspace closes that workspace's context; the last lease overall
+ * closes the browser process.
+ */
+export function acquireBrowserLease(workspace: string): BrowserLease {
   const token = Symbol("browser-lease");
-  browserLeases.add(token);
+  let held = leases.get(workspace);
+  if (!held) {
+    held = new Set();
+    leases.set(workspace, held);
+  }
+  held.add(token);
   let released = false;
   return {
     async release(): Promise<void> {
       if (released) return;
       released = true;
-      if (!browserLeases.delete(token) || browserLeases.size > 0) return;
-      await closeBrowser();
+      const own = leases.get(workspace);
+      if (!own?.delete(token) || own.size > 0) return;
+      leases.delete(workspace);
+      await closeSession(workspace);
+      await closeBrowserProcess();
     },
   };
 }

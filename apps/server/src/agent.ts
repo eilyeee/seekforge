@@ -9,7 +9,9 @@
 import { existsSync } from "node:fs";
 import {
   buildAgentCoreDeps,
+  configureBrowserProfile,
   configureVision,
+  resolveBrowserProfilePath,
   graphHandlersWithPlugins,
   createAgentCore,
   createDefaultDispatcher,
@@ -42,7 +44,7 @@ import {
   type RunEngineeringGraphOptions,
 } from "@seekforge/core";
 import type { ConfirmResult, PermissionRequest, PermissionRule, RunOverrides } from "@seekforge/shared";
-import { loadConfig, type ServerConfig } from "./config.js";
+import { loadConfig, seekforgeHome, type ServerConfig } from "./config.js";
 
 export type { RunOverrides } from "@seekforge/shared";
 
@@ -112,6 +114,20 @@ export type RunGraphFn = (
  * and idempotent because a fresh agent is built per run.
  */
 export function configureServerTools(workspace: string, config: ServerConfig): void {
+  // Both seams are keyed by workspace, which is what lets this host use them at
+  // all: it runs several workspaces' agents at once, so a process-wide value
+  // would be last-write-wins across concurrent runs.
+  try {
+    configureBrowserProfile(
+      config.browserProfile ? resolveBrowserProfilePath(seekforgeHome(), config.browserProfile) : null,
+      workspace,
+    );
+  } catch (error) {
+    // An unusable profile name is reported and ignored: refusing to run a task
+    // because a name has a slash in it would be the wrong trade.
+    configureBrowserProfile(null, workspace);
+    console.error(`warning: ${error instanceof Error ? error.message : String(error)}`);
+  }
   configureVision(
     config.visionModel?.baseUrl
       ? {
@@ -143,14 +159,6 @@ export function buildAgentDeps(
   // Until this existed, `visionModel` did nothing in the Desktop, which is
   // served from here: image_analyze reported "vision_unconfigured" no matter
   // what the config said.
-  //
-  // `browserProfile` is deliberately NOT applied here. The browser session is
-  // one Chromium instance per PROCESS — one context, one page — while this
-  // server runs several workspaces' agents at once. Pointing that single shared
-  // session at one workspace's cookie file would let another workspace's run
-  // inherit the login, and write its own session back into the same file. It
-  // stays a CLI/TUI setting until the browser session itself is per-workspace;
-  // see docs/browser.md.
   configureServerTools(opts.workspace, config);
 
   let runtime: RuntimeClient | undefined;

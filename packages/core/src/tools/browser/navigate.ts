@@ -28,12 +28,13 @@ export const browserNavigate = defineTool({
   async run(args, ctx) {
     const url = checkBrowserUrl(args.url);
     if (ctx.signal?.aborted) throw new ToolError("cancelled", "Browser navigation cancelled");
-    const p = await getPage();
+    const p = await getPage(ctx.workspace);
     // Reset capture so browser_console reflects only the new page.
-    resetCapture();
+    resetCapture(ctx.workspace);
     let resp: PlaywrightResponse | null;
     try {
       resp = await runBrowserOperation(
+        ctx.workspace,
         p.goto(url.toString(), { waitUntil: "load", timeout: NAV_TIMEOUT_MS }),
         ctx.signal,
         "Browser navigation",
@@ -45,10 +46,12 @@ export const browserNavigate = defineTool({
         `Navigation failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    const title = await runBrowserOperation(p.title(), ctx.signal, "Browser title read").catch((err: unknown) => {
-      if (err instanceof ToolError && err.code === "cancelled") throw err;
-      return "";
-    });
+    const title = await runBrowserOperation(ctx.workspace, p.title(), ctx.signal, "Browser title read").catch(
+      (err: unknown) => {
+        if (err instanceof ToolError && err.code === "cancelled") throw err;
+        return "";
+      },
+    );
     return {
       data: {
         url: p.url(),

@@ -42,7 +42,8 @@ function collectAllBullets(workspace: string): SourcedBullet[] {
   const seen = new Set<string>();
   // Same bilingual keywords the injected brief scores against, so asking
   // search_memory in Chinese reaches an English fact exactly as the automatic
-  // brief does. Project facts only — the sidecar is project-scoped.
+  // brief does. Covers global facts too: the SeekForge home keeps its own
+  // sidecar beside its own project.md.
   const keywordsByFact = factKeywords(workspace);
   const add = (memory: string | undefined, source: string, pathContext?: string): void => {
     if (!memory) return;
@@ -52,7 +53,7 @@ function collectAllBullets(workspace: string): SourcedBullet[] {
       const line = `- [${bullet.type}] ${bullet.text}`;
       if (seen.has(line)) continue; // identical bullet already collected (first source wins)
       seen.add(line);
-      const keywords = source === "project" ? keywordsByFact.get(`[${bullet.type}] ${bullet.text}`) : undefined;
+      const keywords = keywordsByFact.get(`[${bullet.type}] ${bullet.text}`);
       out.push({
         line,
         type: bullet.type,

@@ -4642,6 +4642,30 @@ one run installed is read by whichever run happens to call the tool next.
   cannot be honored by a shared context — scoping the setting would only have
   moved the leak from the config into the cookie jar.
 
+## 417. Keying a shared resource by owner is only half of it — creating it must be atomic
+
+Splitting a process-wide singleton into a map keyed by owner fixes who sees
+what. It does not fix two owners arriving at once, and if creating the resource
+is async, the obvious `if (!map.get(k)) map.set(k, await create())` is a
+check-then-act: both callers miss, both create, and only the second lands in the
+map. The first is orphaned — never closed by any teardown that walks the map —
+and its owner keeps reading the map, so every later call silently operates on
+the other's resource. That is the same failure the keying was introduced to
+prevent, moved one level down.
+
+- **Do:** store the in-flight CREATION, not just the finished object, so
+  concurrent callers join one promise. Delete map entries by identity
+  (`if (map.get(k) === mine) map.delete(k)`), never by key: a newer entry can
+  have replaced yours while you were closing.
+- **Caught:** in review of the per-workspace browser session, immediately after
+  that keying fixed the cross-workspace leak. `dispatch_team` runs its members
+  concurrently and they all share one workspace string, so two of them calling
+  `browser_navigate` first would each build a context.
+- **Related:** the same review found that tearing down on cancellation has to
+  count its siblings. Closing the shared context is how a hung Playwright call
+  gets unstuck — it ignores AbortSignal — but doing it while another member is
+  mid-call turns their work into a raw "target closed" they did nothing to earn.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

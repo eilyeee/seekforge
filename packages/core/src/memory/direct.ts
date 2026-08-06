@@ -37,6 +37,13 @@ export type AddMemoryFactOptions = {
    * project.md. User scope is always approved (no per-project candidate queue).
    */
   scope?: "project" | "user";
+  /**
+   * Bilingual retrieval keywords, when the caller has them. A fact typed by
+   * hand normally has none — `seekforge memory keywords` is what gives it some
+   * later — but a caller that already knows them should not have to throw them
+   * away and re-derive them from a model.
+   */
+  keywords?: string[];
 };
 
 export type ProjectFact = {
@@ -75,6 +82,7 @@ export function addMemoryFact(workspace: string, options: AddMemoryFactOptions):
     sourceSessionId: options.sourceSessionId ?? "manual",
     createdAt: new Date().toISOString(),
     status: "approved",
+    ...(options.keywords && options.keywords.length > 0 ? { keywords: options.keywords } : {}),
   };
   if (scope === "user") {
     appendGlobalFact(candidate); // Dedupes identical lines.

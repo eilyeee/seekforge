@@ -3,6 +3,7 @@ import {
   backfillFactKeywords,
   buildProvider,
   factsMissingKeywords,
+  seekforgeHome,
   approveMemoryCandidate,
   compactProjectMemory,
   listMemoryCandidates,
@@ -194,12 +195,16 @@ export function memoryCompactCommand(opts: { dryRun?: boolean; pruneUnusedDays?:
  * happened to be created. This is the one command in the memory group that
  * spends money, so it says what it will do before doing it.
  */
-export async function memoryKeywordsCommand(opts: { limit?: number; dryRun?: boolean } = {}): Promise<void> {
-  const workspace = process.cwd();
-  const config = loadConfig(workspace);
+export async function memoryKeywordsCommand(
+  opts: { limit?: number; dryRun?: boolean; global?: boolean } = {},
+): Promise<void> {
+  const config = loadConfig(process.cwd());
+  // The SeekForge home is a state root exactly like a workspace — same
+  // project.md, same sidecar, same lease — so --global needs no special path.
+  const root = opts.global ? seekforgeHome() : process.cwd();
 
   if (opts.dryRun) {
-    console.log(t("cmd.memory.keywordsMissing", { count: factsMissingKeywords(workspace).length }));
+    console.log(t("cmd.memory.keywordsMissing", { count: factsMissingKeywords(root).length }));
     return;
   }
 
@@ -217,7 +222,7 @@ export async function memoryKeywordsCommand(opts: { limit?: number; dryRun?: boo
     config.model,
   );
 
-  const result = await backfillFactKeywords(provider, workspace, {
+  const result = await backfillFactKeywords(provider, root, {
     ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
   });
   console.log(

@@ -18,6 +18,7 @@ export {
   MEMORY_CANDIDATE_TYPES,
   projectMemoryPath,
   readFactMeta,
+  readGlobalFactMeta,
   readGlobalMemory,
   readProjectMemory,
   readRawProjectMemory,

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { addMemoryFact, backfillFactKeywords, factsMissingKeywords, readFactMeta } from "../../src/memory/index.js";
+import {
+  addMemoryFact,
+  backfillFactKeywords,
+  factsMissingKeywords,
+  readFactMeta,
+  readGlobalFactMeta,
+} from "../../src/memory/index.js";
 import type { ChatProvider } from "../../src/provider/index.js";
 import { makeFakeProvider, makeWorkspace, writeProjectMemory } from "./helpers.js";
 
@@ -136,5 +142,60 @@ describe("backfillFactKeywords", () => {
     const provider = makeFakeProvider([]);
     expect(await backfillFactKeywords(provider, ws)).toMatchObject({ missing: 0, updated: 0, batches: 0 });
     expect(provider.requests).toHaveLength(0);
+  });
+});
+
+describe("global memory keywords", () => {
+  /**
+   * The SeekForge home is a state root like any workspace — same helpers.
+   *
+   * Async on purpose: a sync `finally` around an async callback restores the
+   * env var the moment the callback returns its PROMISE, so everything after
+   * the first await would run with the real home. That is a mistake this
+   * helper should make impossible rather than one each test has to remember.
+   */
+  async function withHome<T>(fn: (home: string) => T | Promise<T>): Promise<T> {
+    const home = makeWorkspace();
+    const saved = process.env["SEEKFORGE_HOME"];
+    process.env["SEEKFORGE_HOME"] = home;
+    try {
+      return await fn(home);
+    } finally {
+      if (saved === undefined) delete process.env["SEEKFORGE_HOME"];
+      else process.env["SEEKFORGE_HOME"] = saved;
+    }
+  }
+
+  it("keeps the keywords a fact promoted to global arrived with", async () => {
+    await withHome(() => {
+      // A cross-project fact used to lose its retrieval keywords on the way to
+      // the global file, which had no sidecar at all — so it could never be
+      // found from the other language, no matter how it was created.
+      addMemoryFact(makeWorkspace(), {
+        content: "releases are tagged from main",
+        type: "convention",
+        scope: "user",
+        keywords: ["release", "发布"],
+      });
+      expect(readGlobalFactMeta()["[convention] releases are tagged from main"]?.keywords).toEqual(["release", "发布"]);
+    });
+  });
+
+  it("records when a global fact was added, which it also never did", async () => {
+    await withHome(() => {
+      addMemoryFact(makeWorkspace(), { content: "a global fact", type: "convention", scope: "user" });
+      expect(readGlobalFactMeta()["[convention] a global fact"]?.addedAt).toBeDefined();
+    });
+  });
+
+  it("backfills the global memory when pointed at the home", async () => {
+    await withHome(async (home) => {
+      addMemoryFact(makeWorkspace(), { content: "a global fact", type: "convention", scope: "user" });
+      expect(factsMissingKeywords(home)).toEqual(["- [convention] a global fact"]);
+      const provider = makeFakeProvider([fenced({ "1": ["global", "全局"] })]);
+      const result = await backfillFactKeywords(provider, home);
+      expect(result).toMatchObject({ missing: 1, updated: 1 });
+      expect(readGlobalFactMeta()["[convention] a global fact"]?.keywords).toEqual(["global", "全局"]);
+    });
   });
 });

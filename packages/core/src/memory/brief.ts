@@ -25,7 +25,7 @@
  */
 
 import { findConflicts } from "./conflict.js";
-import { readFactMeta, readGlobalMemory, readProjectMemory, readSubdirMemories } from "./store.js";
+import { readFactMeta, readGlobalFactMeta, readGlobalMemory, readProjectMemory, readSubdirMemories } from "./store.js";
 
 // Injection budget. Raised from (8 / 800 / 12) as the curated corpus grows so
 // more facts can surface — including per-package subdir facts (see the cascade
@@ -293,12 +293,15 @@ export function parseMemoryBullet(line: string): { type: string; text: string } 
  */
 export function factKeywords(workspace: string): Map<string, string> {
   const out = new Map<string, string>();
-  try {
-    for (const [key, meta] of Object.entries(readFactMeta(workspace))) {
-      if (meta.keywords && meta.keywords.length > 0) out.set(key, meta.keywords.join(" "));
+  // Global first, so an identical bullet in the project's own memory wins.
+  for (const read of [readGlobalFactMeta, () => readFactMeta(workspace)]) {
+    try {
+      for (const [key, meta] of Object.entries(read())) {
+        if (meta.keywords && meta.keywords.length > 0) out.set(key, meta.keywords.join(" "));
+      }
+    } catch {
+      // A sidecar we cannot read is the same as one that has no keywords.
     }
-  } catch {
-    // A sidecar we cannot read is the same as one that has no keywords.
   }
   return out;
 }
@@ -353,8 +356,10 @@ export function buildMemoryBrief(workspace: string, task: string): string | unde
       if (seen.has(line)) return; // identical bullet already collected (higher source wins)
       seen.add(line);
       // Keywords widen only the HAYSTACK — never `line`, which is the text
-      // injected into the prompt and read by a person.
-      const extra = isProject ? keywordsByFact.get(`[${bullet.type}] ${bullet.text}`) : undefined;
+      // injected into the prompt and read by a person. Looked up for every
+      // source: the global memory keeps its own sidecar beside its own
+      // project.md, so a cross-project fact is as findable as a local one.
+      const extra = keywordsByFact.get(`[${bullet.type}] ${bullet.text}`);
       const haystack = [pathContext, `[${bullet.type}] ${bullet.text}`, extra].filter(Boolean).join(" ");
       all.push({
         line,

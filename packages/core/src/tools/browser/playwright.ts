@@ -76,6 +76,8 @@ export type PlaywrightContext = {
   route(pattern: string, handler: (route: PlaywrightRoute) => Promise<void>): Promise<void>;
   /** Cookies + localStorage of every origin this context touched. */
   storageState(): Promise<unknown>;
+  /** Closes this context and its pages, leaving the browser process running. */
+  close(): Promise<void>;
 };
 export type PlaywrightBrowser = {
   newContext(opts?: unknown): Promise<PlaywrightContext>;

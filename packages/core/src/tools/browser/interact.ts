@@ -2,6 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { ToolError } from "../errors.js";
 import { defineTool } from "../registry.js";
+import type { ToolContext } from "../index.js";
 import { resolveForRead } from "../sandbox.js";
 import type { PermissionName } from "@seekforge/shared";
 import { loadPlaywright, type PlaywrightPage } from "./playwright.js";
@@ -88,15 +89,15 @@ export function describeTarget(value: string): string {
  * with `no_page` — so it stays at "execute" rather than prompting the user to
  * approve an action that provably has no target.
  */
-export function interactionPermission(): PermissionName {
-  const url = currentPageUrl();
+export function interactionPermission(workspace: string): PermissionName {
+  const url = currentPageUrl(workspace);
   if (url === undefined) return "execute";
-  return currentPageIsLoopback() ? "execute" : "env";
+  return currentPageIsLoopback(workspace) ? "execute" : "env";
 }
 
 /** Suffix naming the page an interaction lands on, for the confirmation prompt. */
-function onPage(): string {
-  const url = currentPageUrl();
+function onPage(workspace: string): string {
+  const url = currentPageUrl(workspace);
   return url ? ` on ${describeTarget(url)}` : "";
 }
 
@@ -104,13 +105,14 @@ function onPage(): string {
  * Pin the interaction to the page the user was shown.
  *
  * The permission level is decided from where the page points, and the page is
- * shared process-wide — a parallel subagent, or a click of our own that
- * navigated, can move it between the approval and the action. Recording the url
- * in `prepare` (which runs before the prompt) and re-checking it in `act` means
- * an action lands on the page that was approved, or not at all.
+ * shared across this WORKSPACE's tools — a parallel subagent, or a click of our
+ * own that navigated, can move it between the approval and the action.
+ * Recording the url in `prepare` (which runs before the prompt) and re-checking
+ * it in `act` means an action lands on the page that was approved, or not at
+ * all.
  */
-async function capturePage(): Promise<{ state: { url: string | undefined } }> {
-  return { state: { url: currentPageUrl() } };
+async function capturePage(_args: unknown, ctx: ToolContext): Promise<{ state: { url: string | undefined } }> {
+  return { state: { url: currentPageUrl(ctx.workspace) } };
 }
 
 /**
@@ -155,13 +157,13 @@ async function act(
   // `prepared` carries the url captured before the prompt. A follow-up step
   // within one tool call (fill → submit) deliberately passes a context without
   // it: the first step may have navigated the page on purpose.
-  ctx: { signal?: AbortSignal; prepared?: unknown },
+  ctx: { workspace: string; signal?: AbortSignal; prepared?: unknown },
   label: string,
   selector: string,
   action: (page: PlaywrightPage) => Promise<unknown>,
 ): Promise<{ page: PlaywrightPage; outcome: ActionOutcome }> {
   await loadPlaywright();
-  const page = requirePage();
+  const page = requirePage(ctx.workspace);
   const urlBefore = page.url();
   const approved = (ctx.prepared as { url?: string } | undefined)?.url;
   if (approved !== undefined && approved !== urlBefore) {
@@ -170,9 +172,9 @@ async function act(
       `the page moved from ${approved} to ${urlBefore} before this action ran — re-read it with browser_snapshot and retry`,
     );
   }
-  const errorsBefore = capturedActivity().errors.length;
+  const errorsBefore = capturedActivity(ctx.workspace).errors.length;
   try {
-    await runBrowserOperation(action(page), ctx.signal, label);
+    await runBrowserOperation(ctx.workspace, action(page), ctx.signal, label);
   } catch (err) {
     throw mapInteractionError(err, label, selector);
   }
@@ -182,7 +184,7 @@ async function act(
     outcome: {
       url,
       navigated: url !== urlBefore,
-      errorsDuring: capturedActivity().errors.slice(errorsBefore),
+      errorsDuring: capturedActivity(ctx.workspace).errors.slice(errorsBefore),
     },
   };
 }
@@ -201,9 +203,9 @@ export const browserClick = defineTool({
     "Pass index when the selector matches several elements. Requires browser_navigate first; clicking a page outside loopback is always confirmed.",
   schema: clickSchema,
   prepare: capturePage,
-  classify: (args) => ({
-    permission: interactionPermission(),
-    description: `Click ${describeTarget(args.selector)}${onPage()}`,
+  classify: (args, ctx) => ({
+    permission: interactionPermission(ctx.workspace),
+    description: `Click ${describeTarget(args.selector)}${onPage(ctx.workspace)}`,
   }),
   async run(args, ctx) {
     const selector = composeSelector(args.selector, args.index);
@@ -229,10 +231,10 @@ export const browserFill = defineTool({
     "Requires browser_navigate first; filling a page outside loopback is always confirmed.",
   schema: fillSchema,
   prepare: capturePage,
-  classify: (args) => ({
-    permission: interactionPermission(),
+  classify: (args, ctx) => ({
+    permission: interactionPermission(ctx.workspace),
     description:
-      `Type "${describeValue(args.text)}" into ${describeTarget(args.selector)}${onPage()}` +
+      `Type "${describeValue(args.text)}" into ${describeTarget(args.selector)}${onPage(ctx.workspace)}` +
       (args.submit ? " and submit" : ""),
   }),
   async run(args, ctx) {
@@ -244,7 +246,7 @@ export const browserFill = defineTool({
       // and the model already knows what it sent.
       return { data: { selector, filled: args.text.length, submitted: false, ...outcome } };
     }
-    const submitted = await act({ signal: ctx.signal }, "Submit", selector, () =>
+    const submitted = await act({ workspace: ctx.workspace, signal: ctx.signal }, "Submit", selector, () =>
       page.press(selector, "Enter", { timeout }),
     );
     return {
@@ -280,9 +282,9 @@ export const browserSelect = defineTool({
     "Requires browser_navigate first; selecting on a page outside loopback is always confirmed.",
   schema: selectSchema,
   prepare: capturePage,
-  classify: (args) => ({
-    permission: interactionPermission(),
-    description: `Select ${describeValue(args.value ?? args.label ?? "")} in ${describeTarget(args.selector)}${onPage()}`,
+  classify: (args, ctx) => ({
+    permission: interactionPermission(ctx.workspace),
+    description: `Select ${describeValue(args.value ?? args.label ?? "")} in ${describeTarget(args.selector)}${onPage(ctx.workspace)}`,
   }),
   async run(args, ctx) {
     const selector = composeSelector(args.selector, args.index);
@@ -321,10 +323,12 @@ export const browserPress = defineTool({
     "Requires browser_navigate first; pressing keys on a page outside loopback is always confirmed.",
   schema: pressSchema,
   prepare: capturePage,
-  classify: (args) => ({
-    permission: interactionPermission(),
+  classify: (args, ctx) => ({
+    permission: interactionPermission(ctx.workspace),
     description:
-      `Press ${describeValue(args.key)}` + (args.selector ? ` on ${describeValue(args.selector)}` : "") + onPage(),
+      `Press ${describeValue(args.key)}` +
+      (args.selector ? ` on ${describeValue(args.selector)}` : "") +
+      onPage(ctx.workspace),
   }),
   async run(args, ctx) {
     const timeout = args.timeoutMs ?? DEFAULT_ACTION_TIMEOUT_MS;
@@ -389,12 +393,12 @@ export const browserUpload = defineTool({
     "Returns the resulting url, whether it navigated, and any page errors. Requires browser_navigate first; uploading on a page outside loopback is always confirmed.",
   schema: uploadSchema,
   prepare: capturePage,
-  classify: (args) => ({
-    permission: interactionPermission(),
+  classify: (args, ctx) => ({
+    permission: interactionPermission(ctx.workspace),
     // The path is shown raw: handing a file to a page is the one interaction
     // that takes something out of the workspace, and which file it is decides
     // whether that is fine.
-    description: `Upload ${args.path} to ${describeTarget(args.selector)}${onPage()}`,
+    description: `Upload ${args.path} to ${describeTarget(args.selector)}${onPage(ctx.workspace)}`,
     path: args.path,
   }),
   async run(args, ctx) {

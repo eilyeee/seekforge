@@ -843,11 +843,10 @@ CLI、TUI 和服务端一视同仁；在服务端它是**按工作区隔离**的
 重要、如何用 `playwright codegen` 而不是让 agent 来生成这个文件、以及运行被取消
 时会发生什么，见[浏览器 / 视觉验证](browser.zh-CN.md)。
 
-**仅限 CLI 与 TUI。** `seekforge serve`（因而也包括 Desktop）会忽略这个键。浏览器
-会话是每进程一个 Chromium ——一个 context、一个 page——而服务端会并发地跑好几个
-工作区的 agent；把这个共享会话指向某一个工作区的 cookie 文件，会让另一个工作区的
-运行继承那份登录，并把自己的会话写回同一个文件。在浏览器会话本身按工作区隔离之前，
-服务端不支持它。
+所有前端都支持，包括 `seekforge serve` 与 Desktop。为此把浏览器会话本身改成了按
+工作区隔离：Chromium 进程仍然只有一个，但每个工作区有自己的 context —— 这正是
+Playwright 用来做隔离的原语，各自独立的 cookie 和页面。在此之前，同时跑多个工作区的
+服务端会让它们共用同一个页面，profile 也就无从谈起「属于谁」。
 
 可通过 `config set` 设置？**不可以** —— 直接编辑文件。
 

@@ -109,6 +109,13 @@ export type ServerConfig = {
    */
   editFormat?: "patch" | "whole";
   /**
+   * Name of a persistent browser session profile, per workspace. When set, this
+   * workspace's browser context starts from
+   * `~/.seekforge/browser-profiles/<name>.json` and writes it back when a run
+   * finishes. Unset = every run starts logged out. See docs/browser.md.
+   */
+  browserProfile?: string;
+  /**
    * Vision endpoint for the `image_analyze` builtin (OpenAI-compatible). The
    * main model usually cannot see images, so this is normally a separate model
    * and key. Unset leaves the tool reporting "vision_unconfigured".
