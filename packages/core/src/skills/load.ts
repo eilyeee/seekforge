@@ -7,6 +7,7 @@ import { loadPluginContributions, type PluginContributions } from "../plugins/in
 import { BUILTIN_SKILLS } from "./builtins.js";
 import { SKILL_ID_RE, resolveSkillsStoreRoot } from "./storage.js";
 import type { Skill, SkillScope } from "./types.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 const boundedText = (max: number) => z.string().trim().min(1).max(max);
 const skillJsonSchema = z.object({
@@ -126,7 +127,7 @@ function readSkillsRoot({ scope, path: root }: SkillsDir): SkillLoadResult {
     const stat = fs.lstatSync(root);
     if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("root must be a physical directory");
     rootReal = fs.realpathSync(root);
-    entries = fs.readdirSync(rootReal, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    entries = fs.readdirSync(rootReal, { withFileTypes: true }).sort((a, b) => compareByCodePoints(a.name, b.name));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { skills: [], diagnostics: [] };
     return {

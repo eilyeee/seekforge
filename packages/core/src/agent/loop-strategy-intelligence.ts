@@ -1,5 +1,6 @@
 import type { LoopState } from "./loop-state.js";
 import type { OrchestrationConfidence } from "./orchestration-intelligence.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export type LoopStrategyOutcome = {
   failureCategory: string;
@@ -142,12 +143,12 @@ export function analyzeLoopStrategyIntelligence(state: LoopState): LoopStrategyI
     )
     .sort(
       (left, right) =>
-        left.failureCategory.localeCompare(right.failureCategory) ||
+        compareByCodePoints(left.failureCategory, right.failureCategory) ||
         right.lowerConfidenceBound - left.lowerConfidenceBound ||
         right.utilityScore - left.utilityScore ||
         right.improvementRate - left.improvementRate ||
         right.attempts - left.attempts ||
-        left.model.localeCompare(right.model),
+        compareByCodePoints(left.model, right.model),
     );
   const recommendedRoutes = [...new Set(outcomes.map((outcome) => outcome.failureCategory))].flatMap((category) => {
     const candidate = outcomes.find((outcome) => outcome.failureCategory === category && outcome.attempts >= 2);

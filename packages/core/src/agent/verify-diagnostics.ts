@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { MAX_VERIFY_DIAGNOSTIC_INPUT } from "./loop-constants.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export type VerifyFramework =
   | "vitest"
@@ -246,7 +247,7 @@ export function parseVerifyDiagnostics(output: string, options: VerifyDiagnostic
         line: item.line ?? 0,
         message: normalizeForFingerprint(item.message),
       }))
-      .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+      .sort((a, b) => compareByCodePoints(JSON.stringify(a), JSON.stringify(b))),
     fallback: framework === "unknown" ? normalizeForFingerprint(summary) : "",
   });
   return {

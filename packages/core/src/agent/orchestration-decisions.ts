@@ -4,6 +4,7 @@ import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/w
 import { isDenseArray, nextOrchestrationVersion } from "./orchestration.js";
 import { buildWorkspaceOrchestrationControlAnalytics } from "./orchestration-control.js";
 import { acquireSessionLease } from "./session-lease.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export type OrchestrationControllerState = {
   mode: "active" | "frozen";
@@ -278,6 +279,6 @@ export function completeOrchestrationDecision(
 
 export function listOrchestrationDecisions(workspace: string): OrchestrationDecision[] {
   return readDecisions(workspace).sort(
-    (left, right) => Date.parse(right.decidedAt) - Date.parse(left.decidedAt) || left.id.localeCompare(right.id),
+    (left, right) => Date.parse(right.decidedAt) - Date.parse(left.decidedAt) || compareByCodePoints(left.id, right.id),
   );
 }

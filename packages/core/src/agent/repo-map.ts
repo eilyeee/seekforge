@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { taskKeywords, taskPathTokens } from "../memory/brief.js";
 import { DEFAULT_IGNORE_DIRS } from "../tools/sandbox.js";
 import { readWorkspaceStateFile } from "../util/workspace-state.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 /**
  * Repo map: a compact, token-budgeted structural overview of a (possibly large)
@@ -353,7 +354,7 @@ function identifierCounts(content: string): Map<string, number> {
 export function buildFileGraph(root: string, files: CodeFile[]): FileGraph {
   const capped =
     files.length > MAX_GRAPH_FILES
-      ? [...files].sort((a, b) => a.depth - b.depth || a.rel.localeCompare(b.rel)).slice(0, MAX_GRAPH_FILES)
+      ? [...files].sort((a, b) => a.depth - b.depth || compareByCodePoints(a.rel, b.rel)).slice(0, MAX_GRAPH_FILES)
       : files;
 
   const defs = new Map<string, string[]>(); // symbol -> files defining it
@@ -397,7 +398,7 @@ export function buildFileGraph(root: string, files: CodeFile[]): FileGraph {
       }
     }
   }
-  nodes.sort((a, b) => a.localeCompare(b));
+  nodes.sort((a, b) => compareByCodePoints(a, b));
   return { files: nodes, edges, hasEdges, info };
 }
 
@@ -591,14 +592,16 @@ export function buildRelevantFiles(
   // Candidate set: the strongest path-matches, plus the most central files by
   // personalized PageRank (so a central-but-unnamed file gets a chance to clear
   // the floor). Bounded by maxCandidates on each side.
-  const byPath = pathScored.sort((a, b) => b.score - a.score || a.f.rel.localeCompare(b.f.rel)).slice(0, maxCandidates);
+  const byPath = pathScored
+    .sort((a, b) => b.score - a.score || compareByCodePoints(a.f.rel, b.f.rel))
+    .slice(0, maxCandidates);
   const chosen = new Map<string, { f: CodeFile; pathScore: number }>();
   for (const { f, score } of byPath) chosen.set(f.rel, { f, pathScore: score });
   if (pr && prMax > 0) {
     const fileByRel = new Map(files.map((f) => [f.rel, f] as const));
     const prSorted = [...pr.entries()]
       .filter(([, v]) => v > 0)
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .sort((a, b) => b[1] - a[1] || compareByCodePoints(a[0], b[0]))
       .slice(0, maxCandidates);
     for (const [rel] of prSorted) {
       if (chosen.has(rel)) continue;
@@ -637,7 +640,7 @@ export function buildRelevantFiles(
 
   const top = refined
     .filter((r) => r.score >= minScore)
-    .sort((a, b) => b.score - a.score || a.rel.localeCompare(b.rel))
+    .sort((a, b) => b.score - a.score || compareByCodePoints(a.rel, b.rel))
     .slice(0, maxFiles);
   if (top.length === 0) return undefined;
 
@@ -665,7 +668,7 @@ function formatRepoMap(
   const dirs = [...dirCounts.entries()]
     .filter(([d]) => d !== "." && d !== "")
     .filter(([d]) => d.split(path.sep).length - baseDepth <= maxDepth)
-    .sort((a, b) => a[0].localeCompare(b[0]));
+    .sort((a, b) => compareByCodePoints(a[0], b[0]));
   if (dirs.length > 0) {
     out.push("", "## Structure");
     for (const [d, n] of dirs) {
@@ -680,9 +683,10 @@ function formatRepoMap(
   out.push("", "## Files");
   const sorted = rank
     ? [...files].sort(
-        (a, b) => (rank.get(b.rel) ?? 0) - (rank.get(a.rel) ?? 0) || a.depth - b.depth || a.rel.localeCompare(b.rel),
+        (a, b) =>
+          (rank.get(b.rel) ?? 0) - (rank.get(a.rel) ?? 0) || a.depth - b.depth || compareByCodePoints(a.rel, b.rel),
       )
-    : [...files].sort((a, b) => a.depth - b.depth || a.rel.localeCompare(b.rel));
+    : [...files].sort((a, b) => a.depth - b.depth || compareByCodePoints(a.rel, b.rel));
   for (const f of sorted.slice(0, maxFiles)) {
     const outline = outlineFor(root, f.rel, f.size, info?.get(f.rel));
     out.push(`${f.rel}${outline ? `  ${outline}` : ""}`);

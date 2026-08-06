@@ -2,6 +2,7 @@ import type { GraphNode } from "./graph-contract.js";
 import { listWorkspaceGraphExecutorReservations } from "./graph-capacity.js";
 import { graphExecutionAdapterEligibility, type GraphExecutionAdapter } from "./graph-engineering.js";
 import type { EngineeringGraphState } from "./graph-state.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export type EngineeringGraphRuntimeReplanEntry = {
   nodeId: string;
@@ -108,7 +109,7 @@ export function buildEngineeringGraphRuntimeReplan(
   });
   const recommendedOrder = entries
     .filter((entry) => entry.status === "ready")
-    .sort((left, right) => right.score - left.score || left.nodeId.localeCompare(right.nodeId))
+    .sort((left, right) => right.score - left.score || compareByCodePoints(left.nodeId, right.nodeId))
     .map((entry) => entry.nodeId);
   return {
     graphId: state.graphId,
@@ -121,7 +122,7 @@ export function buildEngineeringGraphRuntimeReplan(
         (left.status === "ready" ? 0 : left.status === "in_flight" ? 1 : left.status === "deferred" ? 2 : 3) -
           (right.status === "ready" ? 0 : right.status === "in_flight" ? 1 : right.status === "deferred" ? 2 : 3) ||
         right.score - left.score ||
-        left.nodeId.localeCompare(right.nodeId),
+        compareByCodePoints(left.nodeId, right.nodeId),
     ),
   };
 }
@@ -165,5 +166,5 @@ export function buildWorkspaceExecutorCapacityReport(
         },
       ];
     })
-    .sort((left, right) => right.utilization - left.utilization || left.executor.localeCompare(right.executor));
+    .sort((left, right) => right.utilization - left.utilization || compareByCodePoints(left.executor, right.executor));
 }

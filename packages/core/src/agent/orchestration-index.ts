@@ -6,6 +6,7 @@ import { listLoopStates } from "./loop-state.js";
 import { isDenseArray } from "./orchestration.js";
 import { loopOrchestrationFingerprint } from "./orchestration-intelligence.js";
 import { acquireSessionLease } from "./session-lease.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export type WorkspaceOrchestrationIndexItem = {
   kind: "loop" | "graph";
@@ -158,7 +159,9 @@ function refreshWorkspaceOrchestrationIndexUnlocked(workspace: string): Workspac
       failures: graph.results.filter((result) => result.status === "failed").length,
       ...(graph.parentGraph ? { parent: graph.parentGraph } : {}),
     })),
-  ].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || left.id.localeCompare(right.id));
+  ].sort(
+    (left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || compareByCodePoints(left.id, right.id),
+  );
   const items = allItems.slice(0, MAX_ITEMS);
   const totals = allItems.reduce(
     (summary, item) => ({

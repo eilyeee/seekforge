@@ -6,6 +6,7 @@ import { costDistribution, proportionCi95, type ConfidenceInterval, type CostDis
 import type { TaskResult } from "./task-runner.js";
 import { readTextFileBounded, writeFileAtomic } from "./file-io.js";
 import { MAX_TREND_FILES, MAX_TREND_REPORT_BYTES } from "./limits.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export type TrendEntry = {
   generatedAt: string;
@@ -173,7 +174,7 @@ export function collectTrends(dir: string): TrendEntry[] {
     unique.set(`${item.generatedAt}\0${item.kind}\0${item.label}\0${item.report}`, item);
   }
   return [...unique.values()].sort(
-    (a, b) => Date.parse(a.generatedAt) - Date.parse(b.generatedAt) || a.label.localeCompare(b.label),
+    (a, b) => Date.parse(a.generatedAt) - Date.parse(b.generatedAt) || compareByCodePoints(a.label, b.label),
   );
 }
 

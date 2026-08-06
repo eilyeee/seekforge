@@ -23,6 +23,7 @@ import {
 } from "./recovery-policy.js";
 import { engineeringGraphSignalAvailable } from "./graph-signal-store.js";
 import { acquireSessionLease, isSessionRunActive, type SessionLease } from "./session-lease.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export const MAX_GRAPH_STATE_BYTES = 1024 * 1024;
 export const MAX_GRAPH_EVENTS = 128;
@@ -552,7 +553,7 @@ export function listEngineeringGraphStates(
           entry.name.endsWith(".json") &&
           isValidLoopDagId(entry.name.slice(0, -5)),
       )
-      .sort((left, right) => left.name.localeCompare(right.name));
+      .sort((left, right) => compareByCodePoints(left.name, right.name));
     if (options.requireComplete && candidates.length > 256) {
       throw new Error("Workspace has too many Graph checkpoints for a complete bounded scan");
     }

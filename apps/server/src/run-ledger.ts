@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { acquireSessionLease, redactSecrets, SessionBusyError } from "@seekforge/core";
 export { SERVER_CAPABILITIES, SEEKFORGE_PROTOCOL_VERSION as SERVER_PROTOCOL_VERSION } from "@seekforge/shared/features";
 import { MAX_WS_PAYLOAD_BYTES } from "@seekforge/shared/protocol-limits";
+import { compareByCodePoints } from "@seekforge/shared";
 import {
   appendProjectFile,
   projectFileIdentity,
@@ -170,7 +171,7 @@ export function readRunLedger(workspace: string): RunRecord[] {
     if (!record) break;
     latest.set(record.runId, record);
   }
-  return [...latest.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return [...latest.values()].sort((a, b) => compareByCodePoints(b.updatedAt, a.updatedAt));
 }
 
 export const RUN_EVENT_REPLAY_LIMIT = 500;
@@ -601,7 +602,9 @@ export class RunManager {
       .filter((record) => cutoff === undefined || Date.parse(record.updatedAt) >= cutoff)
       .slice(0, maxTerminalRuns);
     const retained = [...nonTerminal, ...terminal];
-    const ordered = [...retained].sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+    // Code units: this order is the order of a file on disk that a prune then
+    // rewrites, so it must not depend on the locale of whichever process ran.
+    const ordered = [...retained].sort((a, b) => compareByCodePoints(a.updatedAt, b.updatedAt));
     const serialized = ordered.length > 0 ? `${ordered.map((r) => JSON.stringify(r)).join("\n")}\n` : "";
     writeProjectFileAtomic(workspace, ".seekforge/runs.jsonl", serialized);
     state.lines = ordered.length;

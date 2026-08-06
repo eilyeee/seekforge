@@ -4,6 +4,7 @@ import { isValidLoopDagId } from "./loop-dag-validation.js";
 import { isDenseArray } from "./orchestration.js";
 import { isValidOrchestrationResourceId } from "./orchestration-scheduler.js";
 import type { GraphRetryPolicy } from "./graph-retry-policy.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export const MAX_GRAPH_NODES = 128;
 export const MAX_GRAPH_DEPTH = 4;
@@ -844,7 +845,10 @@ function rawGraphDefinitionFingerprint(
 ): string {
   return createHash("sha256")
     .update(
-      JSON.stringify({ definition, workspaces: [...workspaces].sort(([left], [right]) => left.localeCompare(right)) }),
+      JSON.stringify({
+        definition,
+        workspaces: [...workspaces].sort(([left], [right]) => compareByCodePoints(left, right)),
+      }),
     )
     .digest("hex");
 }

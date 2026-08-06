@@ -19,6 +19,7 @@ import {
 } from "@seekforge/core";
 import { readTextFileBounded } from "./file-io.js";
 import { MAX_TASK_FILE_BYTES, MAX_TASK_FILES } from "./limits.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export const TASK_RUNNERS = ["agent", "loop", "session_scenario"] as const;
 export type TaskRunner = (typeof TASK_RUNNERS)[number];
@@ -622,7 +623,10 @@ export function loadTasks(dir: string): TaskDef[] {
     if (seen.has(task.id)) throw new Error(`duplicate task id: ${task.id}`);
     seen.add(task.id);
   }
-  return tasks.sort((a, b) => a.id.localeCompare(b.id));
+  // Code points, not a collator: this order is the order tasks run in and the
+  // order they appear in a persisted result file, which is then diffed against
+  // another machine's.
+  return tasks.sort((a, b) => compareByCodePoints(a.id, b.id));
 }
 
 /** Asserts that every task's fixture directory exists under fixturesRoot. */

@@ -29,6 +29,7 @@ import { buildEngineeringGraphRuntimeReplan, buildWorkspaceExecutorCapacityRepor
 import { listOrchestrationRollouts } from "./orchestration-rollouts.js";
 import { listEngineeringGraphArtifactAttestations } from "./graph-artifact-store.js";
 import { listOrchestrationDecisions, readOrchestrationControllerState } from "./orchestration-decisions.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export type WorkspaceOrchestrationReportOptions = {
   policy?: OrchestrationSloPolicy;
@@ -75,7 +76,10 @@ export function buildWorkspaceOrchestrationReport(
   const contextualRouting = buildWorkspaceContextualLoopRoutingProfile(workspace);
   const decisions = [...new Set([physicalWorkspace, ...allGraphCheckpoints.map((checkpoint) => checkpoint.workspace)])]
     .flatMap((decisionWorkspace) => listOrchestrationDecisions(decisionWorkspace))
-    .sort((left, right) => Date.parse(right.decidedAt) - Date.parse(left.decidedAt) || left.id.localeCompare(right.id))
+    .sort(
+      (left, right) =>
+        Date.parse(right.decidedAt) - Date.parse(left.decidedAt) || compareByCodePoints(left.id, right.id),
+    )
     .slice(0, 100);
   const attestationCounts = new Map<string, number>();
   for (const attestationWorkspace of new Set(allGraphCheckpoints.map((checkpoint) => checkpoint.workspace))) {

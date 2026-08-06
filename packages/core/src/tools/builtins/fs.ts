@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "zod";
-import { DEFAULT_LIMITS } from "@seekforge/shared";
+import { compareByCodePoints, DEFAULT_LIMITS } from "@seekforge/shared";
 import { ToolError } from "../errors.js";
 import { applyEdits } from "../edits.js";
 import {
@@ -129,7 +129,10 @@ function walkEntries(root: string, maxDepth: number): { entries: string[]; trunc
     } catch {
       return;
     }
-    dirents.sort((a, b) => a.name.localeCompare(b.name));
+    // Code units, matching the Rust runtime's byte order: this is one tool with
+    // two backends, and it answered in two different orders depending on which
+    // was configured.
+    dirents.sort((a, b) => compareByCodePoints(a.name, b.name));
     for (const d of dirents) {
       if (truncated) return;
       if (d.isDirectory() && DEFAULT_IGNORE_DIRS.has(d.name)) continue;
@@ -530,7 +533,10 @@ const searchText = defineTool({
       } catch {
         return;
       }
-      dirents.sort((a, b) => a.name.localeCompare(b.name));
+      // Code units, matching the Rust runtime's byte order: this is one tool with
+      // two backends, and it answered in two different orders depending on which
+      // was configured.
+      dirents.sort((a, b) => compareByCodePoints(a.name, b.name));
       for (const d of dirents) {
         if (truncated) return;
         const childRel = rel === "" ? d.name : `${rel}/${d.name}`;

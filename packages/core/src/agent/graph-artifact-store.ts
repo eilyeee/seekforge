@@ -26,6 +26,7 @@ import { listEngineeringGraphStates } from "./graph-state.js";
 import { acquireSessionLease } from "./session-lease.js";
 import { hasOnlyKeys, isRecord } from "../util/guards.js";
 import { isDenseArray } from "./orchestration.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export const MAX_GRAPH_ARTIFACT_BYTES = 256 * 1024 * 1024;
 const DIGEST_RE = /^[a-f0-9]{64}$/;
@@ -125,7 +126,10 @@ function recordAttestationUnlocked(
   };
   if (!validAttestation(attestation)) throw new Error("Graph artifact attestation is invalid");
   let attestations = [...current, attestation]
-    .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.id.localeCompare(right.id))
+    .sort(
+      (left, right) =>
+        Date.parse(left.createdAt) - Date.parse(right.createdAt) || compareByCodePoints(left.id, right.id),
+    )
     .slice(-MAX_ATTESTATIONS);
   let serialized = `${JSON.stringify({ version: 1, attestations })}\n`;
   while (Buffer.byteLength(serialized) > MAX_ATTESTATIONS_BYTES && attestations.length > 1) {
@@ -356,7 +360,10 @@ export function listEngineeringGraphArtifactAttestations(
   if (sha256 !== undefined && !DIGEST_RE.test(sha256)) throw new Error("Graph artifact digest is invalid");
   return readAttestations(workspace)
     .filter((attestation) => sha256 === undefined || attestation.sha256 === sha256)
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt) || left.id.localeCompare(right.id));
+    .sort(
+      (left, right) =>
+        Date.parse(right.createdAt) - Date.parse(left.createdAt) || compareByCodePoints(left.id, right.id),
+    );
 }
 
 export function engineeringGraphArtifactAvailable(workspace: string, sha256: string, sizeBytes: number): boolean {
@@ -550,7 +557,7 @@ export function inspectEngineeringGraphArtifactStore(workspace: string): Enginee
   }
   return entries.sort(
     (left, right) =>
-      Date.parse(left.modifiedAt) - Date.parse(right.modifiedAt) || left.sha256.localeCompare(right.sha256),
+      Date.parse(left.modifiedAt) - Date.parse(right.modifiedAt) || compareByCodePoints(left.sha256, right.sha256),
   );
 }
 

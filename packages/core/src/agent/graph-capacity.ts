@@ -4,6 +4,7 @@ import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/w
 import { isValidLoopDagId } from "./loop-dag-validation.js";
 import { isDenseArray } from "./orchestration.js";
 import { acquireSessionLease } from "./session-lease.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export type WorkspaceGraphExecutorReservation = {
   executor: string;
@@ -214,6 +215,7 @@ export function listWorkspaceGraphExecutorReservations(
   if (!Number.isFinite(nowMs)) throw new Error("Graph executor capacity time is invalid");
   return activeReservations(readDocument(workspace), nowMs).sort(
     (left, right) =>
-      left.executor.localeCompare(right.executor) || left.reservationId.localeCompare(right.reservationId),
+      compareByCodePoints(left.executor, right.executor) ||
+      compareByCodePoints(left.reservationId, right.reservationId),
   );
 }

@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { DEFAULT_LIMITS } from "@seekforge/shared";
+import { compareByCodePoints, DEFAULT_LIMITS } from "@seekforge/shared";
 import { readUtf8FileBoundedSync } from "../util/fs.js";
 import { compileGlob } from "../tools/builtins/glob.js";
 import { readSkillEffectiveness } from "./usage.js";
@@ -106,7 +106,9 @@ function detectWorkspaceSignals(workspace: string): WorkspaceSignals {
         size: stat.size,
         ino: stat.ino,
       });
-      entries = fs.readdirSync(current.absolute, { withFileTypes: true }).sort((a, b) => b.name.localeCompare(a.name));
+      entries = fs
+        .readdirSync(current.absolute, { withFileTypes: true })
+        .sort((a, b) => compareByCodePoints(b.name, a.name));
     } catch {
       continue;
     }
@@ -284,7 +286,9 @@ function orchestrate(
       .filter(({ skill }) => (skill.dependsOn ?? []).every((id) => !pending.has(id)))
       .sort(
         (a, b) =>
-          (a.skill.order ?? 0) - (b.skill.order ?? 0) || b.score - a.score || a.skill.id.localeCompare(b.skill.id),
+          (a.skill.order ?? 0) - (b.skill.order ?? 0) ||
+          b.score - a.score ||
+          compareByCodePoints(a.skill.id, b.skill.id),
       );
     if (ready.length === 0) return [];
     for (const selection of ready) {
@@ -386,6 +390,6 @@ export function selectSkills(task: string, skills: Skill[], opts?: SelectSkillsO
       ...(adjustment !== 0 ? { feedbackAdjustment: adjustment } : {}),
     });
   }
-  selections.sort((a, b) => b.score - a.score || a.skill.id.localeCompare(b.skill.id));
+  selections.sort((a, b) => b.score - a.score || compareByCodePoints(a.skill.id, b.skill.id));
   return orchestrate(selections, skills, limit, opts?.allowHighRisk === true);
 }

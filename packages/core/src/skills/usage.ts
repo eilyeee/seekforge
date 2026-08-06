@@ -5,6 +5,7 @@ import { writeAllSync } from "../util/fs.js";
 import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 import { SKILL_ID_RE } from "./storage.js";
 import type { SkillEffectiveness, SkillSelection } from "./types.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export const MAX_SKILL_USAGE_BYTES = 8 * 1024 * 1024;
 const RETAIN_SKILL_USAGE_BYTES = 4 * 1024 * 1024;
@@ -210,5 +211,5 @@ export function readSkillEffectiveness(workspace: string): SkillEffectiveness[] 
         learnedAdjustment,
       };
     })
-    .sort((a, b) => b.selections - a.selections || a.skillId.localeCompare(b.skillId));
+    .sort((a, b) => b.selections - a.selections || compareByCodePoints(a.skillId, b.skillId));
 }

@@ -4,6 +4,7 @@ import type { OrchestrationConfidence } from "./orchestration-intelligence.js";
 import { isLoopFailureCategory } from "./loop-model-routing.js";
 import { listLoopStates, type LoopState } from "./loop-state.js";
 import { readOrchestrationControllerState } from "./orchestration-decisions.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export type LoopRoutingContext = "node" | "rust" | "python" | "go" | "mixed" | "generic";
 
@@ -146,10 +147,10 @@ export function buildWorkspaceContextualLoopRoutingProfile(
     })
     .sort(
       (left, right) =>
-        left.context.localeCompare(right.context) ||
-        left.failureCategory.localeCompare(right.failureCategory) ||
+        compareByCodePoints(left.context, right.context) ||
+        compareByCodePoints(left.failureCategory, right.failureCategory) ||
         right.explorationScore - left.explorationScore ||
-        left.model.localeCompare(right.model),
+        compareByCodePoints(left.model, right.model),
     );
   return {
     generatedAt: now.toISOString(),
@@ -227,7 +228,7 @@ export function selectWorkspaceContextualLoopRoutes(
               (objective(left) + (left.explorationScore - left.meanUtility))
             : objective(right) - objective(left)) ||
           right.attempts - left.attempts ||
-          left.model.localeCompare(right.model),
+          compareByCodePoints(left.model, right.model),
       );
       return ranked[0] ? [[category, ranked[0].model]] : [];
     }),

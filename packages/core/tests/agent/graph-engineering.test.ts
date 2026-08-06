@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { compareByCodePoints } from "@seekforge/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   engineeringSubgraphStateId,
@@ -947,7 +948,7 @@ describe("runEngineeringGraph", () => {
       .update(
         JSON.stringify({
           definition: legacyDefinition,
-          workspaces: [...workspaces].sort(([left], [right]) => left.localeCompare(right)),
+          workspaces: [...workspaces].sort(([left], [right]) => compareByCodePoints(left, right)),
         }),
       )
       .digest("hex");

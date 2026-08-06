@@ -18,6 +18,7 @@ import type { EngineeringGraphState } from "./graph-state.js";
 import type { LoopHealthReport } from "./loop-health.js";
 import type { LoopState } from "./loop-state.js";
 import { analyzeLoopStrategyIntelligence } from "./loop-strategy-intelligence.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export {
   analyzeLoopStrategyIntelligence,
@@ -277,7 +278,7 @@ function placementReport(
         const queueDepth = adapter.queueDepth ?? 0;
         return { executor: id, utilization, queueDepth, score: utilization * 1_000 + queueDepth };
       })
-      .sort((left, right) => left.score - right.score || left.executor.localeCompare(right.executor))
+      .sort((left, right) => left.score - right.score || compareByCodePoints(left.executor, right.executor))
       .slice(0, 8);
     const currentDescriptor = descriptors[node.executor];
     const adapter =
@@ -519,7 +520,7 @@ function canonicalOrchestrationValue(value: unknown): unknown {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
         .filter(([, item]) => item !== undefined)
-        .sort(([left], [right]) => left.localeCompare(right))
+        .sort(([left], [right]) => compareByCodePoints(left, right))
         .map(([key, item]) => [key, canonicalOrchestrationValue(item)]),
     );
   }
@@ -570,7 +571,7 @@ export function buildOrchestrationPortfolioReport(
       activeDurationMs: graph.elapsedMs,
       ...(graph.parentGraph ? { parent: graph.parentGraph } : {}),
     })),
-  ].sort((left, right) => left.kind.localeCompare(right.kind) || left.id.localeCompare(right.id));
+  ].sort((left, right) => compareByCodePoints(left.kind, right.kind) || compareByCodePoints(left.id, right.id));
   const criticalStatuses = new Set(["failed", "budget", "verify_error", "agent_error", "no_progress", "exhausted"]);
   const warningStatuses = new Set(["paused", "interrupted", "requirements_pending", "cancelled"]);
   const status = items.some((item) => criticalStatuses.has(item.status))

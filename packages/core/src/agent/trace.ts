@@ -24,6 +24,7 @@ import {
 import { readUtf8FileBoundedSync, writeFileAtomic } from "../util/fs.js";
 import { isRecord } from "../util/guards.js";
 import { installProcessTeardown } from "../util/process-teardown.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export type SessionTrace = {
   dir: string;
@@ -402,7 +403,7 @@ export function listSessions(workspace: string, opts: ListSessionsOptions = {}):
   }
   return metas.sort((a, b) => {
     const chronological = Date.parse(b.createdAt) - Date.parse(a.createdAt);
-    return chronological || a.id.localeCompare(b.id);
+    return chronological || compareByCodePoints(a.id, b.id);
   });
 }
 

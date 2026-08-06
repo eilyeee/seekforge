@@ -4,6 +4,7 @@ import { z } from "zod";
 import { ToolError } from "../errors.js";
 import { DEFAULT_IGNORE_DIRS, resolveInsideWorkspace } from "../sandbox.js";
 import { defineTool, type ToolSpec } from "../registry.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 const MAX_GLOB_MATCHES = 1000;
 
@@ -204,7 +205,8 @@ const glob = defineTool({
     const re = compileGlob(args.pattern);
     const { matches, truncated } = walkGlob(root, re);
     // Newest first; ties broken by path for a stable order.
-    matches.sort((a, b) => b.mtimeMs - a.mtimeMs || a.rel.localeCompare(b.rel));
+    // Deterministic tie-break: equal mtimes must not reorder by locale.
+    matches.sort((a, b) => b.mtimeMs - a.mtimeMs || compareByCodePoints(a.rel, b.rel));
     const files = matches.map((m) => m.rel);
     return {
       data: { files, count: files.length, truncated },

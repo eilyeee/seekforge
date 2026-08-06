@@ -5,6 +5,7 @@ import { platform, release } from "node:os";
 import { join, relative } from "node:path";
 import type { EvalConfig } from "./config.js";
 import { DEFAULT_MODEL } from "@seekforge/core";
+import { compareByCodePoints } from "@seekforge/shared";
 import { repoRoot, tasksDir } from "./paths.js";
 import type { TaskDef } from "./tasks.js";
 import { MAX_DATASET_FILES, MAX_DATASET_FILE_BYTES, MAX_DATASET_TOTAL_BYTES } from "./limits.js";
@@ -85,7 +86,10 @@ function hashFile(hash: Hash, path: string, consumed: { bytes: number }): void {
 export function hashDataset(tasks: TaskDef[], fixtureRoot: string): string {
   const hash = createHash("sha256");
   const consumed = { bytes: 0 };
-  for (const task of [...tasks].sort((a, b) => a.id.localeCompare(b.id))) {
+  // Code points, not a collator: this order decides the dataset hash, and the
+  // hash exists to prove two runs — on two machines, in CI and on a laptop —
+  // used the same dataset. A collator would make identical datasets disagree.
+  for (const task of [...tasks].sort((a, b) => compareByCodePoints(a.id, b.id))) {
     const taskFile = join(tasksDir, `${task.id}.json`);
     hash.update(`task:${task.id}\0`);
     try {

@@ -1,6 +1,7 @@
 import type { EngineeringGraphState, GraphArtifact } from "./graph-state.js";
 import type { EngineeringGraphRunSnapshot } from "./graph-run-history.js";
 import { engineeringGraphArtifactAvailable } from "./graph-artifact-store.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export type EngineeringGraphArtifactCatalogEntry = GraphArtifact & {
   key: string;
@@ -39,7 +40,7 @@ export function buildEngineeringGraphArtifactCatalog(
         consumers: [...new Set(consumersByProducer.get(result.id) ?? [])].sort(),
       })),
     )
-    .sort((left, right) => left.key.localeCompare(right.key) || left.path.localeCompare(right.path));
+    .sort((left, right) => compareByCodePoints(left.key, right.key) || compareByCodePoints(left.path, right.path));
 }
 
 /** Plans exact-generation reuse; callers must still verify and materialize each artifact explicitly. */
@@ -84,6 +85,6 @@ export function planEngineeringGraphArtifactReuse(
     }
   }
   return [...candidates.values()].sort(
-    (left, right) => left.nodeId.localeCompare(right.nodeId) || left.key.localeCompare(right.key),
+    (left, right) => compareByCodePoints(left.nodeId, right.nodeId) || compareByCodePoints(left.key, right.key),
   );
 }

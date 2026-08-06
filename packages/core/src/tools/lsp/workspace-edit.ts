@@ -7,6 +7,7 @@ import { resolveForRead, resolveForWrite } from "../sandbox.js";
 import { openVerifiedWrite, replaceFileContents } from "../safe-write.js";
 import { FileTooLargeError, readUtf8FileBoundedSync } from "../../util/fs.js";
 import type { LspPosition } from "./client.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 /**
  * Turning a language server's WorkspaceEdit into files on disk.
@@ -244,7 +245,7 @@ export function planWorkspaceEdit(workspace: string, byUri: Map<string, LspTextE
       edits: edits.length,
     });
   }
-  files.sort((a, b) => a.path.localeCompare(b.path));
+  files.sort((a, b) => compareByCodePoints(a.path, b.path));
   return { files, totalEdits };
 }
 

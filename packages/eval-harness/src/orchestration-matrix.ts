@@ -1,3 +1,5 @@
+import { compareByCodePoints } from "@seekforge/shared";
+
 export type OrchestrationEvalEcosystem = "node" | "rust" | "python" | "go";
 export type OrchestrationEvalExecution = "local" | "remote";
 export type OrchestrationEvalFault = "none" | "retryable" | "crash_recovery" | "capacity_pressure" | "regression";
@@ -139,9 +141,9 @@ export function buildOrchestrationEvaluationMatrix(
     })
     .sort(
       (left, right) =>
-        left.ecosystem.localeCompare(right.ecosystem) ||
-        left.execution.localeCompare(right.execution) ||
-        left.fault.localeCompare(right.fault),
+        compareByCodePoints(left.ecosystem, right.ecosystem) ||
+        compareByCodePoints(left.execution, right.execution) ||
+        compareByCodePoints(left.fault, right.fault),
     );
   const missing = required.filter((requirement, index) => {
     const id = key(requirement);

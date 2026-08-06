@@ -82,6 +82,7 @@ import {
 import { assertGraphValue, bindingValue, boundedOutput, fitOutputBudget, graphInputs } from "./graph-node-values.js";
 import { captureGraphArtifacts } from "./graph-node-artifacts.js";
 import { resolveEngineeringGraphWorkspaces, validateEngineeringGraphRunOptions } from "./graph-run-options.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 // The execution contract, its failure vocabulary, value plumbing, artifact
 // capture, and run-option validation now live in focused modules. They are
@@ -2172,7 +2173,9 @@ export async function runEngineeringGraph(
           const targetOrder = (node: GraphNode): number =>
             Math.max(0, ...(node.compensates ?? []).map((id) => definition.nodes.findIndex((item) => item.id === id)));
           return (
-            latest(right) - latest(left) || targetOrder(right) - targetOrder(left) || left.id.localeCompare(right.id)
+            latest(right) - latest(left) ||
+            targetOrder(right) - targetOrder(left) ||
+            compareByCodePoints(left.id, right.id)
           );
         });
       for (const node of ordered) {

@@ -1,3 +1,4 @@
+import { compareByCodePoints } from "@seekforge/shared";
 export const ORCHESTRATION_RESOURCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
 export type OrchestrationScheduleCandidate = {
@@ -59,7 +60,7 @@ export function selectOrchestrationReadyNodes(
     (left, right) =>
       (right.priority ?? 0) - (left.priority ?? 0) ||
       (right.score ?? 0) - (left.score ?? 0) ||
-      left.id.localeCompare(right.id),
+      compareByCodePoints(left.id, right.id),
   );
   for (const candidate of ranked) {
     if (selected.length >= availableSlots) break;

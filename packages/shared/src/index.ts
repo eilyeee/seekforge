@@ -147,6 +147,57 @@ export type PermissionPolicy = {
  * re-exports it, so `import { isSensitiveBasename } from "@seekforge/core"`
  * keeps working.
  */
+/**
+ * Order two strings by Unicode code point — the order Rust's `Ord` gives, and
+ * never a locale's.
+ *
+ * `String.prototype.localeCompare` asks the runtime's collator, and collators
+ * disagree: under sv-SE "ä" sorts after "z", under en-US it sorts beside "a".
+ * That is the right answer for a list a person reads and the wrong one
+ * everywhere else here — anything HASHED, PERSISTED, or answered by a SECOND
+ * IMPLEMENTATION has to come out identical on every machine.
+ *
+ * Two real defects came from the difference. A plugin's approval digest hashed
+ * its files in locale order, so the same directory produced a different sha256
+ * on a differently-configured machine and an approved plugin read as "changed".
+ * And `list_files` sorted with a collator in TypeScript while the Rust runtime
+ * sorted by bytes, so one tool call returned two different orders depending on
+ * which backend was configured.
+ *
+ * Code POINT, not code unit, and the difference is the whole reason this is a
+ * loop rather than `left < right`. JavaScript's `<` compares UTF-16 code units,
+ * where a supplementary character (U+10000 and up, so every emoji) arrives as a
+ * surrogate pair starting at 0xD800 — numerically *below* the ordinary
+ * characters at U+E000–U+FFFF. Rust compares UTF-8 bytes, which agrees with
+ * code point order, so `<` and Rust disagree on exactly those pairs: `🙂.md`
+ * next to a CJK compatibility ideograph is a filename, not a hypothetical. The
+ * remapping below lifts surrogates back above 0xE000–0xFFFF, which restores
+ * code point order and with it the agreement between the two implementations.
+ */
+export function compareByCodePoints(left: string, right: string): number {
+  if (left === right) return 0;
+  const shared = Math.min(left.length, right.length);
+  for (let i = 0; i < shared; i += 1) {
+    const a = orderableUnit(left.charCodeAt(i));
+    const b = orderableUnit(right.charCodeAt(i));
+    if (a !== b) return a < b ? -1 : 1;
+  }
+  // A common prefix: the shorter string comes first, same as byte order.
+  return left.length < right.length ? -1 : left.length > right.length ? 1 : 0;
+}
+
+/**
+ * Move the surrogate block above the BMP tail so a plain numeric comparison
+ * lands in code point order: 0x0000–0xD7FF stay, 0xE000–0xFFFF drop to
+ * 0xD800–0xF7FF, and surrogates rise to 0xF800–0xFFFF. The three ranges do not
+ * overlap, so nothing is made equal that was not.
+ */
+function orderableUnit(unit: number): number {
+  if (unit >= 0xe000) return unit - 0x800;
+  if (unit >= 0xd800) return unit + 0x2000;
+  return unit;
+}
+
 const SENSITIVE_BASENAME_PATTERNS: RegExp[] = [
   /^\.env$/,
   /^\.env\..+$/,

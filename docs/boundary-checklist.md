@@ -4688,6 +4688,48 @@ moment either file changes.
 - **Note:** "they agree today" is worth verifying and worth saying, but it is
   the gate that makes it stay true.
 
+## 419. A collator is not an order — it is a per-machine opinion about one
+
+`localeCompare` asks the runtime's collator, and collators disagree by design:
+under sv-SE "ä" sorts after "z", under en-US beside "a". That is exactly right
+for a list a person reads, and wrong for every order a machine depends on.
+Three defects in this repository came from the same call:
+
+  - a plugin's approval digest hashed its files in collator order, so the same
+    directory produced a different sha256 on a differently-configured machine,
+    and a plugin approved once read as "changed" afterwards;
+  - the workspace fingerprint did the same, and it decides whether persisted
+    working memory survives;
+  - `list_files` sorted with a collator in TypeScript while the Rust runtime
+    sorted by bytes, so one tool call returned two different orders depending
+    on which backend was configured.
+
+- **Do:** sort by Unicode CODE POINT for anything HASHED, PERSISTED, or answered
+  by a SECOND IMPLEMENTATION — `compareByCodePoints` in @seekforge/shared. Keep
+  the collator only where a human reads the output.
+- **And not code UNIT:** `left < right` looks like the same thing and is not.
+  JavaScript compares UTF-16 code units, where a supplementary character (every
+  emoji) is a surrogate pair starting at 0xD800 — numerically below the ordinary
+  characters at U+E000–U+FFFF. Rust compares UTF-8 bytes, which agrees with code
+  point order. So the obvious fix reintroduces the same class of divergence on a
+  narrower input set, which is worse than the bug: it now needs an emoji in a
+  filename to show up. Caught by review, then pinned by a test that compares
+  against `Buffer.compare` (the UTF-8 bytes Rust sees) and by a real `list_files`
+  call against the Rust binary with `\u{1F642}.md` and `\uF900.md` on disk.
+- **Note:** all three fail closed — a digest mismatch disables, a changed
+  fingerprint discards. That is why they survived: the symptom is a thing
+  quietly not working rather than a thing going wrong.
+- **Caught:** auditing the plugin trust model. The sweep replaced every
+  `localeCompare` in packages/core (29 of them), plus the run ledger and six
+  sites in packages/eval-harness — including `hashDataset`, whose whole job is
+  to prove two runs on two machines used the same dataset, and the
+  orchestration matrix, which is diffed against a stored baseline. Every test
+  passed unchanged: the orders were deterministic-by-accident, and are now
+  deterministic on purpose.
+- **Left alone:** `schedule.ts` sorting ISO timestamps for a person to read,
+  and the Desktop mock. A collator is the right tool where a human is the
+  consumer; the rule is about which orders a machine depends on, not a ban.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

@@ -1,4 +1,5 @@
 import type { TaskResult } from "./task-runner.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export type AggregateMetrics = {
   samples: number;
@@ -89,7 +90,7 @@ export function aggregateResults(results: TaskResult[]): RunAggregate {
     byTask.set(result.taskId, samples);
   }
   const taskResults = [...byTask.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
+    .sort(([a], [b]) => compareByCodePoints(a, b))
     .map(([taskId, samples]) => ({ taskId, ...summarizeSamples(samples) }));
   return { tasks: taskResults.length, taskResults, ...summarizeSamples(results) };
 }

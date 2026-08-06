@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
+import { compareByCodePoints } from "@seekforge/shared";
 import type { PluginSupplyChainEntry } from "@seekforge/shared";
 import { seekforgeHome } from "../memory/store.js";
 import type { HookConfig, HookEntry, HookStage } from "../hooks/index.js";
@@ -174,7 +175,14 @@ export function digestPluginDirectory(dir: string): string {
   let files = 0;
   let bytes = 0;
   const visit = (current: string): void => {
-    for (const entry of readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    // Code units, not a collator: this order decides the hash, so an approval
+    // that means "exactly this content" must not also depend on the locale of
+    // the machine reading it. Under sv-SE "ä" sorts after "z" and under en-US
+    // beside "a" — same directory, different sha256, and a plugin approved on
+    // one machine reading as "changed" on another.
+    for (const entry of readdirSync(current, { withFileTypes: true }).sort((a, b) =>
+      compareByCodePoints(a.name, b.name),
+    )) {
       const path = join(current, entry.name);
       const stat = lstatSync(path);
       if (stat.isSymbolicLink()) throw new Error(`plugin contains a symbolic link: ${relative(root, path)}`);

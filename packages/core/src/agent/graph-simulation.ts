@@ -9,6 +9,7 @@ import {
 import { engineeringGraphCriticality } from "./graph-plan.js";
 import type { EngineeringGraphState } from "./graph-state.js";
 import { orchestrationResourcesOverlap, selectOrchestrationReadyNodes } from "./orchestration-scheduler.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export type EngineeringGraphNodeEstimate = {
   durationMs: number;
@@ -236,7 +237,7 @@ export function simulateEngineeringGraphDistribution(
     budgetBreachProbability: budgetBreaches / samples,
     sensitivity: [...estimates]
       .map(([nodeId, estimate]) => ({ nodeId, uncertaintyMs: estimate.p95DurationMs - estimate.p50DurationMs }))
-      .sort((left, right) => right.uncertaintyMs - left.uncertaintyMs || left.nodeId.localeCompare(right.nodeId))
+      .sort((left, right) => right.uncertaintyMs - left.uncertaintyMs || compareByCodePoints(left.nodeId, right.nodeId))
       .slice(0, 8),
   };
 }
@@ -508,7 +509,7 @@ export function simulateEngineeringGraph(
   }
   const bottlenecks = nodes
     .filter((node) => node.resourceWaitMs > 0)
-    .sort((left, right) => right.resourceWaitMs - left.resourceWaitMs || left.id.localeCompare(right.id))
+    .sort((left, right) => right.resourceWaitMs - left.resourceWaitMs || compareByCodePoints(left.id, right.id))
     .slice(0, 8)
     .map((node) => node.id);
   return {

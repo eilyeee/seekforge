@@ -28,6 +28,7 @@ import {
   type OrchestrationProposal,
 } from "./orchestration-proposals.js";
 import { acquireSessionLease } from "./session-lease.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export type OrchestrationDeploymentStatus = "applying" | "applied" | "failed" | "rolled_back" | "superseded";
 export type OrchestrationDeploymentVerdict = "pending" | "improved" | "stable" | "regressed";
@@ -266,7 +267,8 @@ function readUnlocked(workspace: string, strict = false): OrchestrationDeploymen
 function writeUnlocked(workspace: string, deployments: readonly OrchestrationDeployment[]): void {
   const sorted = [...deployments].sort(
     (left, right) =>
-      Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || left.proposalId.localeCompare(right.proposalId),
+      Date.parse(right.updatedAt) - Date.parse(left.updatedAt) ||
+      compareByCodePoints(left.proposalId, right.proposalId),
   );
   const active = sorted.filter((deployment) => deployment.status === "applying" || deployment.status === "applied");
   if (active.length > MAX_DEPLOYMENTS) throw new Error("Too many active orchestration deployments");

@@ -8,6 +8,7 @@ import { isDenseArray, nextOrchestrationVersion } from "./orchestration.js";
 import type { OrchestrationProposalAction, OrchestrationProposalDraft } from "./orchestration-intelligence.js";
 import { isValidOrchestrationResourceId } from "./orchestration-scheduler.js";
 import { acquireSessionLease, type SessionLease } from "./session-lease.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export type OrchestrationProposalStatus = "proposed" | "approved" | "dismissed";
 
@@ -181,7 +182,7 @@ function writeUnlocked(workspace: string, proposals: readonly OrchestrationPropo
       (left, right) =>
         Number(right.status !== "proposed") - Number(left.status !== "proposed") ||
         Date.parse(right.updatedAt) - Date.parse(left.updatedAt) ||
-        left.id.localeCompare(right.id),
+        compareByCodePoints(left.id, right.id),
     )
     .slice(0, MAX_PROPOSALS);
   let serialized = `${JSON.stringify({ version: 1, proposals: retained })}\n`;
@@ -197,7 +198,7 @@ function writeUnlocked(workspace: string, proposals: readonly OrchestrationPropo
 
 export function listOrchestrationProposals(workspace: string): OrchestrationProposal[] {
   return readUnlocked(workspace).sort(
-    (left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || left.id.localeCompare(right.id),
+    (left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || compareByCodePoints(left.id, right.id),
   );
 }
 
@@ -228,7 +229,7 @@ export function recordOrchestrationProposals(
       (left, right) =>
         confidenceRank[right.confidence] - confidenceRank[left.confidence] ||
         right.evidenceCount - left.evidenceCount ||
-        left.id.localeCompare(right.id),
+        compareByCodePoints(left.id, right.id),
     )
     .slice(0, MAX_PROPOSALS);
   const lease = acquireSessionLease(workspace, "orchestration-proposals", workspaceGuard);

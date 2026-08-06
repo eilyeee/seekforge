@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { resolveForWrite } from "../tools/sandbox.js";
+import { compareByCodePoints } from "@seekforge/shared";
 import {
   FINDING_SEVERITIES,
   FINDING_STATUSES,
@@ -339,7 +340,7 @@ export function listFindings(
   return [...buildSecurityState(workspace).findings.values()]
     .filter((finding) => filters.status === undefined || finding.status === filters.status)
     .filter((finding) => filters.severity === undefined || finding.severity === filters.severity)
-    .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt) || a.id.localeCompare(b.id));
+    .sort((a, b) => compareByCodePoints(b.lastSeenAt, a.lastSeenAt) || compareByCodePoints(a.id, b.id));
 }
 
 export function changeFindingStatus(workspace: string, findingId: string, to: FindingStatus, reason: string): Finding {

@@ -176,6 +176,49 @@ describe.skipIf(!hasBinary)("rust runtime backend (integration)", () => {
     }
   });
 
+  it("lists in the same order as the local walk, whatever the locale", async () => {
+    // The second confirmed divergence of this pair. TypeScript sorted with a
+    // collator and the Rust runtime with byte order, so one tool call answered
+    // in two different orders depending on which backend was configured —
+    // measured: TS gave "a.md, ä.md, B.md, README.md, z.md" where Rust gave
+    // "B.md, README.md, a.md, z.md, ä.md". The model reads this list.
+    //
+    // "ä" is the case that separates the two: under en-US a collator files it
+    // beside "a", under sv-SE after "z", and byte order puts it last.
+    //
+    // "🙂.md" and "豈.md" are the second trap, and they catch the obvious fix
+    // rather than the original bug: `left < right` compares UTF-16 code units,
+    // where an emoji is a surrogate pair starting at 0xD800 and therefore sorts
+    // BELOW U+F900 — while Rust, comparing UTF-8 bytes, sorts it above.
+    // "\uF900" is written as an escape on purpose: it is the CJK compatibility
+    // ideograph, visually identical to the ordinary U+8C48 and a completely
+    // different code point — pasting the glyph would silently test nothing.
+    for (const name of ["a.md", "B.md", "z.md", "ä.md", "README.md", "\u{1F642}.md", "\uF900.md"]) {
+      writeFileSync(join(workspace, name), "x");
+    }
+    const viaRuntime = await exec("list_files", {});
+    const { runtime: _omitted, ...withoutRuntime } = ctx();
+    const local = await dispatcher.execute({ id: "local", name: "list_files", arguments: {} }, withoutRuntime);
+
+    expect(viaRuntime.ok && local.ok).toBe(true);
+    const entriesOf = (r: typeof local): string[] => (r.data as { entries: string[] }).entries;
+    // The parity claim, over the whole listing whatever else the workspace holds.
+    expect(entriesOf(viaRuntime)).toEqual(entriesOf(local));
+    // And the order is byte order, not whatever this machine's collator
+    // prefers — asserted over just the names this test controls, since the
+    // workspace is shared with the tests above.
+    const names = new Set(["a.md", "B.md", "z.md", "ä.md", "README.md", "\u{1F642}.md", "\uF900.md"]);
+    expect(entriesOf(local).filter((e) => names.has(e))).toEqual([
+      "B.md",
+      "README.md",
+      "a.md",
+      "z.md",
+      "ä.md",
+      "\uF900.md",
+      "\u{1F642}.md",
+    ]);
+  });
+
   it("marks a truncated listing in the list itself, as the local walk does", async () => {
     // Both backends answer the same tool, so they have to answer it the same
     // way. The runtime caps at 500 entries and reported `truncated: true` in a

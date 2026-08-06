@@ -6,6 +6,7 @@ import type { EngineeringGraphState } from "./graph-state.js";
 import { isDenseArray, nextOrchestrationVersion } from "./orchestration.js";
 import type { OrchestrationDeployment } from "./orchestration-deployments.js";
 import { acquireSessionLease } from "./session-lease.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export type OrchestrationControlObservation = {
   id: string;
@@ -233,7 +234,8 @@ export function recordOrchestrationDeploymentObservation(
     if (current.observations.some((item) => item.id === observation.id)) return observation;
     const observations = [...current.observations, observation]
       .sort(
-        (left, right) => Date.parse(left.recordedAt) - Date.parse(right.recordedAt) || left.id.localeCompare(right.id),
+        (left, right) =>
+          Date.parse(left.recordedAt) - Date.parse(right.recordedAt) || compareByCodePoints(left.id, right.id),
       )
       .slice(-MAX_OBSERVATIONS);
     writeDocument(workspace, {
@@ -288,7 +290,8 @@ export function recordEngineeringGraphForecastObservation(
     if (current.forecasts.some((item) => item.id === observation.id)) return observation;
     const forecasts = [...current.forecasts, observation]
       .sort(
-        (left, right) => Date.parse(left.recordedAt) - Date.parse(right.recordedAt) || left.id.localeCompare(right.id),
+        (left, right) =>
+          Date.parse(left.recordedAt) - Date.parse(right.recordedAt) || compareByCodePoints(left.id, right.id),
       )
       .slice(-MAX_FORECASTS);
     writeDocument(workspace, {

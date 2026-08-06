@@ -5,6 +5,7 @@ import {
   graphNodeIsEffectful,
 } from "./graph-contract.js";
 import { managedOrchestrationWorktreeSlug } from "./orchestration-worktrees.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export type EngineeringGraphPlanNode = {
   id: string;
@@ -85,7 +86,7 @@ function graphCompensationOrder(definition: EngineeringGraphDefinition): string[
     .sort((left, right) => {
       const targetOrder = (node: (typeof definition.nodes)[number]): number =>
         Math.max(0, ...(node.compensates ?? []).map((id) => definition.nodes.findIndex((item) => item.id === id)));
-      return targetOrder(right) - targetOrder(left) || left.id.localeCompare(right.id);
+      return targetOrder(right) - targetOrder(left) || compareByCodePoints(left.id, right.id);
     })
     .map((node) => node.id);
 }

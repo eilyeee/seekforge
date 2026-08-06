@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import { lstat, open, readdir, readlink } from "node:fs/promises";
 import { join } from "node:path";
+import { compareByCodePoints } from "@seekforge/shared";
 
 const MAX_FINGERPRINT_BYTES = 64 * 1024 * 1024;
 const MAX_FINGERPRINT_FILES = 20_000;
@@ -161,7 +162,9 @@ async function fallbackFingerprint(
   const hash = createHash("sha256");
   const visit = async (directory: string, relative = ""): Promise<void> => {
     checkBudget(budget);
-    const entries = (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
+    const entries = (await readdir(directory, { withFileTypes: true })).sort((a, b) =>
+      compareByCodePoints(a.name, b.name),
+    );
     for (const entry of entries) {
       const path = relative ? `${relative}/${entry.name}` : entry.name;
       if (FALLBACK_IGNORES.has(entry.name) || internalPath(`${path}/`)) continue;

@@ -3,6 +3,7 @@ import { basename, dirname } from "node:path";
 import { resolveForWrite } from "../tools/sandbox.js";
 import { buildSecurityState } from "./store.js";
 import type { Finding, FixAttempt, SecurityEvidencePackage, ThreatModel } from "./types.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export type SecurityExportFormat = "json" | "markdown" | "sarif";
 
@@ -27,10 +28,10 @@ export function buildSecurityEvidencePackage(workspace: string): SecurityEvidenc
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
     repository: basename(workspace),
-    findings: [...state.findings.values()].sort((a, b) => a.id.localeCompare(b.id)),
-    scans: [...state.scans.values()].sort((a, b) => a.startedAt.localeCompare(b.startedAt)),
-    fixes: [...state.fixes.values()].sort((a, b) => a.startedAt.localeCompare(b.startedAt)),
-    threatModels: [...state.threatModels.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    findings: [...state.findings.values()].sort((a, b) => compareByCodePoints(a.id, b.id)),
+    scans: [...state.scans.values()].sort((a, b) => compareByCodePoints(a.startedAt, b.startedAt)),
+    fixes: [...state.fixes.values()].sort((a, b) => compareByCodePoints(a.startedAt, b.startedAt)),
+    threatModels: [...state.threatModels.values()].sort((a, b) => compareByCodePoints(a.createdAt, b.createdAt)),
     events: state.events,
     disclaimer: "This export is an evidence package, not a certification or guarantee of compliance.",
   };

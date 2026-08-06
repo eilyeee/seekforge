@@ -28,6 +28,7 @@ import {
 import { isDenseArray, orchestrationDescendantClosure } from "./orchestration.js";
 import { acquireSessionLease, type SessionLease } from "./session-lease.js";
 import { managedOrchestrationWorktreePath } from "./orchestration-worktrees.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 export type EngineeringGraphMigrationPlan = {
   graphId: string;
@@ -96,7 +97,7 @@ export function listEngineeringGraphTreeCheckpoints(
     const definition = parseEngineeringGraphDefinition(input);
     visit(workspace, definition, definition.graphId);
   }
-  return [...checkpoints.values()].sort((left, right) => left.state.graphId.localeCompare(right.state.graphId));
+  return [...checkpoints.values()].sort((left, right) => compareByCodePoints(left.state.graphId, right.state.graphId));
 }
 
 /** Loads root and nested states without discarding their physical ownership during discovery. */
@@ -990,7 +991,7 @@ export function recoverEngineeringGraphTreeMigration(
       workspace: resolveJournalWorkspace(root, participant.workspace),
       graphId: participant.graphId,
     }))
-    .sort((left, right) => left.key.localeCompare(right.key));
+    .sort((left, right) => compareByCodePoints(left.key, right.key));
   const leases = acquireTreeLeases(leaseTargets);
   try {
     const currentJournal = readEngineeringGraphTreeMigrationJournal(workspace, graphId);
@@ -1045,7 +1046,8 @@ export function applyEngineeringGraphTreeMigration(
   });
   if (changedTargets.length === 0) return { plan, state: currentRoot };
   const ordered = [...changedTargets].sort(
-    (left, right) => right.path.split("/").length - left.path.split("/").length || left.path.localeCompare(right.path),
+    (left, right) =>
+      right.path.split("/").length - left.path.split("/").length || compareByCodePoints(left.path, right.path),
   );
   if (ordered.length > MAX_TREE_PARTICIPANTS || ordered.some((target) => target.path.length > 1_024)) {
     throw new Error("Graph tree migration exceeds the bounded transaction participant limit");
@@ -1053,7 +1055,7 @@ export function applyEngineeringGraphTreeMigration(
   const root = realpathSync.native(workspace);
   const leaseTargets = [...ordered]
     .map((target) => ({ ...target, key: `${safeWorkspaceRelative(root, target.workspace)}\0${target.state.graphId}` }))
-    .sort((left, right) => left.key.localeCompare(right.key))
+    .sort((left, right) => compareByCodePoints(left.key, right.key))
     .map((target) => ({ workspace: target.workspace, graphId: target.state.graphId }));
   const leases = acquireTreeLeases(leaseTargets);
   const preparedFiles: string[] = [];

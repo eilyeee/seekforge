@@ -12,6 +12,7 @@
  */
 
 import type { TaskResult } from "./task-runner.js";
+import { compareByCodePoints } from "@seekforge/shared";
 
 function mean(values: number[]): number | undefined {
   if (values.length === 0) return undefined;
@@ -92,7 +93,7 @@ export function rankSkills(results: TaskResult[]): SkillRanking {
   }
 
   skills.sort(
-    (a, b) => b.timesUsed - a.timesUsed || b.successRate - a.successRate || a.skillId.localeCompare(b.skillId),
+    (a, b) => b.timesUsed - a.timesUsed || b.successRate - a.successRate || compareByCodePoints(a.skillId, b.skillId),
   );
 
   return {
