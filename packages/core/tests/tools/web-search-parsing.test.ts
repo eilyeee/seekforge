@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { decodeDdgUrl, parseDdgResults } from "../../src/tools/builtins/web.js";
+import {
+  classifySearchPage,
+  decodeDdgUrl,
+  parseDdgResults,
+  parseSearxngResults,
+} from "../../src/tools/builtins/web.js";
 
 /**
  * The DuckDuckGo result parser: the least-covered code inside the "critical"
@@ -121,5 +126,86 @@ describe("parseDdgResults", () => {
   it("tolerates a row whose snippet is missing", () => {
     const html = `<a rel="nofollow" class="result__a" href="https://example.com/z">Title only</a>`;
     expect(parseDdgResults(html, 5)).toEqual([{ title: "Title only", url: "https://example.com/z", snippet: "" }]);
+  });
+});
+
+describe("classifySearchPage", () => {
+  /**
+   * The tool used to answer "No results parsed — the query may have no hits or
+   * DuckDuckGo's markup changed." for three different situations. Those call
+   * for opposite actions: "no hits" is an answer the model should believe,
+   * while drift and a block page mean the search never ran and believing it
+   * would be inventing a negative result.
+   */
+  it("calls a page with rows a results page", () => {
+    expect(classifySearchPage(row("https://example.com/a", "R"), 1)).toBe("results");
+  });
+
+  it("separates a genuine zero-hit page from markup drift", () => {
+    const noHits = '<div class="no-results">No results found for that query.</div>';
+    expect(classifySearchPage(noHits, 0)).toBe("empty");
+    // A page that still looks like the results shell but parsed nothing is the
+    // parser falling behind the markup, not an empty result set.
+    expect(classifySearchPage('<div class="results_links"><a class="totally_new">x</a></div>', 0)).toBe("drift");
+    // And something that is not the page at all.
+    expect(classifySearchPage("<html><body>hello</body></html>", 0)).toBe("drift");
+  });
+
+  it("recognizes the block/captcha interstitial", () => {
+    for (const body of [
+      "<html><body>If this error persists, please let us know: anomaly detected</body></html>",
+      '<form class="challenge-form">solve the captcha</form>',
+      "<p>Our systems have detected unusual traffic</p>",
+    ]) {
+      expect(classifySearchPage(body, 0), body).toBe("blocked");
+    }
+  });
+
+  it("prefers the block verdict over drift when the page has both", () => {
+    // A block page can still carry the results shell markup around it; the
+    // block is the actionable fact.
+    expect(classifySearchPage('<div class="results_links"></div><div>captcha</div>', 0)).toBe("blocked");
+  });
+});
+
+describe("parseSearxngResults", () => {
+  const body = (results: unknown): string => JSON.stringify({ results });
+
+  it("reads title, url and snippet out of a SearXNG JSON response", () => {
+    expect(
+      parseSearxngResults(body([{ title: "First", url: "https://example.com/a", content: "a snippet" }]), 10),
+    ).toEqual([{ title: "First", url: "https://example.com/a", snippet: "a snippet" }]);
+  });
+
+  it("applies the same http(s)-only filter the HTML path does", () => {
+    // A self-hosted instance is still relaying results from upstream engines,
+    // so its output is no more trustworthy than the scraped page.
+    const rows = [
+      { title: "Hostile", url: "javascript:alert(1)", content: "" },
+      { title: "Local", url: "file:///etc/passwd", content: "" },
+      { title: "Good", url: "https://example.com/good", content: "ok" },
+    ];
+    expect(parseSearxngResults(body(rows), 10).map((r) => r.url)).toEqual(["https://example.com/good"]);
+  });
+
+  it("honors the limit and keeps one row per url", () => {
+    const rows = Array.from({ length: 20 }, (_, i) => ({ title: `R${i}`, url: `https://example.com/${i}` }));
+    expect(parseSearxngResults(body(rows), 3)).toHaveLength(3);
+    const dupes = [
+      { title: "One", url: "https://example.com/same" },
+      { title: "Two", url: "https://example.com/same" },
+    ];
+    expect(parseSearxngResults(body(dupes), 10)).toHaveLength(1);
+  });
+
+  it("returns [] rather than throwing on anything unexpected", () => {
+    for (const junk of ["", "not json", "null", "[]", '{"results":null}', '{"results":[1,2,"x"]}', '{"other":1}']) {
+      expect(() => parseSearxngResults(junk, 5), junk).not.toThrow();
+      expect(parseSearxngResults(junk, 5), junk).toEqual([]);
+    }
+    // Rows missing the fields that make a result usable are skipped, not faked.
+    expect(
+      parseSearxngResults(JSON.stringify({ results: [{ url: "https://e.com" }, { title: "no url" }] }), 5),
+    ).toEqual([]);
   });
 });

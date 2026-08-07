@@ -2,8 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ensureAstBackend } from "../../src/agent/repo-map-ast.js";
-import { declRanges, extractSymbols, findDefinitions } from "../../src/agent/repo-map.js";
+import { ensureAstBackend, loadedAstGrammars, resetAstBackendForTests } from "../../src/agent/repo-map-ast.js";
+import { declRanges, extractSymbols, findDefinitions, OUTLINE_PREFIX } from "../../src/agent/repo-map.js";
 
 // Optional backend: load it once. If web-tree-sitter / grammars are unavailable
 // in this environment, `astReady` is false and the AST-specific cases skip
@@ -96,6 +96,159 @@ describe("tree-sitter AST backend (optional)", () => {
       ] as const) {
         expect(findDefinitions(d, sym), `definition of ${sym}`).toHaveLength(n);
       }
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * The nine languages whose grammars shipped in tree-sitter-wasms all along
+   * and were never wired up. Before this, PHP and Kotlin outlined to the EMPTY
+   * STRING and Ruby reported its methods while missing the enclosing class —
+   * measured, not hypothetical. Each case asserts the outline AND one
+   * find_definition, because the two walk the tree differently.
+   */
+  const LANGUAGES: { file: string; source: string; defines: string[]; find: string }[] = [
+    {
+      file: "a.rb",
+      source: "class Foo\n  def bar(x)\n  end\n  def self.baz\n  end\nend\nmodule M; end\n",
+      defines: ["Foo", "M"],
+      find: "bar",
+    },
+    {
+      file: "a.php",
+      source:
+        "<?php\ninterface I {}\ntrait T {}\nclass Foo implements I {\n  public function bar($x) {}\n}\nfunction top() {}\n",
+      defines: ["I", "T", "Foo", "top"],
+      find: "bar",
+    },
+    {
+      file: "a.kt",
+      source: "interface I\nobject O\ndata class Foo(val x: Int) {\n  fun bar(x: Int) {}\n}\nfun top() {}\nval v = 1\n",
+      defines: ["I", "O", "Foo", "top", "v"],
+      find: "bar",
+    },
+    {
+      file: "a.swift",
+      source: "protocol P {}\nstruct S: P { func bar(x: Int) {} }\nclass Foo { init() {} }\nfunc top() {}\n",
+      defines: ["P", "S", "Foo", "top"],
+      find: "bar",
+    },
+    {
+      file: "a.scala",
+      source: "trait T\nobject O\ncase class Foo(x: Int)\nclass C\n",
+      defines: ["T", "O", "Foo", "C"],
+      find: "Foo",
+    },
+    {
+      file: "a.sh",
+      source: "function foo() {\n  echo hi\n}\nbar() {\n  echo hi\n}\n",
+      defines: ["foo", "bar"],
+      find: "bar",
+    },
+    {
+      file: "a.lua",
+      source: "function M.foo(x)\nend\nlocal function bar()\nend\n",
+      defines: ["M.foo", "bar"],
+      find: "bar",
+    },
+    {
+      file: "a.zig",
+      source: "pub fn top() void {}\npub fn other() void {}\n",
+      defines: ["top", "other"],
+      find: "other",
+    },
+    {
+      file: "a.sol",
+      source: "contract Foo {\n  function bar(uint x) public {}\n}\ninterface I {}\n",
+      defines: ["Foo", "I"],
+      find: "bar",
+    },
+  ];
+
+  it("outlines the nine languages whose grammars shipped but were never wired", async () => {
+    const ready = await ensureAstBackend(LANGUAGES.map((l) => l.file));
+    if (!ready) return; // tree-sitter unavailable here; the regex floor is tested elsewhere
+    for (const lang of LANGUAGES) {
+      // A directory per language: several of them define a `bar`, and
+      // find_definition searches a whole tree.
+      const d = mkdtempSync(join(tmpdir(), "ast-more-"));
+      try {
+        writeFileSync(join(d, lang.file), lang.source);
+        expect(extractSymbols(lang.file, lang.source), lang.file).toBe(`${OUTLINE_PREFIX} ${lang.defines.join(", ")}`);
+        expect(findDefinitions(d, lang.find), `${lang.file}:${lang.find}`).toHaveLength(1);
+      } finally {
+        rmSync(d, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("loads only the grammars it was asked for", async () => {
+    resetAstBackendForTests();
+    try {
+      // The point of the hint. Loading all 36 shipped grammars costs 454MB of
+      // RSS; a Ruby workspace has no reason to hold the Kotlin parser, and
+      // before the hint every caller paid for ten regardless of the language.
+      if (!(await ensureAstBackend(["main.rb", "lib/util.rb"]))) return;
+      expect(loadedAstGrammars()).toEqual(["ruby"]);
+      // A second call adds to the set rather than replacing it.
+      await ensureAstBackend(["app.php"]);
+      expect(loadedAstGrammars()).toEqual(["php", "ruby"]);
+      // An extension with no grammar is not an error, and loads nothing.
+      await ensureAstBackend(["notes.txt", "data.csv"]);
+      expect(loadedAstGrammars()).toEqual(["php", "ruby"]);
+    } finally {
+      resetAstBackendForTests();
+      await ensureAstBackend();
+    }
+  });
+
+  it("gives concurrent callers of one grammar a single parser", async () => {
+    resetAstBackendForTests();
+    try {
+      // Loading is async, so a check-then-act would let two callers each build
+      // a parser for the same grammar — one of them then orphaned in WASM
+      // memory, which is the expensive thing here.
+      const results = await Promise.all([
+        ensureAstBackend(["a.rb"]),
+        ensureAstBackend(["b.rb"]),
+        ensureAstBackend(["c.rb"]),
+      ]);
+      if (!results[0]) return;
+      expect(loadedAstGrammars()).toEqual(["ruby"]);
+    } finally {
+      resetAstBackendForTests();
+      await ensureAstBackend();
+    }
+  });
+
+  it("widens the already-supported languages without changing their outlines", async () => {
+    // Several node types added for Ruby and Kotlin are shared with grammars
+    // that were already wired: `class` is JavaScript's class EXPRESSION and
+    // `property_declaration` is C#'s property. Both are nested rather than
+    // top-level, so the OUTLINE is untouched — but find_definition recurses, so
+    // they become findable. Asserted in both directions so the widening stays a
+    // decision rather than a surprise.
+    if (!(await ensureAstBackend(["a.ts", "a.cs", "a.js"]))) return;
+    const d = mkdtempSync(join(tmpdir(), "ast-widen-"));
+    try {
+      const ts = "const A = class Named {};\nexport class Real {}\n";
+      const cs = "class Svc {\n  public int Count { get; set; }\n  void Doit() {}\n}\n";
+      const js = "var x = 1;\nlet y = 2;\nconst z = 3;\nclass C {}\n";
+      writeFileSync(join(d, "a.ts"), ts);
+      writeFileSync(join(d, "a.cs"), cs);
+      writeFileSync(join(d, "a.js"), js);
+
+      // Unchanged: the class expression outlines under the name it is bound to,
+      // the C# property does not reach the top level, and JS var/let/const
+      // still come through the variable_declarator branch.
+      expect(extractSymbols("a.ts", ts)).toBe(`${OUTLINE_PREFIX} A, Real`);
+      expect(extractSymbols("a.cs", cs)).toBe(`${OUTLINE_PREFIX} Svc`);
+      expect(extractSymbols("a.js", js)).toBe(`${OUTLINE_PREFIX} x, y, z, C`);
+
+      // Newly reachable.
+      expect(findDefinitions(d, "Named")).toHaveLength(1);
+      expect(findDefinitions(d, "Count")).toHaveLength(1);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }

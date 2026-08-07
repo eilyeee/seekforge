@@ -3,6 +3,7 @@ import {
   buildAgentCoreDeps,
   configureBrowserProfile,
   configureVision,
+  configureWebSearch,
   resolveBrowserProfilePath,
   seekforgeHome,
   createAgentCore,
@@ -89,6 +90,11 @@ export type CliAgentDeps = {
  * a slash in it would be a worse trade than running without the profile.
  */
 export function configureCliTools(config: CliConfig, workspace?: string): void {
+  // The search endpoint is user config only: it is NOT in
+  // PROJECT_PREFERENCE_KEYS, so a cloned repository cannot point this
+  // agent's searches at an endpoint of its choosing and feed the model
+  // whatever it likes back.
+  configureWebSearch(config.webSearch?.searxngUrl ? { searxngUrl: config.webSearch.searxngUrl } : undefined, workspace);
   configureVision(
     config.visionModel?.baseUrl
       ? {

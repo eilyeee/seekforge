@@ -4730,6 +4730,30 @@ Three defects in this repository came from the same call:
   and the Desktop mock. A collator is the right tool where a human is the
   consumer; the rule is about which orders a machine depends on, not a ban.
 
+## 420. A test that reads the developer's machine is testing the machine
+
+`ChatItems.test.tsx` asserted the rendered task badge contained `"done"`. The
+badge is localized, the Desktop resolves its locale from `navigator.language` at
+import time, and the assertion was the English string — so the test passed on an
+English machine and failed on a Chinese one, on identical code. It had been
+failing on main.
+
+Same shape as [419](#419-a-collator-is-not-an-order--it-is-a-per-machine-opinion-about-one),
+one layer up: something that varies per machine was treated as a constant. The
+ordering case corrupted a hash; this one corrupts a test result, which is worse
+in one specific way — a red test that only some machines see gets explained away
+rather than fixed.
+
+- **Do:** assert through the same resolver the code renders through
+  (`expect(html).toContain(t("chat.task.completed"))`), so the test states the
+  behavior — "the badge shows the completed label" — rather than one machine's
+  rendering of it. Pinning the locale would also work; going through `t()` also
+  survives someone rewording the string.
+- **Look for:** locale, timezone, `Intl`, `navigator.language`, `process.env.LANG`,
+  path separators, and the user's home directory in assertions.
+- **Caught:** running the full Desktop suite while auditing something else, on a
+  zh-CN machine.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

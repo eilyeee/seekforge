@@ -18,6 +18,7 @@ import { notebookTools } from "./notebook.js";
 import { skillTools } from "./skill.js";
 
 export { configureVision, type VisionConfig } from "./vision.js";
+export { configureWebSearch, type WebSearchConfig } from "./web.js";
 export {
   acquireBrowserLease,
   browserProfileDir,

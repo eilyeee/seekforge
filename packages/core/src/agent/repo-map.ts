@@ -26,8 +26,19 @@ export type RepoMapOptions = {
   maxDepth?: number;
   /** Max files given a detailed symbol outline in the Files section (default 60). */
   maxFiles?: number;
+  /** A walk the caller already did (see scanSubtree) — avoids a second one. */
+  scan?: SubtreeScan;
 };
 
+/**
+ * What counts as a code file worth mapping.
+ *
+ * This gates the WALK, so an extension missing here means those files are not
+ * merely un-outlined — they are invisible: absent from the file list, from the
+ * import graph, and from find_definition. Kotlin, Swift, Scala, shell, Lua,
+ * Zig and Solidity were all in that state, which made a Kotlin repository look
+ * empty to repo_map.
+ */
 const CODE_EXTS = new Set([
   "js",
   "jsx",
@@ -42,6 +53,8 @@ const CODE_EXTS = new Set([
   "rs",
   "java",
   "rb",
+  "rake",
+  "gemspec",
   "php",
   "c",
   "h",
@@ -52,7 +65,30 @@ const CODE_EXTS = new Set([
   "hh",
   "hxx",
   "cs",
+  "kt",
+  "kts",
+  "swift",
+  "scala",
+  "sc",
+  "sh",
+  "bash",
+  "zsh",
+  "lua",
+  "zig",
+  "sol",
 ]);
+/**
+ * The prefix every symbol outline starts with, and the contract between the
+ * backends that produce one and definedNames() below, which parses it back to
+ * build the reference graph.
+ *
+ * It used to read "exports:", which was only ever true for JavaScript. Now that
+ * Ruby, PHP, Kotlin, Swift, Scala, shell, Lua, Zig and Solidity are outlined
+ * too — none of which has a concept of exporting — the honest word is what a
+ * file DEFINES. The model reads this line.
+ */
+export const OUTLINE_PREFIX = "defines:";
+
 /** Files this large are summarized by size only (avoid pathological reads). */
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_SYMBOLS_PER_FILE = 8;
@@ -162,7 +198,7 @@ function regexOutline(rel: string, content: string): string {
   // Python / Go fall back to top-level def/func.
   for (const m of content.matchAll(/^\s*(?:def|func)\s+([A-Za-z0-9_]+)/gm)) names.add(m[1]!);
   const list = [...names].slice(0, MAX_SYMBOLS_PER_FILE);
-  return list.length > 0 ? `exports: ${list.join(", ")}` : "";
+  return list.length > 0 ? `${OUTLINE_PREFIX} ${list.join(", ")}` : "";
 }
 
 /** Regex definition scan for one file — the floor backend. */
@@ -324,11 +360,11 @@ export type FileGraph = {
   info?: Map<string, FileGraphFileInfo>;
 };
 
-/** Names DEFINED by a file, parsed from its symbol outline ("exports: a, b, …"). */
+/** Names DEFINED by a file, parsed from its symbol outline ("defines: a, b, …"). */
 function definedNames(outline: string): string[] {
-  if (!outline.startsWith("exports:")) return [];
+  if (!outline.startsWith(OUTLINE_PREFIX)) return [];
   const out: string[] = [];
-  for (const part of outline.slice("exports:".length).split(",")) {
+  for (const part of outline.slice(OUTLINE_PREFIX.length).split(",")) {
     const n = part.trim();
     if (n && IDENT_OK.test(n)) out.push(n);
   }
@@ -475,10 +511,37 @@ export function buildRepoMap(root: string, opts: RepoMapOptions = {}): string {
   const sub = opts.path && opts.path !== "." ? opts.path : ".";
   const maxDepth = opts.maxDepth ?? 3;
   const maxFiles = opts.maxFiles ?? 60;
+  const scan = opts.scan ?? scanSubtree(root, sub);
+  if (scan === null) return `Repo map: "${sub}" is outside the workspace.`;
+  return formatRepoMap(scan.root, sub, scan.files, scan.dirCounts, maxDepth, maxFiles);
+}
+
+/** One walk of a subtree, with the resolved root — shareable by a caller. */
+export type SubtreeScan = { root: string; files: CodeFile[]; dirCounts: Map<string, number> };
+
+/**
+ * Resolve a subtree and walk it once. Returns null when the path escapes the
+ * workspace, which callers report the same way they always did.
+ *
+ * Exported so a caller can look at the file list BEFORE building — which is
+ * what loading only the tree-sitter grammars a workspace actually contains
+ * requires — without paying for the walk twice.
+ */
+export function scanSubtree(root: string, sub: string): SubtreeScan | null {
   const resolved = resolveSubtree(root, sub);
-  if (resolved === null) return `Repo map: "${sub}" is outside the workspace.`;
+  if (resolved === null) return null;
   const { files, dirCounts } = walk(resolved.root, resolved.start);
-  return formatRepoMap(resolved.root, sub, files, dirCounts, maxDepth, maxFiles);
+  return { root: resolved.root, files, dirCounts };
+}
+
+/** The distinct file extensions in a scan — the hint ensureAstBackend wants. */
+export function scanExtensions(scan: SubtreeScan): string[] {
+  const exts = new Set<string>();
+  for (const file of scan.files) {
+    const dot = file.rel.lastIndexOf(".");
+    if (dot >= 0) exts.add(file.rel.slice(dot + 1).toLowerCase());
+  }
+  return [...exts];
 }
 
 /** A single tree scan, shareable across the prompt-injection builders below. */
@@ -707,16 +770,16 @@ export type Definition = { file: string; line: number; text: string };
 export function findDefinitions(
   root: string,
   symbol: string,
-  opts: { path?: string; maxResults?: number } = {},
+  opts: { path?: string; maxResults?: number; scan?: SubtreeScan } = {},
 ): Definition[] {
   // Identifier-shaped only (unicode letters/digits ok); rejects whitespace,
   // dots, parens, etc. The regex backend additionally escapes the symbol.
   if (!/^[\p{L}\p{N}_$]+$/u.test(symbol)) return [];
   const sub = opts.path && opts.path !== "." ? opts.path : ".";
   const maxResults = opts.maxResults ?? 50;
-  const resolved = resolveSubtree(root, sub);
+  const resolved = opts.scan ?? scanSubtree(root, sub);
   if (resolved === null) return [];
-  const { files } = walk(resolved.root, resolved.start);
+  const { files } = resolved;
   const results: Definition[] = [];
   for (const f of files) {
     if (results.length >= maxResults) break;

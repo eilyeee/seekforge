@@ -260,7 +260,10 @@ const readFile = defineTool({
     // whole functions rather than a severed one. Falls back to line-aware cuts.
     let ranges: { start: number; end: number }[] | undefined;
     if (content.length > DEFAULT_LIMITS.toolOutputMaxChars) {
-      void ensureAstBackend(); // warm tree-sitter in the background — never block a read on WASM init
+      // Warm tree-sitter in the background — never block a read on WASM init.
+      // Hinted with this file, so reading one .py loads the Python grammar and
+      // not the other nine.
+      void ensureAstBackend([args.path]);
       ranges = declRanges(args.path, content); // code-aware cut only when AST is already warm; else line-aware
     }
     const { text, truncated } = truncateHeadTail(

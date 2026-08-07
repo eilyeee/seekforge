@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { HookConfig, McpServerConfig, MemoryMaintenanceConfig, ModelPricing } from "@seekforge/core";
 import type { HookStage, PermissionRule } from "@seekforge/shared";
 import { mergeConfigLayers, sanitizeProjectConfig } from "@seekforge/shared/config-layers";
-import { knownConfigKeys } from "@seekforge/shared/config-manifest";
+import { classifyConfigKeys, type ConfigKeyVerdict, knownConfigKeys } from "@seekforge/shared/config-manifest";
 import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 
 /**
@@ -60,6 +60,12 @@ export type TuiConfig = {
   /** Vision model for the image_analyze tool (OpenAI-compatible endpoint). */
   visionModel?: { model: string; baseUrl?: string; apiKey?: string };
   /**
+   * web_search's endpoint. A SearXNG base URL makes that instance the primary
+   * backend with DuckDuckGo as the fallback. User config only — see
+   * PROJECT_PREFERENCE_KEYS.
+   */
+  webSearch?: { searxngUrl?: string };
+  /**
    * Name of a persistent browser session profile. When set, the browser tools
    * start from `~/.seekforge/browser-profiles/<name>.json` and write it back on
    * teardown, so a site logged into once stays logged in. Unset = every run
@@ -103,11 +109,14 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 export const KNOWN_CONFIG_KEYS = knownConfigKeys("tui");
 
 /**
- * Unrecognized top-level keys across the config layers — a typo like "modle" is
- * otherwise silently ignored. Returns a sorted, deduped list; empty when
- * everything is recognized. Surfaced by the TUI /doctor.
+ * Top-level keys across the config layers that the TUI does not honor, each
+ * classified as a typo or as a key another frontend reads. Sorted and deduped;
+ * empty when everything is recognized. Surfaced by the TUI /doctor.
+ *
+ * One config.json serves the CLI, the TUI and the server, so a key this
+ * frontend ignores is not automatically a mistake — see classifyConfigKeys.
  */
-export function unknownConfigKeys(projectPath: string): string[] {
+export function unknownConfigKeys(projectPath: string): ConfigKeyVerdict[] {
   const unknown = new Set<string>();
   for (const path of [join(homedir(), ".seekforge", "config.json"), join(projectPath, ".seekforge", "config.json")]) {
     const cfg = readJson(path) as unknown;
@@ -116,7 +125,7 @@ export function unknownConfigKeys(projectPath: string): string[] {
       if (!KNOWN_CONFIG_KEYS.has(key)) unknown.add(key);
     }
   }
-  return [...unknown].sort();
+  return classifyConfigKeys("tui", [...unknown].sort());
 }
 
 /**

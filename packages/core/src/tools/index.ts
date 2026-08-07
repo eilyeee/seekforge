@@ -155,6 +155,7 @@ export type {
 export { applyEdits, closestRegion } from "./edits.js";
 export type { SearchReplaceEdit } from "./edits.js";
 export { zodToJsonSchema } from "./json-schema.js";
+export { browserBackendInstalled } from "./browser/playwright.js";
 export {
   acquireBrowserLease,
   browserProfileDir,
@@ -163,6 +164,7 @@ export {
   acquireLspServerLease,
   builtinTools,
   configureVision,
+  configureWebSearch,
   disposeBrowser,
   disposeLspServers,
   type BrowserLease,

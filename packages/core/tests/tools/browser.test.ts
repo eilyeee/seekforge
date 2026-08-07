@@ -4,6 +4,7 @@ import { ToolError } from "../../src/tools/errors.js";
 import {
   acquireBrowserLease,
   acquireLspServerLease,
+  browserBackendInstalled,
   createDefaultDispatcher,
   disposeBrowser,
 } from "../../src/tools/index.js";
@@ -283,5 +284,45 @@ describe("browser_upload", () => {
     expect(res.ok).toBe(false);
     // The sandbox rejects it; the browser is never even asked.
     expect(res.error?.code).not.toBe("browser_unavailable");
+  });
+});
+
+describe("browserBackendInstalled", () => {
+  /**
+   * The probe `seekforge doctor` reports the browser subsystem with. It answers
+   * from THIS package on purpose: playwright-core is an optional dependency of
+   * @seekforge/core, so resolving it from @seekforge/shared — where the doctor
+   * checks live — would report every installation as missing. That exact
+   * mistake shipped for one commit and said "tree-sitter not installed" on a
+   * machine with tree-sitter installed.
+   */
+  it("reports the specifier it would import, and never throws", () => {
+    const probe = browserBackendInstalled();
+    expect(typeof probe.available).toBe("boolean");
+    expect(probe.specifier).toBe("playwright-core");
+  });
+
+  it("honors the SEEKFORGE_PLAYWRIGHT override", () => {
+    const saved = process.env["SEEKFORGE_PLAYWRIGHT"];
+    process.env["SEEKFORGE_PLAYWRIGHT"] = "vitest"; // a specifier that does resolve
+    try {
+      const probe = browserBackendInstalled();
+      expect(probe.specifier).toBe("vitest");
+      expect(probe.available).toBe(true);
+    } finally {
+      if (saved === undefined) delete process.env["SEEKFORGE_PLAYWRIGHT"];
+      else process.env["SEEKFORGE_PLAYWRIGHT"] = saved;
+    }
+  });
+
+  it("reports unavailable rather than throwing for a specifier that does not resolve", () => {
+    const saved = process.env["SEEKFORGE_PLAYWRIGHT"];
+    process.env["SEEKFORGE_PLAYWRIGHT"] = "@seekforge/definitely-not-installed";
+    try {
+      expect(browserBackendInstalled().available).toBe(false);
+    } finally {
+      if (saved === undefined) delete process.env["SEEKFORGE_PLAYWRIGHT"];
+      else process.env["SEEKFORGE_PLAYWRIGHT"] = saved;
+    }
   });
 });

@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import * as path from "node:path";
-import { symbolBackends, type SymbolBackend } from "./repo-map.js";
+import { OUTLINE_PREFIX, symbolBackends, type SymbolBackend } from "./repo-map.js";
 
 /**
  * Optional tree-sitter (AST) symbol backend. Prepended ahead of the regex floor
@@ -14,6 +14,18 @@ import { symbolBackends, type SymbolBackend } from "./repo-map.js";
  */
 
 // File extension -> tree-sitter-wasms grammar name.
+//
+// tree-sitter-wasms ships 36 grammars; this maps the ones whose declaration
+// node types are known and tested (see repo-map-ast.test.ts). Deliberately NOT
+// mapped, with reasons, so nobody re-derives them:
+//
+//   elixir  — defmodule/def are macros, so the whole file parses to nested
+//             `call` nodes. The AST knows no more than the regex floor does.
+//   vue     — the <script> body arrives as one `raw_text` token; extracting
+//             symbols needs a second parse with the JS grammar.
+//   dart, elm, ql — the shipped .wasm fails to load (ABI mismatch), measured.
+//   objc (23MB), ocaml (15MB), tlaplus (15MB) — heavy for their likelihood.
+//   json/yaml/toml/html/css — no declarations to outline.
 const GRAMMARS: Record<string, string> = {
   js: "javascript",
   jsx: "javascript",
@@ -34,7 +46,34 @@ const GRAMMARS: Record<string, string> = {
   hh: "cpp",
   hxx: "cpp",
   cs: "c_sharp",
+  rb: "ruby",
+  rake: "ruby",
+  gemspec: "ruby",
+  php: "php",
+  kt: "kotlin",
+  kts: "kotlin",
+  swift: "swift",
+  scala: "scala",
+  sc: "scala",
+  sh: "bash",
+  bash: "bash",
+  zsh: "bash",
+  lua: "lua",
+  zig: "zig",
+  sol: "solidity",
 };
+
+/**
+ * Loaded when a caller gives no hint about what it is about to parse.
+ *
+ * These are exactly the grammars this module used to load unconditionally, so
+ * a hint-less call behaves as it always did. What changed is that every caller
+ * in the repository now hints, and hinting is what makes the new languages
+ * affordable: all 36 shipped grammars cost 1031ms and 454MB of RSS (measured),
+ * and even the original ten cost 48MB for a workspace that may be entirely
+ * Python. A TypeScript repo now loads two grammars where it used to load ten.
+ */
+const DEFAULT_EXTENSIONS = ["js", "ts", "tsx", "py", "java", "rs", "go", "c", "cpp", "cs"];
 
 // Named-declaration node types across the supported grammars (JS/TS, Python,
 // Java, Rust, Go, C/C++, C#). They only match within the relevant grammar's
@@ -82,6 +121,46 @@ const DEFINITION_TYPES = new Set([
   "class_specifier",
   "namespace_definition",
   "type_definition",
+  // Ruby — `class`/`module`/`method` really are the node type names here.
+  //
+  // `class` is also JavaScript's node type for a class EXPRESSION, so adding it
+  // widens JS/TS slightly: `const A = class Named {}` keeps outlining as `A`
+  // (the outline reads top-level nodes, and the expression is nested inside the
+  // declarator), but find_definition — which recurses — can now find `Named`.
+  // That is a gap closing, not a behavior change to something that worked, and
+  // it is pinned by a test so it stays deliberate.
+  "class",
+  "module",
+  "method",
+  "singleton_method",
+  // PHP (function_definition/interface_declaration/enum_declaration are shared
+  // with the sets above; these are the ones PHP adds).
+  "trait_declaration",
+  // Swift — struct and enum both parse as class_declaration in this grammar;
+  // protocol_declaration and init_declaration are its own.
+  "protocol_declaration",
+  "init_declaration",
+  // Kotlin. `property_declaration` is C#'s node type too, so a C# property
+  // becomes findable by name for the same reason as the class expression above
+  // — nested, so the outline is unchanged; reachable, so find_definition sees
+  // it. Also pinned by a test.
+  "object_declaration",
+  "property_declaration",
+  // Scala
+  "trait_definition",
+  "object_definition",
+  "class_definition",
+  // Lua
+  "function_definition_statement",
+  "local_function_definition_statement",
+  // Zig gets `function_declaration` from the JS/Kotlin/Swift line above. Its
+  // `const Foo = struct {…}` is a plain variable_declaration, which is NOT
+  // listed here on purpose: JavaScript uses that same node type, and the
+  // variable_declarator branch in outline() below is what handles it there.
+  // Solidity
+  "contract_declaration",
+  "library_declaration",
+  "state_variable_declaration",
 ]);
 
 // web-tree-sitter is optional; keep the boundary structural so importing this
@@ -116,6 +195,9 @@ function extOf(rel: string): string {
 
 const DECLARATOR_NAME_TYPES = new Set(["identifier", "field_identifier", "type_identifier", "qualified_identifier"]);
 
+/** Node types that ARE a name when a grammar exposes no `name` field. */
+const BARE_NAME_TYPES = new Set(["type_identifier", "simple_identifier"]);
+
 function nameOf(node: TsNode): string | undefined {
   // Most grammars expose the name directly.
   const direct = node.childForFieldName?.("name");
@@ -126,6 +208,23 @@ function nameOf(node: TsNode): string | undefined {
   for (let guard = 0; d && guard < 12; guard++) {
     if (DECLARATOR_NAME_TYPES.has(d.type)) return d.text as string;
     d = d.childForFieldName?.("declarator");
+  }
+  // Kotlin marks no `name` field at all: a class is `class_declaration` whose
+  // first named child is a bare `type_identifier`, a function's is a
+  // `simple_identifier`. Searching direct children only, and only for those two
+  // types, keeps this from inventing names for the grammars handled above —
+  // they never reach here.
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const child = node.namedChild(i);
+    if (BARE_NAME_TYPES.has(child.type)) return child.text as string;
+    // …and a Kotlin `val x = 1` puts it one level further down, inside a
+    // `variable_declaration` wrapper.
+    if (child.type === "variable_declaration") {
+      for (let j = 0; j < child.namedChildCount; j++) {
+        const inner = child.namedChild(j);
+        if (BARE_NAME_TYPES.has(inner.type)) return inner.text as string;
+      }
+    }
   }
   return undefined;
 }
@@ -171,7 +270,7 @@ const astBackend: SymbolBackend = {
         }
       }
       const uniq = [...new Set(names)].slice(0, 8);
-      return uniq.length > 0 ? `exports: ${uniq.join(", ")}` : "";
+      return uniq.length > 0 ? `${OUTLINE_PREFIX} ${uniq.join(", ")}` : "";
     } catch {
       return undefined; // any parse/extraction failure -> defer to the regex floor
     } finally {
@@ -224,15 +323,22 @@ const astBackend: SymbolBackend = {
   },
 };
 
-/**
- * Lazily load web-tree-sitter + grammars and register the AST backend ahead of
- * regex. Returns true once ready, false if unavailable (the regex floor stays).
- * Idempotent and safe to call before every repo_map/find_definition use.
- */
-export async function ensureAstBackend(): Promise<boolean> {
-  if (state === "ready") return true;
-  if (state === "failed") return false;
-  if (initPromise) return initPromise;
+/** Resolved once the WASM runtime is up; the per-grammar loader needs both. */
+type Runtime = { Parser: TsParserConstructor; Language: TsLanguage; wasmsDir: string };
+
+let runtime: Runtime | undefined;
+/** Grammars whose load is in flight — two callers must not build two parsers. */
+const loading = new Map<string, Promise<void>>();
+/** Grammars whose .wasm failed to load; retrying every call would be pointless. */
+const unavailable = new Set<string>();
+
+async function initRuntime(): Promise<Runtime | undefined> {
+  if (runtime) return runtime;
+  if (state === "failed") return undefined;
+  if (initPromise) {
+    await initPromise;
+    return runtime;
+  }
   initPromise = (async () => {
     try {
       const require = createRequire(import.meta.url);
@@ -244,28 +350,108 @@ export async function ensureAstBackend(): Promise<boolean> {
       await Parser.init({ locateFile: (name: string) => path.join(wtsDir, name) });
       const Language = Parser.Language ?? mod.Language;
       if (!Language) return false;
-      for (const g of new Set(Object.values(GRAMMARS))) {
-        try {
-          const lang = await Language.load(path.join(wasmsDir, `tree-sitter-${g}.wasm`));
-          const p = new Parser();
-          p.setLanguage(lang);
-          parsers.set(g, p);
-        } catch {
-          // a grammar that fails to load is skipped; the rest still work
-        }
-      }
-      if (parsers.size === 0) {
-        state = "failed";
-        return false;
-      }
-      symbolBackends.unshift(astBackend); // ahead of regex
-      state = "ready";
+      runtime = { Parser, Language, wasmsDir };
       return true;
     } catch {
       state = "failed";
       return false;
     }
   })();
-  return initPromise;
+  await initPromise;
+  return runtime;
+}
+
+async function loadGrammar(rt: Runtime, grammar: string): Promise<void> {
+  if (parsers.has(grammar) || unavailable.has(grammar)) return;
+  const inFlight = loading.get(grammar);
+  if (inFlight) return inFlight;
+  const load = (async () => {
+    try {
+      const lang = await rt.Language.load(path.join(rt.wasmsDir, `tree-sitter-${grammar}.wasm`));
+      const parser = new rt.Parser();
+      parser.setLanguage(lang);
+      parsers.set(grammar, parser);
+    } catch {
+      // A grammar that will not load is remembered as such; the rest still work
+      // and the file falls through to the regex floor.
+      unavailable.add(grammar);
+    } finally {
+      loading.delete(grammar);
+    }
+  })();
+  loading.set(grammar, load);
+  return load;
+}
+
+/**
+ * Load web-tree-sitter and the grammars needed for `hints`, then register the
+ * AST backend ahead of regex. Returns true once at least one grammar is loaded,
+ * false if tree-sitter is unavailable (the regex floor stays). Idempotent, and
+ * safe to call before every repo_map/find_definition/read_file use.
+ *
+ * `hints` are file paths or bare extensions — whatever the caller is about to
+ * parse. Only their grammars load, which is the entire point: the shipped
+ * grammar set costs 454MB of RSS if loaded whole, and no workspace needs it.
+ * A caller with nothing to hint gets {@link DEFAULT_EXTENSIONS}.
+ */
+export async function ensureAstBackend(hints?: Iterable<string>): Promise<boolean> {
+  if (state === "failed") return false;
+  const rt = await initRuntime();
+  if (!rt) return false;
+
+  const wanted = new Set<string>();
+  for (const hint of hints ?? DEFAULT_EXTENSIONS) {
+    const grammar = GRAMMARS[extOf(hint)];
+    if (grammar !== undefined) wanted.add(grammar);
+  }
+  await Promise.all([...wanted].map((grammar) => loadGrammar(rt, grammar)));
+
+  if (parsers.size === 0) {
+    // Nothing usable loaded. Not "failed": a later call naming a different
+    // language may still succeed, and the regex floor covers this one.
+    return false;
+  }
+  if (state !== "ready") {
+    symbolBackends.unshift(astBackend); // ahead of regex, exactly once
+    state = "ready";
+  }
+  return true;
+}
+
+/** Test seam: forget the runtime, every loaded grammar, and the backend. */
+export function resetAstBackendForTests(): void {
+  const at = symbolBackends.indexOf(astBackend);
+  if (at >= 0) symbolBackends.splice(at, 1);
+  parsers.clear();
+  loading.clear();
+  unavailable.clear();
+  runtime = undefined;
+  initPromise = undefined;
+  state = "idle";
+}
+
+/** Grammar names currently loaded — the measurement surface for the cost above. */
+export function loadedAstGrammars(): string[] {
+  return [...parsers.keys()].sort();
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
+
+/**
+ * Whether the AST backend COULD load, without loading it.
+ *
+ * Resolved from this module on purpose: web-tree-sitter and tree-sitter-wasms
+ * are dependencies of @seekforge/core, so asking from @seekforge/shared (which
+ * does not depend on them) answers "missing" on a perfectly good installation.
+ * That is a diagnostic reporting a fault that does not exist, which is worse
+ * than not checking.
+ */
+export function astBackendInstalled(): boolean {
+  try {
+    const require = createRequire(import.meta.url);
+    require.resolve("web-tree-sitter/package.json");
+    require.resolve("tree-sitter-wasms/package.json");
+    return true;
+  } catch {
+    return false;
+  }
+}

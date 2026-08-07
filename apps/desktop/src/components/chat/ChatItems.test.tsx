@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ChatItem } from "../../lib/events";
+import { t } from "../../lib/i18n";
 import { ChatItems } from "./ChatItems";
 
 describe("ChatItems task disclosure", () => {
@@ -41,6 +42,10 @@ describe("ChatItems task disclosure", () => {
 
     const html = renderToStaticMarkup(createElement(ChatItems, { items, historicalStatus: "completed" }));
     expect(html).toContain("historical answer");
-    expect(html).toContain("done");
+    // Through t(), not the English literal. The locale is resolved from
+    // navigator.language at import time, so asserting "done" passed on an
+    // English machine and failed on a Chinese one — a test that reports the
+    // developer's system language rather than the component's behavior.
+    expect(html).toContain(t("chat.task.completed"));
   });
 });

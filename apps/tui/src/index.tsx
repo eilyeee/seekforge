@@ -5,6 +5,7 @@ import {
   buildProvider,
   configureBrowserProfile,
   configureVision,
+  configureWebSearch,
   resolveBrowserProfilePath,
   seekforgeHome,
   createMcpElicitationHandler,
@@ -61,6 +62,14 @@ async function main(): Promise<void> {
   if (args.vim !== undefined) config = { ...config, vim: args.vim };
   setAccent(loadTheme(config.accent).accent);
   setLocale(config.locale ?? detectLocale());
+  // The search endpoint is user config only: it is NOT in
+  // PROJECT_PREFERENCE_KEYS, so a cloned repository cannot point this
+  // agent's searches at an endpoint of its choosing and feed the model
+  // whatever it likes back.
+  configureWebSearch(
+    config.webSearch?.searxngUrl ? { searxngUrl: config.webSearch.searxngUrl } : undefined,
+    projectPath,
+  );
   configureVision(
     config.visionModel?.baseUrl
       ? {

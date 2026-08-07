@@ -48,6 +48,10 @@ export const commands = {
     "cmd.doctor.checkSessionCount": "{count} recorded",
     "cmd.doctor.checkEditorUnset": "$EDITOR/$VISUAL unset \u2014 external edit unavailable",
     "cmd.doctor.checkNoClipboard": "no clipboard tool found (pbcopy/wl-copy/xclip)",
+    "cmd.doctor.checkKeysAllRecognized": "all recognized",
+    "cmd.doctor.checkKeysUnrecognized": "unrecognized: {keys}",
+    "cmd.doctor.checkKeysElsewhere": "read by another frontend: {keys}",
+    "cmd.doctor.checkKeysFixHint": "check for typos \u2014 see docs/configuration.md for valid keys",
 
     // ── cmd.memory.* ────────────────────────────────────────────────────
     "cmd.memory.factsHeader": "Project facts (remove with `seekforge memory remove <n>`):",
@@ -156,13 +160,6 @@ export const commands = {
     "cmd.mcpLogin.removed": 'removed stored credentials for "{name}"',
     "cmd.mcpLogin.nothingStored": 'no stored credentials for "{name}"',
 
-    // ── cmd.rewind.* ────────────────────────────────────────────────────
-    "cmd.rewind.restore": "restore  {path}",
-    "cmd.rewind.delete": "delete   {path}",
-    "cmd.rewind.skip": "skip     {path} ({reason})",
-    "cmd.rewind.summary": "{verb} session {id}: {restored} restored, {deleted} deleted, {skipped} skipped.",
-    "cmd.rewind.review": "Review the working tree with `seekforge diff`.",
-
     // ── cmd.replay.* ────────────────────────────────────────────────────
     "cmd.replay.header": "replaying session {id} — {title}",
     "cmd.replay.userLabel": "user:",
@@ -260,6 +257,10 @@ export const commands = {
     "cmd.doctor.checkSessionCount": "已记录 {count} 个",
     "cmd.doctor.checkEditorUnset": "$EDITOR/$VISUAL 未设置 — 无法使用外部编辑器",
     "cmd.doctor.checkNoClipboard": "未找到剪贴板工具（pbcopy/wl-copy/xclip）",
+    "cmd.doctor.checkKeysAllRecognized": "全部可识别",
+    "cmd.doctor.checkKeysUnrecognized": "无法识别：{keys}",
+    "cmd.doctor.checkKeysElsewhere": "由其他前端读取：{keys}",
+    "cmd.doctor.checkKeysFixHint": "检查是否拼写有误 — 有效键见 docs/configuration.md",
 
     // ── cmd.memory.* ────────────────────────────────────────────────────
     "cmd.memory.factsHeader": "项目事实（使用 `seekforge memory remove <n>` 移除）：",
@@ -365,13 +366,6 @@ export const commands = {
     "cmd.mcpLogin.noRefreshToken": "服务器未签发刷新令牌；过期后需要重新登录",
     "cmd.mcpLogin.removed": "已删除「{name}」的存储凭据",
     "cmd.mcpLogin.nothingStored": "「{name}」没有存储的凭据",
-
-    // ── cmd.rewind.* ────────────────────────────────────────────────────
-    "cmd.rewind.restore": "恢复    {path}",
-    "cmd.rewind.delete": "删除    {path}",
-    "cmd.rewind.skip": "跳过    {path}（{reason}）",
-    "cmd.rewind.summary": "{verb} 会话 {id}：恢复 {restored} 个，删除 {deleted} 个，跳过 {skipped} 个。",
-    "cmd.rewind.review": "使用 `seekforge diff` 查看工作树。",
 
     // ── cmd.replay.* ────────────────────────────────────────────────────
     "cmd.replay.header": "正在回放会话 {id} — {title}",

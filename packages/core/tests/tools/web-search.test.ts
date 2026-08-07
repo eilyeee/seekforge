@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PermissionRequest } from "@seekforge/shared";
 import { createDefaultDispatcher } from "../../src/tools/index.js";
-import { decodeDdgUrl, parseDdgResults } from "../../src/tools/builtins/web.js";
+import { configureWebSearch, decodeDdgUrl, parseDdgResults } from "../../src/tools/builtins/web.js";
 import { call, makeCtx, makeWorkspace } from "./helpers.js";
 
 /**
@@ -143,16 +143,21 @@ describe("web_search tool (through dispatcher)", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("returns {results: []} with a note on garbled markup instead of throwing", async () => {
+  it("returns {results: []} on garbled markup, and says the search did not run", async () => {
     fetchReturning("<html>totally different layout</html>");
     const dispatcher = createDefaultDispatcher();
     const ctx = makeCtx(makeWorkspace(), { confirm: async () => true });
 
     const res = await dispatcher.execute(call("web_search", { query: "x" }), ctx);
-    expect(res.ok).toBe(true);
-    const data = res.data as { results: unknown[]; note: string };
+    expect(res.ok).toBe(true); // still not a throw: a failed search is not a failed run
+    const data = res.data as { results: unknown[]; note: string; searched: boolean };
     expect(data.results).toEqual([]);
-    expect(data.note).toMatch(/no results/i);
+    // This used to read "the query may have no hits or DuckDuckGo's markup
+    // changed", which asks the model to guess which. Those call for opposite
+    // actions, so the note now commits to one.
+    expect(data.searched).toBe(false);
+    expect(data.note).toMatch(/did NOT run/);
+    expect(data.note).not.toMatch(/may have no hits/);
   });
 
   it("maps HTTP errors to a search_failed ToolError", async () => {
@@ -192,5 +197,136 @@ describe("web_search tool (through dispatcher)", () => {
     // schema rejects > 10 before any fetch.
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("invalid_args");
+  });
+
+  /**
+   * The backend chain. web_search had exactly one provider and no way to add
+   * another, so a DuckDuckGo markup change or block page silently emptied every
+   * search in every workspace — and reported it in the same words as a query
+   * that genuinely had no hits.
+   */
+  describe("backends", () => {
+    /** Answers each request by URL, so a chain can be scripted end to end. */
+    function fetchByUrl(handler: (url: string) => { body: string; status?: number }): ReturnType<typeof vi.fn> {
+      const spy = vi.fn(async (input: unknown) => {
+        const url = String(input);
+        const { body, status = 200 } = handler(url);
+        return new Response(body, { status, headers: { "content-type": "text/html" } });
+      });
+      vi.stubGlobal("fetch", spy as unknown as typeof fetch);
+      return spy;
+    }
+
+    const searxngBody = (n: number): string =>
+      JSON.stringify({
+        results: Array.from({ length: n }, (_, i) => ({
+          title: `S${i}`,
+          url: `https://searx.example/${i}`,
+          content: "from searxng",
+        })),
+      });
+
+    async function search(workspace: string, query = "node docs"): Promise<Awaited<ReturnType<typeof run>>> {
+      return run(workspace, query);
+    }
+    async function run(workspace: string, query: string) {
+      const dispatcher = createDefaultDispatcher();
+      const { confirm } = scriptedConfirm(true);
+      const ctx = makeCtx(workspace, { policy: { approvalMode: "auto" }, confirm });
+      return dispatcher.execute(call("web_search", { query }), ctx);
+    }
+
+    afterEach(() => {
+      configureWebSearch(undefined);
+    });
+
+    it("uses only DuckDuckGo when nothing is configured", async () => {
+      const spy = fetchByUrl(() => ({ body: DDG_FIXTURE }));
+      const res = await search(makeWorkspace());
+      expect(res.ok).toBe(true);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(String(spy.mock.calls[0]?.[0])).toContain("duckduckgo.com");
+    });
+
+    it("prefers a configured SearXNG instance and never calls DuckDuckGo", async () => {
+      const workspace = makeWorkspace();
+      configureWebSearch({ searxngUrl: "https://searx.example" }, workspace);
+      const spy = fetchByUrl((url) => ({ body: url.includes("searx.example") ? searxngBody(2) : DDG_FIXTURE }));
+      const res = await search(workspace);
+      expect(res.ok).toBe(true);
+      const data = res.data as { results: { url: string }[] };
+      expect(data.results[0]?.url).toBe("https://searx.example/0");
+      expect(spy).toHaveBeenCalledTimes(1); // no pointless second search
+    });
+
+    it("falls back to DuckDuckGo when the primary did not actually run", async () => {
+      const workspace = makeWorkspace();
+      configureWebSearch({ searxngUrl: "https://searx.example" }, workspace);
+      // An instance that answers with HTML (misconfigured, or a login wall) is
+      // a backend that did not run — exactly the case a second leg exists for.
+      const spy = fetchByUrl((url) => ({
+        body: url.includes("searx.example") ? "<html>login required</html>" : DDG_FIXTURE,
+      }));
+      const res = await search(workspace);
+      expect(res.ok).toBe(true);
+      expect(spy).toHaveBeenCalledTimes(2);
+      const data = res.data as { results: { url: string }[]; note: string };
+      expect(data.results[0]?.url).toBe("https://nodejs.org/docs");
+      expect(data.note).toContain("searxng, duckduckgo");
+    });
+
+    it("does not second-guess a backend that ran and found nothing", async () => {
+      const workspace = makeWorkspace();
+      configureWebSearch({ searxngUrl: "https://searx.example" }, workspace);
+      const spy = fetchByUrl(() => ({ body: searxngBody(0) }));
+      const res = await search(workspace);
+      expect(res.ok).toBe(true);
+      // Zero hits is an answer. Asking a second provider to disagree would turn
+      // it into noise.
+      expect(spy).toHaveBeenCalledTimes(1);
+      const data = res.data as { results: unknown[]; note: string; searched: boolean };
+      expect(data.results).toEqual([]);
+      expect(data.searched).toBe(true);
+      expect(data.note).toMatch(/matched nothing/i);
+    });
+
+    it("says the search did not run when the provider blocked it", async () => {
+      const spy = fetchByUrl(() => ({ body: "<html><body>unusual traffic detected</body></html>" }));
+      const res = await search(makeWorkspace());
+      expect(res.ok).toBe(true);
+      const data = res.data as { results: unknown[]; note: string; searched: boolean };
+      expect(data.results).toEqual([]);
+      // The distinction the model has to act on: this is NOT "no such thing".
+      expect(data.searched).toBe(false);
+      expect(data.note).toMatch(/did NOT run/);
+      expect(data.note).toMatch(/block\/captcha/);
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps one workspace's search endpoint out of another's", async () => {
+      // The server runs several workspaces in one process; a configured
+      // endpoint is one workspace's, the same way its vision endpoint is.
+      const configured = makeWorkspace();
+      const other = makeWorkspace();
+      configureWebSearch({ searxngUrl: "https://searx.example" }, configured);
+      const spy = fetchByUrl((url) => ({ body: url.includes("searx.example") ? searxngBody(1) : DDG_FIXTURE }));
+      await search(other);
+      expect(String(spy.mock.calls[0]?.[0])).toContain("duckduckgo.com");
+    });
+
+    it("reports every backend it tried when they all fail", async () => {
+      const workspace = makeWorkspace();
+      configureWebSearch({ searxngUrl: "https://searx.example" }, workspace);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          throw new Error("network down");
+        }) as unknown as typeof fetch,
+      );
+      const res = await search(workspace);
+      expect(res.ok).toBe(false);
+      expect(res.error?.code).toBe("search_failed");
+      expect(res.error?.message).toContain("searxng, duckduckgo");
+    });
   });
 });

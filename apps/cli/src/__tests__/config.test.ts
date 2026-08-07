@@ -470,10 +470,28 @@ test("profile slots below --settings: settings wins for keys it sets", () => {
 
 test("unknownConfigKeys flags a top-level typo but not recognized keys", () => {
   const { projectPath, cleanup } = setupProject({ model: "deepseek-v4-flash", modle: "typo", provider: "ark" });
-  const unknown = unknownConfigKeys(projectPath);
-  assert.ok(unknown.includes("modle"), "typo key should be reported");
-  assert.ok(!unknown.includes("model"), "recognized key must not be reported");
-  assert.ok(!unknown.includes("provider"), "recognized key must not be reported");
+  const verdicts = unknownConfigKeys(projectPath);
+  const keys = verdicts.map((v) => v.key);
+  assert.ok(keys.includes("modle"), "typo key should be reported");
+  assert.equal(verdicts.find((v) => v.key === "modle")?.kind, "unknown");
+  assert.ok(!keys.includes("model"), "recognized key must not be reported");
+  assert.ok(!keys.includes("provider"), "recognized key must not be reported");
+  cleanup();
+});
+
+test("unknownConfigKeys separates another frontend's key from a typo", () => {
+  // One config.json serves the CLI, the TUI and the server. `models` is the
+  // Desktop's and `accent` is the TUI's; both work, and calling them typos —
+  // which `seekforge doctor` did — is the diagnostic being wrong about
+  // configuration the user can see taking effect.
+  const { projectPath, cleanup } = setupProject({ models: ["a"], accent: "blue", modle: "typo" });
+  const verdicts = unknownConfigKeys(projectPath);
+  const kindOf = (key: string): string | undefined => verdicts.find((v) => v.key === key)?.kind;
+  assert.equal(kindOf("models"), "other-surface");
+  assert.equal(kindOf("accent"), "other-surface");
+  assert.equal(kindOf("modle"), "unknown");
+  const models = verdicts.find((v) => v.key === "models");
+  assert.deepEqual(models?.kind === "other-surface" ? models.surfaces : [], ["server"]);
   cleanup();
 });
 
@@ -482,9 +500,9 @@ test("unknownConfigKeys flags a typo inside a named profile", () => {
     model: "deepseek-v4-flash",
     profiles: { fast: { model: "deepseek-v4-pro", reasoningEffrt: "high" } },
   });
-  const unknown = unknownConfigKeys(projectPath);
-  assert.ok(unknown.includes("reasoningEffrt"), "profile-nested typo should be reported");
-  assert.ok(!unknown.includes("profiles"), "profiles itself is a recognized key");
+  const keys = unknownConfigKeys(projectPath).map((v) => v.key);
+  assert.ok(keys.includes("reasoningEffrt"), "profile-nested typo should be reported");
+  assert.ok(!keys.includes("profiles"), "profiles itself is a recognized key");
   cleanup();
 });
 

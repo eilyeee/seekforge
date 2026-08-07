@@ -1,3 +1,4 @@
+import { browserCheck, codeParsingCheck, lspServersCheck, osSandboxCheck } from "@seekforge/shared/doctor";
 import { describe, expect, it } from "vitest";
 import {
   configKeysCheck,
@@ -36,7 +37,7 @@ function byName(checks: DoctorCheck[], name: string): DoctorCheck {
 describe("runDoctor", () => {
   it("reports all-ok in a healthy environment", () => {
     const checks = runDoctor("/proj", healthyConfig, healthyProbes());
-    expect(checks.length).toBe(12);
+    expect(checks.length).toBe(17);
     expect(checks.every((c) => c.ok)).toBe(true);
     expect(byName(checks, "node").detail).toContain("v22.4.0");
     expect(byName(checks, "platform").detail).toBe("darwin");
@@ -206,5 +207,59 @@ describe("formatDoctorLines", () => {
   it("summarizes an all-passing run", () => {
     const lines = formatDoctorLines([{ name: "platform", ok: true, detail: "darwin" }]);
     expect(lines.at(-1)).toBe("1/1 checks passed");
+  });
+});
+
+describe("optional subsystems", () => {
+  /**
+   * These five degrade QUIETLY. A configured `sandbox` with no bwrap turns the
+   * first run_command into an error; no Playwright means every browser tool is
+   * unavailable; no language server means lsp_* fails mid-task; no tree-sitter
+   * silently drops the repo map to the regex floor. Doctor reported none of
+   * them — it reported the updater — so the first symptom was a run failing
+   * partway through.
+   */
+  it("reports each optional subsystem without failing the report", () => {
+    const checks = runDoctor("/proj", healthyConfig, healthyProbes());
+    for (const name of ["os sandbox", "browser", "lsp servers", "code parsing", "docker"]) {
+      const check = byName(checks, name);
+      expect(check, name).toBeDefined();
+      expect(check.ok, `${name} must never fail the report`).toBe(true);
+    }
+  });
+
+  it("warns about a missing sandbox only when the config asks for one", () => {
+    const unavailable = { available: false, reason: "bwrap was not found on PATH" };
+    // Not configured: informational. The agent works fine unsandboxed if that
+    // is what the user chose.
+    expect(osSandboxCheck(unavailable, false).warn).toBeUndefined();
+    // Configured: run_command will throw sandbox_unavailable on the first
+    // command, so saying so now is the whole point.
+    const configured = osSandboxCheck(unavailable, true);
+    expect(configured.warn).toBe(true);
+    expect(configured.detail).toContain("bwrap");
+    expect(configured.fixHint).toBeDefined();
+    // Available: name the binary that will be used.
+    expect(osSandboxCheck({ available: true, binary: "sandbox-exec" }, true).detail).toBe("sandbox-exec");
+  });
+
+  it("names the language servers it found, or says the tools are unavailable", () => {
+    const withServers = lspServersCheck({ ...healthyProbes(), commandExists: (b) => b === "gopls" });
+    expect(withServers.detail).toBe("gopls");
+    const none = lspServersCheck({ ...healthyProbes(), commandExists: () => false });
+    expect(none.detail).toContain("lsp_* tools unavailable");
+    expect(none.fixHint).toBeDefined();
+  });
+
+  it("distinguishes the AST backend from the regex floor", () => {
+    expect(codeParsingCheck(true).detail).toContain("tree-sitter");
+    expect(codeParsingCheck(false).detail).toContain("regex floor");
+  });
+
+  it("reports the browser backend by the specifier it would import", () => {
+    expect(browserCheck({ available: true, specifier: "playwright-core" }).detail).toBe("playwright-core");
+    const missing = browserCheck({ available: false, specifier: "playwright-core" });
+    expect(missing.detail).toContain("browser tools unavailable");
+    expect(missing.fixHint).toContain("playwright");
   });
 });

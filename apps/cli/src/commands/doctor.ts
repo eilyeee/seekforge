@@ -10,17 +10,28 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { DEFAULT_BASE_URL, resolveProviderPreset } from "@seekforge/core";
+import {
+  astBackendInstalled,
+  browserBackendInstalled,
+  DEFAULT_BASE_URL,
+  probeSandboxCapabilities,
+  resolveProviderPreset,
+} from "@seekforge/core";
 import {
   apiKeyCheck,
+  browserCheck,
   clipboardCheck,
+  codeParsingCheck,
   configKeysCheck as sharedConfigKeysCheck,
   configParseCheck,
   createDefaultProbes as createBaseProbes,
+  dockerCheck,
   editorCheck,
   formatDoctorLines as sharedFormatDoctorLines,
   gitRepoCheck,
+  lspServersCheck,
   mcpServersCheck,
+  osSandboxCheck,
   nodeCheck,
   platformCheck,
   projectConfigCheck,
@@ -28,10 +39,12 @@ import {
   rustRuntimeCheck,
   sessionsCheck,
   type DoctorCheck,
+  type DoctorStrings,
   type DoctorProbes as BaseDoctorProbes,
 } from "@seekforge/shared/doctor";
 import { dim, green, red, yellow } from "../colors.js";
 import { t } from "../i18n.js";
+import type { ConfigKeyVerdict } from "@seekforge/shared/config-manifest";
 import { configParseErrors, loadConfig, unknownConfigKeys } from "../config.js";
 import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "../bounded-file.js";
 
@@ -122,6 +135,34 @@ const GUI_PATH_DIRS = [
 /** Base64 placeholder pubkey that marks the Tauri updater as disabled. */
 const DISABLED_UPDATER_PUBKEY = "dW50cnVzdGVkIGNvbW1lbnQ6IHVwZGF0ZXIgZGlzYWJsZWQ=";
 
+/**
+ * The CLI's localized text for the shared checks.
+ *
+ * Every one of these keys already existed in both languages and was never
+ * read: the checks moved into @seekforge/shared and the translations did not
+ * follow, so `seekforge doctor` printed English details beneath a Chinese
+ * header. Resolved per call rather than once at module load because `t`
+ * depends on the locale, which the config can change between invocations.
+ */
+function doctorStrings(): DoctorStrings {
+  return {
+    configured: t("cmd.doctor.checkConfigured"),
+    missing: t("cmd.doctor.checkMissing"),
+    gitPresent: t("cmd.doctor.checkPresent"),
+    noGitRepo: () => t("cmd.doctor.checkNoGitRepo"),
+    projectConfig: t("cmd.doctor.checkProjectConfig"),
+    usingDefaults: t("cmd.doctor.checkUsingDefaults"),
+    runtimeNotConfigured: t("cmd.doctor.checkRuntimeNotConfigured"),
+    runtimeNotFound: (path) => t("cmd.doctor.checkRuntimeNotFound", { path }),
+    mcpCount: (count) => t("cmd.doctor.checkMcpCount", { count: String(count) }),
+    noSessions: t("cmd.doctor.checkNoSessions"),
+    sessionCount: (count) => t("cmd.doctor.checkSessionCount", { count: String(count) }),
+    noClipboard: t("cmd.doctor.checkNoClipboard"),
+    allRecognized: t("cmd.doctor.checkKeysAllRecognized"),
+    unrecognized: (keys) => t("cmd.doctor.checkKeysUnrecognized", { keys }),
+    readElsewhere: (keys) => t("cmd.doctor.checkKeysElsewhere", { keys }),
+  };
+}
 /** Runs every diagnostic. Pure given the probes (no direct fs/env access). */
 export function runDoctor(
   projectPath: string,
@@ -131,11 +172,13 @@ export function runDoctor(
     baseUrl?: string;
     runtimeBin?: string;
     mcpServers?: Record<string, unknown>;
+    sandbox?: string;
   },
   probes: DoctorProbes,
 ): DoctorCheck[] {
   const checks: DoctorCheck[] = [];
 
+  const strings = doctorStrings();
   // Active provider preset (default "deepseek"); an explicit baseUrl always wins.
   const provider = (config.provider ?? "deepseek").toLowerCase();
   const preset = resolveProviderPreset(provider);
@@ -164,17 +207,27 @@ export function runDoctor(
       config.apiKey,
       probes.env,
       (keyEnv) => `export ${keyEnv}, or \`seekforge config set apiKey <key>\``,
+      strings,
     ),
   );
   checks.push(nodeCheck(probes));
   checks.push(platformCheck(probes));
-  checks.push(gitRepoCheck(projectPath, probes, "`diff`"));
-  checks.push(projectConfigCheck(projectPath, probes));
-  checks.push(rustRuntimeCheck(config.runtimeBin, probes));
-  checks.push(mcpServersCheck(config.mcpServers));
-  checks.push(sessionsCheck(projectPath, probes));
-  checks.push(editorCheck(probes, "$EDITOR/$VISUAL unset — external edit unavailable"));
-  checks.push(clipboardCheck(probes));
+  checks.push(gitRepoCheck(projectPath, probes, "`diff`", strings));
+  checks.push(projectConfigCheck(projectPath, probes, strings));
+  checks.push(rustRuntimeCheck(config.runtimeBin, probes, strings));
+  checks.push(mcpServersCheck(config.mcpServers, strings));
+  checks.push(sessionsCheck(projectPath, probes, strings));
+  checks.push(editorCheck(probes, t("cmd.doctor.checkEditorUnset")));
+  checks.push(clipboardCheck(probes, strings));
+
+  // Optional subsystems. Each degrades QUIETLY when absent — which is exactly
+  // what a diagnostic is for — and none of them fails the report.
+  const configuredSandbox = config.sandbox !== undefined && config.sandbox !== "off";
+  checks.push(osSandboxCheck(probeSandboxCapabilities(probes.platform()), configuredSandbox));
+  checks.push(browserCheck(browserBackendInstalled()));
+  checks.push(lspServersCheck(probes));
+  checks.push(codeParsingCheck(astBackendInstalled()));
+  checks.push(dockerCheck(probes));
 
   // Best-effort desktop/GUI diagnostics. Each is wrapped so a probe surprise
   // can never abort the whole report; a thrown probe degrades to a warn line.
@@ -280,8 +333,8 @@ function updaterCheck(projectPath: string, probes: DoctorProbes): DoctorCheck | 
 }
 
 /** Shared check with the CLI's fix-hint wording (points at docs/configuration.md). */
-export function configKeysCheck(unknownKeys: string[]): DoctorCheck {
-  return sharedConfigKeysCheck(unknownKeys, "check for typos — see docs/configuration.md for valid keys");
+export function configKeysCheck(keys: ConfigKeyVerdict[]): DoctorCheck {
+  return sharedConfigKeysCheck(keys, t("cmd.doctor.checkKeysFixHint"), doctorStrings());
 }
 
 /** Shared renderer with the CLI's colored marks and localized hint/summary lines. */

@@ -731,3 +731,4 @@ export {
   type CheckpointEntry,
   type RewindResult,
 } from "./session-rewind.js";
+export { astBackendInstalled } from "./repo-map-ast.js";

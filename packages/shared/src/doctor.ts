@@ -23,6 +23,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import type { ConfigKeyVerdict } from "./config-manifest.js";
 import { apiKeyEnvVar } from "./provider-env.js";
 
 /**
@@ -82,6 +83,36 @@ export function clipboardCandidates(platform: string): string[] {
 // app-specific wording in explicitly.
 // ---------------------------------------------------------------------------
 
+/**
+ * User-visible text for the shared checks, so a localized frontend can supply
+ * its own without reimplementing the check.
+ *
+ * These checks were moved here when the CLI and the TUI stopped being parallel
+ * reimplementations — and the CLI's Chinese translations for them stayed
+ * behind, written and unreachable. `seekforge doctor` therefore printed English
+ * details under a Chinese header and a Chinese fix-hint prefix. Every field is
+ * optional and defaults to the English that was hardcoded here, so the
+ * English-only TUI passes nothing and its output is unchanged.
+ */
+export type DoctorStrings = {
+  configured?: string;
+  missing?: string;
+  gitPresent?: string;
+  /** `diffLabel` is the app's diff affordance: "`diff`" (CLI) / "/diff" (TUI). */
+  noGitRepo?: (diffLabel: string) => string;
+  projectConfig?: string;
+  usingDefaults?: string;
+  runtimeNotConfigured?: string;
+  runtimeNotFound?: (bin: string) => string;
+  mcpCount?: (count: number) => string;
+  noSessions?: string;
+  sessionCount?: (count: number) => string;
+  noClipboard?: string;
+  allRecognized?: string;
+  unrecognized?: (keys: string) => string;
+  readElsewhere?: (keys: string) => string;
+};
+
 /** The plain "provider (baseUrl)" line (the CLI wraps this with its own warn branch). */
 export function providerCheck(provider: string, baseUrl: string): DoctorCheck {
   return { name: "provider", ok: true, detail: `${provider} (${baseUrl})` };
@@ -99,12 +130,13 @@ export function apiKeyCheck(
   apiKey: string | undefined,
   env: DoctorProbes["env"],
   missingFixHint: (keyEnv: string) => string,
+  strings: DoctorStrings = {},
 ): DoctorCheck {
   const keyEnv = apiKeyEnvVar(provider);
   const hasKey = Boolean(apiKey ?? env(keyEnv));
   return hasKey
-    ? { name: "api key", ok: true, detail: "configured" }
-    : { name: "api key", ok: false, detail: "missing", fixHint: missingFixHint(keyEnv) };
+    ? { name: "api key", ok: true, detail: strings.configured ?? "configured" }
+    : { name: "api key", ok: false, detail: strings.missing ?? "missing", fixHint: missingFixHint(keyEnv) };
 }
 
 export function nodeCheck(probes: DoctorProbes): DoctorCheck {
@@ -125,43 +157,65 @@ export function platformCheck(probes: DoctorProbes): DoctorCheck {
 }
 
 /** `diffLabel` is the app's diff affordance: "`diff`" (CLI) / "/diff" (TUI). */
-export function gitRepoCheck(projectPath: string, probes: DoctorProbes, diffLabel: string): DoctorCheck {
+export function gitRepoCheck(
+  projectPath: string,
+  probes: DoctorProbes,
+  diffLabel: string,
+  strings: DoctorStrings = {},
+): DoctorCheck {
   return probes.fileExists(join(projectPath, ".git"))
-    ? { name: "git repo", ok: true, detail: ".git present" }
+    ? { name: "git repo", ok: true, detail: strings.gitPresent ?? ".git present" }
     : {
         name: "git repo",
         ok: false,
-        detail: `not a git repository — checkpoints and ${diffLabel} are limited`,
+        detail: strings.noGitRepo?.(diffLabel) ?? `not a git repository — checkpoints and ${diffLabel} are limited`,
         fixHint: "git init",
       };
 }
 
-export function projectConfigCheck(projectPath: string, probes: DoctorProbes): DoctorCheck {
+export function projectConfigCheck(
+  projectPath: string,
+  probes: DoctorProbes,
+  strings: DoctorStrings = {},
+): DoctorCheck {
   return probes.fileExists(join(projectPath, ".seekforge", "config.json"))
-    ? { name: "project config", ok: true, detail: ".seekforge/config.json" }
-    : { name: "project config", ok: true, detail: "using global defaults" };
+    ? { name: "project config", ok: true, detail: strings.projectConfig ?? ".seekforge/config.json" }
+    : { name: "project config", ok: true, detail: strings.usingDefaults ?? "using global defaults" };
 }
 
-export function rustRuntimeCheck(runtimeBin: string | undefined, probes: DoctorProbes): DoctorCheck {
-  if (!runtimeBin) return { name: "rust runtime", ok: true, detail: "not configured (TS fallback)" };
+export function rustRuntimeCheck(
+  runtimeBin: string | undefined,
+  probes: DoctorProbes,
+  strings: DoctorStrings = {},
+): DoctorCheck {
+  if (!runtimeBin) {
+    return { name: "rust runtime", ok: true, detail: strings.runtimeNotConfigured ?? "not configured (TS fallback)" };
+  }
   return probes.fileExists(runtimeBin)
     ? { name: "rust runtime", ok: true, detail: runtimeBin }
     : {
         name: "rust runtime",
         ok: false,
-        detail: `${runtimeBin} not found`,
+        detail: strings.runtimeNotFound?.(runtimeBin) ?? `${runtimeBin} not found`,
         fixHint: "fix runtimeBin in config.json or remove it (TS fallback works)",
       };
 }
 
-export function mcpServersCheck(mcpServers: Record<string, unknown> | undefined): DoctorCheck {
+export function mcpServersCheck(
+  mcpServers: Record<string, unknown> | undefined,
+  strings: DoctorStrings = {},
+): DoctorCheck {
   const mcpCount = Object.keys(mcpServers ?? {}).length;
-  return { name: "mcp servers", ok: true, detail: `${mcpCount} configured` };
+  return { name: "mcp servers", ok: true, detail: strings.mcpCount?.(mcpCount) ?? `${mcpCount} configured` };
 }
 
-export function sessionsCheck(projectPath: string, probes: DoctorProbes): DoctorCheck {
+export function sessionsCheck(projectPath: string, probes: DoctorProbes, strings: DoctorStrings = {}): DoctorCheck {
   const sessions = probes.countDir(join(projectPath, ".seekforge", "sessions"));
-  return { name: "sessions", ok: true, detail: sessions === null ? "no sessions yet" : `${sessions} recorded` };
+  const detail =
+    sessions === null
+      ? (strings.noSessions ?? "no sessions yet")
+      : (strings.sessionCount?.(sessions) ?? `${sessions} recorded`);
+  return { name: "sessions", ok: true, detail };
 }
 
 /** `missingDetail` differs per app ("ctrl-e external edit" vs "external edit"). */
@@ -170,11 +224,15 @@ export function editorCheck(probes: DoctorProbes, missingDetail: string): Doctor
   return editor ? { name: "editor", ok: true, detail: editor } : { name: "editor", ok: false, detail: missingDetail };
 }
 
-export function clipboardCheck(probes: DoctorProbes): DoctorCheck {
+export function clipboardCheck(probes: DoctorProbes, strings: DoctorStrings = {}): DoctorCheck {
   const clip = clipboardCandidates(probes.platform()).find((bin) => probes.commandExists(bin));
   return clip
     ? { name: "clipboard", ok: true, detail: clip }
-    : { name: "clipboard", ok: false, detail: "no clipboard tool found (pbcopy/wl-copy/xclip)" };
+    : {
+        name: "clipboard",
+        ok: false,
+        detail: strings.noClipboard ?? "no clipboard tool found (pbcopy/wl-copy/xclip)",
+      };
 }
 
 /**
@@ -182,19 +240,39 @@ export function clipboardCheck(probes: DoctorProbes): DoctorCheck {
  * warning, not a failure — an unknown key is harmless, just probably a
  * mistake. The default fix hint is the TUI wording; the CLI passes its own
  * (pointing at docs/configuration.md).
+ *
+ * Accepts either the plain list of keys this surface did not recognize (the
+ * older shape, kept for callers that have nothing better) or the classified
+ * verdicts from classifyConfigKeys, which can tell a typo from a key another
+ * frontend honors. Only the first is a warning: `models` is a real Desktop
+ * setting, and reporting it as a probable typo to a CLI user is the diagnostic
+ * being wrong about working configuration.
  */
 export function configKeysCheck(
-  unknownKeys: string[],
+  keys: string[] | ConfigKeyVerdict[],
   fixHint = "check for typos — see the config docs for valid keys",
+  strings: DoctorStrings = {},
 ): DoctorCheck {
-  if (unknownKeys.length === 0) return { name: "config keys", ok: true, detail: "all recognized" };
-  return {
-    name: "config keys",
-    ok: true,
-    warn: true,
-    detail: `unrecognized: ${unknownKeys.join(", ")}`,
-    fixHint,
-  };
+  const verdicts: ConfigKeyVerdict[] = keys.map((entry) =>
+    typeof entry === "string" ? { key: entry, kind: "unknown" } : entry,
+  );
+  const unknown = verdicts.filter((v) => v.kind === "unknown").map((v) => v.key);
+  const elsewhere = verdicts.filter(
+    (v): v is Extract<ConfigKeyVerdict, { kind: "other-surface" }> => v.kind !== "unknown",
+  );
+  const elsewhereDetail = elsewhere.map((v) => `${v.key} (${v.surfaces.join("/")})`).join(", ");
+
+  const allRecognized = strings.allRecognized ?? "all recognized";
+  const elsewherePhrase =
+    elsewhere.length === 0
+      ? ""
+      : `; ${strings.readElsewhere?.(elsewhereDetail) ?? `read by another frontend: ${elsewhereDetail}`}`;
+
+  if (unknown.length === 0) {
+    return { name: "config keys", ok: true, detail: `${allRecognized}${elsewherePhrase}` };
+  }
+  const unknownPhrase = strings.unrecognized?.(unknown.join(", ")) ?? `unrecognized: ${unknown.join(", ")}`;
+  return { name: "config keys", ok: true, warn: true, detail: `${unknownPhrase}${elsewherePhrase}`, fixHint };
 }
 
 /**
@@ -242,4 +320,91 @@ export function formatDoctorLines(checks: DoctorCheck[], opts: DoctorFormatOptio
   const passed = checks.filter((c) => c.ok).length;
   lines.push(summaryOf(passed, checks.length));
   return lines;
+}
+
+// ---------------------------------------------------------------------------
+// Optional subsystems.
+//
+// Every one of these degrades QUIETLY when it is missing: the OS sandbox turns
+// a configured `sandbox` into a runtime error on the first command, an absent
+// Playwright makes every browser tool unavailable, a missing language server
+// turns lsp_* into a "no server" error mid-task, and tree-sitter falling back
+// to the regex floor just makes the repo map quietly worse. Doctor checked none
+// of them — it checked the updater and the web bundle — so the first sign of
+// any of these was a run failing partway through.
+//
+// All are informational: the agent works without every one of them, so none
+// flips the exit code.
+// ---------------------------------------------------------------------------
+
+/** Sandbox availability as core's probe reports it, without depending on core. */
+export type SandboxProbe = { available: boolean; binary?: string; reason?: string };
+
+export function osSandboxCheck(probe: SandboxProbe, configured: boolean): DoctorCheck {
+  if (probe.available) {
+    return { name: "os sandbox", ok: true, detail: probe.binary ?? "available" };
+  }
+  // Unavailable is only a WARNING when the config actually asks for it —
+  // run_command then fails with sandbox_unavailable rather than silently
+  // running unsandboxed, so this is the difference between finding out now and
+  // finding out mid-task.
+  return {
+    name: "os sandbox",
+    ok: true,
+    ...(configured ? { warn: true } : {}),
+    detail: probe.reason ?? "unavailable",
+    ...(configured ? { fixHint: 'install bwrap (linux), or set sandbox to "off" in config.json' } : {}),
+  };
+}
+
+/**
+ * Playwright resolves, so the browser_* tools can start. The probe comes from
+ * @seekforge/core (browserBackendInstalled) because that is the package the
+ * optional dependency installs into; resolving it from here would report every
+ * installation as missing.
+ */
+export function browserCheck(probe: { available: boolean; specifier: string }): DoctorCheck {
+  const { available, specifier } = probe;
+  return available
+    ? { name: "browser", ok: true, detail: specifier }
+    : {
+        name: "browser",
+        ok: true,
+        detail: `${specifier} not installed — browser tools unavailable`,
+        fixHint: "pnpm add -w playwright-core && npx playwright install chromium",
+      };
+}
+
+/** The language servers the lsp_* tools look for, and which are on PATH. */
+export const LSP_SERVER_COMMANDS = ["typescript-language-server", "pyright-langserver", "pylsp", "gopls"] as const;
+
+export function lspServersCheck(probes: DoctorProbes): DoctorCheck {
+  const found = LSP_SERVER_COMMANDS.filter((bin) => probes.commandExists(bin));
+  return found.length > 0
+    ? { name: "lsp servers", ok: true, detail: found.join(", ") }
+    : {
+        name: "lsp servers",
+        ok: true,
+        detail: "none on PATH — lsp_* tools unavailable",
+        fixHint: "npm i -g typescript-language-server typescript (or pyright / gopls for other languages)",
+      };
+}
+
+/** tree-sitter, which upgrades symbol extraction above the regex floor. */
+export function codeParsingCheck(installed: boolean): DoctorCheck {
+  return installed
+    ? { name: "code parsing", ok: true, detail: "tree-sitter (AST)" }
+    : {
+        name: "code parsing",
+        ok: true,
+        detail: "regex floor — tree-sitter not installed, repo_map symbols are approximate",
+        fixHint: "pnpm install (web-tree-sitter and tree-sitter-wasms are workspace dependencies)",
+      };
+}
+
+/** Docker, which only `seekforge sandbox-run` needs. */
+export function dockerCheck(probes: DoctorProbes): DoctorCheck {
+  return probes.commandExists("docker")
+    ? { name: "docker", ok: true, detail: "available (sandbox-run)" }
+    : { name: "docker", ok: true, detail: "not installed — `sandbox-run` unavailable" };
 }

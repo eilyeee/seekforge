@@ -125,6 +125,12 @@ export type ServerConfig = {
    * cannot point it anywhere.
    */
   visionModel?: { model: string; baseUrl?: string; apiKey?: string };
+  /**
+   * web_search's endpoint. A SearXNG base URL makes that instance the primary
+   * backend with DuckDuckGo as the fallback. User config only — see
+   * PROJECT_PREFERENCE_KEYS.
+   */
+  webSearch?: { searxngUrl?: string };
   /** User-owned shell hooks fired around tool calls / lifecycle. */
   hooks?: HookConfig;
   /** MCP servers (Claude Code-compatible). Edit the file directly; not settable via `config set`. */

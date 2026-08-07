@@ -85,11 +85,34 @@ test("configKeysCheck passes when there are no unknown keys", () => {
 });
 
 test("configKeysCheck warns (non-fatal) and lists unrecognized keys", () => {
-  const check = configKeysCheck(["modle", "reasoningEffrt"]);
+  const check = configKeysCheck([
+    { key: "modle", kind: "unknown" },
+    { key: "reasoningEffrt", kind: "unknown" },
+  ]);
   assert.equal(check.ok, true); // warning, not a failure — must not flip exit code
   assert.equal(check.warn, true);
   assert.ok(check.detail.includes("modle") && check.detail.includes("reasoningEffrt"));
   assert.ok(check.fixHint);
+});
+
+test("configKeysCheck does not call another frontend's key a typo", () => {
+  // `models` is the Desktop/server's and works; before this the CLI's doctor
+  // reported it as "unrecognized … check for typos" on this very repository.
+  const check = configKeysCheck([{ key: "models", kind: "other-surface", surfaces: ["server"] }]);
+  assert.equal(check.warn, undefined, "a valid key must not warn");
+  assert.ok(check.detail.includes("models (server)"));
+  assert.ok(check.detail.startsWith("all recognized"));
+  assert.equal(check.fixHint, undefined);
+});
+
+test("configKeysCheck still warns about the typo when both kinds are present", () => {
+  const check = configKeysCheck([
+    { key: "modle", kind: "unknown" },
+    { key: "accent", kind: "other-surface", surfaces: ["tui"] },
+  ]);
+  assert.equal(check.warn, true);
+  assert.ok(check.detail.includes("unrecognized: modle"));
+  assert.ok(check.detail.includes("accent (tui)"));
 });
 
 test("an unrecognized provider value warns and notes the DeepSeek fallback", () => {

@@ -921,6 +921,37 @@ shared a single page between them, so a profile could not be scoped to anything.
 
 Settable via `config set`? **No** — edit the file directly.
 
+### `webSearch`
+
+**Default off.** Where `web_search` sends its query. With a SearXNG base URL
+set, that instance is asked first and DuckDuckGo becomes the fallback:
+
+```json
+{ "webSearch": { "searxngUrl": "http://localhost:8888" } }
+```
+
+Until this existed `web_search` had exactly one provider — DuckDuckGo's HTML
+page, scraped — and no way around it. When DuckDuckGo changes its markup or
+answers with a block page, every search in every workspace comes back empty,
+and no setting helps. SearXNG is the second leg because it fits the rest of the
+tool: a JSON API, no API key, and self-hostable.
+
+**Only a backend that did not run hands over.** A search that ran and matched
+nothing is an answer, and asking a second provider to disagree with it would
+launder "no hits" into noise. The tool now reports which case it was, in
+`searched` and in the note it returns, instead of one sentence covering both —
+"no hits" means believe it, "the provider blocked us" means the search never
+happened.
+
+**This key is read from your own config only.** It is not among the keys a
+repository's `.seekforge/config.json` can contribute (see
+[configuration layers](#configuration-layers)), because a cloned repository that
+could set it would choose what the model reads back from a search. It is also
+per workspace, so a server serving several projects does not route one
+project's searches through another's instance.
+
+Settable via `config set`? **No** — edit the file directly.
+
 ### `locale`
 
 UI language for the CLI and TUI chrome (progress lines, summaries, error

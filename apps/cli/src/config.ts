@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import type { HookConfig, McpServerConfig, MemoryMaintenanceConfig, ModelPricing } from "@seekforge/core";
 import type { PermissionRule } from "@seekforge/shared";
 import { mergeConfigLayers, sanitizeProjectConfig } from "@seekforge/shared/config-layers";
-import { knownConfigKeys } from "@seekforge/shared/config-manifest";
+import { classifyConfigKeys, type ConfigKeyVerdict, knownConfigKeys } from "@seekforge/shared/config-manifest";
 import { FileTooLargeError, MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 
 export type CliConfig = {
@@ -47,6 +47,12 @@ export type CliConfig = {
    * User-owned: a project config cannot point it anywhere.
    */
   visionModel?: { model: string; baseUrl?: string; apiKey?: string };
+  /**
+   * web_search's endpoint. A SearXNG base URL makes that instance the primary
+   * backend with DuckDuckGo as the fallback. User config only — see
+   * PROJECT_PREFERENCE_KEYS.
+   */
+  webSearch?: { searxngUrl?: string };
   /**
    * Name of a persistent browser session profile. When set, the browser tools
    * start from `~/.seekforge/browser-profiles/<name>.json` and write it back
@@ -225,12 +231,17 @@ export function availableProfiles(projectPath: string): string[] {
 export const KNOWN_CONFIG_KEYS = knownConfigKeys("cli");
 
 /**
- * Unrecognized top-level keys across the config layers — a typo like "modle" is
- * otherwise silently ignored. Also flags typos inside each named `profiles`
- * entry (which are themselves Partial<CliConfig>). Returns a sorted, deduped
- * list; empty when everything is recognized. Surfaced by `seekforge doctor`.
+ * Top-level keys across the config layers that this frontend does not honor,
+ * each classified as a typo or as a key another frontend reads. Also covers
+ * typos inside each named `profiles` entry (which are themselves
+ * Partial<CliConfig>). Sorted and deduped; empty when everything is recognized.
+ * Surfaced by `seekforge doctor`.
+ *
+ * The classification matters because one config.json serves the CLI, the TUI
+ * and the server: `models` is the Desktop's, `accent` is the TUI's, and
+ * reporting either as a probable typo is the diagnostic being wrong.
  */
-export function unknownConfigKeys(projectPath: string): string[] {
+export function unknownConfigKeys(projectPath: string): ConfigKeyVerdict[] {
   const unknown = new Set<string>();
   const collect = (obj: Record<string, unknown>): void => {
     for (const key of Object.keys(obj)) {
@@ -252,7 +263,7 @@ export function unknownConfigKeys(projectPath: string): string[] {
       }
     }
   }
-  return [...unknown].sort();
+  return classifyConfigKeys("cli", [...unknown].sort());
 }
 
 /**

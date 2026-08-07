@@ -2,7 +2,7 @@ import { z } from "zod";
 import { ToolError } from "../errors.js";
 import { resolveInsideWorkspace } from "../sandbox.js";
 import { defineTool, type ToolSpec } from "../registry.js";
-import { buildRepoMap, findDefinitions } from "../../agent/repo-map.js";
+import { buildRepoMap, findDefinitions, scanExtensions, scanSubtree } from "../../agent/repo-map.js";
 import { ensureAstBackend } from "../../agent/repo-map-ast.js";
 
 const repoMapSchema = z.object({
@@ -40,10 +40,15 @@ const repoMap = defineTool({
     if (ctx.runtime) {
       throw new ToolError("not_supported", "repo_map is not available with the runtime backend yet");
     }
-    await ensureAstBackend(); // best-effort: upgrades extraction to tree-sitter, else regex
     // Validate the subtree stays inside the workspace (throws on traversal).
     resolveInsideWorkspace(ctx.workspace, args.path ?? ".");
+    // Walk once, then load tree-sitter grammars for the languages this
+    // workspace actually contains — a Go repo has no reason to pay for the
+    // Kotlin grammar, and the whole shipped set costs 454MB.
+    const scan = scanSubtree(ctx.workspace, args.path ?? ".");
+    if (scan) await ensureAstBackend(scanExtensions(scan)); // best-effort; else regex
     const map = buildRepoMap(ctx.workspace, {
+      ...(scan ? { scan } : {}),
       ...(args.path !== undefined ? { path: args.path } : {}),
       ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
       ...(args.maxFiles !== undefined ? { maxFiles: args.maxFiles } : {}),
@@ -71,9 +76,13 @@ const findDefinition = defineTool({
     if (ctx.runtime) {
       throw new ToolError("not_supported", "find_definition is not available with the runtime backend yet");
     }
-    await ensureAstBackend(); // best-effort: tree-sitter when available, else regex
     resolveInsideWorkspace(ctx.workspace, args.path ?? ".");
-    const definitions = findDefinitions(ctx.workspace, args.symbol, args.path !== undefined ? { path: args.path } : {});
+    const scan = scanSubtree(ctx.workspace, args.path ?? ".");
+    if (scan) await ensureAstBackend(scanExtensions(scan)); // best-effort; else regex
+    const definitions = findDefinitions(ctx.workspace, args.symbol, {
+      ...(scan ? { scan } : {}),
+      ...(args.path !== undefined ? { path: args.path } : {}),
+    });
     return { data: { symbol: args.symbol, definitions, count: definitions.length }, meta: {} };
   },
 });

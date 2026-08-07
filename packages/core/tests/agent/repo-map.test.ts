@@ -11,6 +11,7 @@ import {
   extractSymbols,
   findDefinitions,
   lazyFileGraph,
+  OUTLINE_PREFIX,
   scanRepo,
   symbolBackends,
   type SymbolBackend,
@@ -143,7 +144,7 @@ describe("buildRepoMap", () => {
       name: "read-size-observer",
       outline: (rel, content) => {
         if (rel === "src/api/user.js") observedBytes = content.length;
-        return "exports: huge";
+        return `${OUTLINE_PREFIX} huge`;
       },
       definitions: () => undefined,
     };
@@ -440,7 +441,7 @@ describe("shared file graph (lazyFileGraph) — build once, byte-identical outpu
       makeSharedRepo(root);
       const graph = buildFileGraph(root, scanRepo(root).files);
       const info = graph.info?.get(join("src", "core", "registry.ts"));
-      expect(info?.outline).toBe("exports: registry");
+      expect(info?.outline).toBe(`${OUTLINE_PREFIX} registry`);
       expect(info?.lines).toBe(1);
     } finally {
       rmSync(root, { recursive: true, force: true });

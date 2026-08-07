@@ -8,17 +8,28 @@
  * setup-wizard api-key hint) and the TUI-only project-memory check.
  */
 import { join } from "node:path";
-import { DEFAULT_BASE_URL, resolveProviderPreset } from "@seekforge/core";
+import {
+  astBackendInstalled,
+  browserBackendInstalled,
+  DEFAULT_BASE_URL,
+  probeSandboxCapabilities,
+  resolveProviderPreset,
+} from "@seekforge/core";
 import {
   apiKeyCheck,
+  browserCheck,
   clipboardCheck,
+  codeParsingCheck,
+  dockerCheck,
   configKeysCheck,
   configParseCheck,
   createDefaultProbes,
   editorCheck,
   formatDoctorLines,
   gitRepoCheck,
+  lspServersCheck,
   mcpServersCheck,
+  osSandboxCheck,
   nodeCheck,
   platformCheck,
   projectConfigCheck,
@@ -46,6 +57,7 @@ export function runDoctor(
     baseUrl?: string;
     runtimeBin?: string;
     mcpServers?: Record<string, unknown>;
+    sandbox?: string;
   },
   probes: DoctorProbes,
 ): DoctorCheck[] {
@@ -75,5 +87,15 @@ export function runDoctor(
       : { name: "project memory", ok: false, detail: "no .seekforge/memory/project.md — /memory creates one" },
     editorCheck(probes, "$EDITOR/$VISUAL unset — ctrl-e external edit unavailable"),
     clipboardCheck(probes),
+    // Optional subsystems, each of which degrades quietly when absent. Same
+    // set the CLI reports; none of them fails the report.
+    osSandboxCheck(
+      probeSandboxCapabilities(probes.platform()),
+      config.sandbox !== undefined && config.sandbox !== "off",
+    ),
+    browserCheck(browserBackendInstalled()),
+    lspServersCheck(probes),
+    codeParsingCheck(astBackendInstalled()),
+    dockerCheck(probes),
   ];
 }

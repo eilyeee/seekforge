@@ -508,10 +508,39 @@ function decodeEntities(text: string): string {
 }
 
 /**
+ * What a results page with no parsed rows actually was.
+ *
+ * `parseDdgResults` returning [] used to mean three different things — the
+ * query genuinely had no hits, DuckDuckGo changed its markup, or the request
+ * was answered with a block/captcha page — and the tool reported one note
+ * covering all of them. The model cannot act on that: "no hits" means believe
+ * it, "drift" and "blocked" mean the search did not happen. Distinguishing them
+ * costs one scan of the page.
+ */
+export type SearchPageKind = "results" | "empty" | "drift" | "blocked";
+
+/** Markers of a real DDG results page, whether or not any row parsed. */
+const DDG_PAGE_MARKERS = ["result__a", "results_links", "no-results", 'id="links"'];
+/** Markers of the interstitial DDG serves instead of results. */
+const DDG_BLOCK_MARKERS = ["anomaly", "captcha", "unusual traffic", "challenge-form"];
+
+export function classifySearchPage(html: string, parsedCount: number): SearchPageKind {
+  if (parsedCount > 0) return "results";
+  const lower = html.toLowerCase();
+  if (DDG_BLOCK_MARKERS.some((marker) => lower.includes(marker))) return "blocked";
+  // A no-hit query still renders the results shell, so the shell is what tells
+  // "nothing matched" apart from "this is not the page we know how to read".
+  if (lower.includes("no-results") || lower.includes("no results found")) return "empty";
+  if (DDG_PAGE_MARKERS.some((marker) => lower.includes(marker.toLowerCase()))) return "drift";
+  return "drift";
+}
+
+/**
  * Parses the DuckDuckGo HTML results page into structured results, without a
  * DOM dependency. Each result row carries a `result__a` anchor (title + href)
  * and a `result__snippet` element. Robust to markup drift: anything it cannot
- * parse is skipped, so a changed layout yields [] rather than a throw.
+ * parse is skipped, so a changed layout yields [] rather than a throw — see
+ * classifySearchPage for telling the reasons apart.
  */
 export function parseDdgResults(html: string, limit: number): WebSearchResult[] {
   const results: WebSearchResult[] = [];
@@ -537,6 +566,141 @@ export function parseDdgResults(html: string, limit: number): WebSearchResult[] 
   }
   return results;
 }
+
+// ---------------------------------------------------------------------------
+// Search backends.
+//
+// web_search had exactly one: DuckDuckGo's HTML page, scraped. That is a single
+// point of failure with no way around it — when DDG changes its markup or
+// serves a block page, every search in every workspace returns nothing, and
+// there is no configuration that helps. SearXNG is the second leg: a JSON API,
+// no key, and self-hostable, which is the shape that fits a local-first tool.
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-workspace search configuration.
+ *
+ * Keyed by workspace for the same reason the vision endpoint is: the server
+ * runs several workspaces in one process, and a setting configured for one of
+ * them must not become another's. A default (no workspace) exists for the
+ * single-workspace frontends.
+ */
+export type WebSearchConfig = {
+  /**
+   * Base URL of a SearXNG instance. When set it is tried FIRST and DuckDuckGo
+   * becomes the fallback, so a self-hosted instance is authoritative while the
+   * public scrape stays as a backstop.
+   */
+  searxngUrl?: string;
+};
+
+const searchConfigs = new Map<string, WebSearchConfig>();
+let defaultSearchConfig: WebSearchConfig | undefined;
+
+/** Set (or clear, with undefined) the search config for one workspace. */
+export function configureWebSearch(config: WebSearchConfig | undefined, workspace?: string): void {
+  if (workspace === undefined) {
+    defaultSearchConfig = config;
+    return;
+  }
+  if (config === undefined) searchConfigs.delete(workspace);
+  else searchConfigs.set(workspace, config);
+}
+
+function searchConfigFor(workspace: string | undefined): WebSearchConfig {
+  if (workspace !== undefined) {
+    const scoped = searchConfigs.get(workspace);
+    if (scoped) return scoped;
+  }
+  return defaultSearchConfig ?? {};
+}
+
+/** One backend's answer: rows, plus why there were none. */
+type BackendOutcome = { kind: SearchPageKind; results: WebSearchResult[] };
+
+async function fetchSearchBody(url: URL, signal: AbortSignal | undefined): Promise<string> {
+  const controller = new AbortController();
+  const offAbort = onAbortOnce(signal, () => controller.abort());
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      signal: controller.signal,
+      redirect: "follow",
+      headers: { "user-agent": "seekforge-agent" },
+    });
+    if (!res.ok) throw new ToolError("search_failed", `Search failed: HTTP ${res.status}`);
+    return (await readResponseBody(res)).toString("utf8");
+  } finally {
+    offAbort();
+    clearTimeout(timer);
+  }
+}
+
+async function searchDuckDuckGo(query: string, count: number, signal?: AbortSignal): Promise<BackendOutcome> {
+  const url = new URL(DDG_HTML_ENDPOINT);
+  url.searchParams.set("q", query);
+  const html = await fetchSearchBody(url, signal);
+  const results = parseDdgResults(html, count);
+  return { kind: classifySearchPage(html, results.length), results };
+}
+
+/**
+ * Parse a SearXNG `format=json` response. Same defensive posture as the HTML
+ * parser: anything unrecognized is skipped rather than thrown, and every URL
+ * goes through the same http(s)-only filter the DDG path uses, because a
+ * self-hosted instance can still be fed a hostile result by an upstream engine.
+ */
+export function parseSearxngResults(body: string, limit: number): WebSearchResult[] {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    return [];
+  }
+  if (typeof payload !== "object" || payload === null) return [];
+  const rows = (payload as { results?: unknown }).results;
+  if (!Array.isArray(rows)) return [];
+  const out: WebSearchResult[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (out.length >= limit) break;
+    if (typeof row !== "object" || row === null) continue;
+    const { url, title, content } = row as { url?: unknown; title?: unknown; content?: unknown };
+    if (typeof url !== "string" || typeof title !== "string" || title.trim() === "") continue;
+    const safe = decodeDdgUrl(url); // http(s)-only, same filter as the DDG path
+    if (!safe || seen.has(safe)) continue;
+    seen.add(safe);
+    out.push({ title: title.trim(), url: safe, snippet: typeof content === "string" ? content.trim() : "" });
+  }
+  return out;
+}
+
+async function searchSearxng(
+  baseUrl: string,
+  query: string,
+  count: number,
+  signal?: AbortSignal,
+): Promise<BackendOutcome> {
+  const url = new URL("./search", baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
+  url.searchParams.set("q", query);
+  url.searchParams.set("format", "json");
+  const body = await fetchSearchBody(url, signal);
+  const results = parseSearxngResults(body, count);
+  // A JSON response that parsed to zero rows really is zero hits; a body that
+  // is not the JSON shape at all is drift (or an instance serving HTML).
+  return { kind: results.length > 0 ? "results" : body.trimStart().startsWith("{") ? "empty" : "drift", results };
+}
+
+/** How each outcome reads to the model — the reason it got nothing, or the caveat. */
+const SEARCH_NOTES: Record<SearchPageKind, string> = {
+  results: "Web snippets — verify by fetching the page with web_fetch; not authoritative.",
+  empty: "No results: the search ran and the query matched nothing. Try different keywords.",
+  drift:
+    "The search did NOT run: the provider answered with a page this parser does not recognize (its markup likely changed). Do not read this as 'no such thing exists'.",
+  blocked:
+    "The search did NOT run: the provider served a block/captcha page instead of results. Do not read this as 'no such thing exists'.",
+};
 
 const SEARCH_DEFAULT_COUNT = 5;
 const SEARCH_MAX_COUNT = 10;
@@ -568,58 +732,49 @@ const webSearch = defineTool({
   }),
   async run(args, ctx) {
     const count = Math.min(args.count ?? SEARCH_DEFAULT_COUNT, SEARCH_MAX_COUNT);
-    const url = new URL(DDG_HTML_ENDPOINT);
-    url.searchParams.set("q", args.query);
+    const { searxngUrl } = searchConfigFor(ctx.workspace);
 
-    const controller = new AbortController();
-    const offAbort = onAbortOnce(ctx.signal, () => controller.abort());
-    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    let res: Response;
-    let buf: Buffer;
-    try {
-      res = await fetch(url, {
-        method: "GET",
-        signal: controller.signal,
-        redirect: "follow",
-        headers: { "user-agent": "seekforge-agent" },
-      });
-      if (!res.ok) {
-        throw new ToolError("search_failed", `Search failed: HTTP ${res.status}`);
+    // A configured SearXNG instance leads and DuckDuckGo backstops it. Only a
+    // backend that did NOT run (drift/block) hands over — a search that ran and
+    // matched nothing is an answer, and asking a second provider to disagree
+    // with it would just launder "no hits" into noise.
+    const chain: { name: string; run: () => Promise<BackendOutcome> }[] = [];
+    if (searxngUrl !== undefined && searxngUrl.trim() !== "") {
+      chain.push({ name: "searxng", run: () => searchSearxng(searxngUrl, args.query, count, ctx.signal) });
+    }
+    chain.push({ name: "duckduckgo", run: () => searchDuckDuckGo(args.query, count, ctx.signal) });
+
+    const attempted: string[] = [];
+    let outcome: BackendOutcome | undefined;
+    let lastError: unknown;
+    for (const backend of chain) {
+      attempted.push(backend.name);
+      try {
+        outcome = await backend.run();
+      } catch (err) {
+        if (ctx.signal?.aborted) throw new ToolError("cancelled", "Web search cancelled");
+        lastError = err;
+        outcome = undefined;
+        continue; // a backend that threw is a backend that did not answer
       }
-      buf = await readResponseBody(res);
-    } catch (err) {
-      if (ctx.signal?.aborted) throw new ToolError("cancelled", "Web search cancelled");
-      if (err instanceof ToolError && err.code === "search_failed") throw err;
-      throw new ToolError("search_failed", `Search failed: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      offAbort();
-      clearTimeout(timer);
+      if (outcome.kind === "results" || outcome.kind === "empty") break;
     }
 
-    const html = buf.toString("utf8");
+    if (!outcome) {
+      const message = lastError instanceof Error ? lastError.message : String(lastError);
+      throw new ToolError("search_failed", `Search failed (${attempted.join(", ")}): ${message}`);
+    }
 
-    const parsed = parseDdgResults(html, count);
-    const results = parsed.map((r) => ({
+    const results = outcome.results.map((r) => ({
       title: r.title,
       url: r.url,
       snippet: redactSecrets(r.snippet),
     }));
-
-    // Markup drift / zero hits: return empty with a note instead of throwing.
-    if (results.length === 0) {
-      return {
-        data: {
-          results: [],
-          note: "No results parsed — the query may have no hits or DuckDuckGo's markup changed.",
-        },
-      };
-    }
-    return {
-      data: {
-        results,
-        note: "Web snippets — verify by fetching the page with web_fetch; not authoritative.",
-      },
-    };
+    // The provider list is reported so "the search did not run" is attributable
+    // rather than a mystery.
+    const note =
+      chain.length > 1 ? `${SEARCH_NOTES[outcome.kind]} (tried: ${attempted.join(", ")})` : SEARCH_NOTES[outcome.kind];
+    return { data: { results, note, searched: outcome.kind !== "drift" && outcome.kind !== "blocked" } };
   },
 });
 

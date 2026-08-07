@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { ToolError } from "../errors.js";
 
 /**
@@ -88,6 +89,21 @@ export type PlaywrightBrowser = {
 export type PlaywrightModule = {
   chromium: { launch(opts?: { headless?: boolean }): Promise<PlaywrightBrowser> };
 };
+
+/**
+ * Whether Playwright COULD load, without launching anything. Resolved from
+ * core, which is where the optional dependency would be installed — see
+ * astBackendInstalled for why the resolving package matters.
+ */
+export function browserBackendInstalled(): { available: boolean; specifier: string } {
+  const specifier = playwrightSpecifier();
+  try {
+    createRequire(import.meta.url).resolve(specifier);
+    return { available: true, specifier };
+  } catch {
+    return { available: false, specifier };
+  }
+}
 
 /** Dynamically import Playwright; a missing module becomes an actionable ToolError. */
 export async function loadPlaywright(): Promise<PlaywrightModule> {

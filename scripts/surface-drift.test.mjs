@@ -172,3 +172,41 @@ test("i18n tables define the same keys in every locale", () => {
     }
   }
 });
+
+/** Every .ts under a directory, recursively, excluding the i18n tables themselves. */
+function sourceFiles(dir, out = []) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name !== "i18n" && entry.name !== "node_modules" && entry.name !== "dist") sourceFiles(full, out);
+    } else if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+test("every i18n key is actually used somewhere", () => {
+  // The parity test above proves both languages define the same keys. It says
+  // nothing about whether anyone reads them, and 30 of 299 turned out to be
+  // dead: 13 because the doctor checks moved into @seekforge/shared and their
+  // translations did not follow — so `seekforge doctor` printed English details
+  // under a Chinese header — and 17 left behind by a namespace rename, still
+  // translated in both languages, superseded by keys under a newer prefix.
+  //
+  // Both failure modes are invisible: a dead key is not an error, it is a
+  // translation nobody sees, and the English fallback looks like a missing
+  // translation rather than a wiring bug.
+  const keys = new Set();
+  for (const name of ["common.ts", "commands.ts", "repl.ts"]) {
+    const tables = localeTables(read("apps", "cli", "src", "i18n", name));
+    for (const key of tables.en) keys.add(key);
+  }
+  // Keys are always written as string literals at the call site, including the
+  // `const key = cond ? "a" : "b"` form, so a literal scan is exact.
+  const source = sourceFiles(join(root, "apps", "cli", "src"))
+    .map((file) => readFileSync(file, "utf8"))
+    .join("\n");
+  const unused = [...keys].filter((key) => !source.includes(`"${key}"`)).sort();
+  assert.deepEqual(unused, [], "i18n keys defined in both languages but read by nobody");
+});
