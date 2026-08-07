@@ -1,3 +1,4 @@
+import { lspServerCommands } from "@seekforge/core";
 import { browserCheck, codeParsingCheck, lspServersCheck, osSandboxCheck } from "@seekforge/shared/doctor";
 import { describe, expect, it } from "vitest";
 import {
@@ -244,11 +245,32 @@ describe("optional subsystems", () => {
   });
 
   it("names the language servers it found, or says the tools are unavailable", () => {
-    const withServers = lspServersCheck({ ...healthyProbes(), commandExists: (b) => b === "gopls" });
+    const commands = lspServerCommands();
+    const withServers = lspServersCheck({ ...healthyProbes(), commandExists: (b) => b === "gopls" }, commands);
     expect(withServers.detail).toBe("gopls");
-    const none = lspServersCheck({ ...healthyProbes(), commandExists: () => false });
+    const none = lspServersCheck({ ...healthyProbes(), commandExists: () => false }, commands);
     expect(none.detail).toContain("lsp_* tools unavailable");
     expect(none.fixHint).toBeDefined();
+  });
+
+  it("asks about every server the lsp_* tools can actually launch", () => {
+    // The list used to be a second copy in @seekforge/shared naming four
+    // servers. It comes from core's own table now, so a language added there
+    // shows up here without anyone remembering to.
+    const commands = lspServerCommands();
+    expect(commands).toContain("rust-analyzer");
+    expect(commands).toContain("clangd");
+    expect(commands).toContain("typescript-language-server");
+    const asked: string[] = [];
+    const recordingProbes = {
+      ...healthyProbes(),
+      commandExists: (bin: string): boolean => {
+        asked.push(bin);
+        return false;
+      },
+    };
+    lspServersCheck(recordingProbes, commands);
+    expect(asked).toEqual([...commands]);
   });
 
   it("distinguishes the AST backend from the regex floor", () => {

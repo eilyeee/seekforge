@@ -156,6 +156,7 @@ export { applyEdits, closestRegion } from "./edits.js";
 export type { SearchReplaceEdit } from "./edits.js";
 export { zodToJsonSchema } from "./json-schema.js";
 export { browserBackendInstalled } from "./browser/playwright.js";
+export { lspServerCommands } from "./lsp/client.js";
 export {
   acquireBrowserLease,
   browserProfileDir,

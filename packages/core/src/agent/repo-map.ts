@@ -11,8 +11,8 @@ import { compareByCodePoints } from "@seekforge/shared";
  *
  *   Structure — directory tree (to maxDepth) with per-directory code-file counts.
  *   Files     — up to maxFiles code files, each with a one-line symbol outline
- *               (exports / component name), breadth-first so entry points and
- *               shallow modules come first.
+ *               (`defines: …`, or a component name), breadth-first so entry
+ *               points and shallow modules come first.
  *
  * Pure-ish: reads the filesystem read-only, never writes. Heuristic symbol
  * extraction (regex, no parser dependency) — good enough to point the agent at

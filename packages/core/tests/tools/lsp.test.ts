@@ -7,6 +7,7 @@ import {
   MAX_CONTENT_LENGTH,
   commandExistsOnPath,
   resolveServerCommand,
+  supportedLspExtensions,
   severityLabel,
 } from "../../src/tools/lsp/client.js";
 import { call, makeCtx, makeWorkspace } from "./helpers.js";
@@ -130,6 +131,79 @@ describe("lsp language → server resolution", () => {
     } catch (err) {
       expect((err as { code?: string }).code).toBe("lsp_unsupported");
     }
+  });
+
+  it("names an install hint for every language it claims to support", () => {
+    // Each entry promises a specific binary; a language added without one
+    // degrades to a bare "unavailable" the user cannot act on.
+    for (const file of [
+      "a.rs",
+      "a.c",
+      "a.cpp",
+      "a.rb",
+      "a.php",
+      "a.kt",
+      "a.swift",
+      "a.scala",
+      "a.lua",
+      "a.zig",
+      "a.sh",
+    ]) {
+      try {
+        resolveServerCommand(`/ws/${file}`);
+        throw new Error(`expected throw for ${file}`);
+      } catch (err) {
+        // Not lsp_unsupported: the language IS configured, its server just is
+        // not installed (PATH is empty in this block).
+        expect((err as { code?: string }).code, file).toBe("lsp_unavailable");
+        expect((err as { message?: string }).message, file).toMatch(/install|ships with/i);
+      }
+    }
+  });
+
+  it("lists the supported extensions in the unsupported error, from the table", () => {
+    // The message used to be a hand-written "Supported: .ts/.tsx/.js/.jsx, .py,
+    // .go" that was already wrong and would have gone on being wrong.
+    try {
+      resolveServerCommand("/ws/notes.txt");
+      throw new Error("expected throw");
+    } catch (err) {
+      const message = (err as { message?: string }).message ?? "";
+      for (const ext of [".ts", ".py", ".go", ".rs", ".swift"]) expect(message, ext).toContain(ext);
+    }
+  });
+
+  it("serves every language the repo map outlines, or says why not", () => {
+    // repo_map covers 19 languages; the lsp_* tools covered four, so a Rust
+    // file could be mapped and then not renamed. These two surfaces are kept
+    // aligned deliberately — the exceptions below are the whole allowed gap.
+    const mapped = [
+      ".ts",
+      ".tsx",
+      ".js",
+      ".jsx",
+      ".py",
+      ".go",
+      ".rs",
+      ".c",
+      ".cc",
+      ".cpp",
+      ".rb",
+      ".php",
+      ".kt",
+      ".swift",
+      ".scala",
+      ".lua",
+      ".zig",
+      ".sh",
+    ];
+    const served = new Set(supportedLspExtensions());
+    expect(mapped.filter((ext) => !served.has(ext))).toEqual([]);
+    // Java and C# are outlined but not served: jdtls wants a `-data <dir>`
+    // workspace and OmniSharp wants a solution probe, neither of which this
+    // seam can guess. Pinned so the omission stays a decision.
+    expect(served.has(".java")).toBe(false);
+    expect(served.has(".cs")).toBe(false);
   });
 
   it("labels diagnostic severities", () => {

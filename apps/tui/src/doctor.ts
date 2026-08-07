@@ -12,6 +12,7 @@ import {
   astBackendInstalled,
   browserBackendInstalled,
   DEFAULT_BASE_URL,
+  lspServerCommands,
   probeSandboxCapabilities,
   resolveProviderPreset,
 } from "@seekforge/core";
@@ -94,7 +95,7 @@ export function runDoctor(
       config.sandbox !== undefined && config.sandbox !== "off",
     ),
     browserCheck(browserBackendInstalled()),
-    lspServersCheck(probes),
+    lspServersCheck(probes, lspServerCommands()),
     codeParsingCheck(astBackendInstalled()),
     dockerCheck(probes),
   ];

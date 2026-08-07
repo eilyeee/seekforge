@@ -375,11 +375,15 @@ export function browserCheck(probe: { available: boolean; specifier: string }): 
       };
 }
 
-/** The language servers the lsp_* tools look for, and which are on PATH. */
-export const LSP_SERVER_COMMANDS = ["typescript-language-server", "pyright-langserver", "pylsp", "gopls"] as const;
-
-export function lspServersCheck(probes: DoctorProbes): DoctorCheck {
-  const found = LSP_SERVER_COMMANDS.filter((bin) => probes.commandExists(bin));
+/**
+ * Which of the lsp_* tools' language servers are on PATH.
+ *
+ * `commands` comes from @seekforge/core's own table (lspServerCommands) rather
+ * than a copy kept here. The copy that used to live in this file named four
+ * servers; the table now holds fifteen, and nothing would have noticed.
+ */
+export function lspServersCheck(probes: DoctorProbes, commands: readonly string[]): DoctorCheck {
+  const found = commands.filter((bin) => probes.commandExists(bin));
   return found.length > 0
     ? { name: "lsp servers", ok: true, detail: found.join(", ") }
     : {

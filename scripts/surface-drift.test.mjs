@@ -152,61 +152,139 @@ function localeTables(source) {
   return tables;
 }
 
+/**
+ * The TUI keeps its table as two top-level consts rather than one nested
+ * object, so it needs its own reader. Same data, different shape.
+ */
+function constTables(source, names) {
+  const tables = {};
+  for (const [locale, name] of Object.entries(names)) {
+    const at = source.indexOf(`const ${name}`);
+    if (at < 0) continue;
+    const body = source.slice(at);
+    const end = body.indexOf("\n};");
+    tables[locale] = new Set([...body.slice(0, end).matchAll(/^\s+"([^"]+)":/gm)].map((entry) => entry[1]));
+  }
+  return tables;
+}
+
+/** Every localized surface: where its tables live and where they are read. */
+const I18N_SURFACES = [
+  {
+    name: "cli",
+    src: ["apps", "cli", "src"],
+    tables: [
+      ["apps", "cli", "src", "i18n", "common.ts"],
+      ["apps", "cli", "src", "i18n", "commands.ts"],
+      ["apps", "cli", "src", "i18n", "repl.ts"],
+    ],
+    read: (source) => localeTables(source),
+  },
+  {
+    name: "tui",
+    src: ["apps", "tui", "src"],
+    tables: [["apps", "tui", "src", "strings.ts"]],
+    read: (source) => constTables(source, { en: "EN", "zh-CN": "ZH_CN" }),
+  },
+  {
+    name: "desktop",
+    src: ["apps", "desktop", "src"],
+    tables: [
+      ["apps", "desktop", "src", "lib", "i18n", "common.ts"],
+      ["apps", "desktop", "src", "lib", "i18n", "views.ts"],
+      ["apps", "desktop", "src", "lib", "i18n", "chat.ts"],
+    ],
+    read: (source) => localeTables(source),
+  },
+];
+
 test("i18n tables define the same keys in every locale", () => {
-  const files = [
-    ["apps", "cli", "src", "i18n", "common.ts"],
-    ["apps", "cli", "src", "i18n", "commands.ts"],
-    ["apps", "cli", "src", "i18n", "repl.ts"],
-  ];
-  for (const parts of files) {
-    const tables = localeTables(read(...parts));
-    const locales = Object.keys(tables);
-    assert.ok(locales.includes("en"), `${parts.join("/")} has no English table`);
-    assert.ok(locales.length > 1, `${parts.join("/")} has no translation table`);
-    for (const locale of locales) {
-      if (locale === "en") continue;
-      const missing = [...tables.en].filter((key) => !tables[locale].has(key));
-      const extra = [...tables[locale]].filter((key) => !tables.en.has(key));
-      assert.deepEqual(missing, [], `${parts.join("/")}: ${locale} is missing keys`);
-      assert.deepEqual(extra, [], `${parts.join("/")}: ${locale} has keys English does not`);
+  for (const surface of I18N_SURFACES) {
+    for (const parts of surface.tables) {
+      const tables = surface.read(read(...parts));
+      const locales = Object.keys(tables);
+      assert.ok(locales.includes("en"), `${parts.join("/")} has no English table`);
+      assert.ok(locales.length > 1, `${parts.join("/")} has no translation table`);
+      for (const locale of locales) {
+        if (locale === "en") continue;
+        const missing = [...tables.en].filter((key) => !tables[locale].has(key));
+        const extra = [...tables[locale]].filter((key) => !tables.en.has(key));
+        assert.deepEqual(missing, [], `${parts.join("/")}: ${locale} is missing keys`);
+        assert.deepEqual(extra, [], `${parts.join("/")}: ${locale} has keys English does not`);
+      }
     }
   }
 });
 
-/** Every .ts under a directory, recursively, excluding the i18n tables themselves. */
-function sourceFiles(dir, out = []) {
+/**
+ * Every .ts/.tsx under a directory, recursively, minus the i18n tables
+ * themselves.
+ *
+ * `exclude` is a set of absolute table paths rather than a directory-name
+ * convention, because the convention only holds for two of the three surfaces:
+ * the CLI and the Desktop keep their tables under an `i18n/` directory, and the
+ * TUI keeps its in `strings.ts`, a plain file among its other modules. Skipping
+ * by directory name therefore left the TUI's table IN the corpus being
+ * searched — and since the check asks whether a key appears as `"key"`
+ * anywhere, every key matched its own definition line and the whole dead-key
+ * test was a no-op for that surface. It reported zero and could report nothing
+ * else.
+ */
+function sourceFiles(dir, exclude, out = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name !== "i18n" && entry.name !== "node_modules" && entry.name !== "dist") sourceFiles(full, out);
-    } else if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) {
+      if (entry.name !== "node_modules" && entry.name !== "dist") sourceFiles(full, exclude, out);
+    } else if ((entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) && !exclude.has(full)) {
       out.push(full);
     }
   }
   return out;
 }
 
+/**
+ * Key prefixes a surface builds at runtime, read out of the source rather than
+ * listed by hand.
+ *
+ * `t(`tips.${i}`)` means every `tips.N` is live even though none appears as a
+ * literal. Writing those prefixes down by hand would be one more list that
+ * drifts — and a stale one turns this gate into a false-positive generator,
+ * which is worse than no gate. So: find the template calls, take the literal
+ * head of each. (Confirmed the hard way — a hand-run of this check reported 21
+ * dead keys in the TUI, all of them `tips.`/`hints.`, and the real number is 0.)
+ */
+function dynamicKeyPrefixes(source) {
+  const prefixes = new Set();
+  for (const match of source.matchAll(/\bt(?:ranslate)?\(\s*`([^`$]*)\$\{/g)) {
+    if (match[1]) prefixes.add(match[1]);
+  }
+  return [...prefixes];
+}
+
 test("every i18n key is actually used somewhere", () => {
   // The parity test above proves both languages define the same keys. It says
-  // nothing about whether anyone reads them, and 30 of 299 turned out to be
-  // dead: 13 because the doctor checks moved into @seekforge/shared and their
-  // translations did not follow — so `seekforge doctor` printed English details
-  // under a Chinese header — and 17 left behind by a namespace rename, still
-  // translated in both languages, superseded by keys under a newer prefix.
+  // nothing about whether anyone reads them, and 30 of the CLI's 299 turned out
+  // to be dead: 13 because the doctor checks moved into @seekforge/shared and
+  // their translations did not follow — so `seekforge doctor` printed English
+  // details under a Chinese header — and 17 left behind by a namespace rename,
+  // still translated in both languages, superseded by keys under a newer prefix.
   //
   // Both failure modes are invisible: a dead key is not an error, it is a
   // translation nobody sees, and the English fallback looks like a missing
   // translation rather than a wiring bug.
-  const keys = new Set();
-  for (const name of ["common.ts", "commands.ts", "repl.ts"]) {
-    const tables = localeTables(read("apps", "cli", "src", "i18n", name));
-    for (const key of tables.en) keys.add(key);
+  for (const surface of I18N_SURFACES) {
+    const keys = new Set();
+    for (const parts of surface.tables) {
+      for (const key of surface.read(read(...parts)).en) keys.add(key);
+    }
+    const tableFiles = new Set(surface.tables.map((parts) => join(root, ...parts)));
+    const source = sourceFiles(join(root, ...surface.src), tableFiles)
+      .map((file) => readFileSync(file, "utf8"))
+      .join("\n");
+    const dynamic = dynamicKeyPrefixes(source);
+    const unused = [...keys]
+      .filter((key) => !source.includes(`"${key}"`) && !dynamic.some((prefix) => key.startsWith(prefix)))
+      .sort();
+    assert.deepEqual(unused, [], `${surface.name}: i18n keys defined in both languages but read by nobody`);
   }
-  // Keys are always written as string literals at the call site, including the
-  // `const key = cond ? "a" : "b"` form, so a literal scan is exact.
-  const source = sourceFiles(join(root, "apps", "cli", "src"))
-    .map((file) => readFileSync(file, "utf8"))
-    .join("\n");
-  const unused = [...keys].filter((key) => !source.includes(`"${key}"`)).sort();
-  assert.deepEqual(unused, [], "i18n keys defined in both languages but read by nobody");
 });

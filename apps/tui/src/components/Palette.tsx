@@ -6,7 +6,7 @@
 
 import type React from "react";
 import { Box, Text } from "ink";
-import type { CommandSpec } from "../commands.js";
+import { commandSummary, type CommandSpec } from "../commands.js";
 import { t } from "../strings.js";
 import { ACCENT } from "./Header.js";
 
@@ -42,7 +42,7 @@ export function Palette({
               {cmd.args ? <Text dimColor> {cmd.args}</Text> : null}
               <Text dimColor>
                 {"  "}
-                {cmd.summary}
+                {commandSummary(cmd)}
               </Text>
             </Box>
           );

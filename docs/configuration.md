@@ -236,6 +236,14 @@ TypeScript.
 { "runtimeBin": "/usr/local/bin/seekforge-runtime" }
 ```
 
+Not everything routes through it, and the exceptions are deliberate. `repo_map`
+and `find_definition` keep reading the filesystem directly: they are read-only,
+they never descend a symlinked directory, they open files with `O_NOFOLLOW`, and
+they reject a subtree that resolves outside the workspace — so there is no
+mutation for the runtime to re-check and no containment it would add. They used
+to refuse to run at all when `runtimeBin` was set, which meant turning the
+runtime on silently removed the agent's two ways of orienting in a repository.
+
 Also read from the `SEEKFORGE_RUNTIME_BIN` environment variable (highest
 precedence).
 

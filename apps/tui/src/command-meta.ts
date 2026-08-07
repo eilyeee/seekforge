@@ -4,7 +4,7 @@
  * padding/alignment; labels here are raw "/name args" strings.
  */
 
-import { COMMANDS, COMMAND_GROUPS, type CommandSpec } from "./commands.js";
+import { COMMANDS, COMMAND_GROUPS, commandGroupLabel, commandSummary, type CommandSpec } from "./commands.js";
 
 export type HelpRow =
   | { kind: "header"; text: string }
@@ -20,13 +20,13 @@ export function helpRows(specs: readonly CommandSpec[] = COMMANDS): HelpRow[] {
   for (const [group, title] of COMMAND_GROUPS) {
     const members = specs.filter((s) => s.group === group);
     if (members.length === 0) continue;
-    rows.push({ kind: "header", text: `── ${title} ──` });
+    rows.push({ kind: "header", text: `── ${commandGroupLabel(group, title)} ──` });
     for (const spec of members) {
       rows.push({
         kind: "command",
         name: spec.name,
         label: spec.args ? `/${spec.name} ${spec.args}` : `/${spec.name}`,
-        summary: spec.summary,
+        summary: commandSummary(spec),
       });
     }
   }

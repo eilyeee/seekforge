@@ -155,18 +155,22 @@ fn cancellation_kills_the_owned_command_group() {
         json!({ "workspace": ws.path(), "command": "echo $$ > command.pid; sleep 10" }),
     );
 
+    // Wait for a pid to be READABLE, not merely for the file to exist. The
+    // shell's `> command.pid` creates the file before `echo` writes to it, so
+    // polling on existence alone reads an empty file roughly one run in six and
+    // panics in parse() — a flake that looked like the cancellation failing.
     let pid_path = ws.0.join("command.pid");
-    for _ in 0..100 {
-        if pid_path.exists() {
-            break;
+    let mut pid: Option<libc::pid_t> = None;
+    for _ in 0..200 {
+        if let Ok(text) = std::fs::read_to_string(&pid_path) {
+            if let Ok(parsed) = text.trim().parse::<libc::pid_t>() {
+                pid = Some(parsed);
+                break;
+            }
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    let pid: libc::pid_t = std::fs::read_to_string(&pid_path)
-        .expect("command must start before cancellation")
-        .trim()
-        .parse()
-        .unwrap();
+    let pid = pid.expect("command must write its pid before cancellation");
 
     writeln!(
         rt.stdin,

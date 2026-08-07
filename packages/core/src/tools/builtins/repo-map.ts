@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { ToolError } from "../errors.js";
 import { resolveInsideWorkspace } from "../sandbox.js";
 import { defineTool, type ToolSpec } from "../registry.js";
 import { buildRepoMap, findDefinitions, scanExtensions, scanSubtree } from "../../agent/repo-map.js";
@@ -26,10 +25,37 @@ const repoMapSchema = z.object({
     .describe("Max files given a symbol outline in the Files section (1-1000, default 60)."),
 });
 
+/**
+ * Why these two tools do not route through the Rust runtime, and no longer
+ * refuse to run when one is configured.
+ *
+ * They used to throw `not_supported` the moment `ctx.runtime` was set, so
+ * turning on `runtimeBin` — which the documentation sells as defense-in-depth
+ * for file I/O, commands and git — silently removed the agent's two ways of
+ * orienting in a repository. Nothing said so. The model just started getting
+ * errors from the tools it is told to use FIRST.
+ *
+ * Running them locally is not a hole in that containment, which is the only
+ * reason the refusal could have been justified:
+ *
+ *   - the subtree is resolved with realpath and rejected if it leaves the
+ *     workspace (resolveSubtree), and again by resolveInsideWorkspace here;
+ *   - readdir reports an entry's OWN type, so a symlink is neither descended
+ *     as a directory nor listed as a file: a link to /etc inside the workspace
+ *     contributes nothing, and never reaches the read layer at all;
+ *   - and independently, every read goes through readWorkspaceStateFile, which
+ *     opens with O_NOFOLLOW and re-checks the target — so even if the walk
+ *     later started resolving entries, a symlinked FILE would still not be
+ *     read.
+ *
+ * All three are asserted in repo-map-containment.test.ts. Both tools are
+ * read-only and write nothing, so there is no mutation for the runtime to
+ * re-check even in principle.
+ */
 const repoMap = defineTool({
   name: "repo_map",
   description:
-    'Get a compact structural overview of the codebase WITHOUT reading every file: a directory tree with per-directory file counts, plus a one-line symbol outline (exports / component names) for the most relevant files. Use this FIRST to orient in an unfamiliar or large repo, then drill in with `path` (e.g. "src/views") before reading specific files. Heuristic outlines — confirm details by reading the file.',
+    'Get a compact structural overview of the codebase WITHOUT reading every file: a directory tree with per-directory file counts, plus a one-line symbol outline (`defines: …` — the classes/functions/types each file declares) for the most relevant files. Use this FIRST to orient in an unfamiliar or large repo, then drill in with `path` (e.g. "src/views") before reading specific files. Heuristic outlines — confirm details by reading the file.',
   schema: repoMapSchema,
   classify: (args) => ({
     permission: "readonly",
@@ -37,9 +63,7 @@ const repoMap = defineTool({
     path: args.path ?? ".",
   }),
   async run(args, ctx) {
-    if (ctx.runtime) {
-      throw new ToolError("not_supported", "repo_map is not available with the runtime backend yet");
-    }
+    // Deliberately NOT gated on ctx.runtime — see the note above runMapLocally.
     // Validate the subtree stays inside the workspace (throws on traversal).
     resolveInsideWorkspace(ctx.workspace, args.path ?? ".");
     // Walk once, then load tree-sitter grammars for the languages this
@@ -73,9 +97,7 @@ const findDefinition = defineTool({
     path: args.path ?? ".",
   }),
   async run(args, ctx) {
-    if (ctx.runtime) {
-      throw new ToolError("not_supported", "find_definition is not available with the runtime backend yet");
-    }
+    // Same reasoning as repo_map: read-only, contained, no runtime needed.
     resolveInsideWorkspace(ctx.workspace, args.path ?? ".");
     const scan = scanSubtree(ctx.workspace, args.path ?? ".");
     if (scan) await ensureAstBackend(scanExtensions(scan)); // best-effort; else regex

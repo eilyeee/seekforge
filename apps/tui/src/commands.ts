@@ -1,11 +1,17 @@
 /**
- * Slash-command registry + parsing for the composer. Pure + unit tested.
+ * Slash-command registry + parsing for the composer.
+ *
+ * The parsing half (parseInput and friends) is pure and unit tested. The two
+ * label helpers below read the active locale, so they are not — the registry
+ * still holds the canonical English, and only the rendering of it is localized.
  *
  * The registry drives the command palette (typing "/" lists COMMANDS with
  * descriptions; the palette filters them with fuzzy.ts) and /help. Adding a
  * command = one COMMANDS entry + one SlashCommand variant + a parseInput
  * case + a handler in app.tsx.
  */
+
+import { translate } from "./strings.js";
 
 export type CommandSpec = {
   /** Name without the leading slash, e.g. "plan". */
@@ -18,6 +24,26 @@ export type CommandSpec = {
 };
 
 export type CommandGroup = "session" | "run" | "review" | "context" | "tools" | "settings" | "info";
+
+/**
+ * Localized summary for a command, falling back to the English written inline
+ * in COMMANDS below.
+ *
+ * The summaries live here in English AND in strings.ts under `cmd.<name>`,
+ * which sounds redundant and is not: this module is pure and unit-tested, the
+ * inline English is what a reader of the registry sees, and strings.ts is where
+ * a locale that is not English gets its text. Before this, the palette and
+ * /help were the one surface of a bilingual TUI that was always English —
+ * Chinese chrome around an English command list.
+ */
+export function commandSummary(command: CommandSpec): string {
+  return translate(`cmd.${command.name}`, command.summary);
+}
+
+/** Localized label for a group heading, falling back to the English below. */
+export function commandGroupLabel(group: CommandGroup, fallback: string): string {
+  return translate(`group.${group}`, fallback);
+}
 
 /** Display order for grouped help. */
 export const COMMAND_GROUPS: ReadonlyArray<[CommandGroup, string]> = [

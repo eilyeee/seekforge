@@ -31,7 +31,6 @@ const EN: Record<string, string> = {
   "status.scrolled": "↑ scrolled",
 
   // ── Header ──────────────────────────────────────────────────────────────
-  "header.tagline": "a local-first coding agent powered by DeepSeek",
   "tip.prefix": "※",
 
   // ── Picker / palette footers ────────────────────────────────────────────
@@ -90,13 +89,6 @@ const EN: Record<string, string> = {
   "mode.acceptEdits": "⏵ accept-edits on",
   "mode.plan": "⏸ plan mode on",
   "mode.cycleHint": "(shift+tab to cycle)",
-  "mode.runningShell": "running:",
-  "mode.bgTask": "background task",
-  "mode.bgTasks": "background tasks",
-  "mode.detachedRun": "detached run",
-  "mode.detachedRuns": "detached runs",
-  "mode.queued": "queued",
-  "session.label": "session",
 
   // ── Composer placeholders (app-level; integrator adopts) ───────────────
   "composer.idle": "Ask SeekForge to do something…  (/ commands · @ files · # remember · ! shell)",
@@ -116,6 +108,70 @@ const EN: Record<string, string> = {
   "tips.9": "/vim enables vim keybindings in the composer",
   "tips.10": "Drop markdown files in .seekforge/commands/ to add custom commands",
   "tips.11": "Ctrl+V pastes an image from the clipboard",
+
+  // ── Slash commands (palette + /help) ──────────────────────────────────
+  "cmd.help": "show all commands",
+  "cmd.new": "start a fresh session (next message opens it)",
+  "cmd.clear": "clear the transcript (name labels the old session)",
+  "cmd.sessions": "pick a session to resume (interactive)",
+  "cmd.resume": "continue an existing session",
+  "cmd.plan": "plan read-only first, confirm, then execute",
+  "cmd.loop": "auto-loop: run→verify until the command passes (task = composer lines below)",
+  "cmd.loop-resume": "resume a persisted loop with optional added limits",
+  "cmd.loop-list": "list persisted loops in this workspace",
+  "cmd.loop-show": "show one persisted loop",
+  "cmd.loop-history": "show recent loop lifecycle events",
+  "cmd.loop-recover": "mark orphaned loops resumable",
+  "cmd.loop-pause": "pause the active loop at its next safe boundary",
+  "cmd.loop-continue": "continue the paused loop in this tab",
+  "cmd.loop-steer": "guide the active loop at its next safe boundary",
+  "cmd.approve": "show or set the approval mode (Shift+Tab cycles)",
+  "cmd.rewind": "undo this session's file changes (dry-run first)",
+  "cmd.backtrack": "rewind the conversation to an earlier message (Esc Esc)",
+  "cmd.fork": "fork the current session (continue without touching the original)",
+  "cmd.tab": "tabs: parallel sessions (Ctrl+N new, Ctrl+T cycle)",
+  "cmd.worktree": "git worktree sessions: isolated checkouts under .seekforge/worktrees",
+  "cmd.diff": "git diff of the working tree",
+  "cmd.review": "review the uncommitted changes (read-only)",
+  "cmd.todo": "cross-session todo list (.seekforge/todos.md)",
+  "cmd.add-dir": "add a read-only directory for @ references",
+  "cmd.model": "switch model for subsequent messages",
+  "cmd.think": "V4 thinking mode and reasoning effort",
+  "cmd.remember": "save a fact to project memory (# <fact> also works)",
+  "cmd.memory":
+    "list project memory facts (candidates reviews pending; keywords backfills bilingual search terms; edit opens a memory file)",
+  "cmd.tasks": "background and detached tasks (live; kill stops one)",
+  "cmd.agents": "list dispatchable subagents",
+  "cmd.agent-steer": "guide a running subagent at its next turn",
+  "cmd.agent-cancel": "cancel one running subagent",
+  "cmd.skills": "list installed skills and their status",
+  "cmd.plugins": "list first-class plugins and approval status",
+  "cmd.mcp": "list configured MCP servers and their tools",
+  "cmd.prompts": "list MCP prompts (invoke as /mcp:<server>:<prompt>)",
+  "cmd.init": "analyze the codebase and write/refresh AGENTS.md",
+  "cmd.doctor": "diagnose the environment (key, node, git, runtime, mcp…)",
+  "cmd.vim": "toggle vim mode for the composer",
+  "cmd.mouse": "toggle mouse-wheel scroll (off = native text selection)",
+  "cmd.theme": "switch the color theme (deepseek/mono/solarized/matrix…)",
+  "cmd.terminal-setup": "how to make Shift+Enter insert a newline in your terminal",
+  "cmd.context": "open the context inspector",
+  "cmd.compact": "compact the session now (focus steers the LLM summary)",
+  "cmd.usage": "cumulative token usage and cost",
+  "cmd.balance": "DeepSeek account balance",
+  "cmd.export": "export the transcript as markdown",
+  "cmd.audit": "write a reviewable audit of a session (timeline, tool calls, files, cost)",
+  "cmd.handoff": "write a session handoff document for the next session",
+  "cmd.stash": "stash / restore the composer draft",
+  "cmd.copy": "copy the last assistant message to the clipboard",
+  "cmd.editor": "edit the prompt in $EDITOR (Ctrl+G)",
+  "cmd.quit": "exit (Ctrl+C twice also works)",
+  "group.session": "Session",
+  "group.run": "Running tasks",
+  "group.review": "Review & history",
+  "group.context": "Context & memory",
+  "group.tools": "Tools & surfaces",
+  "group.settings": "Settings",
+  "group.info": "Info",
 };
 
 const ZH_CN: Record<string, string> = {
@@ -128,7 +184,6 @@ const ZH_CN: Record<string, string> = {
   "status.interrupt": "esc 中断",
   "status.scrolled": "↑ 已滚动",
 
-  "header.tagline": "本地优先的 DeepSeek 编码代理",
   "tip.prefix": "※",
 
   "picker.palette": "↑↓ 选择 · Tab/Enter 补全 · Esc 关闭",
@@ -181,13 +236,6 @@ const ZH_CN: Record<string, string> = {
   "mode.acceptEdits": "⏵ 自动接受编辑已开启",
   "mode.plan": "⏸ 计划模式已开启",
   "mode.cycleHint": "(shift+tab 切换)",
-  "mode.runningShell": "运行中:",
-  "mode.bgTask": "个后台任务",
-  "mode.bgTasks": "个后台任务",
-  "mode.detachedRun": "个分离运行",
-  "mode.detachedRuns": "个分离运行",
-  "mode.queued": "已排队",
-  "session.label": "会话",
 
   "composer.idle": "让 SeekForge 做点什么…  (/ 命令 · @ 文件 · # 记忆 · ! shell)",
   "composer.running": "处理中… 输入可排队后续消息 · Esc 取消 · ! 运行 shell",
@@ -205,6 +253,69 @@ const ZH_CN: Record<string, string> = {
   "tips.9": "/vim 在输入框启用 vim 键位",
   "tips.10": "在 .seekforge/commands/ 放置 markdown 文件可添加自定义命令",
   "tips.11": "Ctrl+V 从剪贴板粘贴图片",
+
+  // ── Slash commands (palette + /help) ──────────────────────────────────
+  "cmd.help": "显示全部命令",
+  "cmd.new": "开始新会话（下一条消息将开启它）",
+  "cmd.clear": "清空对话记录（name 用于标记旧会话）",
+  "cmd.sessions": "选择一个会话恢复（交互式）",
+  "cmd.resume": "继续一个已有会话",
+  "cmd.plan": "先只读地规划，确认后再执行",
+  "cmd.loop": "自动循环：run→verify 直到命令通过（任务写在下方输入框）",
+  "cmd.loop-resume": "恢复一个已持久化的 loop，可追加限制",
+  "cmd.loop-list": "列出本工作区已持久化的 loop",
+  "cmd.loop-show": "查看某个已持久化的 loop",
+  "cmd.loop-history": "查看最近的 loop 生命周期事件",
+  "cmd.loop-recover": "把孤立的 loop 标记为可恢复",
+  "cmd.loop-pause": "在下一个安全边界暂停当前 loop",
+  "cmd.loop-continue": "在本标签页继续已暂停的 loop",
+  "cmd.loop-steer": "在下一个安全边界引导当前 loop",
+  "cmd.approve": "查看或设置审批模式（Shift+Tab 循环切换）",
+  "cmd.rewind": "撤销本会话的文件改动（先 dry-run）",
+  "cmd.backtrack": "把对话回退到更早的一条消息（Esc Esc）",
+  "cmd.fork": "复刻当前会话（继续推进而不影响原会话）",
+  "cmd.tab": "标签页：并行会话（Ctrl+N 新建，Ctrl+T 切换）",
+  "cmd.worktree": "git worktree 会话：位于 .seekforge/worktrees 的隔离检出",
+  "cmd.diff": "工作树的 git diff",
+  "cmd.review": "审查未提交的改动（只读）",
+  "cmd.todo": "跨会话待办清单（.seekforge/todos.md）",
+  "cmd.add-dir": "添加一个只读目录供 @ 引用",
+  "cmd.model": "为后续消息切换模型",
+  "cmd.think": "V4 思考模式与推理强度",
+  "cmd.remember": "把一条事实存入项目记忆（用 # <事实> 也可以）",
+  "cmd.memory": "列出项目记忆事实（candidates 审阅待定项；keywords 补齐双语检索词；edit 打开记忆文件）",
+  "cmd.tasks": "后台与分离任务（实时；kill 可终止其一）",
+  "cmd.agents": "列出可调度的子智能体",
+  "cmd.agent-steer": "在下一轮引导某个运行中的子智能体",
+  "cmd.agent-cancel": "取消某个运行中的子智能体",
+  "cmd.skills": "列出已安装的技能及其状态",
+  "cmd.plugins": "列出一等公民插件及批准状态",
+  "cmd.mcp": "列出已配置的 MCP 服务器及其工具",
+  "cmd.prompts": "列出 MCP 提示词（以 /mcp:<server>:<prompt> 调用）",
+  "cmd.init": "分析代码库并写入/刷新 AGENTS.md",
+  "cmd.doctor": "诊断运行环境（key、node、git、runtime、mcp…）",
+  "cmd.vim": "切换输入框的 vim 模式",
+  "cmd.mouse": "切换鼠标滚轮滚动（关闭后可用原生文本选择）",
+  "cmd.theme": "切换配色主题（deepseek/mono/solarized/matrix…）",
+  "cmd.terminal-setup": "如何让 Shift+Enter 在你的终端里插入换行",
+  "cmd.context": "打开上下文检查器",
+  "cmd.compact": "立即压缩会话（focus 可引导 LLM 摘要）",
+  "cmd.usage": "累计 token 用量与花费",
+  "cmd.balance": "DeepSeek 账户余额",
+  "cmd.export": "把对话记录导出为 markdown",
+  "cmd.audit": "为某个会话写出可审阅的审计报告（时间线、工具调用、文件、花费）",
+  "cmd.handoff": "为下一个会话写一份交接文档",
+  "cmd.stash": "暂存 / 恢复输入框草稿",
+  "cmd.copy": "复制最后一条助手消息到剪贴板",
+  "cmd.editor": "在 $EDITOR 中编辑提示词（Ctrl+G）",
+  "cmd.quit": "退出（连按两次 Ctrl+C 也可以）",
+  "group.session": "会话",
+  "group.run": "运行任务",
+  "group.review": "审查与历史",
+  "group.context": "上下文与记忆",
+  "group.tools": "工具与界面",
+  "group.settings": "设置",
+  "group.info": "信息",
 };
 
 /** All UI strings, keyed by locale then string key. en is canonical. */
@@ -245,4 +356,14 @@ export function getLocale(): Locale {
  */
 export function t(key: string): string {
   return STRINGS[currentLocale][key] ?? STRINGS.en[key] ?? key;
+}
+
+/**
+ * Translate `key`, falling back to a caller-supplied string rather than to the
+ * key itself. For text that already exists in English at its definition site —
+ * the slash-command registry, whose summaries are part of how that module
+ * reads — so the English does not have to be written twice to stay authoritative.
+ */
+export function translate(key: string, fallback: string): string {
+  return STRINGS[currentLocale][key] ?? fallback;
 }

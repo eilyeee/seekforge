@@ -22,6 +22,7 @@ import { ToolError } from "../errors.js";
 import { abortablePromise, onAbortOnce } from "../../util/abort.js";
 import { installProcessTeardown } from "../../util/process-teardown.js";
 import { isRecord } from "../../util/guards.js";
+import { compareByCodePoints } from "@seekforge/shared";
 import { readUtf8FileBoundedSync } from "../../util/fs.js";
 
 const MAX_LSP_DOCUMENT_BYTES = 5 * 1024 * 1024;
@@ -136,7 +137,111 @@ const EXT_TO_LANG: Record<string, LangEntry> = {
     servers: [{ command: "gopls", args: [] }],
     install: "Install the Go language server: `go install golang.org/x/tools/gopls@latest` (needs Go on PATH).",
   },
+  // Everything below serves a language repo_map already outlines. The two
+  // surfaces had drifted apart: repo_map covers 19 languages and the lsp_*
+  // tools covered four, so a Rust file could be mapped and then not renamed,
+  // not have its references found, and not be jumped through — in a repository
+  // that is itself part Rust.
+  //
+  // Each entry names servers that speak LSP over stdio with no extra setup.
+  // Deliberately absent: Java's jdtls, which needs a `-data <dir>` workspace
+  // handed to it and a per-project layout this seam has nowhere to put, and
+  // C#'s OmniSharp, which needs `-lsp` plus a solution/project probe. Both
+  // would be a guess about someone's build rather than a language server.
+  ".rs": {
+    languageId: "rust",
+    servers: [{ command: "rust-analyzer", args: [] }],
+    install: "Install the Rust language server: `rustup component add rust-analyzer`.",
+  },
+  ".c": clangdEntry("c"),
+  // `.h` is genuinely ambiguous, and this table answers it differently from
+  // the tree-sitter table in repo-map-ast.ts, which maps .h to the C++ grammar
+  // because that grammar is a superset and PARSING is all it does. Here the
+  // languageId is a claim about the language's RULES, so the conservative
+  // answer is C — and clangd resolves the real language from
+  // compile_commands.json anyway, which is what actually decides.
+  ".h": clangdEntry("c"),
+  ".cc": clangdEntry("cpp"),
+  ".cpp": clangdEntry("cpp"),
+  ".cxx": clangdEntry("cpp"),
+  ".hpp": clangdEntry("cpp"),
+  ".hh": clangdEntry("cpp"),
+  ".hxx": clangdEntry("cpp"),
+  ".rb": {
+    languageId: "ruby",
+    servers: [
+      { command: "ruby-lsp", args: [] },
+      { command: "solargraph", args: ["stdio"] },
+    ],
+    install: "Install a Ruby language server: `gem install ruby-lsp` or `gem install solargraph`.",
+  },
+  ".php": {
+    languageId: "php",
+    servers: [
+      { command: "intelephense", args: STDIO },
+      { command: "phpactor", args: ["language-server"] },
+    ],
+    install: "Install a PHP language server: `npm i -g intelephense` or install phpactor.",
+  },
+  ".kt": kotlinEntry(),
+  ".kts": kotlinEntry(),
+  ".swift": {
+    languageId: "swift",
+    servers: [{ command: "sourcekit-lsp", args: [] }],
+    install: "sourcekit-lsp ships with the Swift toolchain — install Swift, or Xcode on macOS.",
+  },
+  ".scala": scalaEntry(),
+  ".sc": scalaEntry(),
+  ".lua": {
+    languageId: "lua",
+    servers: [{ command: "lua-language-server", args: [] }],
+    install: "Install the Lua language server: `brew install lua-language-server`, or see LuaLS/lua-language-server.",
+  },
+  ".zig": {
+    languageId: "zig",
+    servers: [{ command: "zls", args: [] }],
+    install: "Install the Zig language server: `brew install zls`, or see zigtools/zls.",
+  },
+  ".sh": bashEntry(),
+  ".bash": bashEntry(),
+  ".zsh": bashEntry(),
 };
+
+/** clangd serves C and C++ from one binary; only the languageId differs. */
+function clangdEntry(languageId: string): LangEntry {
+  return {
+    languageId,
+    servers: [{ command: "clangd", args: [] }],
+    install:
+      "Install clangd: `brew install llvm` (macOS) or your distribution's clangd package. " +
+      "It wants a compile_commands.json to resolve includes.",
+  };
+}
+
+function kotlinEntry(): LangEntry {
+  return {
+    languageId: "kotlin",
+    servers: [{ command: "kotlin-language-server", args: [] }],
+    install:
+      "Install the Kotlin language server: `brew install kotlin-language-server`, or see fwcd/kotlin-language-server.",
+  };
+}
+
+function scalaEntry(): LangEntry {
+  return {
+    languageId: "scala",
+    servers: [{ command: "metals", args: [] }],
+    install: "Install Metals: `cs install metals` (Coursier), or see scalameta/metals.",
+  };
+}
+
+function bashEntry(): LangEntry {
+  return {
+    languageId: "shellscript",
+    servers: [{ command: "bash-language-server", args: ["start"] }],
+    install: "Install the Bash language server: `npm i -g bash-language-server` (it also wants shellcheck on PATH).",
+  };
+}
 
 function tsEntry(languageId: string): LangEntry {
   return {
@@ -183,10 +288,12 @@ export function resolveServerCommand(filePath: string): Resolved {
   const ext = path.extname(filePath).toLowerCase();
   const entry = EXT_TO_LANG[ext];
   if (!entry) {
+    // Derived, not spelled out: this list was written by hand and named three
+    // languages while the table held four, and it would have named four while
+    // the table held nineteen.
     throw new ToolError(
       "lsp_unsupported",
-      `No language server is configured for "${ext || filePath}". ` +
-        "Supported: .ts/.tsx/.js/.jsx (typescript-language-server), .py (pyright/pylsp), .go (gopls).",
+      `No language server is configured for "${ext || filePath}". Supported: ${Object.keys(EXT_TO_LANG).sort(compareByCodePoints).join(", ")}.`,
     );
   }
   const candidate = entry.servers.find((s) => commandExistsOnPath(s.command));
@@ -194,6 +301,24 @@ export function resolveServerCommand(filePath: string): Resolved {
     throw new ToolError("lsp_unavailable", entry.install);
   }
   return { languageId: entry.languageId, candidate };
+}
+/**
+ * Every server binary the lsp_* tools might launch, deduped.
+ *
+ * Exported so `seekforge doctor` can report which are installed without keeping
+ * its own copy of the list — a second hand-maintained copy of this table is
+ * exactly the drift this repository keeps finding.
+ */
+export function supportedLspExtensions(): string[] {
+  return Object.keys(EXT_TO_LANG).sort(compareByCodePoints);
+}
+
+export function lspServerCommands(): string[] {
+  const commands = new Set<string>();
+  for (const entry of Object.values(EXT_TO_LANG)) {
+    for (const server of entry.servers) commands.add(server.command);
+  }
+  return [...commands].sort(compareByCodePoints);
 }
 
 // ---------------------------------------------------------------------------

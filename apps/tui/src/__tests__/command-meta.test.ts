@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { COMMAND_GROUPS, type CommandSpec } from "../commands.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { COMMANDS, COMMAND_GROUPS, type CommandSpec } from "../commands.js";
+import { setLocale } from "../strings.js";
 import { helpRows, selectableIndices, type HelpRow } from "../command-meta.js";
 
 const sample: CommandSpec[] = [
@@ -59,5 +60,51 @@ describe("selectableIndices", () => {
 
   it("is empty when there are no rows", () => {
     expect(selectableIndices([])).toEqual([]);
+  });
+});
+
+describe("localized help", () => {
+  afterEach(() => {
+    setLocale("en");
+  });
+
+  /**
+   * The palette and /help were the one surface of a bilingual TUI that was
+   * always English: 54 command summaries and 7 group headings written inline in
+   * commands.ts and rendered straight to the screen, so a zh-CN user got
+   * Chinese chrome around an English command list.
+   */
+  it("translates every command summary and group heading", () => {
+    setLocale("zh-CN");
+    const rows = helpRows();
+    const headers = rows.filter((r) => r.kind === "header");
+    expect(headers.length).toBeGreaterThan(0);
+    for (const header of headers) {
+      expect(header.kind === "header" && header.text, header.kind === "header" ? header.text : "").toMatch(/[一-鿿]/);
+    }
+    for (const row of rows) {
+      if (row.kind !== "command") continue;
+      // The label keeps its ASCII "/name <args>" shape — only the prose moves.
+      expect(row.label.startsWith("/"), row.name).toBe(true);
+      expect(row.summary, row.name).toMatch(/[一-鿿]/);
+    }
+  });
+
+  it("keeps the English inline in the registry authoritative for en", () => {
+    setLocale("en");
+    for (const row of helpRows()) {
+      if (row.kind !== "command") continue;
+      const spec = COMMANDS.find((c) => c.name === row.name);
+      expect(row.summary, row.name).toBe(spec?.summary);
+    }
+  });
+
+  it("falls back to the registry English for a command with no translation", () => {
+    setLocale("zh-CN");
+    // A command added without a strings.ts entry must still read, not render
+    // its own key.
+    const rows = helpRows([{ name: "brand-new", summary: "does a new thing", group: "info" }]);
+    const command = rows.find((r) => r.kind === "command");
+    expect(command?.kind === "command" && command.summary).toBe("does a new thing");
   });
 });
