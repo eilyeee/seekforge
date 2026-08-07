@@ -15,3 +15,4 @@ export { writeFileAtomic, readFileIfExists } from "./util/fs.js";
 export { isRecord } from "./util/guards.js";
 export { onAbortOnce } from "./util/abort.js";
 export { killProcessTree } from "./util/process-tree.js";
+export { SEEKFORGE_VERSION } from "./version.js";

@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { Command, InvalidArgumentError } from "commander";
+import { SEEKFORGE_VERSION } from "@seekforge/core";
 import { fail, setColorEnabled, useColor } from "./colors.js";
 import { loadConfig } from "./config.js";
 import { detectLocale, setLocale } from "./i18n.js";
@@ -47,13 +48,18 @@ const program = new Command();
 
 // In a normal install/dev run this reads the package version. In a bun
 // --compile sidecar binary (the Tauri-bundled `seekforge-server`) the
-// package.json isn't on the virtual FS, so fall back to a constant rather
-// than crashing — the version string is only used for display.
+// package.json isn't on the virtual FS, so fall back to Core's version
+// constant rather than crashing.
+//
+// That constant, and not "0.0.0": scripts/release.mjs sets both from one
+// number, so the fallback stays correct by construction. The literal meant the
+// Desktop app — whose server IS that sidecar — reported version 0.0.0 in every
+// place it displays one, on every release.
 const version = ((): string => {
   try {
     return (createRequire(import.meta.url)("../package.json") as { version: string }).version;
   } catch {
-    return "0.0.0";
+    return SEEKFORGE_VERSION;
   }
 })();
 
