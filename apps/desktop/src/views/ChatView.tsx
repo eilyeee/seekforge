@@ -420,7 +420,7 @@ export function ChatView() {
       <div
         ref={scrollRef}
         onScroll={(e) => scrollPos.current.set(tab.tabId, e.currentTarget.scrollTop)}
-        className="flex-1 overflow-y-auto px-4 py-6"
+        className="min-h-0 flex-1 overflow-y-auto px-4 py-6"
       >
         {/* Codex-style centered conversation column. */}
         <div className="mx-auto w-full max-w-3xl">
@@ -473,8 +473,10 @@ export function ChatView() {
       )}
 
       {/* Codex-style centered input column under a full-width divider:
-          model+thinking, composer, then the run-context controls. */}
-      <div className="border-t border-subtle">
+          model+thinking, composer, then the run-context controls. `shrink-0`
+          because the composer is the one thing that must never be squeezed out
+          by a panel above it growing. */}
+      <div className="shrink-0 border-t border-subtle">
         <div className="mx-auto w-full max-w-3xl">
           <ModelBar
             tab={tab}

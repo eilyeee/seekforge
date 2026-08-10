@@ -33,7 +33,7 @@ export function UsageFooter({
 }) {
   const t = useT();
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-subtle bg-surface-raised/40 px-4 py-1.5 font-mono text-2xs text-tertiary">
+    <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-subtle bg-surface-raised/40 px-4 py-1.5 font-mono text-2xs text-tertiary">
       <span title={t("chat.usage.promptTitle")}>
         {t("chat.usage.prompt", { tokens: formatTokens(usage.promptTokens) })}
       </span>
