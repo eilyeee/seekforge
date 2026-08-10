@@ -52,6 +52,7 @@ import {
   type LoopDeliveryEvidence,
   type LoopDeliveryCiState,
   type LoopResult,
+  verifyLoopEvidenceIntegrity,
   type LoopEvidenceFormat,
   type LoopState,
   type LoopRequirementMode,
@@ -538,10 +539,28 @@ export async function loopHealthCommand(loopId: string): Promise<void> {
 }
 
 export async function loopEvidenceCommand(
-  loopId: string,
-  opts: { format?: LoopEvidenceFormat; compare?: string } = {},
+  loopId: string | undefined,
+  opts: { format?: LoopEvidenceFormat; compare?: string; verify?: string } = {},
 ): Promise<void> {
   try {
+    if (opts.verify !== undefined) {
+      // The report carries a SHA-256 digest so a reviewer can prove it was not
+      // edited after export. Core has always been able to check it; until now
+      // nothing outside the test suite could ask.
+      const raw = readFileIfExists(resolve(process.cwd(), opts.verify), 4 * 1024 * 1024);
+      if (raw === undefined) throw new Error(`Loop evidence report not found: ${opts.verify}`);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw) as unknown;
+      } catch {
+        throw new Error(`Loop evidence report is not valid JSON: ${opts.verify}`);
+      }
+      const intact = verifyLoopEvidenceIntegrity(parsed);
+      console.log(`${opts.verify}\t${intact ? "intact" : "tampered"}`);
+      if (!intact) process.exitCode = 1;
+      return;
+    }
+    if (loopId === undefined) throw new Error("loop-id is required unless --verify is supplied");
     const workspace = await findLoopWorkspace(loopId, false);
     const state = workspace ? loadLoopState(workspace, loopId) : null;
     if (!state) throw new Error(`Persisted loop not found or invalid: ${loopId}`);

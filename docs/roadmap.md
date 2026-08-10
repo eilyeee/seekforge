@@ -31,7 +31,7 @@ not a promise of API stability.
 | Scheduled jobs, webhooks, and background runs | Implemented, security-sensitive | Persistent run ledger, cancellation, replay cursors, and configurable count/age retention ship; keep hardening external delivery operations. |
 | Browser / visual verification | Implemented, optional | Real Chromium integration CI ships; expand browser/platform coverage while preserving private-network restrictions. |
 | Rust runtime and Docker runner | Implemented, optional | Weekly real-binary/container gates ship; expand the platform matrix and release smoke coverage. |
-| Eval harness | Implemented | Real Loop/resume/memory scenarios, paired multi-sample A/B, CI history restoration, Desktop trend visualization, source-tagged dogfood regressions, and provenance-bearing ecosystem/execution/fault matrices with CI drift gates ship. A `graph` runner drives the real Graph engine, and five tasks now grade the control plane (multi-node, gate approval, rerun-with-descendants, wait/signal, continue-on-failure). Re-record the baseline: it predates those tasks. |
+| Eval harness | Implemented | Real Loop/resume/memory scenarios, paired multi-sample A/B, CI history restoration, Desktop trend visualization, source-tagged dogfood regressions, and provenance-bearing ecosystem/execution/fault matrices with CI drift gates ship. A `graph` runner drives the real Graph engine, and five tasks now grade the control plane (multi-node, gate approval, rerun-with-descendants, wait/signal, continue-on-failure). Baseline re-recorded 2026-08-10 at 68 tasks x 3 samples: 203/204. |
 | `@seekforge/core` embedding API | Internal by policy | The 0.x package stays private; [publication exit criteria](core-package-policy.md) define compiled artifacts, exports, semver, consumer tests, examples, and security docs. |
 | VS Code / JetBrains integration | VS Code client shipped (chat + read-only Loop panel); JetBrains pending | Thin VS Code client ships as a versioned .vsix release asset: chat with tool activity, diff-document permission review with per-hunk approval, cost/cache readout, session resume, questions, `@file` context, memory-candidate review, and readable session transcripts. Marketplace publishing stays manual (publisher token). |
 | Remote/team execution service | Design-stage; single-operator remote execution ships | Graph `remote` nodes now run on the Docker and ssh runners, registered only from `~/.seekforge/graph-executors.json` so a cloned repository cannot name a host. Remaining work is the multi-operator case: stabilize a self-hosted runner contract without weakening local-first defaults. |
@@ -40,9 +40,9 @@ not a promise of API stability.
 
 1. Produce signed updater artifacts and add cross-platform clean-install Desktop
    smoke jobs once platform signing credentials are available; native packages already build in CI.
-2. Re-record `evals/baseline.json` at three samples — it predates the five Graph
-   control-plane tasks — then expand real-project lifecycle fixtures and preserve
-   enough CI trend history to detect slow cost/quality drift across releases.
+2. Expand real-project lifecycle eval fixtures and preserve enough CI trend
+   history to detect slow cost/quality drift across releases; the baseline is
+   current as of 2026-08-10 (68 tasks, three samples, 203/204).
 3. Close the Graph `loop`-node gap so the Loop DAG can actually be retired, then
    expand real-provider coverage for the Loop/Graph control plane; the wire
    dialects of OpenAI-compatible endpoints are normalized and fixture-pinned.

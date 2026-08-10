@@ -283,8 +283,10 @@ seekforge loop-cleanup <worktree-name> [--force]
   已完成 merge 交付的 Loop worktree。整棵 worktree 的清理会在持有工作区 guard 时重新核验，
   并先删除 checkout 而不是先删除已跟踪状态，从而保持原子性。
 - `loop-evidence <id>` 与 `GET /api/loops/:id/evidence` 会生成一份有界的
-  「需求 → 验收证据 → 验证器 → 迭代 → 交付」报告；报告带 SHA-256 完整性摘要与 Core 校验函数，发生交付后还会包含不可变 revision、hash 或 URL。
-  CLI 可导出 JSON、SARIF、JUnit，`--compare` 可比较两次持久运行的变化。
+  「需求 → 验收证据 → 验证器 → 迭代 → 交付」报告；报告带 SHA-256 完整性摘要，发生交付后还会包含不可变 revision、hash 或 URL。
+  CLI 可导出 JSON、SARIF、JUnit，`--compare` 可比较两次持久运行的变化，
+  `loop-evidence --verify <file>` 会重算导出报告的摘要，不匹配时以非零码退出——
+  「导出之后被人改过」正是这个摘要存在的意义。
 - `loop-health <id>` 与 `GET /api/loops/:id/health` 会把当前检查点与仅按阶段、命令
   精确匹配的验证智能组合起来。输出包括硬预算余量、根据最多三次已完成快照计算的保守下一轮
   预测、可承受轮数、限制预算、恢复退避与可靠性发现。它只提供建议，不会改变运行资格或提高预算。

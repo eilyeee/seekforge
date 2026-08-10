@@ -384,15 +384,16 @@ export function registerLoopCommands(program: Command, registration: LoopCommand
     .action((loopId: string, opts: { after?: number; limit?: number }) => loopHistoryCommand(loopId, opts));
   program
     .command("loop-evidence")
-    .argument("<loop-id>")
+    .argument("[loop-id]")
     .option("--format <format>", "json, sarif, or junit", "json")
     .option("--compare <loop-id>", "compare with another persisted Loop")
-    .description("export or compare requirement, verification, iteration, and delivery evidence")
-    .action((loopId: string, opts: { format: string; compare?: string }) => {
+    .option("--verify <file>", "verify the integrity digest of an exported report")
+    .description("export, compare, or verify requirement, verification, iteration, and delivery evidence")
+    .action((loopId: string | undefined, opts: { format: string; compare?: string; verify?: string }) => {
       if (opts.format !== "json" && opts.format !== "sarif" && opts.format !== "junit") {
         throw new InvalidArgumentError("format must be json, sarif, or junit");
       }
-      return loopEvidenceCommand(loopId, { format: opts.format, compare: opts.compare });
+      return loopEvidenceCommand(loopId, { format: opts.format, compare: opts.compare, verify: opts.verify });
     });
   program
     .command("loop-dag-resources")

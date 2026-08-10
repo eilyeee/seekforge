@@ -342,9 +342,11 @@ seekforge loop-cleanup <worktree-name> [--force]
   guard and removes the checkout before its tracked state, so cleanup is atomic.
 - `loop-evidence <id>` and `GET /api/loops/:id/evidence` produce one bounded
   requirement → acceptance evidence → verifier → iteration → delivery report.
-  It includes a SHA-256 integrity digest, a Core verification helper, and immutable delivery revision/hash/URL.
-  CLI export supports JSON, SARIF, and JUnit, while `--compare` reports changes
-  between two persisted runs.
+  It includes a SHA-256 integrity digest and immutable delivery revision/hash/URL.
+  CLI export supports JSON, SARIF, and JUnit, `--compare` reports changes
+  between two persisted runs, and `loop-evidence --verify <file>` recomputes the
+  digest of an exported report and exits non-zero when it no longer matches —
+  editing a report after export is the thing the digest exists to catch.
 - `loop-health <id>` and `GET /api/loops/:id/health` combine the current
   checkpoint with only exact stage-and-command verification intelligence. The
   output reports remaining hard budgets, a conservative next-iteration forecast

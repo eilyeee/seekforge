@@ -4,7 +4,7 @@
 // dirs and get generous timeouts (tsx has to compile the CLI per spawn).
 
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { Command } from "commander";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
@@ -35,6 +35,7 @@ import {
   formatLoopEvent,
   formatLoopState,
   formatSummary,
+  loopEvidenceCommand,
   loopExitCode,
   outputTail,
   runLoopDelivery,
@@ -1220,5 +1221,43 @@ test("CLI numeric parsers reject trailing junk and non-finite values globally", 
     });
     assert.notEqual(result.status, 0, args.join(" "));
     assert.match(`${result.stdout}${result.stderr}`, /positive (?:integer|number)/);
+  }
+});
+
+test("loop-evidence verifies the integrity digest it has always exported", async () => {
+  const workspace = realpathSync(mkdtempSync(resolve(tmpdir(), "seekforge-loop-evidence-")));
+  const cwd = vi.spyOn(process, "cwd").mockReturnValue(workspace);
+  const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+  const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  try {
+    saveLoopState(
+      workspace,
+      createLoopState({ loopId: "evidence-cli", task: "t", workspace, verifyCommand: "true", maxIterations: 1 }),
+    );
+    await loopEvidenceCommand("evidence-cli");
+    const report = JSON.parse(String(log.mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+    assert.ok(report.integrity, "the exported report carries its digest");
+
+    writeFileSync(resolve(workspace, "ok.json"), JSON.stringify(report));
+    await loopEvidenceCommand(undefined, { verify: "ok.json" });
+    assert.match(String(log.mock.calls.at(-1)?.[0]), /intact/);
+    assert.equal(process.exitCode, undefined);
+
+    // Editing a report after export must be detectable; that is the whole point
+    // of the digest, and until now nothing shipped could check it.
+    writeFileSync(resolve(workspace, "bad.json"), JSON.stringify({ ...report, status: "passed" }));
+    await loopEvidenceCommand(undefined, { verify: "bad.json" });
+    assert.match(String(log.mock.calls.at(-1)?.[0]), /tampered/);
+    assert.equal(process.exitCode, 1);
+    process.exitCode = undefined;
+
+    await loopEvidenceCommand(undefined, {});
+    assert.match(String(stderr.mock.calls.at(-1)?.[0]), /loop-id is required/);
+    process.exitCode = undefined;
+  } finally {
+    cwd.mockRestore();
+    log.mockRestore();
+    stderr.mockRestore();
+    rmSync(workspace, { recursive: true, force: true });
   }
 });

@@ -154,20 +154,25 @@ is only updated from an actual eval run, never by hand. Newly added tasks do not
 count as pass→fail regressions. Copy a reviewed, representative report over
 `baseline.json` only when intentionally refreshing the comparison point.
 
-> The five `graph-*` tasks were added after the current baseline was recorded,
-> so the baseline is stale with respect to them. That is safe by construction: a
-> task absent from the baseline can never be a pass→fail regression, so
-> `--fail-on-regression` ignores them until a real run refreshes `baseline.json`.
+**Current baseline: 2026-08-10, all 68 tasks at three samples** — 203/204
+(99.5%), $0.640 total, $0.0032 per success, 106,920 tokens per success, 1.5%
+tool failures, 0 session errors, 90.7 minutes, deepseek-v4-flash.
+`foreach-await-bug` passed 2/3; every other task, including all five new
+`graph-*` control-plane tasks, passed 3/3.
 
-**Current baseline: 2026-08-08, all 63 tasks at three samples** — 187/189
-(98.9%), $0.551 total, $0.00295 per success, 96,875 tokens per success, 1.5%
-tool failures, 0 session errors, deepseek-v4-flash. `foreach-await-bug` passed
-1/3; everything else passed 3/3.
+> The recorded `gitSha` is `27d181f`, stamped when the report was written rather
+> than when the run started. The core the run actually exercised is `9d7f780`;
+> the delta between them is `apps/desktop/**` only, which the harness never
+> loads, and the changes uncommitted at write time were under `apps/cli/**` and
+> `docs/**` — also unused here. So the numbers are attributable to that core.
+> The `datasetHash` is exact.
 
-> The recorded `gitSha` is `58aed14`, the commit the run's tree was based on —
-> it carried the uncommitted change that was in flight at the time. The
-> `datasetHash` is exact. The next scheduled CI run records one whose sha is
-> unambiguous.
+**`foreach-await-bug` went 1/3 → 2/3, and that is not a measurement.** The
+edit-mode prompt gained a diff-hygiene rule between the two baselines, which is
+the change that would plausibly move this task. But distinguishing one success
+from two across three samples is well inside noise — the same argument this file
+makes about single samples applies here with barely more force. Treat it as
+suggestive and nothing more; a real answer needs a paired A/B on this task.
 
 **Sample it three times.** Recorded at ONE sample the previous day, the same
 suite reported 60/63 with `foreach-await-bug`, `go-pagination-window` and
