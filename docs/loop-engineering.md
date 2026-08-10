@@ -262,7 +262,12 @@ seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick
   excluded from totals only while that parent checkpoint is present; an orphaned
   child remains visible and countable until normal retention removes it.
 - The loop is inherently autonomous — every run uses `approvalMode: "acceptEdits"`
-  (file edits auto-approved; dangerous commands still refused by the denylist).
+  (file edits auto-approved). `acceptEdits` deliberately does not auto-allow
+  execution, and CLI/TUI Loops answer every remaining prompt with no, so in those
+  two surfaces **every non-allowlisted command and every env change is denied** —
+  not just denylisted ones. Widen `commandAllowlist` if a Loop needs to run
+  something. Desktop and server Loops differ: they prompt through the normal
+  modals, so a human can approve mid-Loop.
   `-y` just silences the "auto-approves edits" note.
 - `Ctrl-C` stops cooperatively (status `cancelled`). Loop orchestration state is
   saved under `.seekforge/loops/<loop-id>.json`; continue it with
@@ -406,14 +411,17 @@ seekforge loop-cleanup <worktree-name> [--force]
   workspace guard, so it cannot remove an active delivery, and non-force cleanup
   preserves branches with commits not reachable from the base checkout.
 - `--deliver pr --wait-ci` keeps delivery in `action_completed` while required
-  PR checks run. `--ci-repairs 1..3` may feed one bounded failed-step log to a
+  PR checks run. `--ci-repairs 0..3` (default 0) may feed one bounded failed-step log to a
   non-persisted, two-iteration repair Loop with its own cost cap, rerun the frozen
   local pipeline, checkpoint and push the immutable revision, and wait again.
   The CI policy, repair count, checked revision, and failure are durable; a later
   `loop-deliver --wait-ci` resumes the same policy, while retrying without CI
   closure is rejected. Check waits and repair pushes are cooperatively cancellable.
   Check waiting and failed-log retrieval use a provider-neutral CI adapter; the
-  CLI ships GitHub `gh` and GitLab `glab` adapters. Agent credentials, workspace authorization, and MCP repair tools are initialized
+  CLI ships GitHub `gh` and GitLab `glab` adapters and selects between them with
+  `--ci-provider github|gitlab` (default `github`). The adapter shipped and was
+  tested for a while before it had a selector, so CI closure only ever ran
+  against GitHub. Agent credentials, workspace authorization, and MCP repair tools are initialized
   only after a failed check actually requires a repair; green checks need none of them.
 - REST Loop listing supports `status`, `q`, `limit`, and `after`; active Loops
   accept `POST /api/loops/:id/control`, and `/api/loop-dags` exposes durable graph

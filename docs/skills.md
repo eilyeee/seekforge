@@ -80,9 +80,9 @@ model can reason about, a mutilated one is not.
 
 The 2,500-character budget is shared **by need, not evenly**. An even split
 starved a long procedure while a short one left its share unspent — with three
-builtins selected the even share is 832 characters, which `simplify` overshoots
-by 92 and `bugfix` falls short of by 272, so steps were being dropped while
-budget went unused. Allocation now water-fills: each skill receives only what it
+builtins selected the even share is 832 characters, and `simplify` needs only
+740 of it while `bugfix` needs 1,104 — one brief leaving 92 characters unspent
+and truncating another skill by 272 at the same time. Allocation now water-fills: each skill receives only what it
 can spend, and the remainder is re-offered to the ones still short. What is left
 after that is handed to a single skill rather than spread thin, because a whole
 extra step delivered beats a few characters shared three ways.

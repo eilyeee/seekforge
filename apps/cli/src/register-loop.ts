@@ -89,6 +89,13 @@ export function parseLoopModelRoutes(values: readonly string[]): Partial<Record<
   return routes;
 }
 
+function ciProviderName(value: string): "github" | "gitlab" {
+  if (value !== "github" && value !== "gitlab") {
+    throw new InvalidArgumentError("ci-provider must be github or gitlab");
+  }
+  return value;
+}
+
 export function registerLoopCommands(program: Command, registration: LoopCommandRegistration): void {
   const { collect, parsePositiveInt, parseNonNegativeInt, parsePositiveFloat, rootProfile } = registration;
   program
@@ -116,6 +123,7 @@ export function registerLoopCommands(program: Command, registration: LoopCommand
     )
     .option("--wait-ci", "for PR delivery, wait for required checks")
     .option("--ci-repairs <n>", "bounded CI-log repair attempts after PR delivery (0-3)", parseNonNegativeInt, 0)
+    .option("--ci-provider <name>", "CI CLI driving --wait-ci: github (default) or gitlab", ciProviderName)
     .option("--ci-repair-budget <usd>", "cost cap for each CI repair attempt", parsePositiveFloat, 1)
     .option("--max-iters <n>", "max run iterations before giving up (default 8)", parsePositiveInt)
     .option("--budget <usd>", "cumulative cost cap in USD across iterations", parsePositiveFloat)
@@ -162,6 +170,7 @@ export function registerLoopCommands(program: Command, registration: LoopCommand
           waitCi?: boolean;
           ciRepairs?: number;
           ciRepairBudget?: number;
+          ciProvider?: "github" | "gitlab";
           yes?: boolean;
           model?: string;
           modelRoute?: string[];
@@ -193,6 +202,7 @@ export function registerLoopCommands(program: Command, registration: LoopCommand
           waitCi: opts.waitCi,
           ciRepairs: opts.ciRepairs,
           ciRepairBudget: opts.ciRepairBudget,
+          ciProvider: opts.ciProvider,
           yes: opts.yes,
           model: opts.model,
           modelRoutesByFailureCategory:
@@ -504,6 +514,7 @@ export function registerLoopCommands(program: Command, registration: LoopCommand
     .option("--mode <mode>", "checkpoint | merge | patch | pr", parseLoopDelivery)
     .option("--wait-ci", "wait for required PR checks, including on a resumed delivery")
     .option("--ci-repairs <n>", "bounded CI-log repair attempts (0-3)", parseNonNegativeInt)
+    .option("--ci-provider <name>", "CI CLI driving --wait-ci: github (default) or gitlab", ciProviderName)
     .option("--ci-repair-budget <usd>", "cost cap for each CI repair attempt", parsePositiveFloat)
     .option("-y, --yes", "authorize autonomous CI repair in this workspace")
     .option("-m, --model <model>", "override model used for CI repair")

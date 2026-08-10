@@ -62,8 +62,9 @@ any file or diff containing a fenced `tool_call` block becomes an executed call.
 **The skill brief split its budget evenly and cut steps in half.**
 `buildSkillBrief` injects only the `## Procedure` section, and the
 2,500-character budget was divided *per skill*: at the default limit of three
-that is 832 characters each, which `simplify` overshoots by 92 while `bugfix`
-falls 272 short — one brief dropping steps and wasting budget at the same time.
+that is 832 characters each, while `simplify` needs only 740 of it and `bugfix`
+needs 1,104 — one brief leaving 92 characters unspent and truncating another
+skill by 272 at the same time.
 Allocation now water-fills by need, re-offers whatever a step-boundary cut hands
 back, and gives the last remainder to a single skill rather than spreading it too
 thin for anyone to reach their next step. Cuts land between steps: these are

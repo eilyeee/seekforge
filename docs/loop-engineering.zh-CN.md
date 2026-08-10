@@ -223,7 +223,10 @@ seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick
   由 Graph 持有的子 Loop 只能通过父 Graph 恢复；只有父检查点仍存在时，其用量才从总计中排除。
   孤儿子 Loop 在正常保留清理之前仍保持可见并计入总量。
 - Loop 本质上是自主运行的 —— 每次运行都使用 `approvalMode: "acceptEdits"`
-  （文件编辑自动批准；危险命令仍会被 denylist 拒绝）。
+  （文件编辑自动批准）。`acceptEdits` 刻意不自动放行命令执行，而 CLI/TUI 的 Loop
+  对剩余提示一律回答「否」，因此在这两个面上**所有非白名单命令与所有 env 变更都会被拒绝**
+  ——不只是 denylist 里的。Loop 若需要执行某条命令，请扩大 `commandAllowlist`。桌面端与
+  服务端的 Loop 不同：它们走正常的确认弹窗，人可以在 Loop 运行中批准。
   `-y` 只是不再显示「自动批准编辑」的提示。
 - `Ctrl-C` 协作式停止（状态为 `cancelled`）。Loop 编排状态保存在
   `.seekforge/loops/<loop-id>.json`；用 `seekforge loop-resume <loop-id>`
@@ -322,11 +325,13 @@ seekforge loop-cleanup <worktree-name> [--force]
   都视为未经验证并阻止交付。worktree 清理会取得同一工作区 guard，因此不能删除正在交付的任务；
   非 force 清理还会保留包含基线不可达提交的分支。
 - `--deliver pr --wait-ci` 会让交付停留在 `action_completed`，直到必需的 PR checks 完成。
-  `--ci-repairs 1..3` 可把一份有界失败步骤日志交给独立成本上限、最多两轮且不持久化的修复 Loop，
+  `--ci-repairs 0..3`（默认 0）可把一份有界失败步骤日志交给独立成本上限、最多两轮且不持久化的修复 Loop，
   重新运行冻结的本地流水线，checkpoint 并推送不可变 revision，然后再次等待 CI。
   CI 策略、修复次数、已检查 revision 与失败都会持久化；之后的 `loop-deliver --wait-ci` 会续接
   同一策略，不带 CI 闭环的重试会被拒绝。检查等待与修复推送都支持协作式取消。
-  checks 等待与失败日志获取已使用 provider 中立的 CI 适配器；CLI 提供 GitHub `gh` 与 GitLab `glab` 实现。
+  checks 等待与失败日志获取已使用 provider 中立的 CI 适配器；CLI 提供 GitHub `gh` 与 GitLab `glab`
+  两种实现，用 `--ci-provider github|gitlab`（默认 `github`）选择。这个适配器交付并有测试很久
+  之后才有了选择开关，在那之前 CI 闭环实际只跑过 GitHub。
   只有 checks 真实失败且需要修复后，才会初始化 Agent 凭据、工作区授权与 MCP 修复工具；绿色 checks
   不需要这些依赖。
 - REST Loop 列表支持 `status`、`q`、`limit` 与 `after`；活跃 Loop 可接受

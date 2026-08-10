@@ -69,7 +69,7 @@ import { loadConfig } from "../config.js";
 import { t } from "../i18n.js";
 import { ensureWorkspaceAuthorized } from "./run.js";
 import { buildCiRepairPrompt, PR_CHECKS_TIMEOUT_MS } from "../resolve.js";
-import { createGitHubCiProvider, type LoopCiProvider } from "../ci-provider.js";
+import { createGitHubCiProvider, createGitLabCiProvider, type LoopCiProvider } from "../ci-provider.js";
 import { parseLoopDagInput, parseLoopSpeculationInput } from "../loop-input.js";
 import { withLoopAgentRuntime } from "../loop-runtime.js";
 import {
@@ -106,6 +106,8 @@ export type LoopOptions = {
   waitCi?: boolean;
   ciRepairs?: number;
   ciRepairBudget?: number;
+  /** Which shipped CI CLI drives --wait-ci: GitHub `gh` (default) or GitLab `glab`. */
+  ciProvider?: "github" | "gitlab";
   /** Run autonomously (acceptEdits). The loop is autonomous regardless. */
   yes?: boolean;
   /** Override model. */
@@ -144,6 +146,7 @@ export type LoopResumeOptions = Omit<
   | "waitCi"
   | "ciRepairs"
   | "ciRepairBudget"
+  | "ciProvider"
 > & {
   addIters?: number;
   addBudget?: number;
@@ -846,6 +849,7 @@ export async function loopDeliverCommand(
     waitCi?: boolean;
     ciRepairs?: number;
     ciRepairBudget?: number;
+    ciProvider?: "github" | "gitlab";
     yes?: boolean;
     model?: string;
     profile?: string;
@@ -914,6 +918,7 @@ export async function loopDeliverCommand(
               repairBudgetUsd,
               signal: controller.signal,
               repairAttempts: current.delivery?.ci?.repairAttempts ?? 0,
+              ...(opts.ciProvider ? { ciProviderId: opts.ciProvider } : {}),
               updateCi,
             }),
         }
@@ -1302,6 +1307,7 @@ async function runPreparedLoop(
                 repairBudgetUsd: loopOpts.ciRepairBudget ?? 1,
                 signal: controller.signal,
                 repairAttempts: state.delivery?.ci?.repairAttempts ?? 0,
+                ...(loopOpts.ciProvider ? { ciProviderId: loopOpts.ciProvider } : {}),
                 updateCi,
               });
           }
@@ -1344,6 +1350,8 @@ export type LoopCiClosureOptions = {
   repairAttempts: number;
   updateCi: (update: Partial<LoopDeliveryCiState>) => void;
   ciProvider?: LoopCiProvider;
+  /** Which shipped CI CLI adapter to use when no provider is injected. */
+  ciProviderId?: "github" | "gitlab";
 };
 
 type LoopCiRepairContext = {
@@ -1416,16 +1424,17 @@ export function runExternalCommand(
   });
 }
 
-async function runGh(
+async function runCiCli(
+  binary: "gh" | "glab",
   workspace: string,
   args: string[],
   timeout: number,
   signal?: AbortSignal,
   maxBuffer = 1024 * 1024,
 ): Promise<ExternalCommandResult> {
-  const result = await runExternalCommand("gh", args, workspace, timeout, maxBuffer, signal);
+  const result = await runExternalCommand(binary, args, workspace, timeout, maxBuffer, signal);
   if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-    throw new Error("GitHub CLI (gh) is required");
+    throw new Error(binary === "gh" ? "GitHub CLI (gh) is required" : "GitLab CLI (glab) is required");
   }
   if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ABORT_ERR") throw result.error;
   return result;
@@ -1437,10 +1446,14 @@ export async function closeLoopPrCi(options: LoopCiClosureOptions): Promise<Loop
   if (!url || !branch) throw new Error("Loop PR delivery lacks CI-check evidence");
   let delivered = options.delivered;
   let repairAttempts = options.repairAttempts;
+  // The GitLab adapter shipped and was tested but had no selector, so the
+  // provider-neutral CI closure only ever ran against GitHub.
+  const ciBinary = options.ciProvider ? undefined : options.ciProviderId === "gitlab" ? "glab" : "gh";
+  const makeProvider = ciBinary === "glab" ? createGitLabCiProvider : createGitHubCiProvider;
   const ciProvider =
     options.ciProvider ??
-    createGitHubCiProvider((args, timeoutMs, maxBuffer, signal) =>
-      runGh(options.workspace, args, timeoutMs, signal, maxBuffer),
+    makeProvider((args, timeoutMs, maxBuffer, signal) =>
+      runCiCli(ciBinary ?? "gh", options.workspace, args, timeoutMs, signal, maxBuffer),
     );
   try {
     for (;;) {
