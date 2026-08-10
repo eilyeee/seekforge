@@ -107,3 +107,68 @@ jobs:
         run: npx tsx scripts/browser-tools-smoke.mts
         env:
           SEEKFORGE_REQUIRE_BROWSER_SMOKE: "1"
+
+  lsp:
+    name: Language servers
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: pnpm/action-setup@0609f0983b7a228f052f81ef4c3d6510cae254ad # v4
+        with:
+          version: 10.16.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: pnpm
+      # jdtls refuses to start on anything below 21 — the version that runs the
+      # SERVER, not the one a project targets.
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: "21"
+      - run: pnpm install --frozen-lockfile
+      # Language servers are OPTIONAL dependencies the user installs themselves,
+      # so nothing here is declared in any package.json; this throwaway checkout
+      # installs them the same way a user would.
+      - name: Install typescript-language-server
+        run: npm i -g typescript-language-server typescript
+      - name: Install jdtls
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/jdtls"
+          curl -sSL --retry 3 -o "$RUNNER_TEMP/jdtls.tar.gz" \
+            https://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz
+          tar -xzf "$RUNNER_TEMP/jdtls.tar.gz" -C "$RUNNER_TEMP/jdtls"
+          echo "$RUNNER_TEMP/jdtls/bin" >> "$GITHUB_PATH"
+      - name: Drive the lsp_* tools against real language servers
+        run: npx tsx scripts/lsp-tools-smoke.mts
+        env:
+          # A case that silently skips here would defeat the point of the job.
+          SEEKFORGE_REQUIRE_LSP_SMOKE: typescript,java
+
+  web-search:
+    name: web_search backends
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: pnpm/action-setup@0609f0983b7a228f052f81ef4c3d6510cae254ad # v4
+        with:
+          version: 10.16.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The parsers are unit-tested against recorded bodies, which says nothing
+      # about whether the live pages still look like that. A provider that
+      # changed its shape reports "no results" rather than an error, so only a
+      # live run can tell the difference.
+      - name: Search the live backends
+        run: npx tsx scripts/web-search-smoke.mts
+        env:
+          SEEKFORGE_REQUIRE_WEB_SEARCH_SMOKE: "1"
+          # Optional: set these repository secrets to cover the other two legs.
+          BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
+          SEEKFORGE_SEARXNG_URL: ${{ secrets.SEEKFORGE_SEARXNG_URL }}

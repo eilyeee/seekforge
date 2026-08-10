@@ -2,6 +2,171 @@
 
 ## Unreleased
 
+### The quality gate, the eye, the bill, and four languages
+
+**The eval baseline was five weeks and fourteen tasks out of date.** It was
+recorded 2026-07-01 against 49 tasks; the dataset has held 63 since, so the
+subagent specialists, prompt caching, memory scoring and repo-map work that
+landed after it had never passed the gate they are supposed to pass. Re-recorded
+at three samples: **187/189 (98.9%), $0.551, $0.00295 per success, 96,875 tokens
+per success, zero session errors**.
+
+**One sample is not a measurement.** Recorded first at one sample, the same
+suite reported three failures. At three, two of them —
+`go-pagination-window` and `memory-convention-recall` — pass 3/3: they were
+noise, and the single-sample baseline had frozen them as failures, which would
+have made a later run that passed them look like an improvement and set
+`maxSuccessRateDrop` against an inflated count. `foreach-await-bug` passes 1/3
+and is the one real weakness in the set. Tokens per success measured 118,742 at
+one sample and 96,875 at three, on the same code — an 18% swing that is the
+whole argument for the sample count the weekly job already uses.
+
+Two things that only showed up by running it:
+
+- **A completed run could lose its entire report.** `--baseline evals/baseline.json`
+  — the invocation in the README — resolves against the package directory under
+  `pnpm --filter`, not the repository, so the file was not there and the throw
+  took the finished run with it: 63 tasks, 33 minutes and real money, and
+  nothing written. The path now resolves against the cwd and then the repo root,
+  and an unreadable baseline is reported *after* the report is on disk.
+- **`maxTokensPerSuccess` had never actually been checked.** The old baseline
+  carried no token metrics at all, so the gate only ever compared against its
+  absolute ceiling — and that ceiling (100,000) predates the 14 long-running
+  tasks added since. Two runs of the same commit measured 106,435 and 118,742,
+  so it is now 150,000: headroom over the measured spread, not a target. The
+  gate that catches drift from here is the ratio against a baseline that finally
+  has tokens in it.
+
+**A screenshot can reach a model that has eyes.** `browser_screenshot` has
+attached its bytes since it was written, and the OpenAI-compatible protocol
+dropped them with a note on every provider — so the loop it exists for worked on
+Anthropic and nowhere else. The mapping now emits `image_url` content parts:
+inside the user turn for a user's own image, and as one user turn after a tool
+block for a screenshot, because this protocol takes image parts on a user
+message and not on a tool message, and a tool result may not be interleaved with
+anything. Which providers carry them is a per-endpoint answer with a per-model
+question inside it, so it is on for `openai` and `openrouter` (every model in
+those catalogs accepts one), off for `ark` and `ollama` (mixed catalogs, where
+one attached screenshot would fail the request rather than degrade), off for
+DeepSeek, and settable per model with the new **`inlineImages`** config key.
+
+**Cost stops being a `0` that means "unknown" on two more providers.** `openai`
+ships its published price table and reads its cached-input count; `openrouter`
+reports what it charged in `usage.cost` on every request, which is the only
+price that cannot go stale for a 400-model catalog — read now, above the
+built-in table and below a user's own `modelPricing`. Where cost genuinely
+cannot be known (`ark`, `ollama`, a bare `baseUrl`), every surface says so
+instead of implying a bound it cannot hold: the TUI and the server warn like the
+CLI already did, `--max-cost` says the budget cannot be enforced, and
+`schedule add` warns at creation — a scheduled run is unattended, so a budget
+enforced by nothing is worst there. The stale `gpt-4o`/`o3-mini` and
+`claude-3.5-sonnet` catalogs are refreshed.
+
+**Four languages the tools claimed and did not serve.**
+
+- `lsp_*` covered 19 languages and not Java or C#, which `repo_map` outlines.
+  Both were left out for stated reasons, and both reasons are answered rather
+  than overridden: jdtls gets a data directory of SeekForge's own, keyed by
+  workspace under `~/.seekforge/lsp/jdtls/`, and C# is served by `csharp-ls`,
+  which finds the solution itself, with OmniSharp behind it.
+- `.vue` and `.svelte` were walked but only ever regex-matched. They are now
+  outlined by lifting the `<script>` out and parsing it as the JS/TS it declares
+  — no markup grammar involved, which is what the vue grammar's single
+  `raw_text` token made pointless. Line numbers are offset back into the real
+  file, and a component with two script blocks contributes both.
+- Elixir is outlined for the first time. Every declaration there is a macro
+  *call*, so there is no node type to match: the target identifier is what makes
+  a call a definition, and the functions live one level down inside the module.
+- `dart`, `elm` and `ql` are re-measured and still unfixable here: the runtime
+  accepts language versions 13–14 and `tree-sitter-wasms@0.1.13` ships them at
+  15, 12 and 10. Recorded with the numbers so the next person does not measure
+  it again.
+
+**`web_search` gains a leg you can buy.** Brave Search API joins SearXNG and the
+DuckDuckGo scrape, tried first when a key is present, with the same
+http(s)-only URL filter and the same "only a backend that did not run hands
+over" rule. The three frontends now share one `resolveWebSearchConfig` instead
+of each inlining the mapping — which is how the first key ended up honored by
+one surface and ignored by another in earlier rounds.
+
+MCP sampling and elicitation needed nothing: the server answers both through the
+`confirm` and `askUser` bridges the Desktop and the VS Code client already
+implement, so they were never the gap they looked like.
+
+### A capability the eval could not have measured
+
+The specialist subagents a coding run dispatches were never exercised by the
+eval, and not because nobody ran the A/B: the harness never passed `subagents`
+at all, so `dispatch_agent` sat in the catalog with nothing to dispatch. The
+factory now receives the task's workspace — deliberately the fixture's own, so
+the SeekForge repository's agents cannot leak into a run — and a
+`with-subagents` variant turns them on. Control keeps the old behavior, so the
+recorded baseline stays a valid comparison point and the variant is what prices
+them.
+
+### Two surfaces that had never been run
+
+`integration.yml` drives the Loop, the server, the Rust runtime, Docker and a
+real Chromium against real environments. It did not drive a language server or a
+search backend — the two surfaces the change above extended on contracts read
+from documentation. Both now have a smoke like the browser one, and running them
+found three defects that no amount of reading would have.
+
+- **`lsp_exited` threw the server's own explanation away.** stderr was drained
+  into an empty callback, so a server that refused to start reported `jdtls
+  exited` while having printed the exact reason. It now carries the last lines
+  of stderr: `jdtls exited: … Exception: jdtls requires at least Java 21`.
+- **jdtls needs Java 21+, and the install hint did not say so.** A user on the
+  LTS their project targets would hit an immediate exit. Both the hint and
+  `docs/lsp.md` say it now — as does the fact that the version is about the
+  server, not the project.
+- **The 15s request budget was too short for a cold index.** A server accepts
+  `initialize` long before it can answer a question about the code, and jdtls on
+  an empty `-data` directory did not return the first `documentSymbol` inside
+  15s — Java would have timed out on first use for every user and worked
+  afterwards, the worst shape a timeout can have. The first post-handshake
+  request now gets 120s; every later one keeps the ordinary budget. (The
+  handshake itself does not count as that first answer — it is answered before
+  any indexing starts, which is what made the first attempt at this a no-op.)
+
+The `-data` claim the review could only call "high confidence, not perfectly
+citable" is now executed: jdtls creates the directory itself, at the path this
+repository chose. One real limitation is recorded rather than papered over:
+Java's project-wide `lsp_symbols` needs an imported build (pom/Gradle/.project),
+and in a directory of loose `.java` files it stays empty however long it is
+polled, while everything scoped to an open document works.
+
+`docs/lsp.md` listed three languages while the code served twenty-one. It lists
+all of them now.
+
+Six findings from an independent review, all real and all mine:
+
+- **The pricing warning fired once per TURN, not once per session** — which is
+  what all three frontends' documentation promises. The TUI had noticed and
+  carried its own set; the server had not and printed it forever. The gate now
+  lives once in `buildAgentCoreDeps`, keyed by (provider, model) rather than by
+  workspace, because "no price is known for this model" does not become true
+  again in another directory.
+- **A renamed field on either JSON search backend would have read as "no
+  results".** Both classified an unparseable-but-JSON body as `empty` — the
+  outcome documented as *believe it, the query matched nothing* — when the whole
+  reason `drift` exists is to say the opposite. Both now decide on the envelope:
+  `results` present and empty is a real zero-hit answer, `results` absent is
+  drift. The SearXNG half of this predates the Brave backend and is fixed with
+  it.
+- The `webSearch` type in `ServerConfig` never grew `braveApiKey`, so the config
+  shape drifted across the three surfaces in the same change that introduced
+  `resolveWebSearchConfig` to stop exactly that.
+- Three pieces of prose that had stopped being true: `modelPricing`'s doc
+  comment still named OpenAI as a provider with no built-in table, the TUI's
+  `webSearch` comment still described a two-backend chain, and the LSP
+  workspace-args comment credited `seekforge doctor` with calling a function it
+  has never called.
+
+The review also independently re-fetched OpenAI's pricing page and confirmed all
+sixteen rates and the six catalog models against it, and verified the OpenRouter,
+Brave, jdtls, csharp-ls and OpenAI image-part contracts this change assumes.
+
 ### Tool reach: drive the browser, rename a symbol, answer an MCP server
 
 Three capabilities that were shaped like gaps rather than choices.
