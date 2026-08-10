@@ -7,6 +7,8 @@ import {
   buildEngineeringGraphEvidenceReport,
   buildEngineeringGraphHealthReport,
   buildEngineeringGraphArtifactCatalog,
+  checkGraphControlTarget,
+  checkGraphSignalTarget,
   clearEngineeringGraphRecovery,
   diagnoseEngineeringGraphCheckpoint,
   engineeringGraphStateExists,
@@ -62,6 +64,7 @@ import {
   type EngineeringGraphDefinition,
   type EngineeringGraphSimulationOptions,
   type EngineeringGraphState,
+  type GraphControlRejection,
   type GraphExecutionAdapter,
   type RunEngineeringGraphOptions,
 } from "@seekforge/core";
@@ -70,6 +73,12 @@ import { HEADLESS_DECLINE, type TriggerRunHandle } from "../trigger-run.js";
 import type { RouteCtx } from "./context.js";
 
 const graphRunKey = (workspace: string, graphId: string): string => `${workspace}\0${graphId}`;
+
+const REJECTION_STATUS: Readonly<Record<GraphControlRejection["code"], number>> = Object.freeze({
+  bad_request: 400,
+  conflict: 409,
+  not_running: 409,
+});
 
 function boundedInteger(value: string | null, fallback: number, min: number, max: number): number | null {
   if (value === null) return fallback;
@@ -846,17 +855,14 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
     }
     const body = await readJsonBody(ctx.req, res);
     if (body === undefined) return true;
-    if (
-      !isRecord(body) ||
-      Object.keys(body).some((key) => key !== "name" && key !== "payload") ||
-      !isValidLoopDagId(body.name) ||
-      !state.definition.nodes.some((node) => node.waitFor?.signal === body.name)
-    ) {
+    if (!isRecord(body) || Object.keys(body).some((key) => key !== "name" && key !== "payload")) {
       sendApiError(res, 400, "bad_request", "Graph signal must match a declared wait node");
       return true;
     }
-    if (state.status !== "running" && !(state.status === "paused" && state.pauseReason === "wait")) {
-      sendApiError(res, 409, "conflict", `Graph is not waiting for a signal: ${graphId}`);
+    const signalName = typeof body.name === "string" ? body.name : "";
+    const signalRejection = checkGraphSignalTarget(state, signalName);
+    if (signalRejection) {
+      sendApiError(res, REJECTION_STATUS[signalRejection.code], signalRejection.code, signalRejection.message);
       return true;
     }
     if (
@@ -868,7 +874,7 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
       return true;
     }
     try {
-      const signal = await enqueueEngineeringGraphSignal(workspace, graphId, body.name, body.payload);
+      const signal = await enqueueEngineeringGraphSignal(workspace, graphId, signalName, body.payload);
       if (state.status === "paused") startGraphRun(ctx, state.definition, { resume: true });
       else sendJson(res, 202, signal);
     } catch (error) {
@@ -939,8 +945,7 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
     if (
       !isRecord(body) ||
       !["pause", "resume", "steer", "reprioritize", "cancel"].includes(String(body.operation)) ||
-      (body.nodeId !== undefined &&
-        (!isValidLoopDagId(body.nodeId) || !state.definition.nodes.some((node) => node.id === body.nodeId))) ||
+      (body.nodeId !== undefined && !isValidLoopDagId(body.nodeId)) ||
       (body.operation === "steer" && typeof body.message !== "string") ||
       (body.operation !== "steer" && body.message !== undefined) ||
       ((body.operation === "reprioritize" || body.operation === "cancel") && !isValidLoopDagId(body.nodeId)) ||
@@ -951,30 +956,27 @@ export async function handleGraphRoutes(ctx: RouteCtx): Promise<boolean> {
       sendApiError(res, 400, "bad_request", "Graph control command is invalid");
       return true;
     }
-    if (
-      typeof body.nodeId === "string" &&
-      (state.results.some((result) => result.id === body.nodeId) ||
-        state.activeAttempts.some((attempt) => attempt.nodeId === body.nodeId))
-    ) {
-      sendApiError(res, 409, "conflict", `Graph node control only applies before start: ${body.nodeId}`);
+    const command =
+      body.operation === "steer"
+        ? {
+            operation: "steer" as const,
+            message: body.message as string,
+            ...(typeof body.nodeId === "string" ? { nodeId: body.nodeId } : {}),
+          }
+        : body.operation === "reprioritize"
+          ? { operation: "reprioritize" as const, nodeId: body.nodeId as string, priority: body.priority as number }
+          : body.operation === "cancel"
+            ? { operation: "cancel" as const, nodeId: body.nodeId as string }
+            : {
+                operation: body.operation as "pause" | "resume",
+                ...(typeof body.nodeId === "string" ? { nodeId: body.nodeId } : {}),
+              };
+    const controlRejection = checkGraphControlTarget(state, command);
+    if (controlRejection) {
+      sendApiError(res, REJECTION_STATUS[controlRejection.code], controlRejection.code, controlRejection.message);
       return true;
     }
     try {
-      const command =
-        body.operation === "steer"
-          ? {
-              operation: "steer" as const,
-              message: body.message as string,
-              ...(typeof body.nodeId === "string" ? { nodeId: body.nodeId } : {}),
-            }
-          : body.operation === "reprioritize"
-            ? { operation: "reprioritize" as const, nodeId: body.nodeId as string, priority: body.priority as number }
-            : body.operation === "cancel"
-              ? { operation: "cancel" as const, nodeId: body.nodeId as string }
-              : {
-                  operation: body.operation as "pause" | "resume",
-                  ...(typeof body.nodeId === "string" ? { nodeId: body.nodeId } : {}),
-                };
       const entry = await enqueueGraphControl(workspace, graphId, state.controlRunId, command);
       sendJson(res, 202, entry);
     } catch (error) {

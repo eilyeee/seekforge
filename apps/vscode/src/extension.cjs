@@ -3,8 +3,10 @@ const WebSocket = require("ws");
 const {
   SeekForgeBridge,
   formatAgentEvent,
+  formatLoopReport,
   formatTranscript,
   hasDiffPreview,
+  loopRow,
   permissionHunkItems,
   permissionSummary,
   readStoredToken,
@@ -229,12 +231,124 @@ async function connected(context, what) {
   return { bridge, workspaceRoot, workspaceId: await bridge.workspaceId(workspaceRoot) };
 }
 
+/** One icon per reader-facing Loop outcome; the server still owns the status itself. */
+const LOOP_ICONS = {
+  active: new vscode.ThemeIcon("sync"),
+  pass: new vscode.ThemeIcon("pass", new vscode.ThemeColor("testing.iconPassed")),
+  fail: new vscode.ThemeIcon("error", new vscode.ThemeColor("testing.iconFailed")),
+  cancelled: new vscode.ThemeIcon("circle-slash"),
+  pending: new vscode.ThemeIcon("question"),
+};
+
+/**
+ * A read-only view of the server's persisted Loops. It keeps no cached list and
+ * runs no background timer: `getChildren` fetches on demand, so two refreshes
+ * cannot race a stale response into the tree and an idle editor window never
+ * polls a server the user may not be running. Every failure — no folder open,
+ * no server, a folder this server does not host — renders as a row instead of
+ * throwing, because a rejected `getChildren` leaves the view blank with no
+ * explanation.
+ */
+function createLoopsView(context) {
+  const changed = new vscode.EventEmitter();
+  const provider = {
+    onDidChangeTreeData: changed.event,
+    async getChildren(element) {
+      if (element) return [];
+      const workspaceRoot = workspaceRootForEditor(vscode.workspace, vscode.window.activeTextEditor);
+      if (!workspaceRoot) return [{ kind: "note", message: "Open a workspace folder to list SeekForge loops." }];
+      try {
+        const bridge = await configuredBridge(context);
+        const workspaceId = await bridge.workspaceId(workspaceRoot);
+        const loops = await bridge.loops(workspaceId);
+        if (loops.length === 0) return [{ kind: "note", message: "No loops recorded for this workspace yet." }];
+        return loops.map((loop) => ({ kind: "loop", loop, workspaceId }));
+      } catch (error) {
+        return [{ kind: "note", message: error instanceof Error ? error.message : String(error) }];
+      }
+    },
+    getTreeItem(element) {
+      if (element.kind === "note") {
+        const note = new vscode.TreeItem(element.message, vscode.TreeItemCollapsibleState.None);
+        note.tooltip = element.message;
+        return note;
+      }
+      const row = loopRow(element.loop);
+      const item = new vscode.TreeItem(row.label, vscode.TreeItemCollapsibleState.None);
+      // Two loops can share a task string; the loop id keeps selection stable.
+      if (row.loopId) item.id = row.loopId;
+      item.description = row.description;
+      item.tooltip = `${row.description}\n${row.detail}`;
+      item.iconPath = LOOP_ICONS[row.outcome];
+      // The workspace travels with the row: the active editor may have moved to
+      // another folder between the fetch and the click.
+      item.command = {
+        command: "seekforge.showLoop",
+        title: "Open loop",
+        arguments: [{ loopId: row.loopId, workspaceId: element.workspaceId }],
+      };
+      return item;
+    },
+  };
+  return { provider, refresh: () => changed.fire(undefined), dispose: () => changed.dispose() };
+}
+
+async function pickLoopId(bridge, workspaceId) {
+  const loops = await bridge.loops(workspaceId);
+  if (loops.length === 0) {
+    void vscode.window.showInformationMessage("No SeekForge loops recorded for this workspace yet.");
+    return "";
+  }
+  const picked = await vscode.window.showQuickPick(
+    loops.map((loop) => loopRow(loop)),
+    { placeHolder: "Open a SeekForge loop" },
+  );
+  return picked?.loopId ?? "";
+}
+
+/**
+ * Renders one persisted Loop as a Markdown document. The tree passes the loop
+ * and the workspace it was listed under; from the palette the user picks one.
+ */
+async function openLoopReport(context, target) {
+  let loopId = typeof target?.loopId === "string" ? target.loopId : "";
+  let workspaceId = typeof target?.workspaceId === "string" ? target.workspaceId : "";
+  let bridge;
+  if (loopId && workspaceId) {
+    bridge = await configuredBridge(context);
+  } else {
+    const session = await connected(context, "opening a SeekForge loop");
+    if (!session.bridge) return;
+    bridge = session.bridge;
+    workspaceId = session.workspaceId;
+    loopId = await pickLoopId(bridge, workspaceId);
+    if (!loopId) return;
+  }
+  const loop = await bridge.loop(workspaceId, loopId);
+  // History is retained separately and rotates out; losing it must not cost the
+  // reader the state they actually asked for.
+  // A history that could not be read must not render as a loop that has none.
+  const history = await bridge
+    .loopHistoryTail(workspaceId, loopId)
+    .catch((error) => ({ entries: [], dropped: 0, truncated: false, error }));
+  const document = await vscode.workspace.openTextDocument({
+    language: "markdown",
+    content: formatLoopReport(loop, history.entries, history),
+  });
+  await vscode.window.showTextDocument(document, { preview: true });
+}
+
 function activate(context) {
   const output = vscode.window.createOutputChannel("SeekForge");
   const statusBar = createStatusBar();
+  const loopsView = createLoopsView(context);
   context.subscriptions.push(
     output,
     statusBar,
+    loopsView,
+    vscode.window.registerTreeDataProvider("seekforge.loops", loopsView.provider),
+    vscode.commands.registerCommand("seekforge.refreshLoops", () => loopsView.refresh()),
+    vscode.commands.registerCommand("seekforge.showLoop", (target) => runSafely(() => openLoopReport(context, target))),
     vscode.commands.registerCommand("seekforge.showOutput", () => output.show(true)),
     vscode.commands.registerCommand("seekforge.setToken", () =>
       runSafely(async () => {

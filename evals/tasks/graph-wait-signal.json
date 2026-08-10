@@ -1,0 +1,44 @@
+{
+  "id": "graph-wait-signal",
+  "title": "Park an Engineering Graph on a wait node and wake it with an external signal",
+  "fixture": "graph-wait-signal",
+  "mode": "edit",
+  "runner": "graph",
+  "task": "Engineering Graph control plane: the graph must pause durably on a wait node until an external signal is delivered into its mailbox, then resume and consume that signal's payload.",
+  "graph": {
+    "expectedStatus": "passed",
+    "definition": {
+      "graphId": "eval-graph-wait",
+      "costBudgetUsd": 1,
+      "nodes": [
+        {
+          "id": "implement",
+          "kind": "agent",
+          "mode": "edit",
+          "approvalMode": "auto",
+          "task": "`npm test` fails in this project. `formatBytes` in src/bytes.js stops at KB and rounds to whole kilobytes. Fix src/bytes.js so it steps through B, KB, MB, and GB in units of 1024, prints at most one decimal, and drops a trailing \".0\" (0 -> \"0 B\", 1536 -> \"1.5 KB\", 1048576 -> \"1 MB\"). Do NOT edit anything under test/. Run `npm test` to verify."
+        },
+        {
+          "id": "artifact-ready",
+          "kind": "wait",
+          "dependsOn": ["implement"],
+          "waitFor": { "signal": "artifact-ready" }
+        },
+        { "id": "publish", "kind": "function", "handler": "collect", "dependsOn": ["artifact-ready"] }
+      ]
+    },
+    "resume": {
+      "expectedInitialStatus": "paused",
+      "signals": [{ "name": "artifact-ready", "payload": { "release": "1.2.3" } }]
+    }
+  },
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "command_succeeds", "command": "node verify-graph.mjs" },
+    { "type": "file_contains", "path": "test/bytes.test.js", "pattern": "escalates through MB and GB" },
+    { "type": "file_contains", "path": "verify-graph.mjs", "pattern": "GRAPH_ID = .eval-graph-wait." },
+    { "type": "file_not_contains", "path": "test/bytes.test.js", "pattern": "skip" },
+    { "type": "answer_matches", "pattern": "artifact-ready=passed" }
+  ],
+  "notes": "The harness enqueues the external signal into .seekforge/graphs/<id>.signals.json only after asserting that the first invocation stopped at \"paused\", so a graph that walked past its wait node fails before the signal exists. verify-graph.mjs then pins the wait node's resolved output to the exact delivered payload and requires the durable mailbox to be drained, which is the acknowledge-after-checkpoint contract."
+}

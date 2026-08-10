@@ -131,6 +131,56 @@ seekforge sandbox-run "run the test suite" \
 
 Flag：`--image`、`--network none|bridge|host`、`--memory`、`--cpus`、`-m/--model`、`--permission-mode`、`--max-cost`，以及 `--check`（dry-run）。该命令通过 `buildDockerRunArgs` 构造 argv 并 exec `docker`；`--check` 打印 argv 后退出，让你可以精确检查将要运行的内容。
 
+## 作为 Graph 执行器
+
+两个 runner 都可以作为[工程图](graph-engineering.zh-CN.md)中 `remote` 节点的后端。
+注册信息位于 **`~/.seekforge/graph-executors.json`**——操作者的 home 目录，绝不放在
+工作区里：
+
+```json
+{
+  "version": 1,
+  "executors": {
+    "sandbox": { "runner": "docker", "image": "seekforge-runner", "workspaceCapacity": 2 },
+    "workstation": { "runner": "ssh", "host": "me@build-box", "workspace": "/srv/repo" }
+  }
+}
+```
+
+docker 条目接受 `image`、`network`、`memory`、`cpus`、`workdir`；ssh 条目接受
+`host`、`workspace`、`port`、`identityFile`、`binary`、`provider`、`model`。两者都
+接受 `capacity` 与 `workspaceCapacity`。
+
+**为什么只认 home。** 如果放在工作区里，一个被克隆的仓库就能指定攻击者的主机，
+而 `seekforge graph run` 会把任务文本和一个 agent 一起交过去。注册是操作者的行为，
+因此只从操作者的 home 目录读取。没有该文件就没有适配器，所有 `remote` 节点在
+preflight 阶段失败；文件格式错误会直接抛错，而不是退化成空注册表。插件清单依然
+只能为宿主**已经注册**的 id 建立别名——它们无法创造信任。
+
+能力只在真实存在时才声明：
+
+| | docker | ssh |
+| --- | --- | --- |
+| 容量预留 / fencing | 容器名为 `seekforge-graph-<hash>`；守护进程拒绝复用存活名称，这本身**就是** fence | 无——一个什么都栅不住的 token 比没有更糟 |
+| 协作式取消 | 支持（`docker kill` 停止容器） | **不支持**——杀掉本地 `ssh` 只是关闭通道，远端运行是否随之结束取决于那台机器的 sshd。在 ssh 执行器上，`requiresCancellation: true` 的节点会在 preflight 被拒绝 |
+| 结果溯源校验 | 支持——声称的 `session_id` 必须存在于挂载的工作区中 | 无（会话在远端主机上） |
+| 按幂等键恢复 | 支持——日志位于 `.seekforge/graph-remote-results/`（上限 256 条） | 同上 |
+
+**成本。** 走 ssh 时用量并非不可见：`seekforge run --output-format json` 会打印带
+`session_id`、`total_cost_usd` 和 `usage` 的结果信封，而这个信封会顺着承载命令的
+同一条通道回来。真正不同的是**归属**而非可测量性——远端主机用它自己的 key 计费——
+因此每个节点结果都记录 `costAccount: "remote"` 或 `"local"`，同时这笔成本仍然计入
+Graph 账本，因为它确实是为运行这个 Graph 花掉的。Graph 剩余的 `costBudgetUsd` 会
+以 `--max-cost` 下推，因此预算不仅在本地被观察，也在远端主机上被强制执行。
+
+如果完全没有用量上报：当 Graph 声明了成本或 token 预算时，该节点**不可重试地失败**
+——重试只会再花一次同样无法计量的钱。没有预算时则记录 `costUsd: 0` 并附带
+`costAccounting: "unreported"`，这样下游任何环节都不会把那个 0 当成一次测量。
+
+**运维提示。** 给 remote 节点设置 `timeoutMs`：运行带 `-y`，但 stdin 已关闭时的
+env 级权限提示没有人可以回答，只有节点超时能兜底。Graph 容器在 `docker ps` 中以
+`seekforge-graph-` 前缀可见。
+
 ## 安全模型
 
 - **隔离。** `--rm`——容器是短暂的，退出即删除。

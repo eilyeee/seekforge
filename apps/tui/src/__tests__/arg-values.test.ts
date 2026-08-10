@@ -32,6 +32,32 @@ describe("argCandidates", () => {
     ]);
   });
 
+  it("every /graph-* command completes persisted graph ids", () => {
+    const graphCtx: ArgContext = {
+      ...ctx,
+      graphs: [
+        { id: "graph-1", status: "running", settled: 2, nodes: 5 },
+        { id: "graph-2", status: "paused", settled: 5, nodes: 5 },
+      ],
+    };
+    for (const command of ["graph-show", "graph-pause", "graph-continue", "graph-steer", "graph-signal"]) {
+      expect(argCandidates(command, "", graphCtx)).toEqual([
+        { value: "graph-1", hint: "[running] 2/5 nodes" },
+        { value: "graph-2", hint: "[paused] 5/5 nodes" },
+      ]);
+    }
+  });
+
+  it("stops completing graph ids once a second word is being typed", () => {
+    const graphCtx: ArgContext = { ...ctx, graphs: [{ id: "graph-1", status: "running", settled: 0, nodes: 1 }] };
+    expect(argCandidates("graph-steer", "graph-1 ", graphCtx)).toEqual([]);
+    expect(argCandidates("graph-signal", "graph-1 dep", graphCtx)).toEqual([]);
+  });
+
+  it("offers nothing for /graph-* when the workspace has no graphs", () => {
+    expect(argCandidates("graph-show", "", ctx)).toEqual([]);
+  });
+
   it("approve offers the three modes", () => {
     const got = argCandidates("approve", "", ctx) ?? [];
     expect(got.map((c) => c.value)).toEqual(["auto", "confirm", "plan"]);

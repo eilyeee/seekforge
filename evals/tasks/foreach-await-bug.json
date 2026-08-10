@@ -10,5 +10,5 @@
     { "type": "file_not_contains", "path": "src/loader.js", "pattern": "\\.forEach\\(async" },
     { "type": "file_contains", "path": "test/loader.test.js", "pattern": "\\[10, 20, 30\\]" }
   ],
-  "notes": "Classic `forEach(async …)` pitfall: the loop returns before the microtasks run, so the buggy version yields []. file_not_contains removes the fire-and-forget forEach; the test pin blocks rewriting the in-order assertion."
+  "notes": "Classic `forEach(async …)` pitfall: the loop returns before the microtasks run, so the buggy version yields []. The test pin blocks rewriting the in-order assertion. Note what file_not_contains actually gates: the fixture's JSDoc also names `.forEach(async` while describing the bug, so the check only passes once that stale comment is retired too. Measured 3x, the async fix itself lands every time and this check is the only one that fails — the task discriminates diff hygiene, not async semantics."
 }

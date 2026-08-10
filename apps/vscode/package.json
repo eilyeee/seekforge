@@ -34,7 +34,9 @@
     "onCommand:seekforge.newTask",
     "onCommand:seekforge.resumeSession",
     "onCommand:seekforge.showDiff",
-    "onCommand:seekforge.showOutput"
+    "onCommand:seekforge.showLoop",
+    "onCommand:seekforge.showOutput",
+    "onView:seekforge.loops"
   ],
   "main": "./src/extension.cjs",
   "scripts": {
@@ -73,8 +75,35 @@
       {
         "command": "seekforge.showOutput",
         "title": "SeekForge: Show Activity Output"
+      },
+      {
+        "command": "seekforge.showLoop",
+        "title": "SeekForge: Open Loop"
+      },
+      {
+        "command": "seekforge.refreshLoops",
+        "title": "SeekForge: Refresh Loops",
+        "icon": "$(refresh)"
       }
     ],
+    "views": {
+      "explorer": [
+        {
+          "id": "seekforge.loops",
+          "name": "SeekForge Loops",
+          "visibility": "collapsed"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "seekforge.refreshLoops",
+          "when": "view == seekforge.loops",
+          "group": "navigation"
+        }
+      ]
+    },
     "configuration": {
       "title": "SeekForge",
       "properties": {

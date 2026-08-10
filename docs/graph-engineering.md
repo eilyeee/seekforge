@@ -4,6 +4,8 @@
 
 Graph Engineering is SeekForge's durable orchestration layer for workflows that combine Agents, autonomous Loops, deterministic functions, bounded maps, quorum joins, routers, approval gates, and nested graphs. It complements `loop-dag`: Loop DAG is optimized for homogeneous run→verify nodes and managed worktrees, while an Engineering Graph coordinates heterogeneous work.
 
+**Relationship to the Loop DAG.** The Engineering Graph is the orchestration engine SeekForge develops; the Loop DAG is a frozen shortcut for the single-kind case, and `seekforge loop-dag export-graph` moves a DAG onto this engine. A Graph `loop` node is not yet a full Loop DAG node: it forwards `task`, `workspace`, `verifyCommand`, `approvalMode`, the budgets, and `timeoutMs` to its child Loop, and does not accept per-Loop tuning (`maxIterations`, verification plans, model routing, `codeReview`), dependency-output injection into the task, declared output artifacts, per-node budget weighting, or a per-node failure policy. Those Loop DAG features have no Graph equivalent today, so a workflow that needs them stays on the Loop DAG until the Graph grows them.
+
 The Desktop creation workbench renders a deterministic dependency canvas from
 the same JSON definition and supports structured node/dependency insertion. A
 graph can start only after server validation and simulation succeed.
@@ -99,7 +101,7 @@ Node kinds:
 
 - `agent`: one Agent task; `mode` and `approvalMode` use normal permission policy.
 - `loop`: a full autonomous Loop with its own verifier and a share of remaining graph budgets.
-- `function`: an embedding-supplied named handler. Every handler is resolved before effects. The CLI exposes only safe `noop` and `collect` handlers; it does not turn handler names into shell commands. Retried handlers must be idempotent. Handler ids are part of the resume fingerprint, so change the id when its behavior changes.
+- `function`: a named handler, either embedding-supplied or one of the eight deterministic built-ins — `noop`, `collect`, `pick`, `project`, `merge`, `assert`, `count`, `summarize`. Every handler is resolved before effects. A handler is selected by name only and is never turned into a shell command. Retried handlers must be idempotent. Handler ids are part of the resume fingerprint, so change the id when its behavior changes.
 - `map`: resolves a declared dependency output through a bounded JSON Pointer and invokes a registered handler for at most `maxItems` values (default 32, hard limit 64). Items run in bounded batches, receive stable per-item idempotency keys and shares of the remaining node budget, and every started peer settles before a failed batch is published.
 - `join`: succeeds after its dependencies settle when at least `quorum` dependencies passed. This supports bounded quorum/reduce workflows without dynamically rewriting the durable definition.
 - `router`: selects the first matching conditional route, then the optional default route. Downstream nodes bind through `route.routerId` and `route.branch`.
@@ -107,9 +109,13 @@ Node kinds:
 - `subgraph`: runs another validated graph with bounded nesting. Every child receives a deterministic, collision-resistant checkpoint id and records its parent Graph/node provenance. Its usage rolls into the parent and is constrained by the parent share. Subgraph retries resume the child checkpoint and invalidate only failed nodes plus descendants.
 - `wait`: pauses durably until a declared external signal is received or an absolute `notBefore` time is reached. An optional `expiresAt` turns an unresolved wait into a bounded failure and rejects signals created after the deadline.
 - `compensation`: names one or more successful `compensates` dependencies. After main-work failure, eligible compensation nodes run serially in reverse completion/topology order and share the graph's remaining hard budget; after success they are recorded as skipped.
-- `remote`: delegates through an embedding-registered `GraphExecutionAdapter`. Preflight accepts only adapters explicitly marked `trusted` and `locality: "remote"`; a graph or plugin cannot create trust by naming an executor.
+- `remote`: delegates through an embedding-registered `GraphExecutionAdapter`. Preflight accepts only adapters explicitly marked `trusted` and `locality: "remote"`; a graph or plugin cannot create trust by naming an executor. The plain CLI ships two: the Docker and ssh runners behind [`sandbox-run` and `remote-run`](remote.md#as-a-graph-executor), registered from `~/.seekforge/graph-executors.json` in the operator's home directory — never from the workspace, so a cloned repository cannot name a host. A remote node result carries `{runner, sessionId, summary, costAccounting: "reported" | "unreported", costAccount: "local" | "remote"}`, so a downstream `function` node can refuse to treat an unmeasured node as free. Recovery by idempotency key is journaled under `.seekforge/graph-remote-results/`, bounded to 256 entries.
 
 Nodes may declare `inputs` that bind names to direct dependency outputs using bounded JSON Pointers and optional schemas. Recursive schemas support bounded object `properties`/`required`/`additionalProperties`, array `items` and item bounds, and primitive enums. Function, map, compensation, and remote handlers may return up to 32 repository-relative artifact references. `verifyArtifacts: true` physically revalidates each file without following a symlink, streams its SHA-256, verifies a supplied digest, and records size plus producer lineage.
+
+The declarative built-ins take their operands from that same `inputs` binding rather than from any handler-parameter field, so the definition schema does not grow an expression language. `pick`, `count`, and `summarize` are single-operand: they read the map item when the runtime supplies one, and otherwise the input named `value`. `project`, `merge`, and `assert` read every declared input in declaration order and reject a map item outright, because they would otherwise ignore it and publish the same output for every item. `merge` requires object inputs and lets later inputs win; it never copies a `__proto__` key. `assert` fails the node unless every declared input resolves and satisfies its declared schema, and publishes only the asserted names, so gating a large value does not spend the node output budget on it. A declared input that does not resolve is a definition bug, so it fails the node without retrying instead of leaving an `undefined` hole downstream.
+
+That makes definition-only judgment possible: `count` returns `{count}` for an array's length or an object's own keys, and `summarize` returns the fixed shape `{count, truthy, falsy, byType}` over an array. Because the shape is fixed, `outputSchema` can gate on it — `{"type":"object","properties":{"falsy":{"type":"number","enum":[0]}}}` on a `summarize` node means "every mapped item was truthy" without any embedded code.
 
 `priority` orders simultaneously ready nodes. Within a priority tier, work on the longest remaining dependency path starts first. `resources` declares logical locks; dot-separated ids form a hierarchy, so `provider.deepseek` conflicts with `provider.deepseek.chat`. `resourceCapacities` may allow multiple exact-name reservations while parent/child overlap remains exclusive. `adaptiveScheduling: true` uses bounded historical duration/failure observations as a tie-breaker within the static critical tier. Only persisted passed/failed outcomes from the exact definition-and-workspace fingerprint participate; waits and `persist: false` runs neither consume nor produce advice. The output-free history expires after 30 days and is bounded to 512 observations and 128 KiB under a cross-process mutation lease. Auto Loop verification, Loop DAG, and Graph use the same deterministic resource-aware ready-queue owner.
 
@@ -145,6 +151,21 @@ Approved proposals use an explicit `shadow → 5% → 25% → 100%` rollout. Eac
 
 `seekforge orchestration maintain` runs one safe control tick: it refreshes proposals, records terminal observations/calibration, reconciles existing rollouts, rebuilds the materialized index, and reconciles the adaptive controller. It never approves proposals or starts deployments. Add `--dry-run` to preview impact without writes. `seekforge serve --orchestration-auto-maintain` runs that tick only while each workspace is idle; add `--orchestration-auto-rollback` to opt into rollback of observed regressions.
 
+### TUI workflow
+
+The TUI exposes the durable control plane without an execution surface.
+`/graph-list` and `/graph-show <graph-id>` read the checkpoints under
+`.seekforge/graphs/`; `/graph-pause`, `/graph-continue`, and `/graph-steer`
+queue a durable control command that the executing run applies at its next safe
+boundary; `/graph-signal <graph-id> <name>` delivers a wait signal to a node that
+declares one. All five reuse `checkGraphControlTarget` / `checkGraphSignalTarget`,
+so a Graph that is not running, an unknown node, or an undeclared signal is
+refused with the same message the CLI and REST surfaces produce. Starting,
+resuming, restarting, or approving a Graph node still needs the definition file
+and therefore the CLI (`seekforge graph run|resume <file> --approve <node-id>`)
+or the desktop — approval is a run option, not a control-mailbox operation, so
+it cannot be delivered to an already-paused run.
+
 ### Desktop workflow
 
 The desktop Loop manager closes the authoring-to-operation cycle. **Create engineering graph** accepts a versioned template or bounded JSON plus parameters, runs validation and simulation in parallel, shows waves, critical path, cost/token estimates, and risks, and enables start only while that exact preview remains current. Running Graphs are then discovered automatically; expand one to inspect nodes and use execution controls, approvals, signals, reruns, comparison, and retained-worktree operations.
@@ -177,6 +198,42 @@ seekforge graph resources release promote --target fan-in
 seekforge graph delete release
 ```
 
+Durable control, external signals, evidence, run comparison, and the template
+registry are reachable from the CLI as well as REST, so a Graph does not require
+a running server to be operated:
+
+```sh
+seekforge graph pause release
+seekforge graph pause release --node verify
+seekforge graph continue release
+seekforge graph steer release "prefer the smaller fix"
+seekforge graph cancel-node release verify
+seekforge graph reprioritize release verify 5
+seekforge graph signal release approved --payload '{"build":42}'
+seekforge graph evidence release
+seekforge graph evidence --verify evidence.json
+seekforge graph compare release --run-number 2
+seekforge graph template list
+seekforge graph template show package-release 1.0.0
+seekforge graph template register package-release.template.json
+seekforge graph template compare package-release 1.0.0 candidate.template.json
+seekforge graph template deprecate package-release 1.0.0
+```
+
+`pause`, `continue`, `steer`, `cancel-node`, and `reprioritize` enqueue the same
+durable control mailbox the REST `control` endpoint writes, so they work against
+a Graph owned by another live SeekForge process and take effect only at a safe
+scheduling boundary. Node-scoped commands are refused once that node has started.
+`signal` delivers a signal the definition declares; because only a live owner
+drains the mailbox, signalling a wait-paused Graph reports that the run must be
+resumed with its definition. `evidence --verify` recomputes the SHA-256 integrity
+digest of an exported report and exits non-zero when it no longer matches.
+`template compare` exits non-zero on a `breaking` classification.
+
+Whether a control or signal may act on a Graph right now is decided once, by
+`checkGraphControlTarget` and `checkGraphSignalTarget` in Core; CLI and REST both
+call them rather than keeping parallel copies of that rule.
+
 The server exposes validation/dry-run planning (`POST /api/graphs/validate`), side-effect-free resource and budget simulation (`POST /api/graphs/simulate`), scheduling intelligence (`GET /api/graph-scheduling-intelligence`), a fingerprint-bound health forecast (`GET /api/graphs/:id/health`), background start (`POST /api/graphs`), explicit resume/approve/rerun/restart/cancel controls, durable graph pause plus pending-node pause, steer, cancel, and reprioritize control (`POST /api/graphs/:id/control`), external signals (`POST /api/graphs/:id/signals`), automatic-recovery priority (`POST /api/graphs/:id/priority`), node eligibility explanation (`GET /api/graphs/:id/explain/:nodeId`), run comparison (`GET /api/graphs/:id/compare`), bounded history, evidence export, list/detail, and deletion.
 
 Idle recovery considers ownerless `running` graphs and wait-paused graphs whose timer or signal is ready; explicit control and approval pauses remain sticky. Candidates are ordered by mutable priority from -10 to 10, and failures use persisted exponential backoff from 30 seconds to one hour. Loop and Graph decode that recovery subrecord through the same exact-key, timestamp-ordered persisted contract. Recovery bookkeeping is bound to the pre-attempt or newly checkpointed run identity, so a delayed failure cannot modify a later run. Schema-v2 templates can be registered and resolved exactly through `/api/graphs/templates`; versions are never silently floated. Compatibility comparison classifies removed or newly-required parameters, removed defaults, type changes, and output-interface changes as breaking, while deprecation remains explicit metadata and never rewrites existing references. Their optional `interface.outputSchema` uses the same bounded recursive schema parser as nodes. The shared dry-run planner returns normal execution waves separately from compensation order, plus the critical path, resource capacities, maximum parallel width/attempts/dynamic items, recursive node paths, input bindings, runtime requirements, and deterministic managed/fan-in branches without creating resources. Graph runs are represented in the normal Run Ledger and are drained on server shutdown. Server-started graphs containing Agent or Loop nodes must declare `costBudgetUsd`.
@@ -196,7 +253,7 @@ Optimization drafts can be persisted with `seekforge orchestration proposals ref
 
 `seekforge serve --graph-auto-resume` opts into sequential idle-workspace recovery of ownerless running Graphs or wait-paused Graphs with a ready timer or signal. One failed recovery is isolated so later eligible Graphs and retention still run. `--graph-auto-prune` applies the terminal age/count policy during the same idle window, archives and cleans safe managed resources, retains dirty worktrees, preserves child checkpoints while a parent remains resumable, and then removes eligible state. Durable control works for any live Graph owner, including another process or an idle-recovery run. Desktop subscribes to Graph Run Ledger frames over WebSocket, retains a slower polling fallback, displays run deltas plus health forecasts and anomaly heat, and exposes graph/node control, signals, approval, rerun, restart, promotion, archival, pruning, and deletion.
 
-The Server and CLI share the deterministic `noop` and `collect` handler registry. Enabled plugins may publish namespaced `graphHandlers` aliases to those built-ins. A plugin may also alias a `graphExecutor` already registered as trusted by its host; plugin manifests cannot supply executable code, promote an untrusted adapter, or turn handler names into shell commands.
+The Server and CLI share the deterministic built-in handler registry (`noop`, `collect`, `pick`, `project`, `merge`, `assert`, `count`, `summarize`). Enabled plugins may publish namespaced `graphHandlers` aliases to any of those built-ins. A plugin may also alias a `graphExecutor` already registered as trusted by its host; plugin manifests cannot supply executable code, promote an untrusted adapter, or turn handler names into shell commands.
 
 `GET /api/graphs/:id/history` preserves the original event-array response by default. Add `?format=entries&afterSeq=<n>&limit=<n>` for cursor-bearing JSONL records. `GET /api/graphs/:id/evidence` returns the tamper-evident summary, including managed-branch and fan-in provenance but not absolute fan-in workspace paths. `GET`/`POST /api/graphs/:id/resources` inspect or perform `archive`, `prune`, and `promote` operations. Deletion refuses retained managed resources. The list endpoint omits definitions and node outputs and keeps only recent events; the detail endpoint returns the full bounded checkpoint. Desktop inspection renders dependency arrows from the normalized detail and exposes the same archive/promote/prune lifecycle.
 

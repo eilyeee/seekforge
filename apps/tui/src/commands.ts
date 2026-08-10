@@ -87,6 +87,27 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
     summary: "guide the active loop at its next safe boundary",
     group: "run",
   },
+  { name: "graph-list", summary: "list persisted Engineering Graphs in this workspace", group: "review" },
+  { name: "graph-show", args: "<graph-id>", summary: "show one persisted Engineering Graph", group: "review" },
+  {
+    name: "graph-pause",
+    args: "<graph-id>",
+    summary: "pause a running Graph at its next safe boundary",
+    group: "run",
+  },
+  { name: "graph-continue", args: "<graph-id>", summary: "continue a paused-by-control Graph", group: "run" },
+  {
+    name: "graph-steer",
+    args: "<graph-id> <guidance>",
+    summary: "guide a running Graph at its next safe boundary",
+    group: "run",
+  },
+  {
+    name: "graph-signal",
+    args: "<graph-id> <name>",
+    summary: "deliver a wait signal to a Graph",
+    group: "run",
+  },
   {
     name: "approve",
     args: "[auto|confirm|plan]",
@@ -236,6 +257,12 @@ export type SlashCommand =
   | { name: "loop-show"; arg?: string }
   | { name: "loop-history"; arg?: string }
   | { name: "loop-recover" }
+  | { name: "graph-list" }
+  | { name: "graph-show"; arg?: string }
+  | { name: "graph-pause"; arg?: string }
+  | { name: "graph-continue"; arg?: string }
+  | { name: "graph-steer"; arg?: string }
+  | { name: "graph-signal"; arg?: string }
   | { name: "approve"; arg?: string }
   | { name: "rewind"; arg?: string }
   | { name: "backtrack" }
@@ -519,6 +546,7 @@ const NO_ARG = new Set([
   "loop-continue",
   "loop-list",
   "loop-recover",
+  "graph-list",
   "fork",
   "diff",
   "review",
@@ -558,6 +586,8 @@ const REST_ARG = new Set([
   "agent-steer",
   "agent-cancel",
   "loop-steer",
+  "graph-steer",
+  "graph-signal",
 ]);
 /** Commands taking a single word argument. */
 const WORD_ARG = new Set([
@@ -575,6 +605,9 @@ const WORD_ARG = new Set([
   "stash",
   "loop-show",
   "loop-history",
+  "graph-show",
+  "graph-pause",
+  "graph-continue",
 ]);
 
 export function parseInput(line: string): ParsedInput {

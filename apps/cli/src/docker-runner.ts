@@ -29,7 +29,9 @@
  */
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import path from "node:path";
+import type { GraphRemoteRunnerRequest, GraphRemoteRunnerTransport } from "@seekforge/core";
 import { formatCommandLine } from "./runner.js";
 import type { AgentRunner, RunnerOptions, RunnerResult } from "./runner.js";
 
@@ -65,6 +67,20 @@ export interface DockerRunnerOptions extends RunnerOptions {
   /** Passed to the in-container run as `--permission-mode <mode>` when set. */
   permissionMode?: string;
   /**
+   * `docker run --name`. Only set by callers that need a STABLE handle on the
+   * container: the Graph executor names it after the attempt's idempotency key,
+   * which makes the Docker daemon's refusal to reuse a live name the fence that
+   * stops a duplicated attempt, and gives `docker kill` something to aim at.
+   */
+  containerName?: string;
+  /**
+   * Passed to the in-container run as `--output-format <fmt>`. The Graph
+   * executor asks for `json` because the result envelope is how a remote node
+   * reports its own cost and session id; the interactive commands leave it unset
+   * and keep the human rendering.
+   */
+  outputFormat?: string;
+  /**
    * Env source used ONLY to decide which key vars to forward (by name). The
    * values are never read into the argv. Defaults to `process.env`; tests pass
    * a fixed map for determinism.
@@ -89,6 +105,10 @@ export function buildDockerRunArgs(opts: DockerRunnerOptions): string[] {
   const image = opts.image ?? DEFAULT_RUNNER_IMAGE;
   const network = opts.network ?? DEFAULT_RUNNER_NETWORK;
   const env = opts.env ?? process.env;
+
+  if (opts.containerName !== undefined && !DOCKER_NAME_RE.test(opts.containerName)) {
+    throw new Error(`docker runner container name is invalid: ${opts.containerName}`);
+  }
 
   const args: string[] = [
     "run",
@@ -118,6 +138,7 @@ export function buildDockerRunArgs(opts: DockerRunnerOptions): string[] {
   // Optional resource limits.
   if (opts.memory) args.push("--memory", opts.memory);
   if (opts.cpus) args.push("--cpus", opts.cpus);
+  if (opts.containerName) args.push("--name", opts.containerName);
 
   // The image to run.
   args.push(image);
@@ -128,6 +149,7 @@ export function buildDockerRunArgs(opts: DockerRunnerOptions): string[] {
   if (opts.maxDurationSeconds !== undefined) args.push("--max-duration", String(opts.maxDurationSeconds));
   if (opts.model) args.push("-m", opts.model);
   if (opts.permissionMode) args.push("--permission-mode", opts.permissionMode);
+  if (opts.outputFormat) args.push("--output-format", opts.outputFormat);
 
   return args;
 }
@@ -158,5 +180,71 @@ export function createDockerRunner(): AgentRunner {
   return {
     name: "docker",
     run: (o: RunnerOptions) => spawnDockerRun(o as DockerRunnerOptions),
+  };
+}
+
+/** Docker's own container-name grammar; anything else is rejected before the argv is built. */
+const DOCKER_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
+/** Prefix for Graph-owned containers, so an operator can tell them apart in `docker ps`. */
+export const GRAPH_CONTAINER_PREFIX = "seekforge-graph-";
+
+/** Isolation knobs an operator may pin for the Graph executor (never task-derived). */
+export type DockerGraphTransportOptions = {
+  image?: string;
+  network?: DockerNetwork;
+  memory?: string;
+  cpus?: string;
+  workdir?: string;
+  env?: Record<string, string | undefined>;
+};
+
+/**
+ * The Docker runner as a Graph `remote` transport.
+ *
+ * Three properties of this transport are what the Graph contract actually cares
+ * about, and all three are real rather than declared:
+ *
+ * - **Fence.** The container is named after the attempt's idempotency key, and
+ *   the Docker daemon refuses a second container with a live name. A duplicated
+ *   attempt therefore fails to start instead of running twice.
+ * - **Cancellation.** That same name is what `docker kill` takes, so an aborted
+ *   node stops the container itself — not merely the local `docker` client,
+ *   which would leave the run going.
+ * - **Cost and provenance.** The workspace is bind-mounted, so the run's session
+ *   lands in the host workspace and its `--output-format json` envelope reports
+ *   usage spent on THIS machine's forwarded API key.
+ */
+export function dockerGraphTransport(options: DockerGraphTransportOptions = {}): GraphRemoteRunnerTransport {
+  const containerName = (request: GraphRemoteRunnerRequest): string =>
+    `${GRAPH_CONTAINER_PREFIX}${createHash("sha256").update(request.idempotencyKey).digest("hex").slice(0, 32)}`;
+  return {
+    name: "docker",
+    // The container inherits this machine's provider key by name, so the money
+    // is spent on the local account and the Graph ledger is complete.
+    costAccount: "local",
+    sessionIsLocal: true,
+    fencingToken: containerName,
+    command: (request) => ({
+      file: "docker",
+      args: buildDockerRunArgs({
+        task: request.task,
+        workspacePath: request.workspace,
+        outputFormat: "json",
+        containerName: request.fencingToken ?? containerName(request),
+        ...(options.image ? { image: options.image } : {}),
+        ...(options.network ? { network: options.network } : {}),
+        ...(options.memory ? { memory: options.memory } : {}),
+        ...(options.cpus ? { cpus: options.cpus } : {}),
+        ...(options.workdir ? { workdir: options.workdir } : {}),
+        ...(options.env ? { env: options.env } : {}),
+        ...(request.maxCostUsd !== undefined ? { maxCostUsd: request.maxCostUsd } : {}),
+        ...(request.maxDurationSeconds !== undefined ? { maxDurationSeconds: request.maxDurationSeconds } : {}),
+      }),
+    }),
+    cancelCommand: (request) => ({ file: "docker", args: ["kill", request.fencingToken ?? containerName(request)] }),
+    releaseCommand: (request) => ({
+      file: "docker",
+      args: ["rm", "-f", request.fencingToken ?? containerName(request)],
+    }),
   };
 }

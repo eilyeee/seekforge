@@ -44,6 +44,13 @@ import {
   loadLoopState,
   readLoopHistory,
   recoverInterruptedLoops,
+  checkGraphControlTarget,
+  checkGraphSignalTarget,
+  enqueueGraphControl,
+  enqueueEngineeringGraphSignal,
+  isSessionRunActive,
+  listEngineeringGraphStates,
+  loadEngineeringGraphState,
   isWorktreeDirty,
   isValidLoopId,
   createWorktree,
@@ -52,6 +59,7 @@ import {
   WorktreeGitError,
   BUILTIN_COMMAND_ALLOWLIST,
   type BackgroundTasks,
+  type DurableGraphControlCommand,
   type McpClientEntry,
   type McpPromptRef,
   type LoopControl,
@@ -112,6 +120,13 @@ import { t } from "./strings.js";
 import { runSession } from "./agent/run-session.js";
 import { resumeLoop, runLoop } from "./agent/run-loop.js";
 import { formatLoopEvent, shouldRenderLoopEvent } from "./loop-format.js";
+import {
+  formatGraphListLines,
+  formatGraphShowLines,
+  parseGraphId,
+  parseGraphRest,
+  parseGraphSignal,
+} from "./graph-cmd.js";
 import {
   cancelRun,
   ownsRun,
@@ -515,6 +530,20 @@ export function App({
       memoryFiles: (() => {
         try {
           return readdirSync(dirname(projectMemoryPath(projectPath))).filter((f) => !f.startsWith("."));
+        } catch {
+          return [];
+        }
+      })(),
+      graphs: (() => {
+        try {
+          return listEngineeringGraphStates(projectPath)
+            .slice(0, 20)
+            .map((g) => ({
+              id: g.graphId,
+              status: g.status,
+              settled: g.results.length,
+              nodes: g.definition.nodes.length,
+            }));
         } catch {
           return [];
         }
@@ -1028,6 +1057,94 @@ export function App({
   );
 
   // ---------------------------------------------------------------------
+  // Engineering Graph control.
+  //
+  // A Graph is a workspace-level durable run, not a tab-owned one: it may be
+  // driven by another process entirely, so there is no per-tab controller to
+  // reach for and `checkGraphControlTarget` / `checkGraphSignalTarget` in
+  // @seekforge/core stay the single owner of "may this act on this Graph now".
+  // What IS tab-owned is the transcript the outcome lands in, and enqueueing
+  // awaits — so the originating tab id is captured before the first await and
+  // every line is routed to it explicitly. Reading the active tab afterwards
+  // would print a Graph's answer into whatever tab the user switched to.
+  // ---------------------------------------------------------------------
+
+  /** Notice sink bound to one tab id; safe to call after an await. */
+  const noticeIn = useCallback(
+    (tabId: number) =>
+      (text: string, tone?: "dim" | "error"): void => {
+        tabsDispatch({
+          type: "chat",
+          tabId,
+          action: tone ? { type: "notice", text, tone } : { type: "notice", text },
+        });
+      },
+    [],
+  );
+
+  const runGraphControl = useCallback(
+    (graphId: string, command: DurableGraphControlCommand, queued: string) => {
+      const tell = noticeIn(activeIdRef.current);
+      void (async () => {
+        try {
+          const graph = loadEngineeringGraphState(projectPath, graphId);
+          if (!graph) {
+            tell(`persisted Engineering Graph not found or invalid: ${graphId}`, "error");
+            return;
+          }
+          const rejection = checkGraphControlTarget(graph, command);
+          if (rejection) {
+            tell(rejection.message, "error");
+            return;
+          }
+          // A crashed owner can leave status "running" behind; only a live
+          // lease will ever drain the mailbox, so refuse to queue into a
+          // Graph nobody is executing.
+          if (!isSessionRunActive(projectPath, `engineering-graph-${graphId}`)) {
+            tell(`Graph is not running: ${graphId}`, "error");
+            return;
+          }
+          const entry = await enqueueGraphControl(projectPath, graphId, graph.controlRunId, command);
+          tell(`${queued} (seq ${entry.seq})`);
+        } catch (error) {
+          tell(error instanceof Error ? error.message : String(error), "error");
+        }
+      })();
+    },
+    [projectPath, noticeIn],
+  );
+
+  const runGraphSignal = useCallback(
+    (graphId: string, name: string) => {
+      const tell = noticeIn(activeIdRef.current);
+      void (async () => {
+        try {
+          const graph = loadEngineeringGraphState(projectPath, graphId);
+          if (!graph) {
+            tell(`persisted Engineering Graph not found or invalid: ${graphId}`, "error");
+            return;
+          }
+          const rejection = checkGraphSignalTarget(graph, name);
+          if (rejection) {
+            tell(rejection.message, "error");
+            return;
+          }
+          const signal = await enqueueEngineeringGraphSignal(projectPath, graphId, name);
+          tell(`queued signal ${signal.name} for Graph ${graphId} (${signal.id})`);
+          // Only a live owner consumes the mailbox. The TUI has no Graph run
+          // surface, so a wait-paused Graph needs its definition file again.
+          if (graph.status === "paused") {
+            tell(`run "seekforge graph resume <file>" to continue ${graphId}`);
+          }
+        } catch (error) {
+          tell(error instanceof Error ? error.message : String(error), "error");
+        }
+      })();
+    },
+    [projectPath, noticeIn],
+  );
+
+  // ---------------------------------------------------------------------
   // Slash commands.
   // ---------------------------------------------------------------------
 
@@ -1304,6 +1421,71 @@ export function App({
           }
           active.control.steer(guidance);
           notice("loop guidance queued for the next safe boundary");
+          break;
+        }
+        case "graph-list": {
+          // A malformed or unreadable checkpoint directory throws; report it as
+          // a notice rather than letting it escape the input handler.
+          try {
+            for (const line of formatGraphListLines(listEngineeringGraphStates(projectPath))) notice(line);
+          } catch (error) {
+            notice(error instanceof Error ? error.message : String(error), "error");
+          }
+          break;
+        }
+        case "graph-show": {
+          const graphId = parseGraphId(command.arg);
+          if (!graphId) {
+            notice("usage: /graph-show <graph-id> (see /graph-list)", "error");
+            break;
+          }
+          try {
+            const graph = loadEngineeringGraphState(projectPath, graphId);
+            if (!graph) notice(`persisted Engineering Graph not found or invalid: ${graphId}`, "error");
+            else for (const line of formatGraphShowLines(graph)) notice(line);
+          } catch (error) {
+            notice(error instanceof Error ? error.message : String(error), "error");
+          }
+          break;
+        }
+        case "graph-pause": {
+          const graphId = parseGraphId(command.arg);
+          if (!graphId) {
+            notice("usage: /graph-pause <graph-id> (see /graph-list)", "error");
+            break;
+          }
+          runGraphControl(graphId, { operation: "pause" }, `Graph ${graphId} will pause at the next safe boundary`);
+          break;
+        }
+        case "graph-continue": {
+          const graphId = parseGraphId(command.arg);
+          if (!graphId) {
+            notice("usage: /graph-continue <graph-id> (see /graph-list)", "error");
+            break;
+          }
+          runGraphControl(graphId, { operation: "resume" }, `Graph ${graphId} continuation requested`);
+          break;
+        }
+        case "graph-steer": {
+          const parsed = parseGraphRest(command.arg);
+          if (!parsed) {
+            notice("usage: /graph-steer <graph-id> <guidance>", "error");
+            break;
+          }
+          runGraphControl(
+            parsed.graphId,
+            { operation: "steer", message: parsed.rest },
+            `Graph ${parsed.graphId} guidance queued for the next safe boundary`,
+          );
+          break;
+        }
+        case "graph-signal": {
+          const parsed = parseGraphSignal(command.arg);
+          if (!parsed) {
+            notice("usage: /graph-signal <graph-id> <name>", "error");
+            break;
+          }
+          runGraphSignal(parsed.graphId, parsed.name);
           break;
         }
         case "approve": {
@@ -2200,6 +2382,8 @@ export function App({
       runTask,
       runLoopTask,
       resumeLoopTask,
+      runGraphControl,
+      runGraphSignal,
       openExternalEditor,
       quit,
       syncBg,

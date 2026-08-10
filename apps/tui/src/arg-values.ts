@@ -17,6 +17,8 @@ export type ArgContext = {
   memoryFactCount: number;
   /** Files under .seekforge/memory/ offered by "/memory edit ". */
   memoryFiles?: string[];
+  /** Persisted Engineering Graphs offered by the "/graph-*" commands. */
+  graphs?: Array<{ id: string; status: string; settled: number; nodes: number }>;
 };
 
 /** Caps `text` to `max` characters, ellipsizing when it overflows. */
@@ -42,6 +44,20 @@ function todoCandidates(argSoFar: string, ctx: ArgContext): ArgCandidate[] {
   }
   // Empty or a verb prefix ("a", "do", "r"…): offer the verbs.
   return [...TODO_VERBS];
+}
+
+/**
+ * Persisted Graph ids for every `/graph-*` command that takes one. The picker
+ * only completes the FIRST word: once a graph id is typed, `/graph-steer` and
+ * `/graph-signal` take free text (guidance) or a signal name declared by the
+ * definition, neither of which this pure module can enumerate.
+ */
+function graphCandidates(argSoFar: string, ctx: ArgContext): ArgCandidate[] {
+  if (/\s/.test(argSoFar)) return [];
+  return (ctx.graphs ?? []).map((graph) => ({
+    value: graph.id,
+    hint: `[${graph.status}] ${graph.settled}/${graph.nodes} nodes`,
+  }));
 }
 
 function tasksCandidates(argSoFar: string, ctx: ArgContext): ArgCandidate[] {
@@ -102,6 +118,12 @@ export function argCandidates(command: string, argSoFar: string, ctx: ArgContext
         { value: "", hint: "show settings" },
         { value: "edit", hint: "open in $EDITOR" },
       ];
+    case "graph-show":
+    case "graph-pause":
+    case "graph-continue":
+    case "graph-steer":
+    case "graph-signal":
+      return graphCandidates(argSoFar, ctx);
     case "todo":
       return todoCandidates(argSoFar, ctx);
     case "tasks":

@@ -1,0 +1,38 @@
+{
+  "id": "graph-multi-node",
+  "title": "Run a five-node Engineering Graph (agent + function + gate + join) to passed",
+  "fixture": "graph-multi-node",
+  "mode": "edit",
+  "runner": "graph",
+  "task": "Engineering Graph control plane: one Agent node repairs the fixture, then function, gate, and join nodes settle in dependency order.",
+  "graph": {
+    "expectedStatus": "passed",
+    "approve": ["release-review"],
+    "definition": {
+      "graphId": "eval-graph-multi-node",
+      "costBudgetUsd": 1,
+      "nodes": [
+        {
+          "id": "implement",
+          "kind": "agent",
+          "mode": "edit",
+          "approvalMode": "auto",
+          "task": "`npm test` fails in this project. `slugify` in src/slugify.js must lowercase the title, collapse every run of non-alphanumeric characters into a single \"-\", and trim leading and trailing \"-\". Fix src/slugify.js so all three tests pass. Do NOT edit anything under test/. Run `npm test` to verify."
+        },
+        { "id": "collect-implementation", "kind": "function", "handler": "collect", "dependsOn": ["implement"] },
+        { "id": "release-review", "kind": "gate", "dependsOn": ["collect-implementation"] },
+        { "id": "quality", "kind": "join", "quorum": 2, "dependsOn": ["implement", "collect-implementation"] },
+        { "id": "summary", "kind": "function", "handler": "collect", "dependsOn": ["release-review", "quality"] }
+      ]
+    }
+  },
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "command_succeeds", "command": "node verify-graph.mjs" },
+    { "type": "file_contains", "path": "test/slugify.test.js", "pattern": "trims leading and trailing separators" },
+    { "type": "file_contains", "path": "verify-graph.mjs", "pattern": "GRAPH_ID = .eval-graph-multi-node." },
+    { "type": "file_not_contains", "path": "test/slugify.test.js", "pattern": "skip" },
+    { "type": "answer_matches", "pattern": "^graph eval-graph-multi-node passed" }
+  ],
+  "notes": "Drives core's real runEngineeringGraph with the same deterministic noop/collect handler registry the CLI and Server expose. The gate is crossed by an explicit approvedNodeIds selection on the first invocation, so a graph that silently auto-approves would still pass its status check but verify-graph.mjs pins the node kinds, the single Agent attempt, and the scheduler's dependency ordering from the durable checkpoint."
+}

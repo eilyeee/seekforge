@@ -8,8 +8,14 @@
 import { existsSync, opendirSync } from "node:fs";
 import { join, posix } from "node:path";
 import {
+  BUILTIN_GRAPH_HANDLERS,
   MAX_LOOP_ITERATIONS,
   MEMORY_CANDIDATE_TYPES,
+  isValidLoopDagId,
+  parseEngineeringGraphDefinition,
+  validateEngineeringGraphRunOptions,
+  type EngineeringGraphDefinition,
+  type GraphRunStatus,
   type LoopEvent,
   type LoopStatus,
   type LoopVerificationStage,
@@ -21,7 +27,7 @@ import { readTextFileBounded } from "./file-io.js";
 import { MAX_TASK_FILE_BYTES, MAX_TASK_FILES } from "./limits.js";
 import { compareByCodePoints } from "@seekforge/shared";
 
-export const TASK_RUNNERS = ["agent", "loop", "session_scenario"] as const;
+export const TASK_RUNNERS = ["agent", "loop", "session_scenario", "graph"] as const;
 export type TaskRunner = (typeof TASK_RUNNERS)[number];
 export type ExpectedSessionStatus = "completed" | "failed";
 export type MemoryStatField = keyof MemoryStats;
@@ -93,6 +99,30 @@ export type SessionScenarioStep =
 
 export type SessionScenarioConfig = { steps: SessionScenarioStep[] };
 
+/** One external Graph signal delivered into the durable mailbox before a resume. */
+export type GraphSignalSpec = { name: string; payload?: unknown };
+
+export type GraphResumeConfig = {
+  expectedInitialStatus: GraphRunStatus;
+  /** Gate node paths crossed by the resume, e.g. "review" or "child/review". */
+  approve?: string[];
+  /** Node paths invalidated together with their descendants before the resume. */
+  rerun?: string[];
+  /** Enqueued into `.seekforge/graphs/<id>.signals.json` before resuming. */
+  signals?: GraphSignalSpec[];
+};
+
+export type GraphTaskConfig = {
+  definition: EngineeringGraphDefinition;
+  expectedStatus: GraphRunStatus;
+  /** Gate node paths pre-approved on the first invocation. */
+  approve?: string[];
+  /** Operational caps for the invocation; they never change the definition fingerprint. */
+  costBudgetUsd?: number;
+  tokenBudget?: number;
+  resume?: GraphResumeConfig;
+};
+
 export type TaskProvenance = {
   /** How the task entered the dataset; dogfood/external tasks must name their source. */
   kind: "synthetic" | "dogfood" | "external";
@@ -113,6 +143,7 @@ export type TaskDef = {
   expectedStatus?: ExpectedSessionStatus;
   loop?: LoopTaskConfig;
   scenario?: SessionScenarioConfig;
+  graph?: GraphTaskConfig;
 };
 
 const LOOP_STATUSES = new Set<LoopStatus>([
@@ -133,6 +164,9 @@ const INTERRUPTIBLE_LOOP_EVENTS = new Set<LoopEvent["type"]>([
   "loop.snapshot",
   "requirements.completed",
 ]);
+const GRAPH_RUN_STATUSES = new Set<GraphRunStatus>(["running", "paused", "passed", "failed", "cancelled"]);
+const MAX_GRAPH_SELECTION = 32;
+const MAX_GRAPH_SIGNALS = 16;
 const MEMORY_STAT_FIELDS = new Set<MemoryStatField>([
   "totalApprovedFacts",
   "autoExtractedFacts",
@@ -465,6 +499,94 @@ function parseLoop(value: unknown, where: string): LoopTaskConfig {
   return loop;
 }
 
+function graphRunStatus(value: unknown, where: string): GraphRunStatus {
+  if (typeof value !== "string" || !GRAPH_RUN_STATUSES.has(value as GraphRunStatus)) {
+    throw new Error(`${where} must be a valid Graph run status`);
+  }
+  return value as GraphRunStatus;
+}
+
+/** Shape-only: core owns which node paths and gate ids are actually selectable. */
+function graphNodeSelection(value: unknown, where: string): string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_GRAPH_SELECTION) {
+    throw new Error(`${where} must contain 1 to ${MAX_GRAPH_SELECTION} node paths`);
+  }
+  return value.map((entry, index) => {
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      throw new Error(`${where}[${index}] must be a non-empty node path`);
+    }
+    return entry;
+  });
+}
+
+function parseGraph(value: unknown, where: string): GraphTaskConfig {
+  if (!isRecord(value)) throw new Error(`${where} must be an object`);
+  // Definition validity, node/gate ids, handler registration, and the
+  // rerun-requires-resume rule all belong to core; re-implementing them here
+  // would create a second owner that could disagree with the runtime.
+  const definition = parseEngineeringGraphDefinition(value.definition);
+  const config: GraphTaskConfig = {
+    definition,
+    expectedStatus: graphRunStatus(value.expectedStatus, `${where}.expectedStatus`),
+  };
+  if (value.costBudgetUsd !== undefined) {
+    config.costBudgetUsd = positiveNumber(value.costBudgetUsd, `${where}.costBudgetUsd`);
+  }
+  if (value.tokenBudget !== undefined) {
+    config.tokenBudget = positiveInteger(value.tokenBudget, `${where}.tokenBudget`);
+  }
+  if (value.approve !== undefined) config.approve = graphNodeSelection(value.approve, `${where}.approve`);
+  if (value.resume !== undefined) {
+    if (!isRecord(value.resume)) throw new Error(`${where}.resume must be an object`);
+    const resume: GraphResumeConfig = {
+      expectedInitialStatus: graphRunStatus(
+        value.resume.expectedInitialStatus,
+        `${where}.resume.expectedInitialStatus`,
+      ),
+    };
+    if (value.resume.approve !== undefined) {
+      resume.approve = graphNodeSelection(value.resume.approve, `${where}.resume.approve`);
+    }
+    if (value.resume.rerun !== undefined) {
+      resume.rerun = graphNodeSelection(value.resume.rerun, `${where}.resume.rerun`);
+    }
+    if (value.resume.signals !== undefined) {
+      if (
+        !Array.isArray(value.resume.signals) ||
+        value.resume.signals.length === 0 ||
+        value.resume.signals.length > MAX_GRAPH_SIGNALS
+      ) {
+        throw new Error(`${where}.resume.signals must contain 1 to ${MAX_GRAPH_SIGNALS} signals`);
+      }
+      resume.signals = value.resume.signals.map((raw, index) => {
+        const signalWhere = `${where}.resume.signals[${index}]`;
+        if (!isRecord(raw) || !isValidLoopDagId(raw.name)) {
+          throw new Error(`${signalWhere}.name must be a safe signal id`);
+        }
+        return { name: raw.name, ...(raw.payload !== undefined ? { payload: raw.payload } : {}) };
+      });
+    }
+    if (resume.approve === undefined && resume.rerun === undefined && resume.signals === undefined) {
+      throw new Error(`${where}.resume must approve, rerun, or deliver a signal`);
+    }
+    config.resume = resume;
+  }
+  const runOptions = { workspace: ".", handlers: BUILTIN_GRAPH_HANDLERS } as const;
+  validateEngineeringGraphRunOptions(definition, {
+    ...runOptions,
+    ...(config.approve ? { approvedNodeIds: config.approve } : {}),
+  });
+  if (config.resume) {
+    validateEngineeringGraphRunOptions(definition, {
+      ...runOptions,
+      resume: true,
+      ...(config.resume.approve ? { approvedNodeIds: config.resume.approve } : {}),
+      ...(config.resume.rerun ? { rerunFrom: config.resume.rerun } : {}),
+    });
+  }
+  return config;
+}
+
 function parseScenario(value: unknown, where: string): SessionScenarioConfig {
   if (!isRecord(value) || !Array.isArray(value.steps) || value.steps.length === 0) {
     throw new Error(`${where}.steps must be a non-empty array`);
@@ -546,7 +668,7 @@ export function validateTask(value: unknown, where: string): TaskDef {
   }
   const runner = value.runner ?? "agent";
   if (typeof runner !== "string" || !TASK_RUNNERS.includes(runner as TaskRunner)) {
-    throw new Error(`${where}: "runner" must be agent, loop, or session_scenario`);
+    throw new Error(`${where}: "runner" must be agent, loop, session_scenario, or graph`);
   }
   const task: TaskDef = {
     id: requireTaskId(value, where),
@@ -575,20 +697,26 @@ export function validateTask(value: unknown, where: string): TaskDef {
   }
 
   if (runner === "agent") {
-    if (value.loop !== undefined || value.scenario !== undefined) {
-      throw new Error(`${where}: agent tasks cannot define loop or scenario config`);
+    if (value.loop !== undefined || value.scenario !== undefined || value.graph !== undefined) {
+      throw new Error(`${where}: agent tasks cannot define loop, scenario, or graph config`);
     }
     if (value.expectedStatus !== undefined) {
       task.expectedStatus = expectedSessionStatus(value.expectedStatus, `${where}.expectedStatus`);
     }
   } else if (runner === "loop") {
     if (mode !== "edit") throw new Error(`${where}: loop tasks must use edit mode`);
-    if (value.expectedStatus !== undefined || value.scenario !== undefined) {
-      throw new Error(`${where}: loop tasks use loop.expectedStatus and cannot define scenario config`);
+    if (value.expectedStatus !== undefined || value.scenario !== undefined || value.graph !== undefined) {
+      throw new Error(`${where}: loop tasks use loop.expectedStatus and cannot define scenario or graph config`);
     }
     task.loop = parseLoop(value.loop, `${where}.loop`);
+  } else if (runner === "graph") {
+    if (mode !== "edit") throw new Error(`${where}: graph tasks must use edit mode`);
+    if (value.expectedStatus !== undefined || value.loop !== undefined || value.scenario !== undefined) {
+      throw new Error(`${where}: graph tasks use graph.expectedStatus and cannot define loop or scenario config`);
+    }
+    task.graph = parseGraph(value.graph, `${where}.graph`);
   } else {
-    if (value.expectedStatus !== undefined || value.loop !== undefined) {
+    if (value.expectedStatus !== undefined || value.loop !== undefined || value.graph !== undefined) {
       throw new Error(`${where}: session_scenario tasks define terminal states per step`);
     }
     task.scenario = parseScenario(value.scenario, `${where}.scenario`);

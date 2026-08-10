@@ -143,7 +143,9 @@ export type PluginRecord = {
       agentRoots?: string[];
       mcpServers?: Record<string, unknown>;
       hooks?: Record<string, unknown>;
-      graphHandlers?: Record<string, "noop" | "collect">;
+      // The built-in handler catalogue is owned and validated by Core; naming
+      // the ids here again only creates a mirror that goes stale.
+      graphHandlers?: Record<string, string>;
       graphExecutors?: Record<string, string>;
     };
   };

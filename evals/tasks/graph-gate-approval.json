@@ -1,0 +1,39 @@
+{
+  "id": "graph-gate-approval",
+  "title": "Pause an Engineering Graph at a gate and cross it with an explicit approval",
+  "fixture": "graph-gate-approval",
+  "mode": "edit",
+  "runner": "graph",
+  "task": "Engineering Graph control plane: the graph must pause at the review gate after the Agent node passes, and only an explicit approval on resume may release the downstream node.",
+  "graph": {
+    "expectedStatus": "passed",
+    "definition": {
+      "graphId": "eval-graph-gate",
+      "costBudgetUsd": 1,
+      "nodes": [
+        {
+          "id": "implement",
+          "kind": "agent",
+          "mode": "edit",
+          "approvalMode": "auto",
+          "task": "`npm test` fails in this project. `compareVersions` in src/semver.js compares versions as plain strings, so \"1.10.0\" sorts before \"1.9.0\". Fix src/semver.js to compare each dot-separated part numerically, returning -1, 0, or 1. Do NOT edit anything under test/. Run `npm test` to verify."
+        },
+        { "id": "review", "kind": "gate", "dependsOn": ["implement"] },
+        { "id": "publish", "kind": "function", "handler": "collect", "dependsOn": ["review"] }
+      ]
+    },
+    "resume": {
+      "expectedInitialStatus": "paused",
+      "approve": ["review"]
+    }
+  },
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "command_succeeds", "command": "node verify-graph.mjs" },
+    { "type": "file_contains", "path": "test/semver.test.js", "pattern": "compares major parts numerically" },
+    { "type": "file_contains", "path": "verify-graph.mjs", "pattern": "GRAPH_ID = .eval-graph-gate." },
+    { "type": "file_not_contains", "path": "test/semver.test.js", "pattern": "skip" },
+    { "type": "answer_matches", "pattern": "review=passed" }
+  ],
+  "notes": "The first invocation is asserted to stop at \"paused\" (gate approval), which a graph that ignored the gate would fail before any check runs. The resume supplies approvedNodeIds for exactly that gate; verify-graph.mjs proves from the checkpoint that the gate really waited, that the resume was a resume (one graph.started, one graph.resumed), that the Agent ancestor was not replayed, and that the post-gate node only settled after the resume."
+}

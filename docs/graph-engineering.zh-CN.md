@@ -4,6 +4,8 @@
 
 图工程是 SeekForge 的持久化编排层，用于组合 Agent、自主 Loop、确定性函数、有界 map、quorum join、路由器、审批门和嵌套子图。它与 `loop-dag` 互补：Loop DAG 针对同构的「运行→验证」节点和托管 worktree 优化，工程图则负责协调异构工作。
 
+**与 Loop DAG 的关系。** 工程图是 SeekForge 持续演进的编排引擎；Loop DAG 是单一节点类型场景下已冻结的捷径，`seekforge loop-dag export-graph` 可把 DAG 迁移到本引擎。但工程图的 `loop` 节点目前还不等于完整的 Loop DAG 节点：它只把 `task`、`workspace`、`verifyCommand`、`approvalMode`、各项预算与 `timeoutMs` 传给子 Loop，不接受逐 Loop 调参（`maxIterations`、验证计划、模型路由、`codeReview`）、把依赖输出注入任务、声明式输出产物、逐节点预算权重，以及逐节点失败策略。这些 Loop DAG 能力在工程图里今天没有等价物，因此需要它们的工作流应留在 Loop DAG 上，直到工程图补齐。
+
 桌面端创建工作台会从同一份 JSON 定义绘制确定性的依赖画布，并支持结构化添加节点与依赖；只有服务端校验和模拟成功后才可启动。
 带版本的注册项会按 `{template, registeredAt}` 解码；选择注册项只建立精确比较基线，不会修改当前草稿。只有显式确认载入后才会把其中的语义模板复制进编辑器，保留参数信封并预填声明的默认值，同时支持依赖编辑与引用安全的叶节点删除，随后必须重新通过校验/模拟。
 工作台还会把声明的 string/number/boolean 参数呈现为类型化控件，同时保留原始 JSON 编辑器。定义与参数草稿会在短暂去抖后按精确工作区身份自动保存在本地；有界且带版本的缓存会拒绝畸形、重复、超限或未来时间记录，在生命周期边界刷新待保存编辑，并可在不修改服务端状态的情况下重置。浏览器存储不可用或写入、删除失败时，工作台会明确提示，不会误报持久化成功。
@@ -77,7 +79,7 @@ flowchart LR
 
 - `agent`：单次 Agent 任务；`mode` 与 `approvalMode` 继续使用常规权限策略。
 - `loop`：完整的自主 Loop，拥有验证器，并获得剩余图预算的一部分。
-- `function`：由嵌入方提供的命名处理器。所有处理器会在副作用前解析完成。CLI 只提供安全的 `noop` 与 `collect`；不会把处理器名称转换成 shell 命令。可重试处理器必须具备幂等性。处理器 id 会进入恢复指纹，因此行为变化时也必须更换 id。
+- `function`：命名处理器，可以由嵌入方提供，也可以是八个确定性内建之一——`noop`、`collect`、`pick`、`project`、`merge`、`assert`、`count`、`summarize`。所有处理器会在副作用前解析完成。处理器只按名称选择，永远不会被转换成 shell 命令。可重试处理器必须具备幂等性。处理器 id 会进入恢复指纹，因此行为变化时也必须更换 id。
 - `map`：通过有界 JSON Pointer 读取已声明依赖的输出，最多对 `maxItems` 个值调用注册处理器（默认 32，硬上限 64）；每个元素都有稳定幂等键并获得节点剩余预算的份额，失败批次发布前会等待同批所有已启动元素结算。
 - `join`：依赖全部结算后，只要至少 `quorum` 个依赖通过就成功，用于有界 quorum/reduce 流程。
 - `router`：先选择首个匹配的条件路由，再选择可选默认路由。下游通过 `route.routerId` 和 `route.branch` 绑定。
@@ -85,9 +87,13 @@ flowchart LR
 - `subgraph`：在有界嵌套层数内运行另一张已校验图。每个子图都会获得确定性、抗碰撞的检查点 id，并记录父 Graph/节点来源；其用量计入父图并受父级份额约束。子图重试会恢复子检查点，并只让失败节点及其下游失效。
 - `wait`：持久暂停，直到收到声明的外部信号或到达绝对 `notBefore` 时间；可选 `expiresAt` 会把未解决等待转为有界失败，并拒绝截止时间之后创建的信号。
 - `compensation`：声明一个或多个已成功的 `compensates` 依赖。主流程失败后，符合条件的补偿节点按完成/拓扑逆序串行执行，并共享 Graph 剩余的硬预算；主流程成功时记录为跳过。
-- `remote`：通过嵌入方注册的 `GraphExecutionAdapter` 委托执行。预检只接受显式标记为 `trusted` 且 `locality: "remote"` 的适配器；Graph 或插件不能仅凭名称创建信任。
+- `remote`：通过嵌入方注册的 `GraphExecutionAdapter` 委托执行。预检只接受显式标记为 `trusted` 且 `locality: "remote"` 的适配器；Graph 或插件不能仅凭名称创建信任。纯 CLI 现已自带两个：`sandbox-run` 与 `remote-run` 背后的 Docker 与 ssh runner，见[作为 Graph 执行器](remote.zh-CN.md#作为-graph-执行器)，从操作者 home 目录下的 `~/.seekforge/graph-executors.json` 注册——绝不从工作区读取，因此被克隆的仓库无法指定主机。remote 节点的结果携带 `{runner, sessionId, summary, costAccounting: "reported" | "unreported", costAccount: "local" | "remote"}`，因此下游 `function` 节点可以拒绝把一个未计量的节点当作零成本。按幂等键恢复的日志位于 `.seekforge/graph-remote-results/`，上限 256 条。
 
 节点可以通过 `inputs` 把名称绑定到直接依赖输出并附可选 schema。递归 schema 支持有界对象 `properties`/`required`/`additionalProperties`、数组 `items` 与数量边界，以及基础类型 enum。函数、map、补偿和远程处理器每个节点最多返回 32 个工作区相对 artifact。`verifyArtifacts: true` 会在不跟随符号链接的前提下重新验证物理文件，流式计算/核验 SHA-256，并记录大小与生产节点来源。
+
+声明式内建处理器的操作数同样来自 `inputs` 绑定，而不是任何「处理器参数」字段，因此定义 schema 不会长出一套表达式语言。`pick`、`count`、`summarize` 是单操作数：运行时提供 map item 时读该 item，否则读名为 `value` 的输入。`project`、`merge`、`assert` 按声明顺序读取全部已声明输入，并直接拒绝 map item——否则它们会忽略该 item，为每个 item 发布同一份输出。`merge` 要求输入为对象，后者覆盖前者，且永不复制 `__proto__` 键。`assert` 在任一已声明输入无法解析或不满足其声明 schema 时让节点失败，且只发布被断言的名称，因此对一个大对象做门控不会占用节点输出预算。已声明但无法解析的输入是定义错误而非瞬时故障，因此节点直接失败不重试，而不是把 `undefined` 留给下游。
+
+这让「只写定义」也能做判定：`count` 对数组返回长度、对对象返回自有键数，形如 `{count}`；`summarize` 对数组返回固定结构 `{count, truthy, falsy, byType}`。因为结构固定，`outputSchema` 可以直接门控它——在 `summarize` 节点上写 `{"type":"object","properties":{"falsy":{"type":"number","enum":[0]}}}`，含义就是「每个 map item 都为真值」，全程不需要任何嵌入代码。
 
 `priority` 决定同时就绪节点的顺序；同一优先级内，剩余依赖路径最长的工作先启动。`resources` 声明逻辑锁；点号分隔的 id 构成层级，因此 `provider.deepseek` 与 `provider.deepseek.chat` 冲突。`resourceCapacities` 可放宽同名资源的并发数，但父子资源仍互斥。`adaptiveScheduling: true` 使用有界历史耗时/失败观测作为静态关键层级内的次序。只有与定义及物理工作区精确指纹相同的已持久化通过/失败结果会参与；等待态与 `persist: false` 运行既不读取也不产生建议。不含输出的历史保留 30 天，并在跨进程变更租约下限制为 512 条、128 KiB。Auto Loop 验证、Loop DAG 与 Graph 共享同一个确定性、资源感知 ready queue 实现。
 
@@ -121,6 +127,18 @@ flowchart LR
 
 `seekforge orchestration maintain` 执行一次安全控制 tick：刷新提案、记录终态观测与校准、协调已有灰度、重建物化索引并协调自适应控制器；它不会批准提案或启动部署。添加 `--dry-run` 可在不写入的情况下预览影响。`seekforge serve --orchestration-auto-maintain` 只在各工作区空闲时运行该 tick；额外添加 `--orchestration-auto-rollback` 才会对观测到的回归执行回滚。
 
+### TUI 工作流
+
+TUI 暴露的是持久化控制面，不提供执行面。`/graph-list` 与
+`/graph-show <graph-id>` 读取 `.seekforge/graphs/` 下的检查点；`/graph-pause`、
+`/graph-continue`、`/graph-steer` 写入持久化控制命令，由正在执行的运行在下一个
+安全边界应用；`/graph-signal <graph-id> <name>` 向声明了等待信号的节点投递信号。
+这五个命令都复用 `checkGraphControlTarget` / `checkGraphSignalTarget`，因此对未在
+运行的 Graph、未知节点或未声明的信号，会给出与 CLI、REST 完全一致的拒绝信息。
+启动、恢复、重启或审批 Graph 节点仍然需要定义文件，因此只能通过 CLI
+（`seekforge graph run|resume <file> --approve <node-id>`）或桌面端完成——审批是
+运行选项而非控制信箱操作，无法投递给一个已经暂停的运行。
+
 ### 桌面端使用流程
 
 由聊天 Agent 或 REST/CLI 启动 Graph 后，桌面端 Loop 管理器会自动发现它。桌面端 Graph 区域是观测与控制面，而不是定义编写表单：展开 Graph 可检查节点，并使用执行控制、审批、信号、重跑、对比和保留 worktree 操作。打开「编排决策智能」并刷新，会执行一次空闲安全的维护 tick，同时加载共享工作区报告。面板会展示 SLO burn 与控制器冻结状态、上下文路由、执行器容量、运行时重规划顺序、预测不确定性、产物证明数量、精确提案动作和灰度阶段/时间线。先批准提案，再启动 shadow，显式进入 5% cohort，观察证据，并逐阶段推进证据已达标的 cohort；只有暂停的 cohort 才需要恢复。两个区域共享同一份持久检查点和租约。
@@ -151,6 +169,39 @@ seekforge graph resources release promote --target fan-in
 seekforge graph delete release
 ```
 
+持久控制、外部信号、证据、运行对比与模板注册表在 CLI 上和 REST 一样可用，因此
+操作一个 Graph 不再需要先起服务器：
+
+```sh
+seekforge graph pause release
+seekforge graph pause release --node verify
+seekforge graph continue release
+seekforge graph steer release "prefer the smaller fix"
+seekforge graph cancel-node release verify
+seekforge graph reprioritize release verify 5
+seekforge graph signal release approved --payload '{"build":42}'
+seekforge graph evidence release
+seekforge graph evidence --verify evidence.json
+seekforge graph compare release --run-number 2
+seekforge graph template list
+seekforge graph template show package-release 1.0.0
+seekforge graph template register package-release.template.json
+seekforge graph template compare package-release 1.0.0 candidate.template.json
+seekforge graph template deprecate package-release 1.0.0
+```
+
+`pause`、`continue`、`steer`、`cancel-node`、`reprioritize` 写入的是 REST `control`
+端点使用的同一个持久控制信箱，因此它们可以作用于由另一个存活的 SeekForge 进程
+持有的 Graph，并且只在安全的调度边界生效。节点一旦开始执行，针对该节点的命令会被
+拒绝。`signal` 投递定义中已声明的信号；由于只有存活的持有者会消费信箱，对处于
+wait 暂停的 Graph 投递信号时会提示必须带定义恢复该运行。`evidence --verify` 会
+重算导出报告的 SHA-256 完整性摘要，不匹配时以非零码退出。`template compare` 在
+分类为 `breaking` 时以非零码退出。
+
+「某个控制或信号此刻能否作用于这个 Graph」由 Core 的 `checkGraphControlTarget`
+与 `checkGraphSignalTarget` 唯一裁定；CLI 与 REST 都调用它们，而不是各自维护一份
+平行规则。
+
 服务器提供校验/空跑计划（`POST /api/graphs/validate`）、无副作用的资源与预算仿真（`POST /api/graphs/simulate`）、调度智能（`GET /api/graph-scheduling-intelligence`）、绑定精确指纹的健康预测（`GET /api/graphs/:id/health`）、后台启动（`POST /api/graphs`）、显式恢复/审批/重跑/重启/取消、Graph 级暂停，以及待执行节点的暂停、指导、取消与重排优先级（`POST /api/graphs/:id/control`）、外部信号（`POST /api/graphs/:id/signals`）、自动恢复优先级（`POST /api/graphs/:id/priority`）、节点资格解释（`GET /api/graphs/:id/explain/:nodeId`）、运行对比（`GET /api/graphs/:id/compare`）、有界历史、证据导出、列表/详情与删除。
 
 空闲恢复只选择失去 owner 的 `running` Graph，以及定时器到期或信号就绪的 wait 暂停 Graph；显式控制暂停与审批暂停保持粘性。候选按 -10 到 10 的可变优先级排序，失败后持久执行 30 秒到 1 小时的指数退避。Loop 与 Graph 通过同一个精确字段、时间戳有序的持久契约解析恢复子记录。恢复记账同时绑定尝试前和新写入检查点的运行身份，因此迟到失败不会修改后续运行。schema-v2 模板可通过 `/api/graphs/templates` 精确版本注册和解析，版本不会静默漂移；兼容性比较会把参数删除、必填参数新增、默认值删除、参数类型变化和输出接口变化归为破坏性变更，弃用仅记录显式元数据，不会重写已有引用。可选的 `interface.outputSchema` 与节点使用同一套有界递归 schema 解析器。空跑计划把正常执行波次与补偿顺序分开返回，并包含关键路径、资源容量、最大并行宽度、最大尝试/动态元素数和输入绑定。Graph 运行会进入统一 Run Ledger，并在服务器关闭时排空。由服务器启动且包含 Agent 或 Loop 节点的 Graph 必须声明 `costBudgetUsd`。
@@ -171,7 +222,7 @@ Graph 健康报告还会给出 P50/P95 总耗时、测量覆盖率、仿真风�
 
 Desktop 的 Loop 管理器现在形成从创建到运维的闭环。**创建工程编排图**可载入带版本模板，或编辑有界 JSON 定义及参数；它并行执行校验和模拟，展示执行波次、关键路径、成本/令牌估算与风险，且只有当前文本与成功预览完全一致时才能启动。**编排决策智能**是灰度控制中心，可配置 1–32 个样本门禁、推进 shadow/金丝雀、手工暂停/恢复、选择性自动回滚、恢复控制器，并查看近期持久化时间线。**产物可信链**支持注册/吊销 Ed25519 公钥、显示每项证明的即时验证结果，并签入 builder、环境、工具链、输入和可选 SBOM 来源；提交的私钥只用于当次请求，不会持久化。**运维诊断**聚合有界 Loop/Graph 检查点问题、控制器决策、灰度、活跃执行器预留与 CAS 统计，可校准过期容量并导出精确 JSON 快照。所有面板都把异步结果绑定到选中工作区代次，并复用服务端的持久化租约与校验。
 
-Server 与 CLI 共享确定性的 `noop`、`collect` 注册表。已启用插件可以通过命名空间化 `graphHandlers` 声明这些内建处理器的安全别名，也可以为宿主已经注册为可信的 `graphExecutor` 建立别名；插件清单不能提供可执行代码、提升不可信适配器，也不能把处理器名转换成 shell 命令。
+Server 与 CLI 共享确定性的内建处理器注册表（`noop`、`collect`、`pick`、`project`、`merge`、`assert`、`count`、`summarize`）。已启用插件可以通过命名空间化 `graphHandlers` 为其中任意内建处理器声明安全别名，也可以为宿主已经注册为可信的 `graphExecutor` 建立别名；插件清单不能提供可执行代码、提升不可信适配器，也不能把处理器名转换成 shell 命令。
 
 `GET /api/graphs/:id/history` 默认保留原有事件数组响应；添加 `?format=entries&afterSeq=<n>&limit=<n>` 可获得带游标的 JSONL 记录。`GET /api/graphs/:id/evidence` 返回防篡改摘要，其中包含托管分支和 fan-in 来源，但不暴露 fan-in 的绝对工作区路径。`GET`/`POST /api/graphs/:id/resources` 用于检查或执行 `archive`、`prune`、`promote` 操作；仍有托管资源时删除会被拒绝。列表接口省略定义与节点输出，并只保留近期事件；详情接口返回完整的有界检查点。Desktop 检查视图会从标准化详情渲染依赖箭头，并提供同一套归档、提升、清理生命周期操作。
 

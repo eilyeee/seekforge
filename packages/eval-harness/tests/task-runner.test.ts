@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { AgentEvent } from "@seekforge/shared";
 import type { AgentCoreDeps } from "@seekforge/core";
 import { evaluateCheck, runCheckCommand, runTask } from "../src/task-runner.js";
+import { validateTask } from "../src/tasks.js";
 import { FAKE_USAGE, completedEvents, fakeAgent, makeTask, makeTempFixture, type TempFixture } from "./helpers.js";
 
 let fixtures: TempFixture[] = [];
@@ -504,5 +505,122 @@ describe("runTask", () => {
     expect(result.success).toBe(true);
     expect(result.error).toBeUndefined();
     expect(result.execution).toMatchObject({ status: "failed", expectedStatus: "failed", passed: true });
+  });
+});
+
+/**
+ * These run core's REAL runEngineeringGraph. Gate, wait, and function nodes
+ * need no provider, so the whole Graph control plane is exercised offline.
+ */
+describe("runTask graph runner", () => {
+  const graphTask = (graph: unknown, checks: unknown[]) =>
+    validateTask({ ...makeTask(), runner: "graph", graph, checks }, "graph-runner");
+  const offlineAgent = () => ({ agent: { async *runTask() {} }, deps: {} as AgentCoreDeps });
+
+  it("pauses at a gate and resumes with an explicit approval", async () => {
+    const fx = fixture({ "file.txt": "ok" });
+    const result = await runTask(
+      graphTask(
+        {
+          expectedStatus: "passed",
+          definition: {
+            graphId: "harness-gate",
+            nodes: [
+              { id: "before", kind: "function", handler: "noop" },
+              { id: "review", kind: "gate", dependsOn: ["before"] },
+              { id: "after", kind: "function", handler: "collect", dependsOn: ["review"] },
+            ],
+          },
+          resume: { expectedInitialStatus: "paused", approve: ["review"] },
+        },
+        [{ type: "command_succeeds", command: "test -f .seekforge/graphs/harness-gate.json" }],
+      ),
+      { fixturesDir: fx.fixturesDir, createAgent: offlineAgent },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.success).toBe(true);
+    expect(result.execution).toMatchObject({
+      runner: "graph",
+      status: "passed",
+      expectedStatus: "passed",
+      resumed: true,
+      pauseReason: "approval",
+    });
+    expect(result.execution?.nodes?.map((node) => `${node.id}:${node.kind}:${node.status}`)).toEqual([
+      "before:function:passed",
+      "review:gate:passed",
+      "after:function:passed",
+    ]);
+  });
+
+  it("delivers an external signal into the mailbox before resuming a wait", async () => {
+    const fx = fixture({ "file.txt": "ok" });
+    const result = await runTask(
+      graphTask(
+        {
+          expectedStatus: "passed",
+          definition: {
+            graphId: "harness-wait",
+            nodes: [{ id: "external", kind: "wait", waitFor: { signal: "go" } }],
+          },
+          resume: { expectedInitialStatus: "paused", signals: [{ name: "go", payload: { release: "1.2.3" } }] },
+        },
+        [{ type: "answer_matches", pattern: "external=passed" }],
+      ),
+      { fixturesDir: fx.fixturesDir, createAgent: offlineAgent },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.success).toBe(true);
+    expect(result.execution).toMatchObject({ status: "passed", resumed: true, pauseReason: "wait" });
+  });
+
+  it("finishes an independent branch under failurePolicy continue and reports the expected failure", async () => {
+    const fx = fixture({ "file.txt": "ok" });
+    const result = await runTask(
+      graphTask(
+        {
+          expectedStatus: "failed",
+          definition: {
+            graphId: "harness-continue",
+            failurePolicy: "continue",
+            nodes: [
+              {
+                id: "stale",
+                kind: "wait",
+                waitFor: { signal: "never", expiresAt: "2000-01-01T00:00:00.000Z" },
+              },
+              { id: "blocked", kind: "function", handler: "noop", dependsOn: ["stale"] },
+              { id: "independent", kind: "function", handler: "noop" },
+            ],
+          },
+        },
+        [{ type: "answer_matches", pattern: "independent=passed" }],
+      ),
+      { fixturesDir: fx.fixturesDir, createAgent: offlineAgent },
+    );
+    expect(result.success).toBe(true);
+    expect(result.execution?.nodes?.map((node) => `${node.id}:${node.status}`)).toEqual([
+      "stale:failed",
+      "blocked:skipped",
+      "independent:passed",
+    ]);
+  });
+
+  it("fails the task when the first invocation misses its expected paused state", async () => {
+    const fx = fixture({ "file.txt": "ok" });
+    const result = await runTask(
+      graphTask(
+        {
+          expectedStatus: "passed",
+          definition: { graphId: "harness-mismatch", nodes: [{ id: "only", kind: "function", handler: "noop" }] },
+          resume: { expectedInitialStatus: "paused", rerun: ["only"] },
+        },
+        [{ type: "answer_matches", pattern: "only=passed" }],
+      ),
+      { fixturesDir: fx.fixturesDir, createAgent: offlineAgent },
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("expected initial graph status paused");
+    expect(result.execution?.resumed).toBe(false);
   });
 });

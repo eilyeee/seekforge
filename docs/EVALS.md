@@ -51,8 +51,8 @@ alternates A→B then B→A to reduce provider-order and time drift.
 
 - `smoke`: fourteen representative navigation, editing, verification, policy,
   resume, memory, dogfood, Python, and TypeScript tasks; one sample by default.
-- `nightly`: all 62 tasks; three samples by default.
-- `release`: all 62 tasks; five samples and tighter gates.
+- `nightly`: all 68 tasks; three samples by default.
+- `release`: all 68 tasks; five samples and tighter gates.
 
 Every sample records prompt, completion, cache-hit, and total tokens, including
 the latest cumulative usage emitted before a failed session; tool calls
@@ -92,7 +92,7 @@ and can restore the server-provided default simulation after a custom run.
 ### Runner modes
 
 Tasks without `runner` retain the historical single-session `agent` behavior.
-Three runner values are supported:
+Four runner values are supported:
 
 - `agent`: one `AgentCore.runTask` call. Optional `expectedStatus` is
   `completed` (default) or `failed`.
@@ -103,6 +103,16 @@ Three runner values are supported:
 - `session_scenario`: ordered `agent`, `memory.add`, `memory.approve`, and
   `memory.reject` steps. An agent step with `resume: true` binds the next run to
   the previous `sessionId`; terminal status is checked per step.
+- `graph`: core's real `runEngineeringGraph` over an inline `graph.definition`
+  with a required `graph.expectedStatus`. Optional `graph.approve` pre-approves
+  gates on the first invocation; optional `graph.resume` asserts an initial
+  `GraphRunStatus`, then resumes with `approve` (gates), `rerun` (a node and its
+  descendants), and `signals` delivered into the durable mailbox between
+  invocations. Only the deterministic built-in handlers are registered — the
+  harness never introduces a shell-capable handler. Definition validity, node
+  and gate ids, handler registration, and the rerun-requires-resume rule are
+  delegated to core's own pure validators, so an unknown gate or undeclared
+  rerun target fails the dataset gate instead of a paid run.
 
 ```json
 {

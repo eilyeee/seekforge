@@ -26,6 +26,7 @@
  */
 
 import { spawn } from "node:child_process";
+import type { GraphRemoteRunnerTransport } from "@seekforge/core";
 import { formatCommandLine, shellQuote } from "./runner.js";
 import type { AgentRunner, RunnerOptions, RunnerResult } from "./runner.js";
 
@@ -43,6 +44,13 @@ export interface SshRunnerOptions extends RunnerOptions {
   binary?: string;
   /** Passed to the remote run as `--permission-mode <mode>` when set. */
   permissionMode?: string;
+  /**
+   * Passed to the remote run as `--output-format <fmt>`. The Graph executor asks
+   * for `json`: the remote host prints its own usage down the same channel that
+   * carried the command, which is the only way a node running on somebody else's
+   * API key can report what it spent.
+   */
+  outputFormat?: string;
 }
 
 /**
@@ -96,6 +104,7 @@ export function buildSshRunArgs(opts: SshRunnerOptions): string[] {
   if (opts.model) remote.push("-m", shellQuote(opts.model));
   if (opts.provider) remote.push("--provider", shellQuote(opts.provider));
   if (opts.permissionMode) remote.push("--permission-mode", shellQuote(opts.permissionMode));
+  if (opts.outputFormat) remote.push("--output-format", shellQuote(opts.outputFormat));
   // One argument: ssh concatenates multiple ones with spaces anyway, and
   // joining here keeps what the remote shell receives visible in the argv.
   args.push(remote.join(" "));
@@ -123,5 +132,65 @@ export function createSshRunner(): AgentRunner {
   return {
     name: "ssh",
     run: (o: RunnerOptions) => spawnSshRun(o as SshRunnerOptions),
+  };
+}
+
+/** Connection knobs an operator pins for the Graph executor; nothing here is task-derived. */
+export type SshGraphTransportOptions = {
+  /** `user@host` (or an ssh_config alias). Required. */
+  host: string;
+  /** Absolute path of the workspace ON THAT HOST. Required — nothing here can resolve it. */
+  workspacePath: string;
+  port?: number;
+  identityFile?: string;
+  binary?: string;
+  provider?: string;
+  model?: string;
+};
+
+/**
+ * The SSH runner as a Graph `remote` transport.
+ *
+ * What it deliberately does NOT claim is as important as what it does:
+ *
+ * - **No fence.** There is no remote object whose name a second attempt would
+ *   collide with, and a token that fences nothing is worse than no token, so
+ *   this transport provides none. Concurrency is bounded instead by the
+ *   adapter's workspace capacity, which the Graph runtime enforces across
+ *   processes.
+ * - **No cancellation.** Killing the local `ssh` client closes the channel, and
+ *   whether the remote `seekforge run` dies with it depends on that host's sshd
+ *   and shell. "Usually" is not a capability, so `supportsCancellation` stays
+ *   off and preflight rejects nodes that require cancellation on this executor.
+ * - **Remote cost account.** The host uses its own API key: the dollars are
+ *   real and reported by the run itself, but they are billed elsewhere, which
+ *   `costAccount: "remote"` records on every node result.
+ */
+export function sshGraphTransport(options: SshGraphTransportOptions): GraphRemoteRunnerTransport {
+  // Fail here, at construction, rather than on the first dispatched node: an
+  // executor the operator configured wrongly must not become a Graph that dies
+  // halfway through.
+  buildSshRunArgs({ ...options, task: "preflight" });
+  return {
+    name: "ssh",
+    costAccount: "remote",
+    // The session is written on the remote host, so no local check can confirm it.
+    sessionIsLocal: false,
+    command: (request) => ({
+      file: "ssh",
+      args: buildSshRunArgs({
+        task: request.task,
+        host: options.host,
+        workspacePath: options.workspacePath,
+        outputFormat: "json",
+        ...(options.port !== undefined ? { port: options.port } : {}),
+        ...(options.identityFile ? { identityFile: options.identityFile } : {}),
+        ...(options.binary ? { binary: options.binary } : {}),
+        ...(options.provider ? { provider: options.provider } : {}),
+        ...(options.model ? { model: options.model } : {}),
+        ...(request.maxCostUsd !== undefined ? { maxCostUsd: request.maxCostUsd } : {}),
+        ...(request.maxDurationSeconds !== undefined ? { maxDurationSeconds: request.maxDurationSeconds } : {}),
+      }),
+    }),
   };
 }

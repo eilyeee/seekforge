@@ -32,6 +32,8 @@ Reproduce first, locate the root cause, fix minimally, prove it stays fixed.
    the source why the wrong value/branch happens.
 3. apply_patch the SMALLEST fix that removes the cause, not the symptom (a null
    check that hides a bad value is a symptom fix). oldString must match uniquely.
+   In the same patch, fix the comments, docstrings and dead code that described
+   the behavior you removed: they now lie about the file.
 4. Add or adjust a regression guard: a test that fails before your fix and
    passes after (apply_patch/write_file), if the project has a test setup.
 5. Verify by re-running the exact failing case with run_command, then the suite.

@@ -4,7 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { isRecord } from "../util/guards.js";
 import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 import { isValidLoopDagId } from "./loop-dag-validation.js";
-import { loadEngineeringGraphState } from "./graph-state.js";
+import { loadEngineeringGraphState, type EngineeringGraphState } from "./graph-state.js";
 import { acquireSessionLease, SessionBusyError } from "./session-lease.js";
 
 export type DurableGraphControlCommand =
@@ -15,6 +15,43 @@ export type DurableGraphControlCommand =
   | { operation: "cancel"; nodeId: string };
 
 export type DurableGraphControlEntry = DurableGraphControlCommand & { seq: number; runId: string; ts: string };
+
+/**
+ * Why a Graph control or signal cannot be accepted right now. `code` maps to a
+ * REST status without the surface having to re-derive the reason.
+ */
+export type GraphControlRejection = { code: "not_running" | "bad_request" | "conflict"; message: string };
+
+/**
+ * State-dependent admissibility of a control command. Structural shape is
+ * enforced by `enqueueGraphControl`; this is the single owner of "may this
+ * command target this Graph right now" so CLI and REST cannot drift apart.
+ */
+export function checkGraphControlTarget(
+  state: EngineeringGraphState,
+  command: DurableGraphControlCommand,
+): GraphControlRejection | undefined {
+  if (state.status !== "running" || !state.controlRunId) {
+    return { code: "not_running", message: `Graph is not running: ${state.graphId}` };
+  }
+  const nodeId = "nodeId" in command ? command.nodeId : undefined;
+  if (nodeId === undefined) {
+    return command.operation === "reprioritize" || command.operation === "cancel"
+      ? { code: "bad_request", message: `Graph ${command.operation} requires a node id` }
+      : undefined;
+  }
+  if (!state.definition.nodes.some((node) => node.id === nodeId)) {
+    return { code: "bad_request", message: `Unknown Graph node: ${nodeId}` };
+  }
+  // A started node already owns its attempt; only pending work can be retargeted.
+  if (
+    state.results.some((result) => result.id === nodeId) ||
+    state.activeAttempts.some((attempt) => attempt.nodeId === nodeId)
+  ) {
+    return { code: "conflict", message: `Graph node control only applies before start: ${nodeId}` };
+  }
+  return undefined;
+}
 
 const MAX_CONTROL_BYTES = 256 * 1024;
 const MAX_CONTROL_ENTRIES = 256;

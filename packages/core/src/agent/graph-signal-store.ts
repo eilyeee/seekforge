@@ -5,6 +5,8 @@ import { isRecord } from "../util/guards.js";
 import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 import { isDenseArray } from "./orchestration.js";
 import { isValidLoopDagId } from "./loop-dag-validation.js";
+import type { GraphControlRejection } from "./graph-control-store.js";
+import type { EngineeringGraphState } from "./graph-state.js";
 import { acquireSessionLease, SessionBusyError } from "./session-lease.js";
 
 export type EngineeringGraphSignal = {
@@ -82,6 +84,21 @@ export function engineeringGraphSignalAvailable(
       (entry.claimedBy === undefined || entry.claimedBy === nodeId) &&
       (deadline === undefined || Date.parse(entry.createdAt) <= deadline),
   );
+}
+
+/**
+ * State-dependent admissibility of an external signal. Payload bounds live in
+ * `enqueueEngineeringGraphSignal`; this is the single owner of "does this Graph
+ * declare that wait and can it accept the signal now" for CLI and REST alike.
+ */
+export function checkGraphSignalTarget(state: EngineeringGraphState, name: string): GraphControlRejection | undefined {
+  if (!isValidLoopDagId(name) || !state.definition.nodes.some((node) => node.waitFor?.signal === name)) {
+    return { code: "bad_request", message: "Graph signal must match a declared wait node" };
+  }
+  if (state.status !== "running" && !(state.status === "paused" && state.pauseReason === "wait")) {
+    return { code: "conflict", message: `Graph is not waiting for a signal: ${state.graphId}` };
+  }
+  return undefined;
 }
 
 async function withSignalLease<T>(workspace: string, graphId: string, operation: () => T): Promise<T> {

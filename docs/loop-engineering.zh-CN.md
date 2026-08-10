@@ -375,6 +375,36 @@ Agent 迭代重复记账。
 worktree 被有意保留以供检查。若原始 loop 使用了 `--worktree`，
 请在该 worktree 目录中运行 `loop-resume`。
 
+### Loop DAG 的定位与冻结
+
+**Loop DAG 是一条捷径，不是第二套引擎。** 一个 Loop DAG 就是工程图的一种同构形态
+——每个节点都是完整的 run→verify Loop。只需要这个时就用它；当工作流要混合节点类型，
+或者需要带类型的数据流、外部信号、补偿、远程执行时，请用 `seekforge graph`。
+
+**Loop DAG 的契约已冻结。** 新的编排能力只落在工程图上。Loop DAG 只接受正确性与
+安全性修复，不再增加字段。已有的 `.seekforge/loop-dags/` 检查点照常可恢复。
+
+**但它目前也不是工程图的子集。** 工程图的 `loop` 节点只把 `task`、`workspace`、
+`verifyCommand`、`approvalMode`、各项预算与 `timeoutMs` 传给子 Loop，因此 DAG 节点
+可以通过 `options` 携带的逐 Loop 调参（`maxIterations`、验证计划、模型路由、
+`codeReview` 等）、`consumeDependencyOutputs`、声明式 `outputPaths`、`budgetWeight`、
+`predictiveBudget`、`verifierId`，以及逐节点的 `failurePolicy`，在工程图里今天都没有
+等价物。任何需要这些能力的迁移，都必须留在 Loop DAG 上，直到工程图补齐它们。
+
+**迁移方式：**
+
+```sh
+seekforge loop-dag export-graph <file> [-o <out>]
+```
+
+会把 DAG 定义转换成等价的图定义，每个 DAG 节点对应一个 `kind: "loop"` 节点。转换是
+确定性的，并且拒绝产出它无法保证行为一致的图：`outputPaths`、
+`consumeDependencyOutputs`、`verifierId`、逐节点 `options`、共享预算下不相等的
+`budgetWeight`、共享预算下的 `predictiveBudget`，以及混用的逐节点 `failurePolicy`，
+都会带着明确原因失败，而不是被静默丢弃。仍然存在的差异——审批变成
+`<node>-approval` 审批门节点、重试固定为一个最小延迟策略、同优先级按关键路径长度
+打破平局——会打印到 stderr。
+
 ## 核心 API
 
 来自 `@seekforge/core` 的 `runAutoLoop(deps, opts)`：

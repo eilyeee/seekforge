@@ -39,6 +39,18 @@ describe("BUILTIN_SKILLS", () => {
     expect(skill.content).toMatch(/NEVER auto-run/);
   });
 
+  it("bugfix retires the comments and dead code the fix invalidates, inside the Procedure", () => {
+    const skill = BUILTIN_SKILLS.find((s) => s.id === "bugfix")!;
+    // Only the Procedure section reaches the prompt via buildSkillBrief, so the
+    // rule has to live there rather than under Verification/Common Mistakes.
+    const after = skill.content.slice(skill.content.indexOf("## Procedure"));
+    const end = after.indexOf("\n## ");
+    const procedure = end === -1 ? after : after.slice(0, end);
+    expect(procedure).toContain("## Procedure");
+    expect(procedure).toContain("fix the comments, docstrings and dead code");
+    expect(procedure).toMatch(/they now lie about the file/);
+  });
+
   it("every builtin is enabled, builtin-scoped, and low risk", () => {
     for (const skill of BUILTIN_SKILLS) {
       expect(skill.enabled).toBe(true);

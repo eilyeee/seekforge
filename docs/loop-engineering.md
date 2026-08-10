@@ -478,6 +478,44 @@ acceptance gaps, and finding ids; resume discards it after a workspace change.
 Worktrees are deliberately retained for inspection. Run `loop-resume` from the
 worktree directory when the original loop used `--worktree`.
 
+### Loop DAG positioning and freeze
+
+**The Loop DAG is a shortcut, not a second engine.** A Loop DAG is one isomorphic
+shape of an Engineering Graph — every node is a full run→verify Loop. Reach for it
+when that is all you need; reach for `seekforge graph` when a workflow mixes node
+kinds or needs typed data flow, external signals, compensation, or remote
+execution.
+
+**The Loop DAG contract is frozen.** New orchestration capabilities land in the
+Engineering Graph. The Loop DAG receives correctness and security fixes only; it
+will not grow new fields. Existing `.seekforge/loop-dags/` checkpoints keep
+resuming unchanged.
+
+**It is not yet a subset, either.** A Graph `loop` node forwards only `task`,
+`workspace`, `verifyCommand`, `approvalMode`, the budgets, and `timeoutMs` to its
+child Loop, so the per-Loop tuning a DAG node can carry in `options`
+(`maxIterations`, verification plans, model routing, `codeReview`, …),
+`consumeDependencyOutputs`, declared `outputPaths`, `budgetWeight`,
+`predictiveBudget`, `verifierId`, and a per-node `failurePolicy` have no Graph
+equivalent today. A migration that needs any of them must stay on the Loop DAG
+until the Graph grows them.
+
+**Migrating:**
+
+```sh
+seekforge loop-dag export-graph <file> [-o <out>]
+```
+
+converts a DAG definition into the equivalent Graph definition, one
+`kind: "loop"` node per DAG node. The conversion is deterministic and refuses to
+emit a graph it cannot make behave identically: `outputPaths`,
+`consumeDependencyOutputs`, `verifierId`, per-node `options`, unequal
+`budgetWeight` under a shared budget, `predictiveBudget` under a shared budget,
+and a mixed per-node `failurePolicy` each fail with a named reason rather than
+being silently dropped. Differences that survive — approval becomes a
+`<node>-approval` gate node, retries pin an explicit minimum-delay policy,
+equal-priority ties break by criticality — are reported on stderr.
+
 ## Core API
 
 `runAutoLoop(deps, opts)` from `@seekforge/core`:

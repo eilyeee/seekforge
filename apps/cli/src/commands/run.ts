@@ -162,8 +162,9 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
 
   const model = opts.model ?? config.model;
   if (model === "deepseek-reasoner") {
-    // reasoner has no function calling; the fallback text protocol is not
-    // wired into the loop yet (planned). Refuse instead of failing midway.
+    // reasoner has no function calling, and there is deliberately no text
+    // protocol that would parse tool calls out of prose — assistant text and
+    // tool output share one untrusted channel. Refuse instead of failing midway.
     fail(t("err.reasonerNoToolCall"), {
       hint: t("err.reasonerHint"),
     });

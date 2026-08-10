@@ -9,7 +9,7 @@ import { assertFixturesExist, loadTasks, validateCheck, validateTask } from "../
 describe("evals/ dataset", () => {
   const tasks = loadTasks(tasksDir);
 
-  it("contains the sixty-three expected tasks", () => {
+  it("contains the sixty-eight expected tasks", () => {
     expect(tasks.map((t) => t.id)).toEqual([
       "add-function",
       "add-missing-tests",
@@ -35,6 +35,11 @@ describe("evals/ dataset", () => {
       "fix-without-regression",
       "foreach-await-bug",
       "go-pagination-window",
+      "graph-failure-continue",
+      "graph-gate-approval",
+      "graph-multi-node",
+      "graph-rerun-descendants",
+      "graph-wait-signal",
       "guarded-no-delete",
       "hard-buried-bug-scale",
       "hard-csv-parser",
@@ -180,6 +185,27 @@ describe("task validation", () => {
         "scenario",
       ),
     ).not.toThrow();
+    expect(() =>
+      validateTask(
+        {
+          ...valid,
+          runner: "graph",
+          graph: {
+            expectedStatus: "passed",
+            definition: {
+              graphId: "sample",
+              nodes: [
+                { id: "implement", kind: "agent", task: "do it" },
+                { id: "review", kind: "gate", dependsOn: ["implement"] },
+                { id: "publish", kind: "function", handler: "collect", dependsOn: ["review"] },
+              ],
+            },
+            resume: { expectedInitialStatus: "paused", approve: ["review"], signals: [{ name: "go" }] },
+          },
+        },
+        "graph",
+      ),
+    ).not.toThrow();
   });
 
   it("rejects bad shapes", () => {
@@ -289,5 +315,58 @@ describe("task validation", () => {
         "t",
       ),
     ).toThrow(/unknown memory alias/);
+  });
+
+  it("delegates graph rules to core instead of re-implementing them", () => {
+    const graphTask = (graph: unknown) => () => validateTask({ ...valid, runner: "graph", graph }, "g");
+    const nodes = [{ id: "only", kind: "function", handler: "collect" }];
+    expect(graphTask({ expectedStatus: "passed", definition: { graphId: "g", nodes: [] } })).toThrow();
+    expect(graphTask({ expectedStatus: "shipped", definition: { graphId: "g", nodes } })).toThrow(/Graph run status/);
+    // Core owns these: an unregistered handler, an unknown gate, and a rerun
+    // selection that names a node the definition never declared.
+    expect(
+      graphTask({
+        expectedStatus: "passed",
+        definition: { graphId: "g", nodes: [{ id: "only", kind: "function", handler: "shell" }] },
+      }),
+    ).toThrow(/handler is not registered/);
+    expect(graphTask({ expectedStatus: "passed", definition: { graphId: "g", nodes }, approve: ["only"] })).toThrow(
+      /approvedNodeIds/,
+    );
+    expect(
+      graphTask({
+        expectedStatus: "passed",
+        definition: { graphId: "g", nodes },
+        resume: { expectedInitialStatus: "paused", rerun: ["ghost"] },
+      }),
+    ).toThrow(/rerunFrom/);
+    expect(
+      graphTask({
+        expectedStatus: "passed",
+        definition: { graphId: "g", nodes },
+        resume: { expectedInitialStatus: "paused" },
+      }),
+    ).toThrow(/approve, rerun, or deliver a signal/);
+    expect(
+      graphTask({
+        expectedStatus: "passed",
+        definition: { graphId: "g", nodes },
+        resume: { expectedInitialStatus: "paused", signals: [{ name: "bad name" }] },
+      }),
+    ).toThrow(/safe signal id/);
+    expect(() =>
+      validateTask({ ...valid, runner: "graph", mode: "ask", graph: { expectedStatus: "passed" } }, "g"),
+    ).toThrow(/edit mode/);
+    expect(() =>
+      validateTask(
+        {
+          ...valid,
+          runner: "loop",
+          loop: { verifyCommand: "npm test", maxIterations: 1, expectedStatus: "passed" },
+          graph: { expectedStatus: "passed", definition: { graphId: "g", nodes } },
+        },
+        "g",
+      ),
+    ).toThrow(/cannot define scenario or graph config/);
   });
 });

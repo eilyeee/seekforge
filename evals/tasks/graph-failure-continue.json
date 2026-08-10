@@ -1,0 +1,41 @@
+{
+  "id": "graph-failure-continue",
+  "title": "Finish an independent Engineering Graph branch under failurePolicy continue",
+  "fixture": "graph-failure-continue",
+  "mode": "edit",
+  "runner": "graph",
+  "task": "Engineering Graph control plane: a bounded wait deadline fails one branch and skips its dependent, while the independent Agent branch must still run to completion under failurePolicy \"continue\".",
+  "graph": {
+    "expectedStatus": "failed",
+    "definition": {
+      "graphId": "eval-graph-continue",
+      "failurePolicy": "continue",
+      "costBudgetUsd": 1,
+      "nodes": [
+        {
+          "id": "stale-approval",
+          "kind": "wait",
+          "waitFor": { "signal": "never-arrives", "expiresAt": "2000-01-01T00:00:00.000Z" }
+        },
+        { "id": "blocked-publish", "kind": "function", "handler": "collect", "dependsOn": ["stale-approval"] },
+        {
+          "id": "implement",
+          "kind": "agent",
+          "mode": "edit",
+          "approvalMode": "auto",
+          "task": "`npm test` fails in this project. `titleCase` in src/titlecase.js only capitalises the first character of the whole string. Fix src/titlecase.js so every whitespace-separated word starts with an uppercase letter and the rest of each word is lowercase, and an empty string is returned unchanged. Do NOT edit anything under test/. Run `npm test` to verify."
+        },
+        { "id": "independent-summary", "kind": "function", "handler": "collect", "dependsOn": ["implement"] }
+      ]
+    }
+  },
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "command_succeeds", "command": "node verify-graph.mjs" },
+    { "type": "file_contains", "path": "test/titlecase.test.js", "pattern": "lowercases the rest of each word" },
+    { "type": "file_contains", "path": "verify-graph.mjs", "pattern": "GRAPH_ID = .eval-graph-continue." },
+    { "type": "file_not_contains", "path": "test/titlecase.test.js", "pattern": "skip" },
+    { "type": "answer_matches", "pattern": "^graph eval-graph-continue failed" }
+  ],
+  "notes": "The expected terminal status is \"failed\" on purpose: one branch fails, so the run is a failure even though the other branch succeeded. The deterministic failure is a wait node with an expiresAt in the past, which core turns into a bounded zero-attempt failure without a provider call. verify-graph.mjs pins the whole matrix from the checkpoint — failed source, skipped dependent, passed independent branch — which is what separates \"continue\" from \"stop\"."
+}

@@ -177,6 +177,13 @@ also cut off the network:
 - A configured native Runtime is bypassed while any sandbox is active because
   the Runtime protocol has no sandbox field; commands use the wrapped shell
   rather than silently escaping the policy.
+- Path rules name the **resolved** workspace (`resolveWorkspace`), because both
+  kernels match against the resolved path — an unresolved `/tmp/ws` was never
+  hit by its own `read-only` deny rule while the broad `/private/tmp` allowance
+  applied, leaving that level fully writable.
+- There is no Windows implementation and none is planned; see the README's known
+  limitations for why a partial mechanism under the same name would be worse
+  than failing closed.
 
 ---
 

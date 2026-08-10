@@ -21,6 +21,29 @@ and is the one real weakness in the set. Tokens per success measured 118,742 at
 one sample and 96,875 at three, on the same code — an 18% swing that is the
 whole argument for the sample count the weekly job already uses.
 
+**And that weakness is not the one its name suggests.** In both failing samples
+`npm test` passed and the file contained `await`; the only failed check was
+`file_not_contains "\.forEach\(async"`. The fixture's test asserts order, length
+and a non-empty result, so a deterministic pass means the async semantics were
+fixed correctly 3 times out of 3. What survived was the JSDoc line above the
+function — `* BUG: this uses \`.forEach(async …)\`` — describing a bug that had
+just been removed. The passing sample spent 8 tool calls; the two failures spent
+6 and 4. The extra calls were the second edit that retired the stale comment.
+
+So the measured weakness is **diff hygiene**: the fix lands, and the file is left
+describing behavior it no longer has. No test can catch that, which is why the
+guidance went into the shared edit-mode prompt and the `bugfix` skill procedure —
+retire the comments, docstrings and now-dead code a change made false in the same
+edit — rather than into anything shaped like `forEach`. A rule about one idiom
+would have been eval-specific and would have taught nothing.
+
+Found while investigating and deliberately not bundled: `buildSkillBrief` injects
+only a skill's `## Procedure` section, and `SKILL_BRIEF_MAX_CHARS = 2500` divided
+across three selected skills truncates every builtin procedure mid-step — so
+`bugfix`'s regression-test step and `small-code-change`'s "search the old text
+again" step have never reached the model. Raising the cap changes cost on every
+provider call, so it needs its own eval measurement first.
+
 Two things that only showed up by running it:
 
 - **A completed run could lose its entire report.** `--baseline evals/baseline.json`

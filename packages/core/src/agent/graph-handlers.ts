@@ -1,12 +1,19 @@
 import type { GraphExecutionAdapter, GraphFunctionHandler } from "./graph-engineering.js";
 import type { PluginContributions } from "../plugins/index.js";
+import { type BuiltinGraphHandlerId, DECLARATIVE_GRAPH_HANDLERS } from "./graph-declarative-handlers.js";
 
-/** Deterministic handlers shared by the CLI and Server Graph adapters. */
-export const BUILTIN_GRAPH_HANDLERS: Readonly<Record<string, GraphFunctionHandler>> = Object.freeze({
+/**
+ * Deterministic handlers shared by the CLI and Server Graph adapters. A graph
+ * definition selects one by name from this fixed catalogue and can never
+ * contribute executable code; `graph-declarative-handlers.ts` documents how the
+ * declarative members read their operands.
+ */
+export const BUILTIN_GRAPH_HANDLERS: Readonly<Record<BuiltinGraphHandlerId, GraphFunctionHandler>> = Object.freeze({
   noop: () => ({ output: null }),
   collect: ({ dependencies }) => ({
     output: Object.fromEntries([...dependencies].map(([id, result]) => [id, result.output])),
   }),
+  ...DECLARATIVE_GRAPH_HANDLERS,
 });
 
 export function graphHandlersWithPlugins(

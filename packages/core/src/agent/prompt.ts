@@ -84,6 +84,10 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
         "- Finish the WHOLE task, not the first file of it. If the task has N parts, the report",
         "  accounts for all N — done, or explicitly listed as remaining under ## Notes.",
         "- Leave no TODO stubs or placeholder code unless the task explicitly asks for stubs.",
+        "- A change is not finished while the file still describes the behavior you removed. In the",
+        "  same edit, update or delete the comments, docstrings and now-dead code the change made",
+        "  false — a comment documenting the bug you just fixed is itself a new defect. Re-read the",
+        "  patched region (or git_diff it) before reporting; a passing test does not catch this.",
         "",
         "### Editing",
         ...(opts.editFormat === "whole"

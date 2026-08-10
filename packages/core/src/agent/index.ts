@@ -184,13 +184,16 @@ export {
   type GraphActiveAttempt,
 } from "./graph-state.js";
 export {
+  checkGraphControlTarget,
   enqueueGraphControl,
   readGraphControlEntries,
   type DurableGraphControlCommand,
   type DurableGraphControlEntry,
+  type GraphControlRejection,
 } from "./graph-control-store.js";
 export {
   acknowledgeEngineeringGraphSignal,
+  checkGraphSignalTarget,
   claimEngineeringGraphSignal,
   engineeringGraphSignalAvailable,
   enqueueEngineeringGraphSignal,
@@ -253,6 +256,13 @@ export {
   type WorkspaceExecutorCapacityEntry,
 } from "./graph-runtime-plan.js";
 export { BUILTIN_GRAPH_HANDLERS, graphExecutorsWithPlugins, graphHandlersWithPlugins } from "./graph-handlers.js";
+export {
+  BUILTIN_GRAPH_HANDLER_IDS,
+  type BuiltinGraphHandlerId,
+  DECLARATIVE_GRAPH_HANDLER_IDS,
+  DECLARATIVE_GRAPH_HANDLERS,
+  type DeclarativeGraphHandlerId,
+} from "./graph-declarative-handlers.js";
 export {
   engineeringGraphCriticality,
   planEngineeringGraph,
@@ -733,3 +743,27 @@ export {
   type RewindResult,
 } from "./session-rewind.js";
 export { astBackendInstalled } from "./repo-map-ast.js";
+export {
+  createGraphRemoteRunnerAdapter,
+  parseGraphRemoteRunEnvelope,
+  type GraphRemoteRunEnvelope,
+  type GraphRemoteRunnerAdapter,
+  type GraphRemoteRunnerAdapterOptions,
+  type GraphRemoteRunnerCommand,
+  type GraphRemoteRunnerDescriptor,
+  type GraphRemoteRunnerProcessResult,
+  type GraphRemoteRunnerRequest,
+  type GraphRemoteRunnerSpawn,
+  type GraphRemoteRunnerTransport,
+} from "./graph-remote-runner.js";
+export {
+  engineeringGraphFromLoopDag,
+  LoopDagGraphConversionError,
+  type LoopDagGraphConversion,
+  type LoopDagGraphConversionOptions,
+  type LoopDagGraphIssue,
+  type LoopDagGraphIssueCode,
+  type LoopDagGraphIssueSeverity,
+  type LoopDagGraphNodeMapping,
+  type LoopDagGraphSource,
+} from "./loop-dag-to-graph.js";

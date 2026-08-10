@@ -48,6 +48,102 @@ test("every top-level CLI command appears in both README command tables", () => 
   }
 });
 
+/**
+ * Every `<group> <sub>` pair the CLI registers, e.g. `graph signal` or
+ * `graph template list`. The top-level check above only sees `graph`, so a
+ * whole subcommand could ship undocumented behind an already-documented group
+ * — which is exactly how `graph signal`, `graph evidence` and the template
+ * registry stayed CLI-invisible while REST had them.
+ */
+function cliSubcommands() {
+  const files = [["apps", "cli", "src", "index.ts"]];
+  for (const dir of [
+    ["apps", "cli", "src"],
+    ["apps", "cli", "src", "commands"],
+  ]) {
+    for (const name of readdirSync(join(root, ...dir))) {
+      if (name.endsWith(".ts") && !name.includes(".test.")) files.push([...dir, name]);
+    }
+  }
+  const pairs = new Map();
+  for (const parts of files) {
+    const source = readFileSync(join(root, ...parts), "utf8");
+    // `const graph = program.command("graph")` and `const template = graph.command("template")`.
+    const groups = new Map([["program", []]]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const [, variable, parent, name] of source.matchAll(
+        /const\s+(\w+)\s*=\s*(\w+)\s*\.command\(\s*"([a-z][a-z-]*)"/g,
+      )) {
+        if (groups.has(variable) || !groups.has(parent)) continue;
+        groups.set(variable, [...groups.get(parent), name]);
+        grew = true;
+      }
+    }
+    for (const [, parent, name] of source.matchAll(/(\w+)\s*\.command\(\s*"([a-z][a-z-]*)"/g)) {
+      const path = groups.get(parent);
+      // Only nested commands; `program.command("x")` is the top-level check's job.
+      if (!path || path.length === 0) continue;
+      const key = path.join(" ");
+      if (!pairs.has(key)) pairs.set(key, new Set());
+      pairs.get(key).add(name);
+    }
+  }
+  return pairs;
+}
+
+/**
+ * User-facing documentation for one language. Subcommands are documented
+ * wherever their capability lives — the README summary table, the CLI
+ * reference, or a topic guide — so the corpus is every page of that language.
+ */
+function docCorpus(chinese) {
+  const parts = [read(chinese ? "README.zh-CN.md" : "README.md")];
+  for (const name of readdirSync(join(root, "docs"))) {
+    if (name.endsWith(".md") && name.endsWith(".zh-CN.md") === chinese) parts.push(read("docs", name));
+  }
+  // Inline spans and fenced example lines both count; fences are tracked per
+  // file so an unbalanced one cannot swallow the rest of the corpus.
+  return parts.flatMap((source) => {
+    const spans = [...source.matchAll(/`([^`\n]+)`/g)].map((match) => match[1]);
+    let fenced = false;
+    for (const line of source.split("\n")) {
+      if (line.startsWith("```")) fenced = !fenced;
+      else if (fenced) spans.push(line.trim());
+    }
+    return spans;
+  });
+}
+
+test("every CLI subcommand appears in both languages of documentation", () => {
+  const groups = cliSubcommands();
+  assert.ok(groups.size > 5, `expected several CLI command groups, found ${groups.size}`);
+  for (const [chinese, label] of [
+    [false, "English documentation"],
+    [true, "Chinese documentation"],
+  ]) {
+    // Only code spans introducing this group can satisfy it, so prose that
+    // merely happens to contain the word does not count as documentation.
+    const spans = docCorpus(chinese);
+    const missing = [];
+    for (const [group, subcommands] of groups) {
+      const scoped = spans.filter((span) => span.startsWith(`${group} `) || span.startsWith(`seekforge ${group} `));
+      const documented = scoped.join("\n");
+      for (const sub of subcommands) {
+        if (!new RegExp(`(^|[^a-z-])${sub}([^a-z-]|$)`).test(documented)) missing.push(`${group} ${sub}`);
+      }
+    }
+    // Report the whole drift set at once; fixing them one build at a time is
+    // how a surface stays undocumented for another dozen commits.
+    assert.deepEqual(
+      missing,
+      [],
+      `${label} never documents these subcommands — an undocumented subcommand is an undiscoverable one`,
+    );
+  }
+});
+
 /** Config keys declared by the CLI's CliConfig type. */
 function configKeys() {
   const source = read("apps", "cli", "src", "config.ts");

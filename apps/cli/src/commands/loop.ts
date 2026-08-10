@@ -11,7 +11,9 @@ import {
   createWorktreePatch,
   discoverLoopVerificationPlan,
   diagnoseLoopCheckpoint,
+  engineeringGraphFromLoopDag,
   enqueueLoopControl,
+  LoopDagGraphConversionError,
   exportLoopEvidence,
   hasCompleteLoopDeliveryEvidence,
   isWorktreeDirty,
@@ -44,6 +46,7 @@ import {
   saveLoopState,
   setLoopPriority,
   worktreeChangedPathsSince,
+  writeFileAtomic,
   type LoopEvent,
   type LoopDeliveryMode,
   type LoopDeliveryEvidence,
@@ -57,7 +60,7 @@ import {
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { formatCostUsd } from "@seekforge/shared/format";
 import { createCliAgentDeps, prepareMcp } from "../agent-factory.js";
 import { dim, fail, green, red } from "../colors.js";
@@ -989,6 +992,106 @@ export async function loopDagCommand(
     fail(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   }
+}
+
+/**
+ * Migration path: rewrite a Loop DAG definition as the equivalent Engineering
+ * Graph, where each node becomes a `kind: "loop"` node. Anything the Graph
+ * cannot express fails here instead of producing a graph that merely looks
+ * equivalent, so the exported definition is safe to run in place of the DAG.
+ */
+export function loopDagExportGraphCommand(
+  file: string,
+  opts: {
+    out?: string;
+    graphId?: string;
+    budget?: number;
+    tokenBudget?: number;
+    maxDurationSeconds?: number;
+    maxConcurrency?: number;
+    managedWorktrees?: boolean;
+    managedWorktreeLimit?: number;
+    predictiveBudget?: boolean;
+  },
+): void {
+  const workspace = process.cwd();
+  const raw = readFileIfExists(resolve(workspace, file), 512 * 1024);
+  if (raw === undefined) {
+    fail(`Loop DAG file not found: ${file}`);
+    return;
+  }
+  let parsed: ReturnType<typeof parseLoopDagInput>;
+  try {
+    parsed = parseLoopDagInput(JSON.parse(raw) as unknown, workspace);
+  } catch (error) {
+    fail(
+      error instanceof SyntaxError
+        ? `Loop DAG file is not valid JSON: ${file}`
+        : error instanceof Error
+          ? error.message
+          : String(error),
+    );
+    return;
+  }
+  const workspaceForNode: Record<string, string> = {};
+  for (const [nodeId, absolute] of parsed.nodeWorkspaces) {
+    const rel = relative(workspace, absolute);
+    if (rel.startsWith("..") || rel === "") {
+      process.stderr.write(
+        `warning: ${nodeId}: workspace ${absolute} is not inside ${workspace}; the Graph rejects node workspaces outside its root\n`,
+      );
+    }
+    workspaceForNode[nodeId] = rel === "" ? "." : rel;
+  }
+  let conversion: ReturnType<typeof engineeringGraphFromLoopDag>;
+  try {
+    conversion = engineeringGraphFromLoopDag(
+      {
+        nodes: parsed.nodes,
+        ...(Object.keys(workspaceForNode).length > 0 ? { workspaceForNode } : {}),
+        ...(parsed.fanIn ? { fanIn: parsed.fanIn } : {}),
+        ...(opts.maxConcurrency !== undefined ? { maxConcurrency: opts.maxConcurrency } : {}),
+        ...(opts.budget !== undefined ? { costBudgetUsd: opts.budget } : {}),
+        ...(opts.tokenBudget !== undefined ? { tokenBudget: opts.tokenBudget } : {}),
+        ...(opts.maxDurationSeconds !== undefined
+          ? { maxDurationMs: Math.round(opts.maxDurationSeconds * 1_000) }
+          : {}),
+        ...(opts.managedWorktrees ? { managedWorktrees: true } : {}),
+        ...(opts.managedWorktreeLimit !== undefined ? { managedWorktreeLimit: opts.managedWorktreeLimit } : {}),
+        ...(opts.predictiveBudget ? { predictiveBudget: true } : {}),
+      },
+      { ...(opts.graphId ? { graphId: opts.graphId } : {}) },
+    );
+  } catch (error) {
+    if (error instanceof LoopDagGraphConversionError) {
+      for (const issue of error.issues) {
+        process.stderr.write(`${issue.nodeId ? `${issue.nodeId}: ` : ""}${issue.field} — ${issue.message}\n`);
+      }
+      fail("Loop DAG has fields with no equivalent Engineering Graph representation");
+      return;
+    }
+    fail(error instanceof Error ? error.message : String(error));
+    return;
+  }
+  for (const warning of conversion.warnings) {
+    process.stderr.write(
+      `warning: ${warning.nodeId ? `${warning.nodeId}: ` : ""}${warning.field} — ${warning.message}\n`,
+    );
+  }
+  const serialized = `${JSON.stringify(conversion.definition, null, 2)}\n`;
+  if (opts.out === undefined) {
+    process.stdout.write(serialized);
+    return;
+  }
+  const target = resolve(workspace, opts.out);
+  try {
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileAtomic(target, serialized);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    return;
+  }
+  console.log(`Wrote Engineering Graph ${conversion.definition.graphId} to ${target}`);
 }
 
 export async function loopDeleteCommand(loopId: string): Promise<void> {

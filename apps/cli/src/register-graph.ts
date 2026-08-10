@@ -1,10 +1,13 @@
 import type { Command } from "commander";
 import { InvalidArgumentError } from "commander";
 import {
+  graphCompareCommand,
+  graphControlCommand,
   graphDeleteCommand,
   graphArtifactMaterializeCommand,
   graphArtifactStoreCommand,
   graphDiagnoseCommand,
+  graphEvidenceCommand,
   graphListCommand,
   graphExplainCommand,
   graphExpansionPlanCommand,
@@ -15,9 +18,15 @@ import {
   graphMigrationPlanCommand,
   graphPriorityCommand,
   graphRunCommand,
+  graphSignalCommand,
   graphSimulateCommand,
   graphResourcesCommand,
   graphShowCommand,
+  graphTemplateCompareCommand,
+  graphTemplateDeprecateCommand,
+  graphTemplateListCommand,
+  graphTemplateRegisterCommand,
+  graphTemplateShowCommand,
   graphValidateCommand,
 } from "./commands/graph.js";
 
@@ -37,6 +46,13 @@ function artifactSize(value: string): number {
     throw new InvalidArgumentError("size must be at most 268435456 bytes");
   }
   return size;
+}
+
+function runNumber(value: string): number {
+  if (!/^[1-9][0-9]*$/.test(value)) throw new InvalidArgumentError("run-number must be a positive integer");
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) throw new InvalidArgumentError("run-number must be a safe integer");
+  return parsed;
 }
 
 function nonNegativeInteger(value: string): number {
@@ -204,6 +220,97 @@ export function registerGraphCommands(
     .argument("<priority>", "integer from -10 to 10", graphPriority)
     .description("set automatic recovery priority for a persisted Graph")
     .action(graphPriorityCommand);
+  graph
+    .command("pause")
+    .argument("<graph-id>")
+    .option("--node <node-id>", "pause only this pending node")
+    .description("pause a live Graph at its next safe boundary")
+    .action((graphId: string, opts: { node?: string }) =>
+      graphControlCommand(graphId, { operation: "pause", ...(opts.node ? { nodeId: opts.node } : {}) }),
+    );
+  graph
+    .command("continue")
+    .argument("<graph-id>")
+    .option("--node <node-id>", "resume only this pending node")
+    .description("resume a durably paused Graph or pending node")
+    .action((graphId: string, opts: { node?: string }) =>
+      graphControlCommand(graphId, { operation: "resume", ...(opts.node ? { nodeId: opts.node } : {}) }),
+    );
+  graph
+    .command("steer")
+    .argument("<graph-id>")
+    .argument("<guidance>")
+    .option("--node <node-id>", "steer only this pending node")
+    .description("queue guidance for a live Graph")
+    .action((graphId: string, guidance: string, opts: { node?: string }) =>
+      graphControlCommand(graphId, {
+        operation: "steer",
+        message: guidance,
+        ...(opts.node ? { nodeId: opts.node } : {}),
+      }),
+    );
+  graph
+    .command("cancel-node")
+    .argument("<graph-id>")
+    .argument("<node-id>")
+    .description("cancel a pending Graph node before it starts")
+    .action((graphId: string, nodeId: string) => graphControlCommand(graphId, { operation: "cancel", nodeId }));
+  graph
+    .command("reprioritize")
+    .argument("<graph-id>")
+    .argument("<node-id>")
+    .argument("<priority>", "integer from -10 to 10", graphPriority)
+    .description("reorder a pending Graph node within the ready queue")
+    .action((graphId: string, nodeId: string, priority: number) =>
+      graphControlCommand(graphId, { operation: "reprioritize", nodeId, priority }),
+    );
+  graph
+    .command("signal")
+    .argument("<graph-id>")
+    .argument("<name>", "declared wait signal name")
+    .option("--payload <json>", "bounded JSON payload for the wait node")
+    .description("deliver a declared external signal to a waiting Graph")
+    .action((graphId: string, name: string, opts: { payload?: string }) =>
+      graphSignalCommand(graphId, name, opts.payload),
+    );
+  graph
+    .command("evidence")
+    .argument("[graph-id]")
+    .option("--verify <file>", "verify the integrity digest of an exported report")
+    .description("export a tamper-evident Graph evidence report")
+    .action((graphId: string | undefined, opts: { verify?: string }) => graphEvidenceCommand(graphId, opts));
+  graph
+    .command("compare")
+    .argument("<graph-id>")
+    .option("--run-number <n>", "compare against this archived run", runNumber)
+    .description("compare the current Graph state with an archived terminal run")
+    .action((graphId: string, opts: { runNumber?: number }) => graphCompareCommand(graphId, opts.runNumber));
+  const template = graph.command("template").description("manage the versioned schema-v2 Graph template registry");
+  template.command("list").description("list registered template versions").action(graphTemplateListCommand);
+  template
+    .command("show")
+    .argument("<template-id>")
+    .argument("<version>")
+    .description("resolve one exact registered template")
+    .action(graphTemplateShowCommand);
+  template
+    .command("register")
+    .argument("<file>")
+    .description("register or replace one exact template version")
+    .action(graphTemplateRegisterCommand);
+  template
+    .command("compare")
+    .argument("<template-id>")
+    .argument("<version>")
+    .argument("<file>", "candidate template to classify against the registered version")
+    .description("classify a candidate as identical, compatible, or breaking")
+    .action(graphTemplateCompareCommand);
+  template
+    .command("deprecate")
+    .argument("<template-id>")
+    .argument("<version>")
+    .description("mark a registered version deprecated without rewriting references")
+    .action(graphTemplateDeprecateCommand);
   graph
     .command("show")
     .argument("<graph-id>")

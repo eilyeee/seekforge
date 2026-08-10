@@ -8,6 +8,7 @@ import { seekforgeHome } from "../memory/store.js";
 import type { HookConfig, HookEntry, HookStage } from "../hooks/index.js";
 import type { McpServerConfig } from "../mcp/types.js";
 import { readWorkspaceStateFile } from "../util/workspace-state.js";
+import { BUILTIN_GRAPH_HANDLER_IDS } from "../agent/graph-declarative-handlers.js";
 import {
   PLUGIN_API_VERSION,
   type PluginContributions,
@@ -81,7 +82,7 @@ const manifestSchema = z
         agentRoots: z.array(z.string()).max(20).optional(),
         mcpServers: z.record(z.string().regex(PLUGIN_ID_RE), mcpServer).optional(),
         hooks: hookConfig.optional(),
-        graphHandlers: z.record(z.string().regex(PLUGIN_ID_RE), z.enum(["noop", "collect"])).optional(),
+        graphHandlers: z.record(z.string().regex(PLUGIN_ID_RE), z.enum(BUILTIN_GRAPH_HANDLER_IDS)).optional(),
         graphExecutors: z.record(z.string().regex(PLUGIN_ID_RE), z.string().regex(PLUGIN_ID_RE)).optional(),
       })
       .strict()

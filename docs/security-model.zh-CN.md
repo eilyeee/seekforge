@@ -94,6 +94,8 @@ Agent 启动的命令会收到一份移除了凭据环境变量的父环境副�
 - 级别为 `off` / `read-only` / `workspace-write` / `restricted`；`read-only` 保持工作区只读但允许临时文件，`restricted` 在此之上再禁用网络访问；darwin 使用 seatbelt，linux 使用 bwrap（`buildSandboxSpec` `:106`，`sandboxedShell` `:128`）。
 - 若请求了沙箱但包装器无法构建，命令会被**拒绝**，而不是悄悄地无沙箱执行（`run-command.ts::runShellCommand`，`sandbox_unavailable`）。
 - 任何沙箱生效期间，已配置的原生 Runtime 会被绕开，因为 Runtime 协议没有沙箱字段；命令改用被包装的 shell，而不是无声地逃出策略之外。
+- 路径规则写的是**解析后**的工作区（`resolveWorkspace`），因为两种内核都按解析后的路径匹配——未解析的 `/tmp/ws` 从未被它自己的 `read-only` 拒绝规则命中，反而落进宽泛的 `/private/tmp` 许可，导致该级别实际完全可写。
+- 没有 Windows 实现，也不计划提供；为什么「用同一个名字提供一个不完整的机制」比失败关闭更糟，见 README 的已知限制。
 
 ---
 

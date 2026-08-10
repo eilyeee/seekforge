@@ -118,6 +118,41 @@ describe("buildSandboxSpec", () => {
     ]);
   });
 
+  it("names the resolved workspace so a symlinked path is still covered by its own rules", () => {
+    allAvailable();
+    const created = fs.mkdtempSync(path.join(os.tmpdir(), "seekforge-sbx-real-"));
+    // os.tmpdir() itself goes through a symlink on macOS (/var -> /private/var),
+    // so the resolved form is what the kernel will actually check.
+    const real = fs.realpathSync(created);
+    const link = path.join(os.tmpdir(), `seekforge-sbx-link-${process.pid}`);
+    fs.rmSync(link, { force: true });
+    fs.symlinkSync(created, link);
+    try {
+      // The kernel checks the resolved path: a rule naming the symlink would
+      // never match, so read-only would fall through to the broad temp-dir
+      // write allowance and silently permit writes.
+      const readOnly = buildSandboxSpec("read-only", link, "darwin")!.args[1]!;
+      expect(readOnly).toContain(`(deny file-write* (subpath "${real}"))`);
+      expect(readOnly).not.toContain(`(subpath "${link}")`);
+
+      const write = buildSandboxSpec("workspace-write", link, "darwin")!.args[1]!;
+      expect(write).toContain(`(allow file-write* (subpath "${real}"))`);
+
+      expect(buildSandboxSpec("workspace-write", link, "linux")!.args.join(" ")).toContain(`--bind ${real} ${real}`);
+    } finally {
+      fs.rmSync(link, { force: true });
+      fs.rmSync(created, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the literal workspace path when it cannot be resolved", () => {
+    allAvailable();
+    const missing = path.join(os.tmpdir(), "seekforge-sbx-does-not-exist");
+    expect(buildSandboxSpec("read-only", missing, "darwin")!.args[1]!).toContain(
+      `(deny file-write* (subpath "${missing}"))`,
+    );
+  });
+
   it("escapes double quotes and backslashes in seatbelt paths", () => {
     allAvailable();
     const profile = buildSandboxSpec("workspace-write", '/ws/we"ird\\dir', "darwin")!.args[1]!;
@@ -263,6 +298,24 @@ describe("seatbelt integration (darwin only)", () => {
       }
     },
   );
+});
+
+describe("seatbelt read-only integration (darwin only)", () => {
+  it.skipIf(!hasSeatbelt)("keeps a workspace reached through a symlink read-only", () => {
+    // /tmp is a symlink to /private/tmp on macOS. A profile that named the
+    // unresolved path emitted a deny rule the kernel never matched, while the
+    // broad /private/tmp allowance did — the workspace stayed writable.
+    const ws = fs.mkdtempSync("/tmp/seekforge-sbx-ro-");
+    try {
+      const target = path.join(ws, "written.txt");
+      const shell = sandboxedShell(`echo nope > "${target}"`, "read-only", ws);
+      expect(shell.sandboxed).toBe(true);
+      expect(spawnSync(shell.bin, shell.args, { cwd: ws }).status).not.toBe(0);
+      expect(fs.existsSync(target)).toBe(false);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("bwrap integration (linux only)", () => {

@@ -690,7 +690,9 @@ describe("runEngineeringGraph", () => {
       expect.objectContaining({ runNumber: 1, status: "passed" }),
     ]);
     expect((await inspectEngineeringGraphResources(root, "managed-graph")).archived).toBe(false);
-  }, 30_000);
+    // provisions and prunes real git worktrees — 4.7s alone, but process-spawn
+    // bound, so it measured 31.9s against the 30s budget under full-suite load.
+  }, 90_000);
 
   it("provisions and cleans nested managed Graph worktrees through the parent resource lifecycle", async () => {
     const root = gitWorkspace();

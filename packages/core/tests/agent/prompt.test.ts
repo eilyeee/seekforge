@@ -51,6 +51,27 @@ describe("buildSystemPrompt: discipline sections", () => {
     expect(p).toContain("re-read the file before retrying");
   });
 
+  it("EDIT mode requires retiring comments/dead code the change made false", () => {
+    const p = buildSystemPrompt({ ...base, mode: "edit" });
+    expect(p).toContain("still describes the behavior you removed");
+    expect(p).toContain("comments, docstrings and now-dead code");
+    expect(p).toContain("a passing test does not catch this");
+    // Guidance must stay generic: no eval-task-specific idioms baked in.
+    expect(p).not.toMatch(/forEach|Promise\.all|for\s*\.\.\.\s*of/);
+  });
+
+  it("states the stale-comment rule exactly once, and only in EDIT mode", () => {
+    const edit = buildSystemPrompt({ ...base, mode: "edit" });
+    const occurrences = edit.split("still describes the behavior you removed").length - 1;
+    expect(occurrences).toBe(1);
+    for (const opts of [
+      { ...base, mode: "ask" as const },
+      { ...base, mode: "ask" as const, plan: true },
+    ]) {
+      expect(buildSystemPrompt(opts)).not.toContain("still describes the behavior you removed");
+    }
+  });
+
   it("every mode carries failure handling, tool choice and context economy", () => {
     for (const opts of [
       { ...base, mode: "edit" as const },

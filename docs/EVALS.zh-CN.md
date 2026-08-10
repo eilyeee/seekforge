@@ -48,8 +48,8 @@ pnpm --filter @seekforge/eval-harness eval -- --suite release       # all tasks,
 
 - `smoke`：十四个有代表性的导航、编辑、验证、策略、恢复、记忆、dogfood、
   Python 和 TypeScript 任务；默认采样一次。
-- `nightly`：全部 62 个任务；默认采样三次。
-- `release`：全部 62 个任务；采样五次，门禁更严格。
+- `nightly`：全部 68 个任务；默认采样三次。
+- `release`：全部 68 个任务；采样五次，门禁更严格。
 
 每次采样都会记录 prompt、completion、缓存命中和总 token 数（包括失败会话
 终止前最后一次上报的累计用量）；工具调用数和失败的工具调用数；会话错误；
@@ -78,7 +78,7 @@ Desktop 的 **Eval 趋势** 面板通过 `GET /api/evals/trends?limit=<1..200>`
 
 ### Runner 模式
 
-没有 `runner` 字段的任务保持历史的单会话 `agent` 行为。支持三种 runner 值：
+没有 `runner` 字段的任务保持历史的单会话 `agent` 行为。支持四种 runner 值：
 
 - `agent`：一次 `AgentCore.runTask` 调用。可选的 `expectedStatus` 为
   `completed`（默认）或 `failed`。
@@ -88,6 +88,14 @@ Desktop 的 **Eval 趋势** 面板通过 `GET /api/evals/trends?limit=<1..200>`
 - `session_scenario`：按顺序执行 `agent`、`memory.add`、`memory.approve` 和
   `memory.reject` 步骤。带 `resume: true` 的 agent 步骤会将下一次运行绑定到
   上一个 `sessionId`；每个步骤都会检查终态。
+- `graph`：以内联的 `graph.definition` 驱动核心真实的 `runEngineeringGraph`，
+  必须提供 `graph.expectedStatus`。可选的 `graph.approve` 在首次调用时预先批准
+  审批门；可选的 `graph.resume` 会先断言初始 `GraphRunStatus`，再以 `approve`
+  （审批门）、`rerun`（某节点及其后代）恢复，并在两次调用之间把 `signals` 投递
+  进持久信箱。只注册确定性的内建处理器——评估框架不会引入任何能执行 shell 的
+  处理器。定义合法性、节点与审批门 id、处理器注册以及「rerun 必须配合 resume」
+  这条规则，全部委托给核心自身的纯校验器，因此未知审批门或未声明的 rerun 目标
+  会在数据集门禁处失败，而不是等到一次花钱的运行。
 
 ```json
 {

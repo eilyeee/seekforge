@@ -274,6 +274,33 @@ describe("parseInput loop controls", () => {
   });
 });
 
+describe("parseInput Graph controls", () => {
+  it.each([
+    ["/graph-list", { name: "graph-list" }],
+    ["/graph-show graph-1", { name: "graph-show", arg: "graph-1" }],
+    ["/graph-pause graph-1", { name: "graph-pause", arg: "graph-1" }],
+    ["/graph-continue graph-1", { name: "graph-continue", arg: "graph-1" }],
+  ])("parses %s", (input, command) => {
+    expect(parseInput(input)).toEqual({ kind: "slash", command });
+  });
+
+  it("keeps the whole line for steering and signalling", () => {
+    expect(parseInput("/graph-steer graph-1 focus on the failing verify node")).toEqual({
+      kind: "slash",
+      command: { name: "graph-steer", arg: "graph-1 focus on the failing verify node" },
+    });
+    expect(parseInput("/graph-signal graph-1 deploy-ok")).toEqual({
+      kind: "slash",
+      command: { name: "graph-signal", arg: "graph-1 deploy-ok" },
+    });
+  });
+
+  it("leaves the argument absent when none was typed", () => {
+    expect(parseInput("/graph-steer")).toEqual({ kind: "slash", command: { name: "graph-steer" } });
+    expect(parseInput("/graph-show")).toEqual({ kind: "slash", command: { name: "graph-show" } });
+  });
+});
+
 describe("parseInput v3 additions", () => {
   it("parses the new management commands", () => {
     expect(parseInput("/backtrack")).toEqual({ kind: "slash", command: { name: "backtrack" } });

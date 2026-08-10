@@ -825,6 +825,12 @@ below it unless the nested workspace is explicitly protected again.
   broad temp allowances, and test the workspace-inside-temp case directly.
 - **Caught:** `packages/core/src/tools/os-sandbox.ts` — `read-only` workspaces
   below `/tmp` or `TMPDIR` inherited the parent's write permission.
+- **Also caught:** ordering the deny last still failed when the rule named the
+  *unresolved* workspace. Both kernels match resolved paths, so on macOS a
+  `read-only` workspace at `/tmp/ws` was never hit by its own
+  `(deny file-write* (subpath "/tmp/ws"))` while the broad `/private/tmp`
+  allowance applied — the level was fully writable. Canonicalize any path you
+  hand to an OS policy, not only paths you compare yourself (see §402).
 
 ## 50. Interactive prompts are a serialized resource unless the UI queues them
 

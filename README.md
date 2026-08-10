@@ -81,7 +81,7 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge rewind [session-id] [--dry-run]` | undo all file changes a session made (pre-write checkpoints) |
 | `seekforge replay <session-id>` | re-render a stored session to the terminal (deterministic, no model calls) |
 | `seekforge audit <session-id> [--json] [-o <file>]` | export a reviewable report of what an agent did in a stored session |
-| `seekforge memory add "<fact>" [--type] [--pending]` / `remove <n\|id\|text>` | tell the agent something directly (REPL: `/remember <fact>`) |
+| `seekforge memory add "<fact>" [--type] [--pending]` / `seekforge memory remove <n\|id\|text>` | tell the agent something directly (REPL: `/remember <fact>`) |
 | `seekforge status` | project / config / last-session overview |
 | `seekforge update` | check npm for a newer seekforge version and print the install command |
 | `seekforge diff` | show the current git diff |
@@ -90,6 +90,8 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge resolve-review <pr> --max-cost <usd>` | address actionable PR review feedback, verify, commit, and push fixes |
 | `seekforge schedule add\|list\|run\|next\|history\|install\|uninstall\|status` | manage scheduled jobs, history, retries, and the crontab tick — see [Scheduling](docs/scheduling.md) |
 | `seekforge graph validate\|run\|resume\|list\|show\|history\|delete` | run durable heterogeneous Agent/Loop/function/router/gate/subgraph workflows — see [Graph Engineering](docs/graph-engineering.md) |
+| `seekforge graph pause\|continue\|steer\|cancel-node\|reprioritize\|signal` | control a live Graph from another process: safe-boundary pause/resume, guidance, pending-node cancel/reorder, and declared external signals |
+| `seekforge graph evidence\|compare\|template` | export a tamper-evident Graph report, diff the current run against an archived one, or manage the versioned template registry (`template list\|show\|register\|compare\|deprecate`) |
 | `seekforge sandbox-run "<task>"` | run a task through the Docker runner contract — see [Remote execution](docs/remote.md) |
 | `seekforge remote-run "<task>" --host <user@host> --workspace <path>` | run the same task on a machine you own over ssh; that host uses its own API key — see [Remote execution](docs/remote.md) |
 | `seekforge evolve analyze\|list\|show\|accept\|reject\|apply` | score sessions and review self-evolution proposals (human-gated) |
@@ -270,13 +272,24 @@ Protocol: [`crates/runtime/PROTOCOL.md`](crates/runtime/PROTOCOL.md).
 
 ## Known limitations
 
-- `deepseek-reasoner` is not usable as the agent model (no function calling;
-  a fallback text protocol exists in the provider but is not wired into the
-  loop). Use the DeepSeek V4 models instead — they combine thinking with
-  tool calling.
-- Native Desktop packages target macOS, Linux, and Windows. The optional OS
-  command sandbox currently supports macOS (seatbelt) and Linux (bwrap) only;
-  requesting it on Windows fails closed instead of running unsandboxed.
+- `deepseek-reasoner` is not usable as the agent model: it has no function
+  calling, and SeekForge deliberately ships no text-protocol fallback that would
+  parse tool calls out of model prose — assistant text and tool output are the
+  same untrusted channel, so a fenced block inside a file or diff would become
+  an executed call. Use the DeepSeek V4 models instead — they combine thinking
+  with tool calling.
+- Shell command execution is POSIX-only: `run_command`, background tasks, and
+  the Rust runtime all execute through `/bin/sh -c`, so the command tools do not
+  run on native Windows — use WSL. Native Desktop packages target macOS, Linux,
+  and Windows, but Windows appears in CI only as a Desktop packaging target, not
+  as a tested runtime.
+- The optional OS command sandbox supports macOS (seatbelt) and Linux (bwrap)
+  only, and no Windows equivalent is planned: job objects and restricted tokens
+  cannot express a deny-by-default *path* policy, and AppContainer can only reach
+  files whose ACLs name its package SID — which would break the reads every build
+  needs and block loopback even at the levels meant to leave the network alone.
+  Requesting a sandbox on Windows fails closed rather than shipping a weaker
+  guarantee under the same name.
 
 ## Monorepo layout
 

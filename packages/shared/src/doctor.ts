@@ -353,7 +353,14 @@ export function osSandboxCheck(probe: SandboxProbe, configured: boolean): Doctor
     ok: true,
     ...(configured ? { warn: true } : {}),
     detail: probe.reason ?? "unavailable",
-    ...(configured ? { fixHint: 'install bwrap (linux), or set sandbox to "off" in config.json' } : {}),
+    // Windows has nothing to install: no sandbox exists there by design, so the
+    // hint must point at WSL rather than at a package name that does not apply.
+    ...(configured
+      ? {
+          fixHint:
+            'install bwrap (linux); macOS uses seatbelt; Windows has no sandbox — run under WSL, or set sandbox to "off" in config.json',
+        }
+      : {}),
   };
 }
 

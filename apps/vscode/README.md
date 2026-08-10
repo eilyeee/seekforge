@@ -8,7 +8,7 @@ Thin local client for the versioned `seekforge serve` REST/WebSocket contract.
    bearer token is stored in VS Code SecretStorage; legacy `seekforge.token`
    settings are migrated and removed automatically.
 4. Run **SeekForge: New Task**, **Resume Session**, **Show Workspace Diff**,
-   **Review Memory Candidates**, **Open Session Transcript**, or
+   **Review Memory Candidates**, **Open Session Transcript**, **Open Loop**, or
    **Show Activity Output**.
 
 The extension streams model output, thinking, tool activity (`⏺ tool(arg)` /
@@ -27,6 +27,16 @@ human for, and approves or rejects one — memory is human-gated by design, and
 the review belongs where the code is. **Open Session Transcript** renders a past
 session as readable Markdown (roles as headers, tool calls named, attachments
 noted) instead of the raw JSONL.
+
+The **SeekForge Loops** view in the Explorer lists the persisted Loops of the
+active workspace with their status, iteration progress and spend against the
+budget; selecting one opens a Markdown report with the verify command, the last
+verify output, delivery state, and the most recent retained lifecycle events
+(the report says how many earlier events it left out). The view is
+**read-only** and refreshes only when you ask it to (the refresh button in its
+title bar): starting, pausing, steering, pruning and deleting a Loop stay with
+the surfaces that own the control plane, and an idle editor window does not poll
+a server you may not be running.
 
 It deliberately remains a thin client: orchestration, permissions, traces, and
 workspace coordination stay inside the local SeekForge server.

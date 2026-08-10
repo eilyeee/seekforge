@@ -8,6 +8,7 @@ import {
   loopDeliverCommand,
   loopEvidenceCommand,
   loopDagCommand,
+  loopDagExportGraphCommand,
   loopDagResourcesCommand,
   loopListCommand,
   loopHistoryCommand,
@@ -204,7 +205,7 @@ export function registerLoopCommands(program: Command, registration: LoopCommand
       },
     );
 
-  program
+  const loopDag = program
     .command("loop-dag")
     .argument("<file>", "JSON DAG with nodes: id, task, verifyCommand, and optional dependsOn")
     .option("--budget <usd>", "shared cumulative cost cap in USD", parsePositiveFloat)
@@ -259,6 +260,47 @@ export function registerLoopCommands(program: Command, registration: LoopCommand
           approve: opts.approve,
         });
       },
+    );
+
+  loopDag
+    .command("export-graph")
+    .argument("<file>", "JSON DAG to convert into an equivalent Engineering Graph definition")
+    .option("-o, --out <file>", "write the Graph definition here instead of stdout")
+    .option("--graph-id <id>", "Graph id (defaults to a deterministic content fingerprint)")
+    .option("--budget <usd>", "shared cumulative cost cap in USD", parsePositiveFloat)
+    .option("--token-budget <n>", "shared prompt + completion token cap", parsePositiveInt)
+    .option("--max-duration <seconds>", "shared wall-clock budget in seconds", parsePositiveFloat)
+    .option("--max-concurrency <n>", "parallel nodes (2-8 require isolated node workspaces)", parsePositiveInt)
+    .option("--managed-worktrees", "automatically create and retain one isolated Git worktree per node")
+    .option("--worktree-limit <n>", "maximum managed seekforge worktrees in the repository", parsePositiveInt)
+    .option("--predictive-budget", "declare historical budget weighting (the Graph has no equivalent)")
+    .description("convert a Loop DAG into the equivalent Engineering Graph definition")
+    .action(
+      (
+        file: string,
+        opts: {
+          out?: string;
+          graphId?: string;
+          budget?: number;
+          tokenBudget?: number;
+          maxDuration?: number;
+          maxConcurrency?: number;
+          managedWorktrees?: boolean;
+          worktreeLimit?: number;
+          predictiveBudget?: boolean;
+        },
+      ) =>
+        loopDagExportGraphCommand(file, {
+          out: opts.out,
+          graphId: opts.graphId,
+          budget: opts.budget,
+          tokenBudget: opts.tokenBudget,
+          maxDurationSeconds: opts.maxDuration,
+          maxConcurrency: opts.maxConcurrency,
+          managedWorktrees: opts.managedWorktrees,
+          managedWorktreeLimit: opts.worktreeLimit,
+          predictiveBudget: opts.predictiveBudget,
+        }),
     );
 
   program

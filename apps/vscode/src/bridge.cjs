@@ -6,6 +6,12 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_RUN_TIMEOUT_MS = 30 * 60_000;
 /** Tool rows are activity, not transcripts: keep one line readable in the panel. */
 const MAX_EVENT_LINE_CHARS = 400;
+/** The server rejects a history limit above 1000, so never ask for more. */
+const MAX_LOOP_HISTORY_ENTRIES = 500;
+/** History rows rendered in a report — the most recent ones, where the outcome is. */
+const MAX_LOOP_HISTORY_ROWS = 300;
+/** Pages one report will walk, so an enormous log cannot stall the editor. */
+const MAX_LOOP_HISTORY_PAGES = 20;
 
 function normalizeServerUrl(serverUrl) {
   const url = new URL(serverUrl);
@@ -171,6 +177,204 @@ function usageSummary(usage) {
   return `$${(Number(usage.costUsd) || 0).toFixed(4)} · ${prompt} · ${formatTokens(usage.completionTokens)} completion`;
 }
 
+/** Persisted Loop statuses that have not settled yet (server LoopPersistedStatus). */
+const ACTIVE_LOOP_STATUSES = new Set(["running", "paused"]);
+
+/**
+ * Reader-facing grouping of a persisted Loop status. The server owns the
+ * vocabulary; this only buckets it for display, and anything unrecognised falls
+ * into "fail" rather than being rendered as a success the server never claimed.
+ */
+function loopOutcome(status) {
+  if (ACTIVE_LOOP_STATUSES.has(status)) return "active";
+  if (status === "passed") return "pass";
+  if (status === "cancelled") return "cancelled";
+  if (status === "requirements_pending") return "pending";
+  return "fail";
+}
+
+function formatUsd(value) {
+  return `$${(Number(value) || 0).toFixed(4)}`;
+}
+
+/** "3/10" — iterations run against the configured ceiling. */
+function loopProgress(loop) {
+  const done = Number(loop?.iterations) || 0;
+  const max = Number(loop?.maxIterations);
+  return Number.isFinite(max) && max > 0 ? `${done}/${max}` : String(done);
+}
+
+/** Spend, with the budget appended only when the Loop actually has one. */
+function loopCost(loop) {
+  const budget = loop?.costBudgetUsd;
+  const spent = formatUsd(loop?.costUsd);
+  return typeof budget === "number" && Number.isFinite(budget) ? `${spent} / ${formatUsd(budget)}` : spent;
+}
+
+function formatDuration(ms) {
+  const total = Math.max(0, Math.round((Number(ms) || 0) / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (hours > 0) return `${hours}h${String(minutes).padStart(2, "0")}m`;
+  if (minutes > 0) return `${minutes}m${String(seconds).padStart(2, "0")}s`;
+  return `${seconds}s`;
+}
+
+/** One list row for a persisted Loop: what it is, where it got to, what it cost. */
+function loopRow(loop) {
+  const status = typeof loop?.status === "string" && loop.status ? loop.status : "unknown";
+  return {
+    loopId: typeof loop?.loopId === "string" ? loop.loopId : "",
+    outcome: loopOutcome(status),
+    label: clipLine(loop?.task || loop?.loopId || "loop", 120),
+    description: `${status} · ${loopProgress(loop)} · ${loopCost(loop)}`,
+    detail: [loop?.loopId, loop?.phase ? `phase ${loop.phase}` : "", loop?.updatedAt ? `updated ${loop.updatedAt}` : ""]
+      .filter((part) => part)
+      .join(" · "),
+  };
+}
+
+/** Last `maxLines` lines of captured output, for a bounded excerpt in the report. */
+function outputTail(output, maxLines = 40) {
+  const lines = String(output ?? "")
+    .split("\n")
+    .filter((line, index, all) => line.trim() !== "" || index < all.length - 1);
+  return lines.slice(-maxLines).join("\n").trimEnd();
+}
+
+/**
+ * A code fence longer than the longest backtick run inside the body, so a
+ * verify command or captured output containing ``` cannot break out of
+ * its block and rewrite the rest of the report.
+ */
+function fencedBlock(language, body) {
+  const longest = (String(body).match(/`+/g) ?? []).reduce((max, run) => Math.max(max, run.length), 0);
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return [`${fence}${language}`, body, fence];
+}
+
+/**
+ * One retained Loop history entry as a readable line. Unknown event types are
+ * still printed by name: a history that silently drops rows would misrepresent
+ * what the Loop did.
+ */
+function formatLoopEvent(event) {
+  if (!event || typeof event.type !== "string") return "unknown event";
+  switch (event.type) {
+    case "iteration.start":
+      return `iteration ${event.iteration} started`;
+    case "run.completed":
+      return `iteration ${event.iteration} agent run completed (${formatUsd(event.costUsd)})`;
+    case "verify":
+      return `iteration ${event.iteration} verify exit ${event.code} — ${event.passed ? "passed" : "failed"}`;
+    case "verify.stage.started":
+      return `iteration ${event.iteration} stage ${event.stageId} attempt ${event.attempt}`;
+    case "verify.stage.completed":
+      return `iteration ${event.iteration} stage ${event.result?.id} exit ${event.result?.code}${
+        event.result?.flaky ? " (flaky)" : ""
+      }`;
+    case "verify.flaky":
+      return `iteration ${event.iteration} stage ${event.stageId} flaky after ${event.attempts} attempts`;
+    case "verify.impact":
+      return `iteration ${event.iteration} impact selection${event.fullFallback ? " (full fallback)" : ""}`;
+    case "loop.paused":
+      return `iteration ${event.iteration} paused`;
+    case "loop.resumed":
+      return `iteration ${event.iteration} resumed`;
+    case "loop.steered":
+      return `iteration ${event.iteration} steered (${event.count} message(s))`;
+    case "loop.recovery":
+      return `iteration ${event.iteration} recovery attempt ${event.attempt} (${event.reason})`;
+    case "loop.rollback":
+      return `iteration ${event.iteration} rolled back (${(event.restored ?? []).length} restored, ${
+        (event.deleted ?? []).length
+      } deleted)`;
+    case "requirements.completed":
+      return `requirements ready${event.approvalRequired ? " — approval required" : ""}`;
+    case "requirements.reviewed":
+      return `acceptance review ${event.review?.complete ? "complete" : "incomplete"}`;
+    case "code_review.completed":
+      return `iteration ${event.iteration} code review: ${clipLine(event.review?.summary ?? "", 160)}`;
+    case "loop.warning":
+      return `warning (${event.warning}): ${clipLine(event.message, 200)}`;
+    case "loop.done":
+      return `done — ${event.result?.status} after ${event.result?.iterations} iteration(s), ${formatUsd(
+        event.result?.costUsd,
+      )}`;
+    default:
+      return event.type;
+  }
+}
+
+/**
+ * A persisted Loop rendered for reading: what it was asked to do, how far it
+ * got, what it spent, and the retained lifecycle log. Read-only by design —
+ * pausing, steering and deleting a Loop stay with the surfaces that own the
+ * control plane.
+ */
+function formatLoopReport(loop, history = [], options = {}) {
+  const lines = [`# ${loop?.task || loop?.loopId || "SeekForge loop"}`, ""];
+  lines.push(`- **Loop**: \`${loop?.loopId ?? "?"}\``);
+  lines.push(`- **Status**: ${loop?.status ?? "unknown"}${loop?.phase ? ` (phase ${loop.phase})` : ""}`);
+  lines.push(`- **Iterations**: ${loopProgress(loop)}`);
+  lines.push(`- **Cost**: ${loopCost(loop)}`);
+  if (typeof loop?.tokensUsed === "number") {
+    lines.push(
+      `- **Tokens**: ${formatTokens(loop.tokensUsed)}${
+        typeof loop?.tokenBudget === "number" ? ` / ${formatTokens(loop.tokenBudget)}` : ""
+      }`,
+    );
+  }
+  if (typeof loop?.elapsedMs === "number") lines.push(`- **Elapsed**: ${formatDuration(loop.elapsedMs)}`);
+  if (typeof loop?.verifyRuns === "number") lines.push(`- **Verify runs**: ${loop.verifyRuns}`);
+  if (loop?.createdAt) lines.push(`- **Created**: ${loop.createdAt}`);
+  if (loop?.updatedAt) lines.push(`- **Updated**: ${loop.updatedAt}`);
+  if (loop?.verifyCommand) lines.push("", "## Verify command", "", ...fencedBlock("sh", loop.verifyCommand));
+  if (loop?.delivery) {
+    lines.push(
+      "",
+      "## Delivery",
+      "",
+      `- ${loop.delivery.mode} — ${loop.delivery.status}${loop.delivery.phase ? ` (${loop.delivery.phase})` : ""}`,
+      ...(loop.delivery.artifact ? [`- artifact: ${loop.delivery.artifact}`] : []),
+      ...(loop.delivery.error ? [`- error: ${clipLine(loop.delivery.error, 300)}`] : []),
+    );
+  }
+  if (loop?.lastVerify) {
+    const tail = outputTail(loop.lastVerify.output);
+    lines.push("", `## Last verify (exit ${loop.lastVerify.code})`, "");
+    lines.push(...(tail ? fencedBlock("txt", tail) : ["_no output_"]));
+  }
+  if (loop?.lastAgentError) {
+    lines.push(
+      "",
+      "## Last agent error",
+      "",
+      `\`${loop.lastAgentError.code ?? "error"}\` — ${clipLine(loop.lastAgentError.message ?? "", 400)}`,
+    );
+  }
+  lines.push("", "## History", "");
+  // The wire contract only pages forward, so a long log is read as a tail. Say
+  // what was left out: a partial history presented as complete would hide the
+  // very events — the failure, the final loop.done — a reader opened this for.
+  const dropped = Number(options.dropped) || 0;
+  if (dropped > 0 || options.truncated) {
+    const total = `${dropped + history.length}${options.truncated ? "+" : ""}`;
+    lines.push(`_Showing the ${history.length} most recent of ${total} retained events._`, "");
+  }
+  // "Could not read it" and "there is none" are different facts about the loop.
+  if (options.error) {
+    const reason = options.error instanceof Error ? options.error.message : String(options.error);
+    lines.push(`_History could not be read: ${clipLine(reason, 200)}._`);
+  } else if (history.length === 0) {
+    lines.push("_No retained history for this loop._");
+  }
+  for (const entry of history)
+    lines.push(`- \`${entry?.seq ?? "?"}\` ${entry?.ts ?? ""} — ${formatLoopEvent(entry?.event)}`);
+  return lines.join("\n");
+}
+
 /**
  * Renders one agent event as an output-channel line, or null when the event
  * carries no standalone row (streamed deltas and usage updates are handled by
@@ -310,6 +514,70 @@ class SeekForgeBridge {
     return Array.isArray(body?.sessions) ? body.sessions : [];
   }
 
+  /**
+   * Persisted Loops for a workspace, newest first. The server returns a bare
+   * array; anything else is treated as "none" rather than crashing the view.
+   */
+  async loops(workspaceId, options = {}) {
+    const body = await this.request(withWorkspace("/api/loops", workspaceId), options);
+    return Array.isArray(body) ? body : [];
+  }
+
+  async loop(workspaceId, id, options = {}) {
+    return this.request(withWorkspace(`/api/loops/${encodeURIComponent(id)}`, workspaceId), options);
+  }
+
+  /**
+   * Retained lifecycle log after `after` (exclusive). The server caps `limit` at
+   * 1000, so asking for more would be a 400 rather than more history.
+   */
+  async loopHistory(workspaceId, id, options = {}) {
+    const { after = 0, limit = MAX_LOOP_HISTORY_ENTRIES, ...rest } = options;
+    const query = `/api/loops/${encodeURIComponent(id)}/history?after=${after}&limit=${limit}`;
+    const body = await this.request(withWorkspace(query, workspaceId), rest);
+    return Array.isArray(body) ? body : [];
+  }
+
+  /**
+   * The MOST RECENT retained history. The wire contract only pages forward from
+   * a sequence cursor — there is no "tail" parameter — so a reader who stopped
+   * at the first page would see a long Loop's opening events and never its
+   * failure or its final `loop.done`. Walk forward, keep the tail, and report
+   * what was dropped so the caller can say the log is partial.
+   *
+   * Paging stops on a short page, on a cursor that fails to advance (a server
+   * that cannot page further must not spin this loop), and at `maxPages`.
+   */
+  async loopHistoryTail(workspaceId, id, options = {}) {
+    // `limit` is read here rather than passed through untouched: the end-of-log
+    // test compares a page against the size that was actually requested.
+    const {
+      rows = MAX_LOOP_HISTORY_ROWS,
+      maxPages = MAX_LOOP_HISTORY_PAGES,
+      limit = MAX_LOOP_HISTORY_ENTRIES,
+      ...rest
+    } = options;
+    const entries = [];
+    let dropped = 0;
+    let truncated = false;
+    let after = 0;
+    for (let page = 0; page < maxPages; page += 1) {
+      const batch = await this.loopHistory(workspaceId, id, { ...rest, after, limit });
+      for (const entry of batch) {
+        entries.push(entry);
+        if (entries.length > rows) {
+          entries.shift();
+          dropped += 1;
+        }
+      }
+      const last = batch.length > 0 ? Number(batch[batch.length - 1]?.seq) : Number.NaN;
+      if (batch.length < limit || !Number.isFinite(last) || last <= after) break;
+      after = last;
+      truncated = page + 1 >= maxPages;
+    }
+    return { entries, dropped, truncated };
+  }
+
   /** One session's transcript, as the messages a reader would want to see. */
   async sessionTranscript(workspaceId, id, options = {}) {
     const body = await this.request(withWorkspace(`/api/sessions/${encodeURIComponent(id)}`, workspaceId), options);
@@ -406,12 +674,22 @@ module.exports = {
   DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_RUN_TIMEOUT_MS,
   MAX_EVENT_LINE_CHARS,
+  MAX_LOOP_HISTORY_ENTRIES,
+  MAX_LOOP_HISTORY_PAGES,
+  MAX_LOOP_HISTORY_ROWS,
   MAX_SELECTION_CHARS,
   SeekForgeBridge,
   clipLine,
   formatAgentEvent,
+  formatDuration,
+  formatLoopEvent,
+  formatLoopReport,
   formatTranscript,
   hasDiffPreview,
+  loopCost,
+  loopOutcome,
+  loopProgress,
+  loopRow,
   normalizeServerUrl,
   describeRule,
   permissionHunkItems,

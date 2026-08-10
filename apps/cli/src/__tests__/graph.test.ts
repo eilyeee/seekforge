@@ -3,8 +3,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Command } from "commander";
-import { recordGraphSchedulingObservation } from "@seekforge/core";
-import { graphIntelligenceCommand, readEngineeringGraphFile } from "../commands/graph.js";
+import { recordGraphSchedulingObservation, runEngineeringGraph, type AgentCoreDeps } from "@seekforge/core";
+import {
+  graphCompareCommand,
+  graphControlCommand,
+  graphEvidenceCommand,
+  graphIntelligenceCommand,
+  graphSignalCommand,
+  graphTemplateCompareCommand,
+  graphTemplateDeprecateCommand,
+  graphTemplateListCommand,
+  graphTemplateRegisterCommand,
+  graphTemplateShowCommand,
+  readEngineeringGraphFile,
+} from "../commands/graph.js";
 import { registerGraphCommands } from "../register-graph.js";
 
 describe("Engineering Graph CLI input", () => {
@@ -70,6 +82,33 @@ describe("Engineering Graph CLI input", () => {
     );
   });
 
+  it("exposes every durable control the REST surface accepts", () => {
+    const program = new Command();
+    registerGraphCommands(
+      program,
+      (value, previous) => [...previous, value],
+      () => undefined,
+    );
+    const graph = program.commands.find((command) => command.name() === "graph");
+    expect(graph?.commands.map((command) => command.name())).toEqual(
+      expect.arrayContaining([
+        "pause",
+        "continue",
+        "steer",
+        "cancel-node",
+        "reprioritize",
+        "signal",
+        "evidence",
+        "compare",
+        "template",
+      ]),
+    );
+    const template = graph?.commands.find((command) => command.name() === "template");
+    expect(template?.commands.map((command) => command.name())).toEqual(
+      expect.arrayContaining(["list", "show", "register", "compare", "deprecate"]),
+    );
+  });
+
   it("reports scheduling intelligence without node output", () => {
     const workspace = mkdtempSync(join(tmpdir(), "seekforge-graph-cli-intelligence-"));
     workspaces.push(workspace);
@@ -88,5 +127,133 @@ describe("Engineering Graph CLI input", () => {
       entries: [expect.objectContaining({ graphId: "release", nodeId: "verify", failures: 1 })],
       findings: [],
     });
+  });
+});
+
+describe("Engineering Graph CLI control plane", () => {
+  const workspaces: string[] = [];
+  afterEach(() => {
+    vi.restoreAllMocks();
+    process.exitCode = undefined;
+    for (const workspace of workspaces.splice(0)) rmSync(workspace, { recursive: true, force: true });
+  });
+
+  /** A pure `wait` Graph reaches a durable paused checkpoint without a provider. */
+  async function waitingGraph(prefix: string): Promise<{ workspace: string; graphId: string }> {
+    const workspace = mkdtempSync(join(tmpdir(), prefix));
+    workspaces.push(workspace);
+    const graphId = "release";
+    await runEngineeringGraph(
+      {} as AgentCoreDeps,
+      {
+        graphId,
+        nodes: [{ id: "external", kind: "wait" as const, waitFor: { signal: "approved" } }],
+      },
+      { workspace },
+    );
+    vi.spyOn(process, "cwd").mockReturnValue(workspace);
+    return { workspace, graphId };
+  }
+
+  it("delivers only a signal the definition declares, and points at resume", async () => {
+    const { graphId } = await waitingGraph("seekforge-graph-cli-signal-");
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const error = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    await graphSignalCommand(graphId, "undeclared");
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("declared wait node"));
+    expect(process.exitCode).toBe(1);
+    process.exitCode = undefined;
+
+    await graphSignalCommand(graphId, "approved", '{"build":42}');
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Queued signal approved"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("graph resume"));
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("rejects a malformed signal payload before touching the mailbox", async () => {
+    const { graphId } = await waitingGraph("seekforge-graph-cli-payload-");
+    const error = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    await graphSignalCommand(graphId, "approved", "{not json");
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("valid JSON"));
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("refuses control commands unless a run owns the Graph", async () => {
+    const { graphId } = await waitingGraph("seekforge-graph-cli-control-");
+    const error = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    await graphControlCommand(graphId, { operation: "pause" });
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("not running"));
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("exports evidence and detects a tampered report", async () => {
+    const { workspace, graphId } = await waitingGraph("seekforge-graph-cli-evidence-");
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    graphEvidenceCommand(graphId);
+    const report = JSON.parse(String(log.mock.calls[0]?.[0])) as { integrity: unknown; status: string };
+    expect(report).toMatchObject({ graphId, status: "paused" });
+    expect(report.integrity).toBeDefined();
+
+    writeFileSync(join(workspace, "evidence.json"), JSON.stringify(report));
+    graphEvidenceCommand(undefined, { verify: "evidence.json" });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("intact"));
+    expect(process.exitCode).toBeUndefined();
+
+    writeFileSync(join(workspace, "tampered.json"), JSON.stringify({ ...report, status: "passed" }));
+    graphEvidenceCommand(undefined, { verify: "tampered.json" });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("tampered"));
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("requires an archived baseline before comparing runs", async () => {
+    const { graphId } = await waitingGraph("seekforge-graph-cli-compare-");
+    const error = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    graphCompareCommand(graphId);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("baseline not found"));
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("completes the template registry lifecycle from the CLI", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-graph-cli-template-"));
+    workspaces.push(workspace);
+    vi.spyOn(process, "cwd").mockReturnValue(workspace);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const error = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const template = (version: string, extra: Record<string, unknown> = {}) => ({
+      schemaVersion: 2,
+      kind: "engineering-graph-template",
+      templateId: "package-release",
+      version,
+      parameters: { pkg: { type: "string", default: "core" }, ...(extra.parameters as object) },
+      definition: { graphId: "release-${{pkg}}", nodes: [{ id: "review", kind: "gate" }] },
+    });
+    writeFileSync(join(workspace, "v1.json"), JSON.stringify(template("1.0.0")));
+    graphTemplateRegisterCommand("v1.json");
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("package-release@1.0.0"));
+
+    graphTemplateListCommand();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("package-release@1.0.0"));
+    graphTemplateShowCommand("package-release", "1.0.0");
+    expect(JSON.parse(String(log.mock.calls.at(-1)?.[0]))).toMatchObject({ templateId: "package-release" });
+
+    // A newly required parameter is breaking, and the CLI must fail on it.
+    writeFileSync(
+      join(workspace, "v2.json"),
+      JSON.stringify(template("2.0.0", { parameters: { extra: { type: "string" } } })),
+    );
+    graphTemplateCompareCommand("package-release", "1.0.0", "v2.json");
+    expect(JSON.parse(String(log.mock.calls.at(-1)?.[0]))).toMatchObject({ classification: "breaking" });
+    expect(process.exitCode).toBe(1);
+    process.exitCode = undefined;
+
+    graphTemplateDeprecateCommand("package-release", "1.0.0");
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Deprecated Graph template"));
+    graphTemplateListCommand();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("deprecated="));
+
+    graphTemplateShowCommand("package-release", "9.9.9");
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("not found"));
+    expect(process.exitCode).toBe(1);
   });
 });

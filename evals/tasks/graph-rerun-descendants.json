@@ -1,0 +1,39 @@
+{
+  "id": "graph-rerun-descendants",
+  "title": "Resume an Engineering Graph with --rerun and re-execute only that node and its descendants",
+  "fixture": "graph-rerun-descendants",
+  "mode": "edit",
+  "runner": "graph",
+  "task": "Engineering Graph control plane: after the graph passes, resuming with a rerun of one node must invalidate that node and every descendant while every ancestor keeps its settled result.",
+  "graph": {
+    "expectedStatus": "passed",
+    "definition": {
+      "graphId": "eval-graph-rerun",
+      "costBudgetUsd": 1,
+      "nodes": [
+        {
+          "id": "implement",
+          "kind": "agent",
+          "mode": "edit",
+          "approvalMode": "auto",
+          "task": "`npm test` fails in this project. `chunk` in src/chunk.js drops the trailing partial window because its loop only emits full `size` slices. Fix src/chunk.js so the remainder is returned as a final shorter chunk and an input shorter than `size` yields one chunk. Do NOT edit anything under test/. Run `npm test` to verify."
+        },
+        { "id": "package", "kind": "function", "handler": "collect", "dependsOn": ["implement"] },
+        { "id": "publish", "kind": "function", "handler": "collect", "dependsOn": ["package"] }
+      ]
+    },
+    "resume": {
+      "expectedInitialStatus": "passed",
+      "rerun": ["package"]
+    }
+  },
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "command_succeeds", "command": "node verify-graph.mjs" },
+    { "type": "file_contains", "path": "test/chunk.test.js", "pattern": "keeps the trailing partial chunk" },
+    { "type": "file_contains", "path": "verify-graph.mjs", "pattern": "GRAPH_ID = .eval-graph-rerun." },
+    { "type": "file_not_contains", "path": "test/chunk.test.js", "pattern": "skip" },
+    { "type": "answer_matches", "pattern": "publish=passed" }
+  ],
+  "notes": "The first invocation must reach \"passed\" on its own; the second resumes the same persisted checkpoint with rerunFrom=[package]. verify-graph.mjs counts node.completed events per node from the retained lifecycle window: the Agent ancestor exactly once, the reran node and its descendant exactly twice. That distinguishes a real scoped invalidation from either a no-op resume or a full replay."
+}

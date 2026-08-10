@@ -13,7 +13,7 @@ agent, then grades with deterministic checks only (no LLM judges).
   "title": "Human-readable title",
   "fixture": "fixtures/<name> directory",
   "mode": "edit",                  // or "ask"
-  "runner": "agent",               // optional: agent | loop | session_scenario
+  "runner": "agent",               // optional: agent | loop | session_scenario | graph
   "task": "The prompt given to the agent.",
   "checks": [ /* see below */ ],
   "notes": "optional rationale"
@@ -33,6 +33,58 @@ provide `loop.verifyCommand`, `loop.maxIterations`, and `loop.expectedStatus`,
 with optional persisted resume settings. `session_scenario` tasks run ordered
 agent and memory lifecycle steps; an agent step with `resume: true` resumes the
 previous session rather than starting a new trace.
+
+### `graph` tasks (Engineering Graph control plane)
+
+A `graph` task carries a complete Engineering Graph definition inline and drives
+core's real `runEngineeringGraph` with the same deterministic `noop`/`collect`
+handler registry the CLI and Server expose — the harness never invents a handler
+that could run a shell command:
+
+```jsonc
+{
+  "runner": "graph",
+  "mode": "edit",
+  "graph": {
+    "expectedStatus": "passed",     // terminal GraphRunStatus of the LAST invocation
+    "approve": ["release-review"],  // gate node paths pre-approved on the first invocation
+    "costBudgetUsd": 1,             // optional operational caps (also "tokenBudget")
+    "definition": { "graphId": "…", "nodes": [ /* … */ ] },
+    "resume": {                     // optional second invocation against the checkpoint
+      "expectedInitialStatus": "paused",           // asserted BEFORE resuming
+      "approve": ["review"],                       // --approve
+      "rerun": ["package"],                        // --rerun (node + descendants)
+      "signals": [{ "name": "artifact-ready", "payload": { "release": "1.2.3" } }]
+    }
+  }
+}
+```
+
+`definition` is parsed by core's `parseEngineeringGraphDefinition`, and the
+approve/rerun selections go through `validateEngineeringGraphRunOptions`, so an
+unknown gate, an undeclared rerun target, or an unregistered handler fails the
+dataset gate rather than a paid run. Signals are enqueued into
+`.seekforge/graphs/<graphId>.signals.json` between the two invocations, which is
+exactly how an external system wakes a `wait` node.
+
+The task's `answer_matches` checks grade a deterministic status line —
+`graph <graphId> <status> <node>=<status> …` — not model prose, because a Graph
+has no single final summary.
+
+Graph fixtures ship a `verify-graph.mjs` that reads the durable checkpoint at
+`.seekforge/graphs/<graphId>.json` and asserts node kinds/statuses/attempts,
+lifecycle event counts, and dependency ordering. That is what makes the *control
+plane* graded rather than only the file the Agent node happened to edit.
+
+Current graph tasks:
+
+| Task | Graph behavior under test |
+| --- | --- |
+| `graph-multi-node` | five-node dependency graph (agent + function + gate + join) reaching `passed`, gate crossed by an explicit approval on the first invocation |
+| `graph-gate-approval` | graph pauses at a gate (`paused`, `pauseReason: approval`), resume with `--approve` crosses it without replaying the Agent ancestor |
+| `graph-rerun-descendants` | resume with `--rerun` invalidates one node plus its descendants while every ancestor keeps its settled result |
+| `graph-wait-signal` | `wait` node parks the graph durably; an external signal wakes it, its payload lands in the node output, and the mailbox is drained |
+| `graph-failure-continue` | `failurePolicy: "continue"` — an expired wait fails, its dependent is skipped, the independent Agent branch still completes, run is `failed` |
 
 ## Fixture conventions
 
@@ -64,8 +116,12 @@ pnpm --filter @seekforge/eval-harness eval -- --suite nightly --junit evals/repo
 | Suite | Tasks | Default samples | Intended use |
 | --- | ---: | ---: | --- |
 | `smoke` | 15 representative tasks | 1 | quick model/config and Loop lifecycle check |
-| `nightly` | all 63 tasks | 3 | weekly regression and efficiency gate |
-| `release` | all 63 tasks | 5 | release qualification with tighter gates |
+| `nightly` | all 68 tasks | 3 | weekly regression and efficiency gate |
+| `release` | all 68 tasks | 5 | release qualification with tighter gates |
+
+`smoke` is an explicit id list, so the five `graph-*` tasks currently run only in
+`nightly`/`release` (both select `"*"`). Adding one of them to `smoke` is a
+`config.json` edit.
 
 Use `--repeat <n>` (1 to 20) to override the sample count and `--task a,b` to narrow the
 chosen suite. `--require-api-key` turns a missing provider key into a non-zero
@@ -98,6 +154,11 @@ is only updated from an actual eval run, never by hand. Newly added tasks do not
 count as pass→fail regressions. Copy a reviewed, representative report over
 `baseline.json` only when intentionally refreshing the comparison point.
 
+> The five `graph-*` tasks were added after the current baseline was recorded,
+> so the baseline is stale with respect to them. That is safe by construction: a
+> task absent from the baseline can never be a pass→fail regression, so
+> `--fail-on-regression` ignores them until a real run refreshes `baseline.json`.
+
 **Current baseline: 2026-08-08, all 63 tasks at three samples** — 187/189
 (98.9%), $0.551 total, $0.00295 per success, 96,875 tokens per success, 1.5%
 tool failures, 0 session errors, deepseek-v4-flash. `foreach-await-bug` passed
@@ -115,6 +176,14 @@ noise, and a single-sample baseline had frozen them as failures — which would
 have made a later run that passed them look like an improvement, and set
 `maxSuccessRateDrop` against an inflated failure count. Only
 `foreach-await-bug` is a real weakness, and its 1/3 says so with a number.
+
+**Read the per-check data before naming the weakness.** In both failing samples
+of `foreach-await-bug`, `npm test` passed and the file contained `await`; the
+only failed check was `file_not_contains "\.forEach\(async"`. The fixture's test
+asserts order, length and a non-empty result, so a deterministic pass means the
+async fix landed 3 times out of 3. What survived was the JSDoc line describing
+the bug that had just been removed. The task discriminates **diff hygiene**, not
+async semantics — a task name is a hypothesis, and the checks are the evidence.
 
 The baseline before that was recorded 2026-07-01 against 49 tasks and carried
 **no token metrics at all** — so `maxTokensPerSuccess` had only ever been

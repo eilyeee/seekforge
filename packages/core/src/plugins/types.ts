@@ -1,5 +1,6 @@
 import type { HookConfig } from "../hooks/index.js";
 import type { McpServerConfig } from "../mcp/types.js";
+import type { BuiltinGraphHandlerId } from "../agent/graph-declarative-handlers.js";
 
 export const PLUGIN_API_VERSION = 1 as const;
 
@@ -21,7 +22,7 @@ export type PluginManifest = {
     /** Shell hooks activate only after the installed digest is explicitly enabled. */
     hooks?: HookConfig;
     /** Safe aliases to deterministic built-in Graph handlers. */
-    graphHandlers?: Record<string, "noop" | "collect">;
+    graphHandlers?: Record<string, BuiltinGraphHandlerId>;
     /** Aliases to host-registered trusted remote executors; no code is loaded from the plugin. */
     graphExecutors?: Record<string, string>;
   };
@@ -45,7 +46,7 @@ export type PluginContributions = {
   agentRoots: string[];
   mcpServers: Record<string, McpServerConfig>;
   hooks: HookConfig;
-  graphHandlers?: Record<string, "noop" | "collect">;
+  graphHandlers?: Record<string, BuiltinGraphHandlerId>;
   graphExecutors?: Record<string, string>;
   plugins: PluginRecord[];
 };

@@ -78,6 +78,19 @@ function realpathOrNull(p: string): string | null {
   }
 }
 
+/**
+ * Both kernels match sandbox path rules against the *resolved* path, so the
+ * policy has to name the resolved workspace. On macOS /tmp is a symlink to
+ * /private/tmp: a "read-only" workspace emitted as `/tmp/ws` is never matched by
+ * its own deny rule, while the broad `/private/tmp` write allowance is — which
+ * silently makes a read-only workspace writable. Falls back to the literal path
+ * when the workspace cannot be resolved, so an unresolvable path keeps the
+ * stricter behavior instead of dropping out of the policy.
+ */
+function resolveWorkspace(workspace: string): string {
+  return realpathOrNull(workspace) ?? workspace;
+}
+
 function normalizeProfile(input: Exclude<SandboxLevel, "off"> | SandboxProfile): SandboxProfile {
   if (typeof input !== "string") return input;
   return {
@@ -195,11 +208,11 @@ export function buildSandboxSpec(
   const profile = normalizeProfile(level);
   if (platform === "darwin") {
     if (!availabilityCheck("sandbox-exec")) return null;
-    return { bin: "sandbox-exec", args: ["-p", buildSeatbeltProfile(profile, workspace)] };
+    return { bin: "sandbox-exec", args: ["-p", buildSeatbeltProfile(profile, resolveWorkspace(workspace))] };
   }
   if (platform === "linux") {
     if (!availabilityCheck("bwrap")) return null;
-    return { bin: "bwrap", args: buildBwrapArgs(profile, workspace) };
+    return { bin: "bwrap", args: buildBwrapArgs(profile, resolveWorkspace(workspace)) };
   }
   return null;
 }

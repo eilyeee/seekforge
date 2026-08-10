@@ -78,7 +78,7 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge rewind [session-id] [--dry-run]` | 撤销某会话的全部文件改动（写前检查点） |
 | `seekforge replay <session-id>` | 把已存储的会话确定性地重新渲染到终端（不调用模型） |
 | `seekforge audit <session-id> [--json] [-o <file>]` | 导出一份可复核的报告，说明智能体在该会话里做了什么 |
-| `seekforge memory add "<fact>" [--type] [--pending]` / `remove <n\|id\|text>` | 直接告诉 agent 一条事实（REPL：`/remember <fact>`） |
+| `seekforge memory add "<fact>" [--type] [--pending]` / `seekforge memory remove <n\|id\|text>` | 直接告诉 agent 一条事实（REPL：`/remember <fact>`） |
 | `seekforge status` | 项目 / 配置 / 最近会话概览 |
 | `seekforge update` | 检查 npm 上的新版本并打印安装命令 |
 | `seekforge diff` | 显示当前 git diff |
@@ -87,6 +87,8 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge resolve-review <pr> --max-cost <usd>` | 处理 PR 评审中可执行的反馈，验证、提交并推送修复 |
 | `seekforge schedule add\|list\|run\|next\|history\|install\|uninstall\|status` | 管理定时任务、历史、重试与 crontab tick——见[定时任务](docs/scheduling.zh-CN.md) |
 | `seekforge graph validate\|run\|resume\|list\|show\|history\|delete` | 运行持久化的异构 Agent/Loop/函数/路由/审批门/子图工作流——见[图工程](docs/graph-engineering.zh-CN.md) |
+| `seekforge graph pause\|continue\|steer\|cancel-node\|reprioritize\|signal` | 从另一个进程控制运行中的 Graph：安全边界处暂停/恢复、下达指导、取消或重排尚未开始的节点、投递已声明的外部信号 |
+| `seekforge graph evidence\|compare\|template` | 导出防篡改的 Graph 证据报告、与已归档运行做对比、管理带版本的模板注册表（`template list\|show\|register\|compare\|deprecate`） |
 | `seekforge sandbox-run "<task>"` | 通过 Docker runner 契约执行任务——见[远程执行](docs/remote.zh-CN.md) |
 | `seekforge remote-run "<task>" --host <user@host> --workspace <path>` | 通过 ssh 在你自己的机器上执行同一个任务；该主机使用它自己的 API key——见[远程执行](docs/remote.zh-CN.md) |
 | `seekforge evolve analyze\|list\|show\|accept\|reject\|apply` | 会话打分与自我进化提案审阅（人工把关） |
@@ -251,12 +253,20 @@ seekforge config set runtimeBin target/release/seekforge-runtime --global
 
 ## 已知限制
 
-- `deepseek-reasoner` 不能作为 agent 模型（无函数调用；provider 里有文本
-  回退协议但未接入循环）。请使用 DeepSeek V4 模型——它们把思考与工具
-  调用结合。
-- 原生 Desktop 安装包支持 macOS、Linux 与 Windows。可选的操作系统命令沙箱
-  目前只支持 macOS（seatbelt）与 Linux（bwrap）；在 Windows 上请求启用时会
-  失败关闭，而不会退化为无沙箱执行。
+- `deepseek-reasoner` 不能作为 agent 模型：它不支持函数调用，而 SeekForge
+  刻意不提供从模型文本中解析工具调用的回退协议——助手文本与工具输出属于
+  同一条不可信通道，文件或 diff 里的围栏代码块会变成被执行的调用。请使用
+  DeepSeek V4 模型——它们把思考与工具调用结合。
+- shell 命令执行仅限 POSIX：`run_command`、后台任务与 Rust 运行时都通过
+  `/bin/sh -c` 执行，因此命令类工具在原生 Windows 上跑不起来——请使用 WSL。
+  原生 Desktop 安装包支持 macOS、Linux 与 Windows，但 Windows 在 CI 里只作为
+  桌面打包目标出现，并非受测运行时。
+- 可选的操作系统命令沙箱只支持 macOS（seatbelt）与 Linux（bwrap），且不计划
+  提供 Windows 等价实现：job object 与 restricted token 根本无法表达「按路径
+  默认拒绝」的策略，而 AppContainer 只能访问 ACL 中显式写有其 package SID 的
+  文件——这会切断每次构建都需要的读取，并且在本应放行网络的级别上也会挡掉
+  回环连接。在 Windows 上请求沙箱会失败关闭，而不是用同一个名字提供一个更弱
+  的保证。
 
 ## Monorepo 结构
 

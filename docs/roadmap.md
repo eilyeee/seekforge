@@ -20,7 +20,8 @@ not a promise of API stability.
 | Capability | Status | Current boundary / next step |
 | --- | --- | --- |
 | Core agent loop, CLI, TUI, session traces, permissions | Production-ready foundation | Continue boundary regression testing and real-project dogfooding. |
-| Autonomous Loop and Graph engineering | Implemented, maturing | Safe-boundary adaptive scheduling, desktop authoring/simulation, gray-release controls, operational diagnostics, versioned decision evidence, burn-rate freeze control, renewable executor fencing, and signed CAS provenance ship; expand real-provider and real-project coverage. |
+| Autonomous Loop and Graph engineering | Implemented, maturing | Safe-boundary adaptive scheduling, desktop authoring/simulation, gray-release controls, operational diagnostics, versioned decision evidence, burn-rate freeze control, renewable executor fencing, and signed CAS provenance ship. Durable control, external signals, evidence, run comparison, and the template registry now reach the CLI and the TUI, not only REST; the deterministic handler catalogue covers definition-only workflows. Next: close the Graph `loop`-node gap below, then expand real-provider and real-project coverage. |
+| Loop DAG → Engineering Graph convergence | Migration path shipped, engines not merged | `seekforge loop-dag export-graph` converts a DAG deterministically and refuses any definition it cannot make behave identically. The Loop DAG contract is frozen: new orchestration capability lands in the Graph. Merging still blocked on the Graph `loop` node, which forwards only `task`/`workspace`/`verifyCommand`/`approvalMode`/budgets/`timeoutMs` — per-Loop `options`, `consumeDependencyOutputs`, `outputPaths`, `budgetWeight`, `predictiveBudget`, `verifierId`, and per-node failure policy have no Graph equivalent yet. |
 | Desktop and local web workbench | Implemented, maturing | Native macOS, Linux, and Windows package builds ship; updater/platform signing and clean-install smoke tests still require release credentials. |
 | DeepSeek provider and cost accounting | Production-ready foundation | Main, compaction, and memory-extraction calls share accounting; preserve provider-specific token/cache semantics. |
 | Provider presets / OpenAI-compatible endpoints | Implemented, maturing | Add compatibility fixtures per provider; do not claim identical tool/thinking behavior. |
@@ -30,18 +31,20 @@ not a promise of API stability.
 | Scheduled jobs, webhooks, and background runs | Implemented, security-sensitive | Persistent run ledger, cancellation, replay cursors, and configurable count/age retention ship; keep hardening external delivery operations. |
 | Browser / visual verification | Implemented, optional | Real Chromium integration CI ships; expand browser/platform coverage while preserving private-network restrictions. |
 | Rust runtime and Docker runner | Implemented, optional | Weekly real-binary/container gates ship; expand the platform matrix and release smoke coverage. |
-| Eval harness | Implemented | Real Loop/resume/memory scenarios, paired multi-sample A/B, CI history restoration, Desktop trend visualization, source-tagged dogfood regressions, and provenance-bearing ecosystem/execution/fault matrices with CI drift gates ship. |
+| Eval harness | Implemented | Real Loop/resume/memory scenarios, paired multi-sample A/B, CI history restoration, Desktop trend visualization, source-tagged dogfood regressions, and provenance-bearing ecosystem/execution/fault matrices with CI drift gates ship. A `graph` runner drives the real Graph engine, and five tasks now grade the control plane (multi-node, gate approval, rerun-with-descendants, wait/signal, continue-on-failure). Re-record the baseline: it predates those tasks. |
 | `@seekforge/core` embedding API | Internal by policy | The 0.x package stays private; [publication exit criteria](core-package-policy.md) define compiled artifacts, exports, semver, consumer tests, examples, and security docs. |
-| VS Code / JetBrains integration | VS Code client shipped; JetBrains pending | Thin VS Code client ships as a versioned .vsix release asset: chat with tool activity, diff-document permission review with per-hunk approval, cost/cache readout, session resume, questions, `@file` context, memory-candidate review, and readable session transcripts. Marketplace publishing stays manual (publisher token). |
-| Remote/team execution service | Design-stage | Stabilize a self-hosted runner contract without weakening local-first defaults. |
+| VS Code / JetBrains integration | VS Code client shipped (chat + read-only Loop panel); JetBrains pending | Thin VS Code client ships as a versioned .vsix release asset: chat with tool activity, diff-document permission review with per-hunk approval, cost/cache readout, session resume, questions, `@file` context, memory-candidate review, and readable session transcripts. Marketplace publishing stays manual (publisher token). |
+| Remote/team execution service | Design-stage; single-operator remote execution ships | Graph `remote` nodes now run on the Docker and ssh runners, registered only from `~/.seekforge/graph-executors.json` so a cloned repository cannot name a host. Remaining work is the multi-operator case: stabilize a self-hosted runner contract without weakening local-first defaults. |
 
 ## Near-term priorities
 
 1. Produce signed updater artifacts and add cross-platform clean-install Desktop
    smoke jobs once platform signing credentials are available; native packages already build in CI.
-2. Expand real-project lifecycle eval fixtures and preserve enough CI trend
-   history to detect slow cost/quality drift across releases.
-3. Expand real-provider coverage for the Loop/Graph control plane; the wire
+2. Re-record `evals/baseline.json` at three samples — it predates the five Graph
+   control-plane tasks — then expand real-project lifecycle fixtures and preserve
+   enough CI trend history to detect slow cost/quality drift across releases.
+3. Close the Graph `loop`-node gap so the Loop DAG can actually be retired, then
+   expand real-provider coverage for the Loop/Graph control plane; the wire
    dialects of OpenAI-compatible endpoints are normalized and fixture-pinned.
 4. Improve provider compatibility fixtures while keeping DeepSeek-specific cost
    and cache-hit reporting first class.

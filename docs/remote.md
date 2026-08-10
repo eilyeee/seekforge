@@ -154,6 +154,63 @@ Flags: `--image`, `--network none|bridge|host`, `--memory`, `--cpus`,
 command builds its argv via `buildDockerRunArgs` and execs `docker`; `--check`
 prints the argv and exits, so you can inspect exactly what would run.
 
+## As a Graph executor
+
+Both runners can back a `remote` node in an [Engineering Graph](graph-engineering.md).
+Registration lives in **`~/.seekforge/graph-executors.json`** — the operator's home
+directory, never the workspace:
+
+```json
+{
+  "version": 1,
+  "executors": {
+    "sandbox": { "runner": "docker", "image": "seekforge-runner", "workspaceCapacity": 2 },
+    "workstation": { "runner": "ssh", "host": "me@build-box", "workspace": "/srv/repo" }
+  }
+}
+```
+
+Docker entries accept `image`, `network`, `memory`, `cpus`, and `workdir`; ssh
+entries accept `host`, `workspace`, `port`, `identityFile`, `binary`, `provider`,
+and `model`. Both accept `capacity` and `workspaceCapacity`.
+
+**Why home-only.** A workspace file would let a cloned repository name an
+attacker's host and hand `seekforge graph run` both the task text and an agent.
+Registration is an operator act, so it comes from the operator's home directory.
+Without the file there is no adapter and every `remote` node fails preflight;
+a malformed file throws rather than degrading to an empty registry. Plugin
+manifests can still only *alias* an id the host already registered — they cannot
+create trust.
+
+Capabilities are declared only where they are real:
+
+| | docker | ssh |
+| --- | --- | --- |
+| Capacity reservation / fencing | container named `seekforge-graph-<hash>`; the daemon's refusal to reuse a live name *is* the fence | none — a token that fences nothing is worse than no token |
+| Cooperative cancellation | yes (`docker kill` stops the container) | **no** — killing the local `ssh` closes the channel, and whether the remote run dies is that host's sshd's decision. A node with `requiresCancellation: true` is refused at preflight on an ssh executor |
+| Result provenance | yes — the claimed `session_id` must exist under the mounted workspace | none (the session lives on the remote host) |
+| Recovery by idempotency key | yes — journal at `.seekforge/graph-remote-results/` (bounded to 256 entries) | same |
+
+**Cost.** Usage is not invisible over ssh: `seekforge run --output-format json`
+prints a result envelope with `session_id`, `total_cost_usd`, and `usage`, and
+that envelope returns over the same channel that carried the command. What
+differs is *attribution*, not measurability — the remote host bills its own key —
+so each node result records `costAccount: "remote"` or `"local"`, and the cost is
+still charged to the Graph ledger because it really was spent running this Graph.
+The Graph's remaining `costBudgetUsd` is pushed down as `--max-cost`, so the
+budget is enforced on the remote host as well as observed locally.
+
+Where no usage is reported at all, the node **fails non-retryably** if the Graph
+declared a cost or token budget — retrying would spend the same unmeasured amount
+again. Without a budget it records `costUsd: 0` together with
+`costAccounting: "unreported"`, so nothing downstream can read that zero as a
+measurement.
+
+**Operational notes.** Give remote nodes a `timeoutMs`: the run gets `-y`, but an
+env-level permission prompt on a closed stdin has no human to answer it, and only
+the node timeout bounds that. Graph containers are visible under the
+`seekforge-graph-` name prefix in `docker ps`.
+
 ## Security model
 
 - **Isolation.** `--rm` — the container is ephemeral and removed on exit.

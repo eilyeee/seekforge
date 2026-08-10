@@ -12,15 +12,20 @@ import { promisify } from "node:util";
 import {
   addMemoryFact,
   approveMemoryCandidate,
+  BUILTIN_GRAPH_HANDLERS,
+  enqueueEngineeringGraphSignal,
   memoryStats,
   readFactMeta,
   readSessionMeta,
   rejectMemoryCandidate,
   resumeAutoLoop,
   runAutoLoop,
+  runEngineeringGraph,
   scoreSession,
   type AgentCore,
   type AgentCoreDeps,
+  type EngineeringGraphDefinition,
+  type EngineeringGraphState,
   type LoopResult,
   type RunAgentTaskInput,
 } from "@seekforge/core";
@@ -65,6 +70,7 @@ export type RunTaskOptions = {
   /** Test seams; production always uses core's real orchestration functions. */
   runLoop?: typeof runAutoLoop;
   resumeLoop?: typeof resumeAutoLoop;
+  runGraph?: typeof runEngineeringGraph;
 };
 
 /** One skill the core selected for this task's session (from skills-usage.jsonl). */
@@ -87,6 +93,9 @@ export type TaskMetrics = {
   /** Heuristic 0-100 session score from core (absent if scoring failed). */
   score?: number;
 };
+
+/** Per-node outcome of a Graph run, so a report can show where a graph stopped. */
+export type GraphNodeSummary = { id: string; kind: string; status: string; attempts: number };
 
 export type ExecutionStep = {
   index: number;
@@ -112,6 +121,10 @@ export type TaskExecution = {
   lifecycleEvents?: number;
   interruptedAtOccurrence?: number;
   steps?: ExecutionStep[];
+  /** Graph runner only: the terminal node outcomes of the final invocation. */
+  nodes?: GraphNodeSummary[];
+  /** Graph runner only: why the first invocation paused, when it did. */
+  pauseReason?: "approval" | "control" | "wait";
 };
 
 export type TaskResult = {
@@ -667,6 +680,116 @@ async function runLoopTaskMode(
   };
 }
 
+/** A/B prompt variants must reach every Agent/Loop node, nested graphs included. */
+function graphWithTaskSuffix(
+  definition: EngineeringGraphDefinition,
+  suffix: string | undefined,
+): EngineeringGraphDefinition {
+  if (!suffix) return definition;
+  return {
+    ...definition,
+    nodes: definition.nodes.map((node) => ({
+      ...node,
+      ...(typeof node.task === "string" ? { task: `${node.task}${suffix}` } : {}),
+      ...(node.graph ? { graph: graphWithTaskSuffix(node.graph, suffix) } : {}),
+    })),
+  };
+}
+
+function graphNodeSummaries(state: EngineeringGraphState): GraphNodeSummary[] {
+  return state.results.map(({ id, kind, status, attempts }) => ({ id, kind, status, attempts }));
+}
+
+/**
+ * Deterministic stand-in for an agent's final answer: a Graph has no single
+ * summary, and grading on one node's prose would reintroduce model wording.
+ */
+function graphAnswer(state: EngineeringGraphState): string {
+  return [
+    `graph ${state.graphId} ${state.status}`,
+    ...graphNodeSummaries(state).map((n) => `${n.id}=${n.status}`),
+  ].join(" ");
+}
+
+async function runGraphTaskMode(
+  task: TaskDef,
+  created: CreatedAgent,
+  dir: string,
+  suffix: string | undefined,
+  opts: RunTaskOptions,
+  metrics: MutableMetrics,
+): Promise<{ answer: string; execution: TaskExecution; error?: string }> {
+  const config = task.graph;
+  if (!config) throw new Error(`task ${task.id}: graph runner is missing graph config`);
+  if (!created.deps) throw new Error(`task ${task.id}: graph runner requires createAgent() to expose AgentCoreDeps`);
+  const run = opts.runGraph ?? runEngineeringGraph;
+  // Built once so the initial run and the resume present the identical
+  // definition: core refuses to resume a changed fingerprint.
+  const definition = graphWithTaskSuffix(config.definition, suffix);
+  const budgets = {
+    ...(config.costBudgetUsd !== undefined ? { costBudgetUsd: config.costBudgetUsd } : {}),
+    ...(config.tokenBudget !== undefined ? { tokenBudget: config.tokenBudget } : {}),
+  };
+  let lifecycleEvents = 0;
+  const onEvent = (): void => {
+    lifecycleEvents++;
+  };
+  const initial = await run(created.deps, definition, {
+    workspace: dir,
+    handlers: BUILTIN_GRAPH_HANDLERS,
+    ...budgets,
+    ...(config.approve?.length ? { approvedNodeIds: config.approve } : {}),
+    onEvent,
+  });
+  const initialPauseReason = initial.pauseReason;
+  let final = initial;
+  let didResume = false;
+  let statePassed = config.resume === undefined || initial.status === config.resume.expectedInitialStatus;
+  if (config.resume !== undefined && statePassed) {
+    for (const signal of config.resume.signals ?? []) {
+      await enqueueEngineeringGraphSignal(dir, definition.graphId, signal.name, signal.payload);
+    }
+    didResume = true;
+    final = await run(created.deps, definition, {
+      workspace: dir,
+      handlers: BUILTIN_GRAPH_HANDLERS,
+      resume: true,
+      ...budgets,
+      ...(config.resume.approve?.length ? { approvedNodeIds: config.resume.approve } : {}),
+      ...(config.resume.rerun?.length ? { rerunFrom: config.resume.rerun } : {}),
+      onEvent,
+    });
+  }
+  statePassed = statePassed && final.status === config.expectedStatus;
+  metrics.usage = { ...metrics.usage, costUsd: finiteMetric(final.spentCost) };
+  const sessionIds: string[] = [];
+  for (const result of final.results) {
+    if (result.sessionId && !sessionIds.includes(result.sessionId)) sessionIds.push(result.sessionId);
+  }
+  return {
+    answer: graphAnswer(final),
+    execution: {
+      runner: "graph",
+      status: final.status,
+      expectedStatus: config.expectedStatus,
+      passed: statePassed,
+      sessionIds,
+      resumed: didResume,
+      lifecycleEvents,
+      nodes: graphNodeSummaries(final),
+      ...(initialPauseReason ? { pauseReason: initialPauseReason } : {}),
+    },
+    ...(!statePassed
+      ? {
+          error:
+            config.resume && initial.status !== config.resume.expectedInitialStatus
+              ? `expected initial graph status ${config.resume.expectedInitialStatus}, got ${initial.status}`
+              : `expected graph status ${config.expectedStatus}, got ${final.status}`,
+        }
+      : {}),
+  };
+}
+
 function memoryStep(
   step: Exclude<SessionScenarioStep, { type: "agent" }>,
   dir: string,
@@ -821,7 +944,12 @@ export async function runTask(task: TaskDef, opts: RunTaskOptions): Promise<Task
     let execution: TaskExecution = {
       runner,
       status: "failed",
-      expectedStatus: runner === "loop" ? (task.loop?.expectedStatus ?? "passed") : "completed",
+      expectedStatus:
+        runner === "loop"
+          ? (task.loop?.expectedStatus ?? "passed")
+          : runner === "graph"
+            ? (task.graph?.expectedStatus ?? "passed")
+            : "completed",
       passed: false,
       sessionIds: [],
     };
@@ -831,9 +959,11 @@ export async function runTask(task: TaskDef, opts: RunTaskOptions): Promise<Task
       const outcome =
         runner === "loop"
           ? await runLoopTaskMode(task, created, dir, opts.taskSuffix, opts, metrics)
-          : runner === "session_scenario"
-            ? await runSessionScenarioMode(task, created, dir, opts.taskSuffix, metrics)
-            : await runAgentTaskMode(task, created, dir, opts.taskSuffix, metrics);
+          : runner === "graph"
+            ? await runGraphTaskMode(task, created, dir, opts.taskSuffix, opts, metrics)
+            : runner === "session_scenario"
+              ? await runSessionScenarioMode(task, created, dir, opts.taskSuffix, metrics)
+              : await runAgentTaskMode(task, created, dir, opts.taskSuffix, metrics);
       answer = outcome.answer;
       execution = outcome.execution;
       error = outcome.error;

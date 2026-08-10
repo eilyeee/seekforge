@@ -135,6 +135,12 @@ backend in `crates/runtime`.
   `typecheck`/`test` pass with uncommitted changes present can mask a commit
   that is incomplete or wires a flag wrong. When in doubt, `git stash` your
   pending edits and re-run, or check what a fresh clone would see.
+- **Never `git stash` when other agents share the working tree.** Stash is
+  tree-wide: a pathspec is not always honored, and a stash of "your" files takes
+  everyone else's uncommitted work with it. This has already destroyed two
+  parallel work streams here. When the tree is shared, verify in a throwaway
+  `git worktree add` at clean `HEAD` with only your changes applied, and treat
+  `git reset`, `git checkout -- <path>`, and `git clean` the same way.
 - Before committing, run `git status` and stage with `git add -A` (or otherwise
   confirm completeness). Do **not** cherry-pick paths and risk leaving a
   related file behind — e.g. an export in `provider/index.ts` for a new symbol,

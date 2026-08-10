@@ -85,9 +85,21 @@ CLI).
 `/tasks [kill <id>]` `/agents` `/agent-steer <dispatch-id> <message>`
 `/agent-cancel <dispatch-id>` `/skills` `/plugins` `/mcp` (incl. resources) `/init`
 `/loop` `/loop-resume` `/loop-pause` `/loop-continue` `/loop-steer <guidance>`
+`/graph-list` `/graph-show <graph-id>` `/graph-pause <graph-id>`
+`/graph-continue <graph-id>` `/graph-steer <graph-id> <guidance>`
+`/graph-signal <graph-id> <name>`
 `/doctor` `/vim` `/terminal-setup` `/context` `/compact` `/usage`
 `/export [path]` `/copy` `/editor` `/quit` — plus custom commands from
 `.seekforge/commands/`.
+
+The `/graph-*` commands drive an Engineering Graph persisted under
+`.seekforge/graphs/`, including one started by `seekforge graph run` in another
+process: `/graph-pause`, `/graph-continue` and `/graph-steer` queue a durable
+control command that the executing run applies at its next safe boundary, and
+`/graph-signal` delivers a wait signal to a node that declares one. The TUI has
+no `/graph-run` — starting, restarting, or approving a Graph node still goes
+through the CLI (`seekforge graph run|resume <file> --approve <node-id>`),
+because those need the Graph definition file, not just its checkpoint.
 
 Background tasks started with `run_command background:true` survive across
 turns (one shared manager per TUI process; killed on exit). `/compact` folds

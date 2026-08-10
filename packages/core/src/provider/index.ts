@@ -9,8 +9,14 @@
  *
  * Contract (see packages/shared/src/index.ts for the types):
  *   createDeepSeekProvider(config: ProviderConfig): ChatProvider
- *   parseFallbackToolCalls(text: string): ProviderToolCall[]
  *   estimateCostUsd(usage, model): number
+ *
+ * Tool calls are only ever read from the wire protocol's own tool-call fields.
+ * There is deliberately no text-protocol parser that lifts tool calls out of
+ * assistant prose: every supported agent model does native function calling,
+ * and a text protocol would make any fenced block inside a tool result (file
+ * content, a diff, a fetched page) indistinguishable from a call the model
+ * made — see docs/boundary-checklist.md #33.
  */
 
 import type { ChatResponse } from "@seekforge/shared";
@@ -34,7 +40,6 @@ export {
 } from "./presets.js";
 export { estimateCostUsd, pricingSourceFor, type PricingSource, type UsageTokens } from "./cost.js";
 export { MODEL_PRICING, DEFAULT_BASE_URL, DEFAULT_MODEL, DEPRECATED_MODELS, type ModelPricing } from "./constants.js";
-export { parseFallbackToolCalls, buildFallbackToolPrompt } from "./fallback.js";
 export {
   resolveWireProtocol,
   WIRE_PROTOCOLS,
