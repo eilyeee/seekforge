@@ -72,6 +72,8 @@ export type AgentBuildOptions = {
   guardNoProgress?: boolean;
   /** Skill selection/injection (default true). */
   injectSkills?: boolean;
+  /** Prompt budget for the skill brief (AgentCoreDeps.skillBriefMaxChars, default 2500). */
+  skillBriefMaxChars?: number;
   /**
    * Give the agent the specialist subagents a real run dispatches
    * (AgentCoreDeps.subagents). Default OFF here, which is what the harness has
@@ -134,6 +136,15 @@ export const VARIANTS: Variant[] = [
     name: "no-skills",
     describe: "Disables skill selection and prompt injection to measure the net value of the skills system.",
     apply: (base) => ({ ...base, injectSkills: false }),
+  },
+  {
+    name: "wide-skill-brief",
+    describe:
+      "Raises the skill-brief budget from 2500 to 4000 characters. At the default limit of three skills, " +
+      "the builtin procedures need ~2900-3900 together, so some are still truncated after the brief " +
+      "reallocates by need — this measures whether the missing steps are worth the tokens they cost on " +
+      "every call.",
+    apply: (base) => ({ ...base, skillBriefMaxChars: 4_000 }),
   },
   {
     name: "verify-gate",

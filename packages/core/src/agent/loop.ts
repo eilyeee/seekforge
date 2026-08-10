@@ -213,6 +213,13 @@ export type AgentCoreDeps = {
   skillSnapshot?: readonly Skill[];
   /** Disable skill selection/injection for controlled evaluations. Default true. */
   injectSkills?: boolean;
+  /**
+   * Prompt budget for the injected skill brief. Defaults to
+   * `SKILL_BRIEF_MAX_CHARS`. Exists so an A/B can measure whether a wider budget
+   * pays for the tokens it costs on every call — three builtin procedures
+   * genuinely exceed the default, and no reallocation can change that.
+   */
+  skillBriefMaxChars?: number;
   /** Defer skill outcome attribution to an outer orchestration layer. */
   deferSkillOutcome?: boolean;
   /** Specialist agents dispatchable via the synthetic dispatch_agent tool. */
@@ -708,7 +715,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                     plan: input.plan,
                     projectRules: collectProjectRules(input.projectPath, undefined, input.task),
                     memoryBrief: memoryFor(input.task),
-                    skillBrief: buildSkillBrief(skillSelections),
+                    skillBrief: buildSkillBrief(skillSelections, deps.skillBriefMaxChars),
                     subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
                     commandRoster:
                       depth === 0 ? buildCommandRoster(loadUserCommands(input.projectPath)) || undefined : undefined,
@@ -741,7 +748,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               plan: input.plan,
               projectRules: collectProjectRules(input.projectPath, undefined, input.task),
               memoryBrief,
-              skillBrief: buildSkillBrief(skillSelections),
+              skillBrief: buildSkillBrief(skillSelections, deps.skillBriefMaxChars),
               subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
               commandRoster:
                 depth === 0 ? buildCommandRoster(loadUserCommands(input.projectPath)) || undefined : undefined,

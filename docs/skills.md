@@ -78,6 +78,21 @@ A skill that does not fit the remaining budget is left out of the brief
 entirely rather than included as a fragment: an absent skill is something the
 model can reason about, a mutilated one is not.
 
+The 2,500-character budget is shared **by need, not evenly**. An even split
+starved a long procedure while a short one left its share unspent — with three
+builtins selected the even share is 832 characters, which `simplify` overshoots
+by 92 and `bugfix` falls short of by 272, so steps were being dropped while
+budget went unused. Allocation now water-fills: each skill receives only what it
+can spend, and the remainder is re-offered to the ones still short. What is left
+after that is handed to a single skill rather than spread thin, because a whole
+extra step delivered beats a few characters shared three ways.
+
+A truncated procedure is cut at a **step boundary**, never mid-step. These are
+numbered lists whose steps wrap across lines, so a line-boundary cut still landed
+inside step 4 — and half of step 4 reads exactly like all of step 4, which the
+model has no way to detect. The partial step is dropped and the
+`read_skill(…)` marker says where the rest is.
+
 High-risk skills are excluded from automatic selection. They remain available
 only through an explicit caller opt-in or a direct skill invocation. Every
 selected brief includes its scope and risk, shares the 2,500-character prompt

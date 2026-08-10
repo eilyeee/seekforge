@@ -2,6 +2,89 @@
 
 ## Unreleased
 
+### The surfaces a capability claimed, and the premise that was wrong
+
+**A `wait` node could not be woken without starting a server.** Graph's durable
+control mailbox, external signals, evidence export, run comparison and the
+template registry were REST-only. They are now `graph
+pause|continue|steer|cancel-node|reprioritize|signal|evidence|compare`, `graph
+template list|show|register|compare|deprecate`, and six `/graph-*` TUI commands.
+Whether a control or signal may act on a Graph right now is decided once, in
+Core, because copying the server's inline state checks into two more surfaces is
+how they drift.
+
+**The drift gate only ever saw `graph`.** It matched `program.command("x")`, so a
+whole subcommand could ship behind a documented group. It now walks nested
+registrations and checks every `<group> <sub>` against both languages. It
+immediately found `memory remove`, undocumented as its own command since it was
+written, and failed twice more while this work was in progress.
+
+**Graph is not a strict superset of Loop DAG** — the premise this set out to act
+on did not survive contact with `runGraphLoop`, which forwards seven fields. A
+Graph `loop` node cannot express `node.options` at all (`maxIterations`,
+verification plans, model routing, `codeReview`), `consumeDependencyOutputs`,
+`outputPaths`, `budgetWeight`, `predictiveBudget`, `verifierId`, or a per-node
+failure policy; declaring `inputs` on one even parses and is silently inert. So
+no rewrite: `loop-dag export-graph` converts deterministically and refuses, by
+name, every field it cannot make behave identically. The Loop DAG contract is
+frozen and closing that gap is the documented precondition for retiring it.
+
+**`function` nodes were a documented feature with two handlers.** `pick`,
+`project`, `merge`, `assert`, `count` and `summarize` join `noop`/`collect` — no
+contract change and no new execution surface, because operands ride the existing
+`inputs` binding and predicates ride the existing schemas. `count`/`summarize`
+plus `outputSchema.enum` is how a definition-only user finally gates a `map`.
+
+**`remote` nodes had no adapter to trust.** The Docker and ssh runners are now
+adapters, registered only from `~/.seekforge/graph-executors.json` in the
+operator's home — never the workspace, so a cloned repository cannot name a host.
+ssh cannot cancel, so a `requiresCancellation` node is refused there rather than
+promised. And the ssh cost was never invisible: `--output-format json` returns
+usage over the same channel. What differs is attribution, so results carry
+`costAccount`, and a node reporting no usage under a budget fails closed instead
+of booking a zero.
+
+**`read-only` was writable.** Both kernels match resolved paths while the sandbox
+profile named the unresolved workspace, so a `read-only` workspace under `/tmp`
+fell through its own deny rule into the `/private/tmp` allowance. This defeated
+the fix already recorded as boundary-checklist §49 — ordering the deny last is
+useless when the rule names a path the kernel never matches.
+
+**No Windows sandbox, and now the README says why.** Job objects have no path
+dimension, restricted tokens gate by ACL, and AppContainer denies reads by
+default. The decisive fact: command execution is `/bin/sh -c` everywhere, so
+there is no Windows execution path to sandbox.
+
+**The reasoner fallback is deleted, not wired.** Exported, zero consumers. A
+non-function-calling model has no `tool` role, so results return as prose — and
+any file or diff containing a fenced `tool_call` block becomes an executed call.
+
+**The skill brief split its budget evenly and cut steps in half.**
+`buildSkillBrief` injects only the `## Procedure` section, and the
+2,500-character budget was divided *per skill*: at the default limit of three
+that is 832 characters each, which `simplify` overshoots by 92 while `bugfix`
+falls 272 short — one brief dropping steps and wasting budget at the same time.
+Allocation now water-fills by need, re-offers whatever a step-boundary cut hands
+back, and gives the last remainder to a single skill rather than spreading it too
+thin for anyone to reach their next step. Cuts land between steps: these are
+numbered lists whose steps wrap across lines, so a line-boundary cut still landed
+inside step 4, and half of step 4 reads exactly like all of step 4.
+
+Measured at three selected skills, `small-code-change`'s closing "search the old
+text again to catch any leftover" step now arrives where it did not before, and
+no brief ends mid-step. `bugfix`'s regression-guard step still does not fit, and
+reallocation cannot make it: three procedures of that size genuinely exceed 2,500
+characters. That remainder is a cap question, not an allocation one, and raising
+the cap changes the cost of every provider call — so it needs its own paired
+measurement rather than a guess bundled in here. The cap is unchanged, so
+everything above costs nothing per call.
+
+Also: a `graph` eval runner over the real engine with five control-plane tasks; a
+read-only Loop panel for the VS Code client, whose history paged forward from
+zero and so showed a failed Loop its oldest events; and AGENTS.md now forbids
+`git stash` on a shared tree, because following its own clean-checkout advice
+destroyed two parallel work streams here.
+
 ### The quality gate, the eye, the bill, and four languages
 
 **The eval baseline was five weeks and fourteen tasks out of date.** It was

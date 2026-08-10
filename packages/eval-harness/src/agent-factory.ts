@@ -65,6 +65,7 @@ export function createDefaultAgentFactory(config: EvalConfig, options: AgentBuil
       ...(options.finalizeReview ? { finalizeReview: true } : {}),
       ...(options.guardNoProgress ? { guardNoProgress: true } : {}),
       ...(options.injectSkills === false ? { injectSkills: false } : {}),
+      ...(options.skillBriefMaxChars !== undefined ? { skillBriefMaxChars: options.skillBriefMaxChars } : {}),
       // Read from the fixture's own workspace, never the repository this runs
       // in: a fixture has no `.seekforge/agents`, so this is exactly the
       // builtin specialists and nothing of SeekForge's own.
