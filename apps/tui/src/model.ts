@@ -195,11 +195,15 @@ export function approvalModeFor(setting: ApprovalSetting): "auto" | "acceptEdits
 export function permissionResultForKey(
   key: string,
   durable = false,
+  // L3 (`env`) approvals are never remembered by Core: a bare tool name cannot
+  // carry the URL or selector the user actually approved. Offering "don't ask
+  // again" there would promise something the permission layer silently drops.
+  sessionGrantable = true,
 ): boolean | { allow: true; remember: "session" | "always" } {
-  if (key === "A" && durable) return { allow: true, remember: "always" };
+  if (key === "A" && durable && sessionGrantable) return { allow: true, remember: "always" };
   const choice = key.toLowerCase();
   if (choice === "y") return true;
-  if (choice === "a") return { allow: true, remember: "session" };
+  if (choice === "a") return sessionGrantable ? { allow: true, remember: "session" } : true;
   return false;
 }
 

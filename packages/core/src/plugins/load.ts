@@ -73,7 +73,11 @@ const manifestSchema = z
     apiVersion: z.literal(PLUGIN_API_VERSION),
     id: z.string().regex(PLUGIN_ID_RE),
     name: z.string().min(1).max(120),
-    version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/),
+    // SemVer, including the optional pre-release and build-metadata parts.
+    version: z
+      .string()
+      .max(100)
+      .regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/),
     description: z.string().max(2_000).optional(),
     seekforge: z.string().max(100).optional(),
     contributes: z
@@ -354,7 +358,13 @@ export function loadPluginContributions(workspace: string): PluginContributions 
       if (path) result.agentRoots.push(path);
     }
     for (const [name, config] of Object.entries(plugin.manifest.contributes?.mcpServers ?? {})) {
-      result.mcpServers[`${plugin.id}__${name}`] = { ...config, trusted: true };
+      // Enabling a plugin authorizes what the reviewed manifest declares, not
+      // more: connection trust is granted only where the manifest itself says
+      // `trusted: true`, so the approved digest covers that grant and an
+      // explicit `false` is never widened. Omitted keeps the McpServerConfig
+      // default (untrusted), which is what a reader of a manifest without the
+      // field expects and what docs/mcp.md's trust model promises.
+      result.mcpServers[`${plugin.id}__${name}`] = { ...config, trusted: config.trusted === true };
     }
     mergeHooks(result.hooks, plugin.manifest.contributes?.hooks);
     for (const [name, handler] of Object.entries(plugin.manifest.contributes?.graphHandlers ?? {})) {

@@ -1781,13 +1781,23 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         settleRunningSession(runSignal.aborted ? "cancelled" : "failed");
         throw error;
       } finally {
+        // Read the cancellation intent BEFORE the cleanup abort below, which
+        // would otherwise make a finished run indistinguishable from a cancelled
+        // one. The browser profile decision depends on the difference: a
+        // cancelled run must not write the live storage state over a saved
+        // profile, and inferring that from a signal aborted by our own teardown
+        // would be a timing heuristic on a security decision.
+        const cancelled = runSignal.aborted;
         // Async-generator consumers may stop iteration without aborting. In that
         // path no catch block runs, so close the durable lifecycle here.
         runController.abort();
         await Promise.allSettled([...activeOperations]);
         detachParentAbort();
         settleRunningSession("cancelled");
-        await Promise.all([lspLease?.release().catch(() => {}), browserLease?.release().catch(() => {})]);
+        await Promise.all([
+          lspLease?.release().catch(() => {}),
+          browserLease?.release({ persist: !cancelled }).catch(() => {}),
+        ]);
         sessionLease.release();
       }
     },

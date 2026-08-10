@@ -22,10 +22,13 @@ describe("buildSystemPrompt: mode contracts", () => {
     expect(p).not.toContain("apply_patch");
   });
 
-  it("ASK mode declares read-only and forbids write/command tools", () => {
+  it("ASK mode declares read-only, forbids writes/mutating commands, and admits read-only git/gh", () => {
     const p = buildSystemPrompt({ ...base, mode: "ask" });
     expect(p).toContain("Mode: ASK (read-only)");
-    expect(p).toContain("Write and command tools are disabled");
+    expect(p).toContain("Write tools and mutating commands are disabled");
+    // Level-0 calls bypass the ask gate (tools/permissions.ts), so the prompt
+    // must not claim command execution is impossible.
+    expect(p).toContain("read-only git/gh query");
     expect(p).not.toContain("Mode: EDIT");
   });
 

@@ -12,13 +12,13 @@
 | 模型设置（`--model`、配置中的 `model:`） | `model` 配置键 + `--model`/`-m` flag；`provider` 选择端点预设；`modelPricing` 提供各模型的价格。 |
 | 配置文件（`.aider.conf.yml`、`.clinerules`、`settings.json`、`config.toml`） | `.seekforge/config.json`（项目级）+ `~/.seekforge/config.json`（全局）+ `.seekforge/config.local.json`（已 gitignore）。见[配置](configuration.zh-CN.md)。 |
 | API 密钥环境变量 | `DEEPSEEK_API_KEY`（Ark provider 则为 `ARK_API_KEY`）；也可用 `apiKey` 配置键。 |
-| 项目指令（`CONVENTIONS.md`、`.clinerules`、`CLAUDE.md`、`AGENTS.md`） | `AGENTS.md`（由 `seekforge init` 创建），外加人工筛选的 `.seekforge/project.md` 记忆。 |
+| 项目指令（`CONVENTIONS.md`、`.clinerules`、`CLAUDE.md`、`AGENTS.md`） | `AGENTS.md`（由 `seekforge init` 创建），外加人工筛选的 `.seekforge/memory/project.md` 记忆。 |
 | MCP 服务器 | `mcpServers` 配置 + `seekforge mcp add/list/remove`。见 [MCP](mcp.zh-CN.md)。 |
-| 斜杠命令 / 自定义命令 | 内置 TUI 斜杠命令 + 自定义命令（frontmatter、`$ARGUMENTS`、`` !`shell` ``）。见 [TUI README](../apps/tui/README.md#custom-commands)。 |
+| 斜杠命令 / 自定义命令 | 内置斜杠命令 + `.seekforge/commands/` 下的自定义命令。`description:` frontmatter 与 `$ARGUMENTS` 在所有界面都可用；`` !`shell` `` 插值由 CLI REPL（不带子命令的 `seekforge`）与服务端展开，**TUI 不支持**。文件格式见 [TUI README](../apps/tui/README.md#custom-commands)。 |
 | 子智能体 / 专家智能体 | `dispatch_agent` 名册 — `seekforge agent list/show/import`，定义存放于 `.seekforge/agents/`。 |
 | 技能 / 可复用流程 | `.seekforge/skills/<id>/SKILL.md` — `seekforge skill create/list/import`。 |
 | 会话历史 / 转录 | `.seekforge/` 下的会话 trace — `seekforge sessions`、`resume`、`replay`、`audit`。 |
-| 权限 / 审批模式（自动批准、plan 模式） | 审批模式 `confirm` / `acceptEdits` / `auto` / `plan`；`-y`、`--permission-mode`、`--plan`、`permissionRules`。 |
+| 权限 / 审批模式（自动批准、plan 模式） | 审批模式 `auto` / `acceptEdits` / `confirm` / `manual`；`-y`、`--permission-mode`、`permissionRules`。plan 不是审批模式——`--plan`（或 `--permission-mode plan`）是在 `confirm` 之下的只读运行。 |
 | 成本 / token 统计 | DeepSeek 内置支持；其他 provider 用 `modelPricing` + `maxCostUsd` 预算；`seekforge models`、TUI `/usage`。 |
 | Headless / 脚本模式 | `seekforge -p "<prompt>"` 配合 `--output-format json|stream-json`。见 [CLI 参考](cli-reference.zh-CN.md)。 |
 

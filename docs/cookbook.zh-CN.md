@@ -48,7 +48,7 @@ seekforge loop "port the module to TS" --verify "pnpm build" --max-iters 12 --bu
 seekforge loop "fix it in isolation" --verify "pnpm test" --worktree
 ```
 
-`--verify <cmd>` 是**必填项**（其退出码 0 即成功标准）。`--max-iters` 默认为 8，上限 100。`--budget <usd>` 会在观测到的累计用量达到预算时停止后续工作；已经在途的 provider 请求可能使最终账单略高于预算。循环本身即是自主运行的（工作在 `acceptEdits` 模式）；`-y` 只是省去自动批准的提示信息。
+**必须**给出成功标准，二选一：`--verify <cmd>`（其退出码 0 即成功标准）或 `--auto-verify`（从项目清单里发现并冻结一条验证流水线）。两者只能选一个——同时给会被拒绝，一个都不给也会被拒绝。`--max-iters` 默认为 8，上限 100。`--budget <usd>` 会在观测到的累计用量达到预算时停止后续工作；已经在途的 provider 请求可能使最终账单略高于预算。循环本身即是自主运行的（工作在 `acceptEdits` 模式）；`-y` 除了省去自动批准的提示信息，**还会**为该工作区预授权目录访问——不加 `-y` 时，在尚未授权的目录里进行非交互式运行会被直接拒绝。
 
 验证命令通过共享的 shell 执行器运行，套用已配置的操作系统级沙箱，并在按下 `Ctrl-C` 或触发 TUI 的 Stop 操作时协作式停止。
 
@@ -110,7 +110,11 @@ seekforge diff                       # raw git diff
 seekforge ask "review my uncommitted changes for bugs and edge cases"
 ```
 
-`ask` 是只读问答——不写文件，不执行命令。
+`ask` 是只读问答——不写文件，不执行变更性命令。但它并非「完全不执行命令」：
+level-0 的只读调用在 ask 门禁之前就已放行，因此单条、未加管道的只读 `git`/`gh`
+查询（`git log`、`git diff`、`gh pr view` 等）会被直接执行，不再询问。凡是被归类为
+`write` / `execute` / `env` / `dangerous` 的调用——包括其余所有 shell 命令，以及
+任何带管道、重定向或命令替换的 `git`/`gh` 行——在 ask 模式下一律拒绝。
 
 **提示：**
 - `finalizeReview`（配置项，默认关闭）会让编辑型运行在结束前审查自己的 diff，并在可用时调度内置的 `reviewer` 子 agent。参见 [Configuration → finalizeReview](configuration.zh-CN.md#finalizereview)。
@@ -192,7 +196,9 @@ seekforge skill enable|disable|remove <id>
 ```
 
 原生 Skill 使用与 `SKILL.md` 并列的 `skill.json` 元数据；导入的 YAML frontmatter
-会被转换为该布局。Agent 会为每次新任务或恢复任务重新挑选相关 skill；TUI `/skills`
+会被转换为该布局。Agent 会为每次新任务或恢复任务重新挑选相关 skill，但有两个例外：
+用 `--system-prompt` 整体替换系统提示时会跳过挑选，纯 ask 模式下也会跳过——因此
+`seekforge ask` 从不加载 skill（`--plan` 仍会加载）。TUI `/skills`
 还会报告无效安装。
 
 **提示：** 格式、选择、风险和诊断见[技能指南](skills.zh-CN.md)。
@@ -222,13 +228,14 @@ seekforge memory stats                   # extraction-quality stats
 seekforge memory compact --dry-run       # collapse duplicates deterministically
 seekforge memory keywords --dry-run      # 有多少条事实还没有检索关键词
 seekforge memory keywords                # 给它们补上（会调用模型）
+seekforge memory keywords -g             # 同上，但作用于全局（跨项目）记忆
 ```
 
 自动提取的事实会一直处于**待定（pending）**状态，直到你批准——除非设置了 `memoryAutoApproveConfidence`。参见 [Configuration → memoryAutoApproveConfidence](configuration.zh-CN.md#memoryautoapproveconfidence)。
 
 **检索关键词。** 每条事实会带上若干条中英双语的检索词，好让一个用某种语言问出来的问题，能够命中用另一种语言写下的答案。抽取阶段会在本来就要发出的那次模型调用里顺带拿到它们——这意味着你手敲的事实一条都没有，在这个字段存在之前记住的事实也一样。`memory keywords` 就是用来按需补齐这个缺口的：它是这一组命令里唯一花钱的，每次请求批量处理约 20 条，并且只碰那些还没有关键词的事实，所以新增几条之后再跑一次很便宜。`--limit` 可以把一份很大的记忆拆成负担得起的几批；某一批失败了，它里面的事实会留到下一次继续补。
 
-关键词只用于匹配，绝不会被注入、也不会展示给模型——`memory list` 会在每条待定候选下面把它们打印出来，好让你看清自己批准的到底是什么。全局（跨项目）事实不带关键词：存放它们的 sidecar 是工作区级的，守护它的租约也是。
+关键词只用于匹配，绝不会被注入、也不会展示给模型——`memory list` 会在每条待定候选下面把它们打印出来，好让你看清自己批准的到底是什么。全局（跨项目）事实同样可以带关键词：`memory keywords -g`（`--global`）补齐的是 SeekForge home 而不是当前项目——它本身就是一个状态根，有同样的 `project.md`、同样的 sidecar 和同样的租约。
 
 **提示：** `--type` 取值为 `command | path | convention | tech | task_pattern` 之一。
 
@@ -263,4 +270,4 @@ Ark 会禁用 DeepSeek 独有的行为（thinking body、cache-hit token、内�
 
 填入提供方给出的真实每百万 token 价格。列在 `modelPricing` 中的模型总是会被计价，从而重新启用 `maxCostUsd` 预算追踪。参见 [Configuration → Ark](configuration.zh-CN.md#火山引擎-arkopenai-兼容) 和 [modelPricing](configuration.zh-CN.md#modelpricing在其他-provider-上开启成本跟踪)。
 
-**提示：** `seekforge models` 列出 DeepSeek 模型及定价；`seekforge doctor` 检查你的 key 和环境。
+**提示：** `seekforge models` 列出所有**内置**定价的模型——除 DeepSeek 外，还包括 SeekForge 自带费率的 Anthropic 与 OpenAI 条目。它只读内置价目表，所以你通过 `modelPricing` 自行定价的 Ark 模型不会出现在这里，请直接查看你写下的那份 JSON。`seekforge doctor` 检查你的 key 和环境。

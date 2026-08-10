@@ -56,11 +56,16 @@ seekforge loop "port the module to TS" --verify "pnpm build" --max-iters 12 --bu
 seekforge loop "fix it in isolation" --verify "pnpm test" --worktree
 ```
 
-`--verify <cmd>` is **required** (its exit 0 is the success criterion).
+A success criterion is **required**, as either `--verify <cmd>` (its exit 0 is
+the criterion) or `--auto-verify` (discover and freeze a verification pipeline
+from the project manifests). Exactly one of the two — combining them is
+rejected, and so is omitting both.
 `--max-iters` defaults to 8 and is capped at 100. `--budget <usd>` stops further work when observed
 cumulative usage reaches the budget; an already in-flight provider request can
 make the final billed amount slightly higher. The loop is inherently autonomous
-(runs in `acceptEdits`); `-y` only suppresses the auto-approve note.
+(runs in `acceptEdits`); `-y` suppresses the auto-approve note **and**
+pre-authorizes folder access for this workspace — without it a non-interactive
+run in a not-yet-authorized directory is refused outright.
 
 The verification command uses the shared shell executor with the configured OS
 sandbox and is stopped cooperatively on `Ctrl-C` or the TUI Stop action.
@@ -134,7 +139,13 @@ seekforge diff                       # raw git diff
 seekforge ask "review my uncommitted changes for bugs and edge cases"
 ```
 
-`ask` is read-only Q&A — no writes, no command execution.
+`ask` is read-only Q&A — no writes and no mutating commands. It is not "no
+command execution": level-0 read-only calls are allowed before the ask gate is
+reached, so a single, unpiped read-only `git`/`gh` query (`git log`,
+`git diff`, `gh pr view`, …) is spawned without a prompt. Anything classified
+`write`, `execute`, `env`, or `dangerous` — including every other shell
+command, and any `git`/`gh` line with a pipe, redirect, or command
+substitution — is refused in ask mode.
 
 **Tips:**
 - `finalizeReview` (config, default off) makes an edit run review its own diff
@@ -237,7 +248,10 @@ seekforge skill enable|disable|remove <id>
 
 Native skills use `skill.json` metadata beside `SKILL.md`; imported YAML
 frontmatter is converted to that layout. The agent selects relevant skills for
-every fresh or resumed task. TUI `/skills` also reports invalid installations.
+every fresh or resumed task, with two exceptions: selection is skipped when the
+system prompt is replaced (`--system-prompt`), and in plain ask mode — so
+`seekforge ask` never loads a skill (`--plan` still does). TUI `/skills` also
+reports invalid installations.
 
 **Tips:** see the [Skills guide](skills.md) for format, selection, risk, and diagnostics.
 
@@ -266,6 +280,7 @@ seekforge memory stats                   # extraction-quality stats
 seekforge memory compact --dry-run       # collapse duplicates deterministically
 seekforge memory keywords --dry-run      # how many facts lack retrieval keywords
 seekforge memory keywords                # give them some (calls the model)
+seekforge memory keywords -g             # same, for the global (cross-project) memory
 ```
 
 Auto-extracted facts stay **pending** until you approve them, unless you set
@@ -285,8 +300,9 @@ next run.
 
 Keywords are matched against, never injected and never shown to the model —
 `memory list` prints them under each pending candidate so you can see what you
-are approving. Global (cross-project) facts do not carry them: the sidecar that
-holds them is workspace-scoped, as is the lease that guards it.
+are approving. Global (cross-project) facts can carry them too:
+`memory keywords -g` (`--global`) backfills the SeekForge home instead of this
+project, which is a state root with the same `project.md`, sidecar, and lease.
 
 **Tips:** `--type` is one of `command | path | convention | tech | task_pattern`.
 
@@ -326,5 +342,8 @@ Fill in real per-1M-token prices from your provider. A model listed in
 See [Configuration → Ark](configuration.md#volcengine-ark-openai-compatible)
 and [modelPricing](configuration.md#modelpricing-cost-tracking-on-other-providers).
 
-**Tips:** `seekforge models` lists DeepSeek models and pricing; `seekforge doctor`
-checks your key and environment.
+**Tips:** `seekforge models` lists every model with **built-in** pricing —
+DeepSeek plus the Anthropic and OpenAI entries SeekForge ships rates for. It
+reads the built-in table only, so an Ark model you priced through
+`modelPricing` never appears there; check the JSON you wrote instead.
+`seekforge doctor` checks your key and environment.

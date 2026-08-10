@@ -2683,7 +2683,11 @@ export function App({
       }
 
       // Single-hunk / no-hunk: original behavior unchanged.
-      const result: ConfirmResult = permissionResultForKey(rawInput, pending.request.rememberRule !== undefined);
+      const result: ConfirmResult = permissionResultForKey(
+        rawInput,
+        pending.request.rememberRule !== undefined,
+        pending.request.sessionGrantable !== false,
+      );
       // "a" (allow for session) also mirrors the command prefix into the local
       // allowlist for /permissions display and command-prefix matching; CORE's
       // canonical sessionAllowlist grows from the remember:"session" result.

@@ -18,7 +18,10 @@ describe("buildSubagentPrompt", () => {
     expect(p).toContain("/ws");
     expect(p).toContain("Specialty: reviews diffs");
     expect(p).toContain("ASK (read-only)");
-    expect(p).toContain("never attempt writes");
+    // Level-0 read-only git/gh is allowed before the ask gate (permissions.ts),
+    // so the prompt must not claim commands are disabled outright.
+    expect(p).toContain("mutating commands are disabled");
+    expect(p).toContain("Read-only git/gh queries still run");
     expect(p).toContain("markdown report");
   });
 

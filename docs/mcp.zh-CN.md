@@ -144,7 +144,12 @@ $ seekforge mcp login docs
 settings file  >  project .seekforge/config.json  >  global ~/.seekforge/config.json
 ```
 
-每个服务器的配置按键做浅合并（shallow-merge）：后面的层覆盖前面的层。
+合并以**服务器名**为单位，而不是以服务器条目内部的字段为单位：高优先级层若定义了
+`myserver`，就会**整条替换**该条目，而不会逐字段合并。因此项目层哪怕只想改
+`args`，也会一并丢掉全局层为该服务器设置的 `permission` 与 `toolPermissions`
+加固，权限随之回落到由注解推导的默认值。只有在你打算完整替换该条目时，才在高优先级
+层重新定义一个服务器。
+
 遮蔽全局条目的仓库定义仍不受信任；信任不会跨该边界继承。完整的分层模型见
 [cli-reference.zh-CN.md](cli-reference.zh-CN.md#设置分层)。
 
@@ -163,6 +168,19 @@ mcp__<server>__<tool>
 | `filesystem`  | `read_file`  | `mcp__filesystem__read_file`  |
 | `filesystem`  | `write_file` | `mcp__filesystem__write_file` |
 | `web-search`  | `search`     | `mcp__web-search__search`     |
+
+只有当这种简单形式既无歧义又是合法工具名时才会采用：长度不超过 64 个字符、匹配
+`^[A-Za-z0-9_-]+$`，且服务器名与工具名都不含 `__`（否则三段式拆分会产生歧义）。
+其余情况——名字过长、含空格/点号/斜杠，或服务器名形如 `a__b`——都会回退到经过
+净化且抗碰撞的形式：每一段只保留 `[A-Za-z0-9_-]`，分别截断（服务器名 15 个字符、
+工具名 25 个字符），并追加 `sha256(server, tool)` 的前 10 位十六进制摘要：
+
+```text
+mcp__<safe-server>__<safe-tool>__<10 位十六进制摘要>
+```
+
+摘要由原始名称计算得出，因此映射在多次运行之间保持稳定，两个净化后文本相同的工具
+也仍会得到不同的名字。
 
 服务器 `tools/list` 响应中的 `inputSchema` 会作为 `parametersOverride`
 原样透传给模型，因此模型看到的是真实的参数 schema。本地校验使用
@@ -204,15 +222,26 @@ refresh token 或静态 header。
 
 | 能力 | 方法 | 何时接上 | 会发生什么 |
 | --- | --- | --- | --- |
-| `sampling` | `sampling/createMessage` | 前端有确认通道且配置了模型 | 服务器的 prompt 会原样（截断后）展示给你，你批准后用你自己的模型执行。 |
+| `sampling` | `sampling/createMessage` | 前端有确认通道 | 服务器的 prompt 会原样（截断后）展示给你，你批准后用你自己的模型执行。 |
 | `elicitation` | `elicitation/create` | 前端有向用户提问的通道 | 服务器的问题会抛给你，你的回答被返回。 |
+
+「是否配置了模型」是另一个问题，它在请求真正到达时才回答，而不是在声明能力时。
+CLI 与 TUI 用本次运行自己的配置构建采样 provider，没有 API key 时干脆不声明该能力；
+`seekforge serve` 则惰性解析 provider（MCP 客户端先于持有 provider 的 agent deps 建立），
+因此它始终声明 sampling，若最终没有配置模型则以 `mcp_sampling_unavailable` 应答。
 
 **采样花的是你的 token，跑的是你没写过的 prompt**，因此**每一次**都要确认——这里没有
 审批模式的旁路，只有你的前端 confirm 本身的行为（所以无头 `-y` 运行会批准它，
 就像 `-y` 批准其他一切一样）。确认提示会写明是哪个服务器、用哪个模型、发送什么文本。
-这次调用花了多少，会以 `[mcp:<server>] sampling used <n> tokens ($x.xxxx)` 写到 stderr，
-**并且**计入会话自身的合计：它会出现在 `usage.updated`、会话记录以及前端展示的成本里——
-和你付费的其他每一个 token 在同一个地方。
+这次调用花了多少会计入会话自身的合计：它会出现在 `usage.updated`、会话记录以及前端
+展示的成本里——和你付费的其他每一个 token 在同一个地方。已发布的每个前端都是这样做的。
+若嵌入方没有提供用量接收端，则退回到兜底行为：每次调用向 stderr 打印一行：
+
+```text
+[mcp:<server>] sampling used <n> tokens ($x.xxxx)
+```
+
+两者是二选一而非同时发生：负责记账的前端不会再打印这一行。
 
 采样用的 provider 与 agent 用的来自同一份配置，但是独立实例：服务器发起的模型调用不会
 混进 agent 的重试总线与响应缓存。请求在抵达模型之前先被限界：最多 50 条消息、
@@ -308,6 +337,25 @@ seekforge mcp-serve: read-only on /path/to/workspace
 seekforge mcp-serve: FULL ACCESS (trusted callers only) on /path/to/workspace
 ```
 
+#### 配置
+
+`mcp-serve` 会像其他每个命令一样读取 `.seekforge/config.json`，并把它应用到
+MCP 客户端发起的工具调用上：
+
+| 配置键 | 对 `mcp-serve` 的作用 |
+|---|---|
+| `permissionRules` | 生效。deny 规则在任何权限级别上都会拦截（包括只读调用），且从不提示。完整模式下 allow 规则会预先授权某个工具，`env` 类工具也不例外。 |
+| `hooks` | 生效。`preToolUse` 在每次工具调用前运行，非零退出即拦截该调用；`updatedInput` 改写会照常重新校验并重新做权限检查。 |
+| `sandbox` | 在完整模式下对 `run_command` / `run_tests` 生效。沙箱机制不可用时命令直接失败，而不会退化为无沙箱执行。 |
+| `commandAllowlist` | 生效，但在这里不产生任何差别：完整模式本就自动放行 `execute`，只读模式则一律禁止。 |
+| `visionModel`、`webSearch`、`browserProfile` | 会被配置，但默认没有任何调用能触达它们：`image_analyze`、`web_search`、`web_fetch` 与 `browser_navigate` 都分类为 `env`，一律被拒绝。只有当你的 `permissionRules` 明确允许了对应工具时它们才会生效。 |
+| `mcpServers`、`runtimeBin`、模型/provider 相关键 | **不**生效。该进程不运行 agent：它既不调用模型，也不连接其他 MCP 服务器，因此无处可用。 |
+
+只有仓库无法写入的层会到达这条传输：项目层与本地层贡献 deny 规则（以及此处用不到的
+不受信任 `mcpServers` 定义），而 `hooks`、`sandbox`、`commandAllowlist` 只来自你的
+用户级配置。插件 hooks 被有意排除——这里的默认形态是只读工具集，而仓库提供的 hook
+命令会把它重新变成任意命令执行。
+
 ### 2.2 协议
 
 服务器使用协议版本 `2025-06-18`。服务器信息：
@@ -359,7 +407,8 @@ seekforge mcp-serve: FULL ACCESS (trusted callers only) on /path/to/workspace
 | `git_blame`     | readonly         |
 | `git_show`      | readonly         |
 
-`ToolContext` 运行在 `"ask"` 审批模式下，且 `confirm` 回调**始终拒绝** ——
+`ToolContext` 运行在 `mode: "ask"`（直接禁止一切高于 L0 的操作）与
+`approvalMode: "confirm"` 之下，其 `confirm` 回调**始终拒绝** ——
 三个相互独立的层共同阻止写入。
 
 尝试调用任何其他工具（例如 `write_file`）会返回 JSON-RPC 错误：
@@ -373,11 +422,19 @@ seekforge mcp-serve: FULL ACCESS (trusted callers only) on /path/to/workspace
 传入 `--allow-write` 后，除 `ask_user` 外的所有内置工具都会被暴露。
 排除 `ask_user` 是因为 MCP 没有可交互的人类通道。
 
-`confirm` 回调按权限级别**自动放行**：
+`ToolContext` 运行在 `mode: "edit"` 与 `approvalMode: "auto"` 之下：
 
 - `L1 (write)` —— 自动允许
 - `L2 (execute)` —— 自动允许
-- `L3 (env)` —— 始终拒绝（网络抓取、依赖安装等操作始终需要真人确认）
+- `L3 (env)` —— 始终拒绝（网络抓取、依赖安装等操作始终需要真人确认），
+  除非你自己的 `permissionRules` 明确允许了那个工具
+- `L4 (dangerous)` —— 两种模式下都既不执行、也无从询问
+
+`confirm` 回调在两种模式下都**始终拒绝**。自动放行由 `approvalMode` 承担，作用范围
+限定在上述级别；`confirm` 因此只会被那些真正需要人来回答的问题触达，而这里没有人。
+其中最关键的一个，是命令在 OS 沙箱内失败时得到的那次重试提议：一个会自动放行的
+`confirm` 会对任何「失败输出看起来像被沙箱拒绝」的命令回答「好，去掉沙箱再跑一次」，
+那样配置的 `sandbox` 就只剩装饰意义。在这里该提议会被拒绝，沙箱下的失败结果原样保留。
 
 > **安全提示：** 完整模式相当于把工作区里的一个 shell 交给 MCP 客户端。
 > 只连接你信任其执行任意命令的调用方。
@@ -393,10 +450,16 @@ seekforge mcp-serve: FULL ACCESS (trusted callers only) on /path/to/workspace
 | `mcp_config`       | 配置缺失或无效              |
 | `mcp_crashed`      | 服务器进程意外退出            |
 | `mcp_timeout`      | 超过空闲超时（30s）未响应，或超过 10 分钟总时长 |
+| `mcp_cancelled`    | 请求完成前调用方的 AbortSignal 已触发 |
 | `mcp_error`        | 服务器返回了 JSON-RPC 错误              |
 | `mcp_tool_error`   | 工具调用返回了 `isError: true`            |
 | `mcp_http_error`   | HTTP 传输：不可达或非 200        |
 | `mcp_parse_error`  | 响应体无法解析                      |
+| `mcp_auth_error`   | OAuth：元数据/端点无效、不支持 PKCE S256、issuer 或 state 不匹配、令牌响应缺少 access token |
+| `mcp_pagination_limit` | 分页列表超过 100 页或 10,000 条 |
+| `mcp_pagination_loop`  | 分页列表返回了此前已出现过的 cursor |
+| `mcp_sampling_denied`      | 用户拒绝了服务器的 `sampling/createMessage` 请求 |
+| `mcp_sampling_unavailable` | 服务器请求采样，但本会话没有配置模型 |
 | `mcp_write_failed` | 无法写入 stdin（stdio）              |
 | `disposed`         | 请求完成前客户端已被销毁      |
 | `unknown_server`   | 服务器名不在已连接集合中          |
@@ -405,8 +468,12 @@ seekforge mcp-serve: FULL ACCESS (trusted callers only) on /path/to/workspace
 
 | 错误码 | 含义                              |
 |---|---|
-| -32601 | 方法未找到（例如 prompts/list） |
-| -32602 | 参数无效（工具名错误、工具未暴露） |
+| -32600 | 请求无效（重复发送 `initialize`） |
+| -32601 | 方法未找到 —— 不在 §2.2 表格内的方法 |
+| -32602 | 参数无效（工具名错误、工具未暴露、资源或 prompt 未知） |
+| -32603 | 内部错误 —— handler 抛出异常，而非以 `isError` 报告的普通工具失败 |
+| -32700 | 解析错误 —— 单帧超过 1 MiB 消息上限 |
+| -32002 | 请求在 `initialize` / `notifications/initialized` 完成之前到达 |
 
 ---
 
@@ -454,5 +521,9 @@ seekforge mcp-serve: FULL ACCESS (trusted callers only) on /path/to/workspace
 行为与以前完全一致。
 
 能延长截止时间的心跳必须有自己的上限，否则服务端想把调用挂多久就挂多久 —— 所以还有一个
-总时长，任何数量的进度通知都无法把它推过去。两者都可以按客户端配置
-（`requestTimeoutMs`、`maxRequestTotalMs`）。
+总时长，任何数量的进度通知都无法把它推过去。
+
+两者都是 `createMcpClient` 的选项（`requestTimeoutMs`、`maxRequestTotalMs`）——那是给
+**嵌入方**的接缝，而不是配置项。它们不是 `McpServerConfig` 的字段，`loadMcpToolSpecs`
+也不会转发它们，因此 `.seekforge/config.json` 里的服务器条目无法改变自身的超时，
+所有已配置的服务器都使用上表中的默认值。

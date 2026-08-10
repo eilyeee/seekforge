@@ -71,6 +71,24 @@ export type PermissionRequest = {
    * and it must not offer a rule it invented itself either.
    */
   rememberRule?: PermissionRule;
+  /**
+   * False when core will NOT remember an allow-for-session answer for this call
+   * — `env` (L3) tools, whose session token would be a bare tool name and so
+   * could not carry the URL or selector actually approved. A frontend must not
+   * offer "don't ask again" when this is false: core would silently downgrade
+   * the answer to allow-once and the user would believe they granted more than
+   * they did. Absent means grantable, so existing frontends keep working.
+   */
+  sessionGrantable?: boolean;
+  /**
+   * True only for the one-shot "retry this command WITHOUT the sandbox" offer.
+   * It is otherwise shaped exactly like an ordinary `execute` request, so a host
+   * whose confirm auto-answers would undo the sandbox the user separately
+   * configured without anyone deciding to. A human answering it is a legitimate
+   * approval — the promise is that the fallback is never SILENT — so this flag
+   * gates nothing in core; it exists so such a host can refuse this one case.
+   */
+  escalation?: true;
 };
 
 /**
@@ -127,10 +145,15 @@ export type PermissionPolicy = {
    * In-memory, run-scoped allowlist grown by "allow-for-session" confirmations
    * (confirm returning `{ allow: true, remember: "session" }`). For
    * run_command/task_kill it holds classified command PREFIXES; for other
-   * tools it holds bare tool names. A subsequent matching call auto-allows
-   * without re-prompting. Mutated in place by enforcePermission, so the caller
-   * MUST pass a single array shared across a session's tool calls. NOT
-   * persisted (unlike commandAllowlist/rules) — it dies with the run.
+   * write/execute tools it holds bare tool names. A subsequent matching call
+   * auto-allows without re-prompting. Mutated in place by enforcePermission, so
+   * the caller MUST pass a single array shared across a session's tool calls.
+   * NOT persisted (unlike commandAllowlist/rules) — it dies with the run.
+   *
+   * `env`-level tools are deliberately excluded: a bare tool name cannot carry
+   * the subject the user actually approved, so remembering `browser_click` or
+   * `web_fetch` would grant every later selector or URL from one keypress. They
+   * confirm on every call; only an explicit allow rule can widen them.
    */
   sessionAllowlist?: string[];
 };

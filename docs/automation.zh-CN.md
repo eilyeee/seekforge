@@ -6,15 +6,17 @@ SeekForge 的服务器可以在**外部事件**到达时运行任务——GitHub
 
 触发器注册在**服务器**上（不是 CLI 调度器），存放在工作区的 `.seekforge/triggers.json` 中。当其 endpoint 被携带有效凭证调用时，服务器会启动一次**无头（headless）、成本受限**的 agent 运行来执行触发器的任务，并返回新会话的 id。
 
-每次被触发的运行都是一个**普通的、可审计的会话**——它写入与交互式运行完全相同的 JSONL 追踪记录，因此会出现在 `seekforge sessions` 里，可以用 `seekforge replay <id>` 回放、用 `seekforge audit <id>` 审阅、用 `seekforge rewind <id>` 撤销。
+每次被触发的运行都是一个**普通的、可审计的会话**——它写入与交互式运行完全相同的 JSONL 追踪记录，可以用 `seekforge replay <id>` 回放、用 `seekforge audit <id>` 审阅、用 `seekforge rewind <id>` 撤销。
+
+追踪记录写在哪里取决于隔离方式。`ask` 触发器（以及任何显式设为 `isolation: "workspace"` 的触发器）写入工作区，因此会出现在该工作区的 `seekforge sessions` 中。`edit` 触发器通常在自己的 git worktree 中运行（见下文第 4 条），并**把会话追踪写在那个 worktree 里**——在基仓库中执行 `seekforge sessions` 是列不出它的。run ledger 无论如何都留在基工作区：`GET /api/runs`（或 `.seekforge/runs.jsonl`）会给出 `runId`、`sessionId` 以及 `worktreeId`/`worktreeBranch` 标签；`cd` 进那个 worktree 再运行 `seekforge sessions` / `audit` / `replay` 即可访问追踪记录。
 
 ## 安全为先
 
 webhook 可能被外部系统在无人盯守的情况下调用，因此被触发的运行有四重锁定：
 
 1. **认证投递。** 通用调用方使用服务器 bearer token 加上该触发器的独立 secret。原生 GitHub webhook 则改为用该触发器 secret 对请求体逐字节签名并发送 `X-Hub-Signature-256`；它不需要发明自定义的 GitHub header，也不需要暴露服务器 bearer token。secret 比较采用常量时间算法。
-2. **成本预算是强制的。** 每个触发器都必须提供 `maxCostUsd`。一旦累计花费达到预算，运行就会平缓终止（追踪记录会保留）。没有预算的触发器在**创建时即被拒绝**——不存在注册一个无上限触发器的途径。
-3. **运行是无头的。** 被触发的运行与交互式运行使用同一引擎，但处于机器（非交互）模式：agent 的审批回调会**自动拒绝**一切原本需要弹出提示的操作。危险命令保持被拒，命令执行 / 环境变更一律拒绝（没有人来批准它们，而被触发的运行绝不能挂起等待输入）。`edit` 类触发器运行在 *acceptEdits* 模式下，普通的工作区内文件编辑可以自主进行；风险更高的一切仍被拒绝。
+2. **每次运行都有上限——能按成本就按成本，不能就按 token。** 每个触发器都必须提供 `maxCostUsd`，缺少它的触发器在**创建时即被拒绝**。一旦累计花费达到预算，运行就会平缓终止（追踪记录会保留）。但在没有价目表的 provider 上这个预算是空转的：成本恒报 0，永远达不到预算。与定价无关、始终成立的保证是每次被触发的运行有一个 **800 万累计 token**（提示 + 补全）的硬上限，达到即以同样平缓的方式中止。若希望你填写的美元数字才是真正生效的那个上限，请在配置中设置 `modelPricing`。
+3. **运行是无头的。** 被触发的运行与交互式运行使用同一引擎，但处于机器（非交互）模式：agent 的审批回调会**自动拒绝**一切原本需要弹出提示的操作。危险命令保持被拒，命令执行 / 环境变更一律拒绝（没有人来批准它们，而被触发的运行绝不能挂起等待输入）。`edit` 类触发器运行在 *acceptEdits* 模式下，普通的工作区内文件编辑可以自主进行；风险更高的一切仍被拒绝。`ask` 触发器完全不放宽权限——它是只读的，任何需要确认的操作都会被拒绝。
 4. **可写运行默认隔离。** `edit` 触发器默认使用 `isolation: "auto"`：在 Git 仓库中，SeekForge 会创建独立 worktree/分支，并把其 id 写进 run label，便于之后审阅和合并；非 Git 工作区则回退到串行的原工作区执行。显式设为 `"workspace"` 可关闭隔离，设为 `"worktree"` 则要求必须成功隔离，否则直接失败。
 
 ## 触发器格式
@@ -45,7 +47,7 @@ webhook 可能被外部系统在无人盯守的情况下调用，因此被触发
 | 方法 + 路径 | 用途 |
 | --- | --- |
 | `GET /api/triggers` | 列出触发器（secret 已掩码）。 |
-| `POST /api/triggers` | 创建触发器（缺少 `maxCostUsd`/`secret` 会被拒绝）。返回 `201`。 |
+| `POST /api/triggers` | 创建触发器（缺少 `maxCostUsd`/`secret` 返回 `400`；id 已存在返回 `409`）。返回 `201`。 |
 | `DELETE /api/triggers/:id` | 删除触发器。 |
 | `POST /api/triggers/:id` | **触发**——启动一次无头运行。返回 `202`。 |
 
@@ -66,15 +68,21 @@ webhook 可能被外部系统在无人盯守的情况下调用，因此被触发
 
 签名有效的 GitHub 请求不需要服务器 bearer token 或 `x-seekforge-trigger-secret`。接受的事件为 `push`、`pull_request`、`issues`、`issue_comment` 和 `workflow_run`。投递按工作区、触发器和 delivery ID 去重，去重窗口 24 小时；重复投递返回 `409`。持久 claim 由跨进程工作区 lease 保护，因此共享同一工作区的两个 Server 实例也不能同时接受同一投递。
 
-可选的 JSON 请求体（例如 GitHub webhook payload）会被提炼成一段简短摘要——action、仓库、ref、PR/issue 编号 + 标题、发起者、head commit——并追加到任务描述中，让本次运行拥有上下文。请求体大小有上限；未知结构只贡献其顶层键名（不含值）。
+去重存储另有**每工作区最多记住 10,000 条投递**的硬上限；超出后会优先丢弃最快过期的条目。因此在 webhook 流量持续很高时，某个 delivery id 可能在 24 小时未满时就被遗忘，此时对它的重投递会再次触发运行。去重是尽力而为的重复抑制，不是事务级的 exactly-once 承诺。
 
-成功时服务器立即返回 `202 Accepted` 与新会话 id；运行在后台继续：
+可选的 JSON 请求体（例如 GitHub webhook payload）会被提炼成一段简短摘要——action、仓库、ref、PR/issue 编号 + 标题、发起者、head commit——并追加到任务描述中，让本次运行拥有上下文。请求体上限为 25 MiB（GitHub 自身的 webhook 上限），超出返回 `413`。追加到任务里的摘要另有远为严格的长度限制，未知结构只贡献其顶层键名（不含值）。
+
+成功时服务器立即返回 `202 Accepted`，携带新的 run id 与会话 id；运行在后台继续：
 
 ```json
-{ "sessionId": "20260703-...-ab12", "triggerId": "ci-review" }
+{ "runId": "run-lz4k9x-3f8a1c2b5d6e", "sessionId": "20260703-...-ab12", "triggerId": "ci-review" }
 ```
 
-响应码：`202` 已触发 · `400` 请求体畸形或 GitHub 事件元数据无效 · `401` 通用请求的服务器 token 错误或缺失 · `403` 触发器 secret 或 GitHub 签名错误 · `404` 触发器不存在 · `409` 触发器已禁用或 GitHub 投递重复。
+`runId` 是在 ledger 中定位这次运行的键（`GET /api/runs/:id`、`.seekforge/runs.jsonl`）——包括它的最终状态、成本，以及查找 worktree 隔离运行的追踪记录所需的隔离标签。
+
+响应码：`202` 已触发 · `400` 请求体畸形或 GitHub 事件元数据无效 · `401` 通用请求的服务器 token 错误或缺失 · `403` 触发器 secret 或 GitHub 签名错误 · `404` 触发器不存在 · `409` 触发器已禁用或 GitHub 投递重复 · `413` 请求体超过 25 MiB · `500` 运行未能启动（已认领的 GitHub delivery id 会被释放，以便重投递重试）。
+
+注意：携带 GitHub 形状 header（`X-Hub-Signature-256` 或 `X-GitHub-Delivery`）的请求永远不会得到 `404`：未知的触发器 id 与签名错误一样返回 `403`，因此未认证的调用方无法探测存在哪些触发器 id。
 
 ## 把 GitHub / CI webhook 指过来
 
@@ -99,6 +107,8 @@ webhook 可能被外部系统在无人盯守的情况下调用，因此被触发
      --data-binary @event.json
    ```
 
+   **不要在通用调用上带 GitHub 的 header。** 只要请求携带了 `X-Hub-Signature-256` *或* `X-GitHub-Delivery`，它就会被当作原生 GitHub 投递处理，必须带有对请求原始字节计算的有效 `X-Hub-Signature-256`——正确的 bearer token 和触发器 secret 也救不了它，结果是 `403`。这一点最常咬到会转发 `X-GitHub-Delivery` 却重新签名或丢掉签名的中继/代理：要么两个 header 都原样转发，要么两个都不转发。
+
 ## 暴露到公网
 
-服务器只绑定 `127.0.0.1`，因此按设计触发器无法从公网直接访问。要接收真实的 GitHub/CI webhook，请在前面架设一个由你掌控的反向代理或隧道。转发 GitHub 的签名、delivery、event 和 content-type header 时不要改写请求体；HMAC 验证依赖逐字节一致。通用调用方还必须转发 bearer 和触发器 secret 两个 header。有了每触发器独立的 secret，URL 泄露本身既无法触发运行，也无法访问管理 endpoint。轮换 secret 的方式是 `DELETE` 后重新创建触发器（或编辑 `triggers.json` 后重启）。
+服务器只绑定 `127.0.0.1`，因此按设计触发器无法从公网直接访问。要接收真实的 GitHub/CI webhook，请在前面架设一个由你掌控的反向代理或隧道。转发 GitHub 的签名、delivery、event 和 content-type header 时不要改写请求体；HMAC 验证依赖逐字节一致。通用调用方还必须转发 bearer 和触发器 secret 两个 header——并且不能被额外加上 GitHub 的签名或 delivery header，否则会被推到只认签名的那条路径上。有了每触发器独立的 secret，URL 泄露本身既无法触发运行，也无法访问管理 endpoint。轮换 secret 的方式是 `DELETE` 后重新创建触发器（或编辑 `triggers.json` 后重启）。

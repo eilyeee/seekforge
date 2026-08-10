@@ -11,8 +11,10 @@
  * agent's confirm callback auto-denies (no interactive prompts to hang on;
  * dangerous tools stay denied; env/execute auto-deny). Edit jobs run in
  * acceptEdits so file edits apply autonomously, while everything else is still
- * refused. Each run is a normal, auditable session (`seekforge sessions` /
- * `seekforge audit`).
+ * refused. Every tick also carries DEFAULT_MAX_SCHEDULE_TOTAL_TOKENS, the
+ * pricing-independent ceiling that keeps the run bounded when the provider has
+ * no price table and maxCostUsd therefore can never trip. Each run is a normal,
+ * auditable session (`seekforge sessions` / `seekforge audit`).
  */
 
 import { listSessions, resolvedPricingSource } from "@seekforge/core";
@@ -23,6 +25,7 @@ import { dim, fail, green, red } from "../colors.js";
 import {
   addJob,
   acquireScheduleLease,
+  DEFAULT_MAX_SCHEDULE_TOTAL_TOKENS,
   dueJobs,
   generateId,
   isDue,
@@ -99,8 +102,10 @@ export function scheduleAddCommand(opts: ScheduleAddOptions, projectPath: string
     // maxCostUsd is required here precisely because a scheduled run is
     // unattended. On a provider with no known price that requirement is
     // satisfied on paper and enforced by nothing — every request reports 0, so
-    // the budget never trips and the job is unbounded. Said at creation, where
-    // it can still be fixed, rather than at 3am on the first tick.
+    // the budget never trips. The run is still bounded (every tick carries the
+    // DEFAULT_MAX_SCHEDULE_TOTAL_TOKENS ceiling), but a token ceiling is a far
+    // coarser bound than the dollar figure the user typed, so say so at
+    // creation, where it can still be fixed, rather than at 3am on the first tick.
     const scheduleConfig = loadConfig(projectPath);
     if (
       resolvedPricingSource({
@@ -113,7 +118,8 @@ export function scheduleAddCommand(opts: ScheduleAddOptions, projectPath: string
         `warning: no price is known for ${scheduleConfig.model ?? "the default model"}${
           scheduleConfig.provider ? ` on provider "${scheduleConfig.provider}"` : ""
         } — this job's $${result.job.maxCostUsd.toFixed(2)} budget cannot be enforced ` +
-          "(cost reports 0); set modelPricing in config before letting it run unattended",
+          `(cost reports 0); each run is still capped at ${DEFAULT_MAX_SCHEDULE_TOTAL_TOKENS.toLocaleString("en-US")} ` +
+          "tokens, but set modelPricing in config to get the budget you asked for",
       );
     }
     console.log(
@@ -258,6 +264,10 @@ export async function scheduleRunCommand(opts: ScheduleRunOptions, projectPath: 
           // human lines, or one JSON object per job under --json).
           outputFormat: "json",
           suppressResult: true,
+          // Pricing-independent backstop: on a provider with no price table
+          // costUsd never grows, so maxCostUsd alone would leave this unattended
+          // run unbounded. Same ceiling the server's trigger runs use.
+          maxTotalTokens: DEFAULT_MAX_SCHEDULE_TOTAL_TOKENS,
           // Edit jobs must apply edits without a human; acceptEdits auto-approves
           // ONLY file edits (writes still refuse dangerous, execute/env still deny).
           ...(job.mode === "edit" ? { permissionMode: "acceptEdits" } : {}),

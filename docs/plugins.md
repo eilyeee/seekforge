@@ -55,11 +55,24 @@ Every plugin has a strict `plugin.json`:
 }
 ```
 
-IDs use lowercase letters, digits, and dashes. Versions use SemVer syntax.
+IDs use lowercase letters, digits, and dashes. Versions use SemVer syntax,
+including the optional pre-release and build-metadata parts (`1.2.0-rc.1+build.7`).
 Contribution roots are relative directories confined to the plugin. MCP server
 names are exposed as `<plugin-id>__<server-name>` to avoid ambiguous collisions. User
 configuration wins over a plugin MCP server with the same effective name;
 plugin hooks run before user-configured hooks.
+
+A contributed MCP server carries exactly the connection trust its manifest
+declares. `trusted` defaults to `false` here as everywhere else, so the `docs`
+server above is listed but never connected automatically, and an explicit
+`"trusted": false` is preserved. Only a manifest that itself contains
+`"trusted": true` lets automatic discovery spawn that server's process or
+contact its endpoint, and its tools then follow the ordinary MCP permission
+mapping described in [MCP](mcp.md). That line is part of the approved digest:
+adding it to an installed plugin marks the plugin `changed` and stops every
+contribution until the new digest is approved. To connect a server the manifest
+leaves untrusted, put a full entry named `<plugin-id>__<server-name>` in your own
+configuration — user configuration replaces the plugin's entry.
 
 `graphHandlers` contributes namespaced aliases such as `team-workflows__summarize` for the deterministic built-ins `noop`, `collect`, `pick`, `project`, `merge`, `assert`, `count`, and `summarize`. `graphExecutors` can alias only an adapter that the embedding host already registered as trusted and remote; the manifest cannot create or elevate an executor. Manifests cannot contain Graph handler code or shell commands; all aliases are resolved before any Graph effect.
 
@@ -79,8 +92,8 @@ links and special files are rejected. A plugin is capped at 1,000 files and
 or disabled plugins contribute nothing.
 
 Enabling a plugin is an authority decision. Review its complete directory,
-especially hooks, stdio MCP commands, environment/header values, and agent or
-skill instructions. The digest check detects changes; it does not establish the
+especially hooks, stdio MCP commands, MCP `trusted` flags, environment/header
+values, and agent or skill instructions. The digest check detects changes; it does not establish the
 author's trustworthiness or sandbox third-party code.
 
 ## CLI

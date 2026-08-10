@@ -8,10 +8,13 @@ SeekForge 可以按计划运行任务——每晚一次代码审查、定期的�
 
 ## 安全为先
 
-定时任务让 agent **自主运行**，无人盯守。两道护栏保证其安全：
+定时任务让 agent **自主运行**，无人盯守。三道护栏保证其安全：
 
-1. **成本预算是强制的。** 每个任务都必须提供 `--max-cost <usd>`。一旦累计花费达到预算，运行就会平缓终止（追踪记录会保留）。没有预算的任务在注册时即被拒绝——不存在调度一次无上限运行的途径。
-2. **每次触发都是无头（headless）运行。** `schedule run` 用与 `seekforge -p` 相同的引擎跑每个任务，但处于机器（非交互）模式，因此 agent 的审批回调会**自动拒绝**一切原本需要弹出提示的操作：危险命令保持被拒，`execute` / 环境类操作一律拒绝（没有 TTY 可供批准，而定时运行绝不能挂起等待输入）。`edit` 类任务运行在 *acceptEdits* 模式下，普通文件编辑可以自主进行；风险更高的一切仍被拒绝。
+1. **成本预算是强制的。** 每个任务都必须提供 `--max-cost <usd>`。一旦累计花费达到预算，运行就会平缓终止（追踪记录会保留）。没有预算的任务在注册时即被拒绝。
+
+   但这个预算只在 SeekForge 知道模型价格时才**真正生效**。在没有内置价目表、配置里也没有 `modelPricing` 的自定义 provider 上，每次请求的成本都报 0，预算永远达不到——`schedule add` 会就此发出警告，正确的修法是设置 `modelPricing`。
+2. **token 上限始终生效。** 与价格无关，每次定时运行在累计的提示 + 补全 token 达到 **800 万** 时停止（与 [webhook 触发器](automation.zh-CN.md)使用同一个上限）。正是它让承诺在*所有* provider 上都成立：不存在调度一次完全没有上限的运行。它只是粗粒度的兜底，不能替代一个真正生效的成本预算——而且它约束的是**一次运行**、而非任务的一生：一个不断失败的任务是按次受限，重复次数则由下文的连续失败自动禁用来限制。
+3. **每次触发都是无头（headless）运行。** `schedule run` 用与 `seekforge -p` 相同的引擎跑每个任务，但处于机器（非交互）模式，因此 agent 的审批回调会**自动拒绝**一切原本需要弹出提示的操作：危险命令保持被拒，`execute` / 环境类操作一律拒绝（没有 TTY 可供批准，而定时运行绝不能挂起等待输入）。`edit` 类任务运行在 *acceptEdits* 模式下，普通文件编辑可以自主进行；风险更高的一切仍被拒绝。
 
 注册任务的同时也会为当前工作区授权后续触发（与你交互时给出的目录访问许可是同一种许可），因此无头运行不会被目录门禁拦住。
 
@@ -29,7 +32,9 @@ SeekForge 可以按计划运行任务——每晚一次代码审查、定期的�
       "mode": "ask",                  // "ask" (read-only) | "edit" (may modify files)
       "maxCostUsd": 0.50,             // REQUIRED per-run budget (USD); must be > 0
       "enabled": true,
-      "lastRunAt": "2026-07-02T03:00:00.000Z"  // set by `schedule run`; absent until first run
+      "lastRunAt": "2026-07-02T03:00:00.000Z", // set by `schedule run`; absent until first run
+      "failureCount": 0,                       // consecutive failures; written by `schedule run`, cleared on success
+      "nextRetryAt": "2026-07-02T03:01:00.000Z" // backoff floor after a failure; absent while healthy
     }
   ]
 }
@@ -39,7 +44,8 @@ SeekForge 可以按计划运行任务——每晚一次代码审查、定期的�
   - 间隔：`<n><unit>`，单位为 `s`、`m`、`h`、`d` 或 `w`——如 `30m`、`2h`、`1d`、`1w`。间隔类任务在从未运行过、或距 `lastRunAt` 已过去至少一个间隔时到期。
   - Cron：标准 5 字段表达式 `minute hour day-of-month month day-of-week`，支持 `*`、列表（`1,15`）、区间（`1-5`）和步长（`*/15`）。当 day-of-month 和 day-of-week 同时受限时，*任一*匹配即触发（标准 cron 语义）。一个 cron 任务在每个匹配的分钟内至多触发一次。
 - **`mode`**——`ask` 用于只读问答 / 报告类任务；`edit` 用于可能改动文件的任务（编辑自动批准；命令 / 危险操作仍被拒绝）。
-- **`maxCostUsd`**——必填；运行达到该值即停止。
+- **`maxCostUsd`**——必填；运行达到该值即停止（价目表的注意事项见上文）。
+- **`failureCount` / `nextRetryAt`**——由 `schedule run` 写入，不需要你手工填。它们承载下文所述的重试退避与自动禁用计数。
 
 ## 命令
 
@@ -82,7 +88,11 @@ seekforge schedule uninstall
 
 `schedule add` 的 flag：`--task`（必填），`--every <interval>` / `--cron "<expr>"` 二选一，`--max-cost <usd>`（必填），`--mode ask|edit`（默认 `ask`），以及 `--id <name>`（默认从任务描述派生）。
 
-每次尝试都会连同其 `runId`、attempt、status、session、cost、error 追加到 `.seekforge/runs.jsonl`。失败会按指数退避重试，间隔从一分钟到一小时不等；成功会清零失败计数。list/run/next/history/install/uninstall/status 均支持 `--json`。
+每次尝试都会连同其 `runId`、attempt、status、session、cost、error 追加到 `.seekforge/runs.jsonl`。失败会按指数退避重试，间隔从一分钟到一小时不等；成功会清零失败计数。
+
+**连续失败 5 次后任务会被自动禁用**（注册表里的 `enabled` 翻为 `false`），不再继续重试——否则一个彻底坏掉的任务会每小时耗掉一次预算，永不停歇。禁用时不会打印任何提示，因此一个悄悄不再运行的任务表现为 `seekforge schedule list` 中的 `[disabled]`，其 `failureCount` 仍保留；导致它被禁用的那些失败记录在 `.seekforge/runs.jsonl` 中。用 `seekforge schedule enable <id>` 重新启用会同时清除 `failureCount` 和 `nextRetryAt`，任务从干净状态重新开始。
+
+list/run/next/history/install/uninstall/status 均支持 `--json`。
 
 ## 接入操作系统的调度器
 

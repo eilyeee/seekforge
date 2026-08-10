@@ -11,7 +11,9 @@
  * REQUIRED and must be a positive finite number — `validateJobInput` rejects a
  * job without it. The command layer (commands/schedule.ts) additionally runs
  * every tick headless (machine output → interactive prompts auto-deny, dangerous
- * stays denied) and enforces the per-job budget via the existing run path.
+ * stays denied), enforces the per-job budget via the existing run path, and
+ * caps every run at {@link DEFAULT_MAX_SCHEDULE_TOTAL_TOKENS} tokens so the
+ * bound survives a provider whose prices are unknown (costUsd stays 0).
  */
 
 import { execFileSync } from "node:child_process";
@@ -50,6 +52,20 @@ export type Job = {
 };
 
 export type Registry = { jobs: Job[] };
+
+/**
+ * Hard token ceiling for ONE scheduled run (prompt + completion, cumulative).
+ *
+ * `maxCostUsd` is the primary bound, but it is a no-op on a provider with no
+ * price table: every request reports costUsd 0, so the budget can never be
+ * reached and an unattended cron-fired run would have no spend bound at all.
+ * This ceiling is independent of pricing, so "a scheduled run is bounded" holds
+ * for every provider. Deliberately the same value as the server's
+ * DEFAULT_MAX_TRIGGER_TOTAL_TOKENS (apps/server/src/trigger-run.ts): both are
+ * headless, unattended run paths and must carry the same guarantee. Generous
+ * enough not to cut off a legitimately long job; low enough to stop a runaway.
+ */
+export const DEFAULT_MAX_SCHEDULE_TOTAL_TOKENS = 8_000_000;
 
 // --- registry paths + disk I/O ---------------------------------------------
 

@@ -1,9 +1,10 @@
 /** User-triggered GitHub issue-to-PR and review-fix workflows. */
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isAuthorizedDir } from "../authorized-dirs.js";
 import { fail } from "../colors.js";
 import { loadConfig } from "../config.js";
 import {
@@ -42,7 +43,7 @@ import {
   type IssueRef,
   type ReviewContext,
 } from "../resolve.js";
-import { runTaskCommand } from "./run.js";
+import { type RunOptions, runTaskCommand } from "./run.js";
 
 export type ResolveOptions = {
   maxCost: number;
@@ -52,6 +53,8 @@ export type ResolveOptions = {
   dryRun?: boolean;
   worktree?: boolean;
   waitCi?: boolean;
+  /** `-y`: pre-authorize the work directory (required for a not-yet-authorized CI checkout). */
+  yes?: boolean;
 };
 
 export type ResolveReviewOptions = {
@@ -60,7 +63,76 @@ export type ResolveReviewOptions = {
   dryRun?: boolean;
   worktree?: boolean;
   waitCi?: boolean;
+  /** `-y`: pre-authorize the work directory (required for a not-yet-authorized CI checkout). */
+  yes?: boolean;
 };
+
+/**
+ * The options every `resolve` / `resolve-review` agent run uses. These runs are
+ * documented as headless, so they must never be able to ask a human anything:
+ * a machine output format makes run.ts's confirm auto-DENY instead of prompting
+ * (the same lever `schedule run` pulls for its headless ticks), and
+ * `suppressResult` keeps that format's result envelope out of resolve's own
+ * human output. `acceptEdits` still auto-approves ONLY file edits.
+ *
+ * `yes` here is folder-access consent for the work directory alone — it can not
+ * widen approvals, because `permissionMode` takes precedence over it
+ * (see permission-mode.ts).
+ */
+export function headlessRunOptions(input: { consent: boolean; maxCost: number; model?: string }): RunOptions {
+  return {
+    mode: "edit",
+    permissionMode: "acceptEdits",
+    outputFormat: "json",
+    suppressResult: true,
+    yes: input.consent,
+    maxCostUsd: input.maxCost,
+    model: input.model,
+  };
+}
+
+/**
+ * Folder-access consent for the work directory. A temporary worktree lives in
+ * `$TMPDIR`, outside any authorized ancestor, yet it is a checkout of the very
+ * repository the user authorized and explicitly pointed `resolve` at — so that
+ * consent carries over. `-y` covers the remaining case (a fresh, not-yet
+ * authorized checkout, e.g. in CI), which would otherwise fail hard because a
+ * headless run has no prompt to fall back on.
+ */
+function workspaceConsent(projectPath: string, yes: boolean | undefined): boolean {
+  return yes === true || isAuthorizedDir(projectPath);
+}
+
+/**
+ * Copy the session traces written inside the temporary worktree back into the
+ * base repository. `runTaskCommand` records a trace under
+ * `<cwd>/.seekforge/sessions/<id>/`, and resolve runs it with the worktree as
+ * cwd, so removing the worktree would delete the very trace `seekforge
+ * sessions` / `seekforge audit` are documented to inspect afterwards. Each run
+ * gets a freshly created worktree, so every session directory in it belongs to
+ * this run. An existing destination id is never overwritten.
+ */
+export function preserveSessionTraces(workPath: string, projectPath: string): void {
+  const from = join(workPath, ".seekforge", "sessions");
+  const to = join(projectPath, ".seekforge", "sessions");
+  let names: string[];
+  try {
+    // isDirectory() is false for a symlink (readdir uses lstat), so a symlinked
+    // session directory is skipped rather than followed.
+    names = readdirSync(from, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !existsSync(join(to, entry.name)))
+      .map((entry) => entry.name);
+  } catch {
+    return; // no trace was recorded (the run never started)
+  }
+  if (names.length === 0) return;
+  try {
+    mkdirSync(to, { recursive: true, mode: 0o700 });
+    for (const name of names) cpSync(join(from, name), join(to, name), { recursive: true });
+  } catch (error) {
+    console.error(`  could not preserve the session trace: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
 
 type Result = { code: number; stdout: string; stderr: string; missing: boolean; timedOut: boolean };
 
@@ -159,6 +231,7 @@ async function repairFailedCi(
   branch: string,
   maxCost: number,
   model: string | undefined,
+  consent: boolean,
 ): Promise<boolean> {
   const listed = run("gh", buildFailedRunListArgs(branch), workPath);
   if (listed.code !== 0) return false;
@@ -175,12 +248,10 @@ async function repairFailedCi(
   if (runId === undefined) return false;
   const logs = run("gh", buildFailedRunLogArgs(runId), workPath);
   if (logs.code !== 0 || logs.stdout.trim() === "") return false;
-  const completed = await runTaskCommand(buildCiRepairPrompt(logs.stdout), {
-    mode: "edit",
-    permissionMode: "acceptEdits",
-    maxCostUsd: maxCost,
-    model,
-  });
+  const completed = await runTaskCommand(
+    buildCiRepairPrompt(logs.stdout),
+    headlessRunOptions({ consent, maxCost, model }),
+  );
   if (!completed || !changed(workPath) || !verify(projectPath, workPath)) return false;
   for (const args of [buildAddArgs(), buildCommitArgs(`Fix CI for ${branch}`), buildPushArgs(branch)]) {
     const result = run("git", args, workPath);
@@ -222,6 +293,7 @@ export async function resolveCommand(issueArg: string, opts: ResolveOptions): Pr
 
   const branch = buildBranchName(issue.number);
   const base = opts.base?.trim() || DEFAULT_BASE_BRANCH;
+  const consent = workspaceConsent(projectPath, opts.yes);
   const useWorktree = opts.worktree ?? true;
   const workPath = useWorktree ? createTempWorktreePath() : projectPath;
   const reuseBranch = existingBranch(projectPath, branch);
@@ -247,12 +319,10 @@ export async function resolveCommand(issueArg: string, opts: ResolveOptions): Pr
   const originalCwd = process.cwd();
   try {
     process.chdir(workPath);
-    const completed = await runTaskCommand(buildTaskPrompt(issue), {
-      mode: "edit",
-      permissionMode: "acceptEdits",
-      maxCostUsd: opts.maxCost,
-      model: opts.model,
-    });
+    const completed = await runTaskCommand(
+      buildTaskPrompt(issue),
+      headlessRunOptions({ consent, maxCost: opts.maxCost, model: opts.model }),
+    );
     if (!completed) {
       removeOnExit = useWorktree;
       fail("the agent run did not complete — not committing or opening a PR");
@@ -312,7 +382,7 @@ export async function resolveCommand(issueArg: string, opts: ResolveOptions): Pr
         console.log("\n✓ PR opened; no CI checks are configured for this PR.");
       } else if (checks.code !== 0) {
         console.error("PR checks failed; attempting one bounded repair from failed-step logs.");
-        const repaired = await repairFailedCi(projectPath, workPath, branch, opts.maxCost, opts.model);
+        const repaired = await repairFailedCi(projectPath, workPath, branch, opts.maxCost, opts.model, consent);
         const recheck = repaired
           ? run("gh", buildPrChecksArgs(url || branch), workPath, PR_CHECKS_TIMEOUT_MS)
           : undefined;
@@ -328,6 +398,9 @@ export async function resolveCommand(issueArg: string, opts: ResolveOptions): Pr
     removeOnExit = useWorktree;
   } finally {
     process.chdir(originalCwd);
+    // Before the worktree can be removed: the run's trace must survive it, or
+    // the documented `seekforge sessions|audit` follow-up has nothing to read.
+    if (useWorktree) preserveSessionTraces(workPath, projectPath);
     if (removeOnExit) removeWorktree(projectPath, workPath, true);
   }
 }
@@ -369,12 +442,14 @@ export async function resolveReviewCommand(prArg: string, opts: ResolveReviewOpt
   let removeOnExit = false;
   try {
     process.chdir(workPath);
-    const completed = await runTaskCommand(buildReviewTaskPrompt(review), {
-      mode: "edit",
-      permissionMode: "acceptEdits",
-      maxCostUsd: opts.maxCost,
-      model: opts.model,
-    });
+    const completed = await runTaskCommand(
+      buildReviewTaskPrompt(review),
+      headlessRunOptions({
+        consent: workspaceConsent(projectPath, opts.yes),
+        maxCost: opts.maxCost,
+        model: opts.model,
+      }),
+    );
     if (!completed || !changed(workPath)) {
       removeOnExit = useWorktree;
       fail(completed ? "the agent made no review changes" : "the review-fix agent run did not complete");
@@ -412,6 +487,7 @@ export async function resolveReviewCommand(prArg: string, opts: ResolveReviewOpt
     removeOnExit = useWorktree;
   } finally {
     process.chdir(originalCwd);
+    if (useWorktree) preserveSessionTraces(workPath, projectPath);
     if (removeOnExit) removeWorktree(projectPath, workPath, true);
   }
 }

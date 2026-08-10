@@ -37,16 +37,23 @@ The directory is created with mode `0700` and the JSONL file with mode `0600`.
 Current Finding, scan, fix, and threat-model views are rebuilt from events; old
 events are not rewritten.
 
-Finding lifecycle states are:
+Finding lifecycle states are `open`, `triaged`, `fixing`, `resolved`,
+`accepted_risk`, `dismissed`, and `reopened`. Only these transitions are
+accepted; anything else fails with `invalid finding transition`:
 
 ```text
-open -> triaged -> fixing -> resolved
-  \         \          \-> accepted_risk
-   \         \----------> dismissed
-    \--------------------> accepted_risk / dismissed
-
-resolved / accepted_risk / dismissed -> reopened
+open          -> triaged | fixing | resolved | accepted_risk | dismissed
+triaged       -> fixing | resolved | accepted_risk | dismissed | reopened
+fixing        -> open | resolved | reopened
+resolved      -> reopened
+accepted_risk -> reopened
+dismissed     -> reopened
+reopened      -> triaged | fixing | resolved | accepted_risk | dismissed
 ```
+
+Note that `fixing` is deliberately narrow: a Finding under active repair cannot
+jump straight to `accepted_risk` or `dismissed` — send it back to `open` first.
+Setting a Finding to the status it already has is a no-op, not an error.
 
 Verification is independent of lifecycle: `unverified`, `verified`, `failed`,
 or `stale`. Changing a Finding to `resolved` does not prove the fix. A later scan
@@ -74,10 +81,19 @@ Repository content and tool output are treated as untrusted data. Scanner output
 must be one exact JSON object matching the Core schema. Unknown fields, markdown
 wrappers, malformed values, absolute or escaping paths, missing files, invalid
 line ranges, and excerpts that do not occur in the cited source lines are
-rejected. The raw model response is never persisted.
+rejected. The raw model response never reaches the security event log: only
+validated, sanitized Finding fields are written to
+`.seekforge/security/events.jsonl`.
 
-Stored text and command output are length-limited and common secret formats are
-redacted. Evidence paths are repository-relative and resolved with the same
+That is a scoped guarantee, not a global one. The scan runs as an ordinary
+agent session, so its final message — the raw JSON, verbatim — is recorded in
+that session's trace under `.seekforge/sessions/<id>/` (`events.jsonl` and
+`messages.jsonl`), unsanitized and unredacted. Treat a scan session trace as
+sensitive, and delete it (`seekforge sessions prune`, or the directory itself)
+if the raw response must not persist.
+
+Stored text and command output in the security log are length-limited and
+common secret formats are redacted. Evidence paths are repository-relative and resolved with the same
 symlink-aware workspace boundary used by Core tools. Do not treat an LLM
 Finding as confirmed solely because it passed structural validation; triage its
 reachability and impact.

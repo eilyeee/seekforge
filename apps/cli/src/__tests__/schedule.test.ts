@@ -17,12 +17,18 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "vitest";
-import { scheduleAddCommand, scheduleRemoveCommand, scheduleSetEnabledCommand } from "../commands/schedule.js";
+import { test, vi } from "vitest";
+import {
+  scheduleAddCommand,
+  scheduleRemoveCommand,
+  scheduleRunCommand,
+  scheduleSetEnabledCommand,
+} from "../commands/schedule.js";
 import {
   addJob,
   acquireScheduleLease,
   cronMatches,
+  DEFAULT_MAX_SCHEDULE_TOTAL_TOKENS,
   dueJobs,
   generateId,
   isDue,
@@ -40,6 +46,16 @@ import {
   validateJobInput,
   type Job,
 } from "../schedule.js";
+
+// The tick must never reach the real run path in a test (no model, no spend);
+// this records the options it would have been driven with instead.
+const { runTaskOptions } = vi.hoisted(() => ({ runTaskOptions: [] as Record<string, unknown>[] }));
+vi.mock("../commands/run.js", () => ({
+  runTaskCommand: async (_task: string, opts: Record<string, unknown>) => {
+    runTaskOptions.push(opts);
+    return true;
+  },
+}));
 
 const baseJob = (over: Partial<Job> = {}): Job => ({
   id: "j1",
@@ -458,6 +474,35 @@ test("schedule mutation commands do not bypass an occupied scheduler lease", () 
   } finally {
     process.stderr.write = oldWrite;
     process.exitCode = oldExitCode;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A scheduled run is unattended, so its bound must not depend on the provider
+// having a price table: with no pricing every request reports cost 0 and
+// maxCostUsd can never trip. The token ceiling is what keeps the promise that
+// there is no way to schedule an unbounded run.
+test("every tick carries the pricing-independent token ceiling", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sf-sched-"));
+  const log = console.log;
+  try {
+    runTaskOptions.length = 0;
+    console.log = () => {};
+    saveRegistry(dir, {
+      jobs: [baseJob({ id: "ask-job" }), baseJob({ id: "edit-job", mode: "edit" })],
+    });
+
+    await scheduleRunCommand({}, dir);
+
+    assert.equal(runTaskOptions.length, 2);
+    for (const opts of runTaskOptions) {
+      assert.equal(opts["maxTotalTokens"], DEFAULT_MAX_SCHEDULE_TOTAL_TOKENS);
+      assert.equal(opts["maxCostUsd"], 0.5);
+    }
+    // …and the ceiling matches the one the server's webhook triggers use.
+    assert.equal(DEFAULT_MAX_SCHEDULE_TOTAL_TOKENS, 8_000_000);
+  } finally {
+    console.log = log;
     rmSync(dir, { recursive: true, force: true });
   }
 });

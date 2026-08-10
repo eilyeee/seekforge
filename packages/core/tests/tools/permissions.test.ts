@@ -570,6 +570,48 @@ describe("allow-for-session confirm channel", () => {
     expect(sessionAllowlist).toHaveLength(0);
   });
 
+  it("an env approval is never remembered for the session", async () => {
+    const ws = makeWorkspace();
+    const sessionAllowlist: string[] = [];
+    const { confirm, requests } = scriptedConfirm({ allow: true, remember: "session" });
+    // "auto" is the mode the promise is about: env still confirms there.
+    const ctx = makeCtx(ws, { policy: { approvalMode: "auto", sessionAllowlist }, confirm });
+
+    const first = await enforcePermission(
+      "browser_navigate",
+      { permission: "env", description: "open https://docs.example/", command: "GET https://docs.example/" },
+      ctx,
+    );
+    expect(first.allowed).toBe(true);
+    expect(sessionAllowlist).toHaveLength(0);
+
+    // A different URL of the same tool must prompt again — the session token is
+    // the bare tool name, so remembering it would grant every later URL.
+    const second = await enforcePermission(
+      "browser_navigate",
+      { permission: "env", description: "open https://evil.example/", command: "GET https://evil.example/" },
+      ctx,
+    );
+    expect(second).toMatchObject({ allowed: true, decision: "user_approved" });
+    expect(requests).toHaveLength(2);
+  });
+
+  it("a stale env token in the session allowlist does not auto-allow", async () => {
+    const ws = makeWorkspace();
+    const { confirm, requests } = scriptedConfirm(false);
+    const ctx = makeCtx(ws, {
+      policy: { approvalMode: "auto", sessionAllowlist: ["browser_click"] },
+      confirm,
+    });
+    const res = await enforcePermission(
+      "browser_click",
+      { permission: "env", description: "click #delete on https://evil.example/" },
+      ctx,
+    );
+    expect(res).toMatchObject({ allowed: false, decision: "user_denied" });
+    expect(requests).toHaveLength(1);
+  });
+
   it("session allowlist does NOT rescue a dangerous command", async () => {
     const ws = makeWorkspace();
     const { confirm, requests } = scriptedConfirm(true);

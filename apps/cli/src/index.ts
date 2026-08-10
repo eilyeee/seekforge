@@ -439,6 +439,7 @@ program
   .option("--no-worktree", "run in the current checkout instead of an isolated git worktree")
   .option("--wait-ci", "wait for PR checks and fail when a check fails")
   .option("--dry-run", "fetch + branch + fix + verify, but print (don't run) the push/PR")
+  .option("-y, --yes", "pre-authorize the working directory (folder consent; needed on an unauthorized CI checkout)")
   .description("autonomously fix a GitHub issue on a work branch and open a PR (agent fixes; the command pushes/PRs)")
   .action(
     async (
@@ -451,6 +452,7 @@ program
         dryRun?: boolean;
         worktree?: boolean;
         waitCi?: boolean;
+        yes?: boolean;
       },
     ) => {
       await resolveCommand(issue, {
@@ -461,6 +463,7 @@ program
         dryRun: opts.dryRun,
         worktree: opts.worktree,
         waitCi: opts.waitCi,
+        yes: opts.yes,
       });
     },
   );
@@ -473,11 +476,12 @@ program
   .option("--no-worktree", "run in the current checkout instead of an isolated git worktree")
   .option("--wait-ci", "wait for PR checks after pushing")
   .option("--dry-run", "fix + verify, but print (don't run) commit/push")
+  .option("-y, --yes", "pre-authorize the working directory (folder consent; needed on an unauthorized CI checkout)")
   .description("address actionable review feedback on an existing PR and push the fixes")
   .action(
     async (
       pr: string,
-      opts: { maxCost: number; model?: string; dryRun?: boolean; worktree?: boolean; waitCi?: boolean },
+      opts: { maxCost: number; model?: string; dryRun?: boolean; worktree?: boolean; waitCi?: boolean; yes?: boolean },
     ) => {
       await resolveReviewCommand(pr, opts);
     },
@@ -603,7 +607,7 @@ program
   .option("--output-style <style>", "default | concise | explanatory | learning")
   .option("--settings <file>", "path to JSON settings file (layered over project config but below env/CLI flags)")
   .option("--profile <name>", "use a named config profile (also SEEKFORGE_PROFILE env)")
-  .description("read-only Q&A about the codebase (no writes, no commands)")
+  .description("read-only Q&A about the codebase (no writes, no mutating commands; read-only git/gh still runs)")
   .action(async (question: string, opts: SharedRunOpts) => {
     await runTaskCommand(question, {
       mode: "ask",
@@ -680,7 +684,7 @@ program
 
 program
   .command("models")
-  .description("list available DeepSeek models and their pricing")
+  .description("list models from the built-in price table (DeepSeek, Anthropic, OpenAI) and their pricing")
   .action(() => {
     modelsCommand();
   });

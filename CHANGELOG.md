@@ -2,6 +2,90 @@
 
 ## Unreleased
 
+### Eight security promises the code did not keep
+
+An audit checked ~575 capability statements across fourteen documents against
+the code. Forty-seven did not hold. Eight of those were security promises, and
+those are the ones worth reading.
+
+**Enabling a plugin silently trusted its MCP servers.** `loadPluginContributions`
+wrote `trusted: true` unconditionally, overwriting a manifest's explicit
+`trusted: false` — and trust is not cosmetic: it auto-connects the server and
+drops the default tool permission from `env` to `write`. `docs/plugins.md`
+promised plugins "do not bypass the existing permission system"; `docs/mcp.md`
+promised only `trusted: true` entries connect. Trust now comes from the manifest
+the user reviewed and the digest covers, never from the loader. **Behavior
+change:** an installed plugin whose manifest omits `trusted` stops auto-connecting
+its MCP servers. That is the fix, and it is user-visible.
+
+**`mcp-serve` read no configuration at all.** It was the one CLI entry point
+that called neither `loadConfig` nor `configureCliTools`, so its `ToolContext`
+had no sandbox, no permission rules and no hooks — while `docs/configuration.md`
+promised the sandbox "fails hard, never silently degrades" and that a `preToolUse`
+non-zero exit blocks the call. Both now hold.
+
+Wiring the sandbox alone would have been *worse* than leaving it off: a failed
+sandboxed command offers one unsandboxed retry through `ctx.confirm`, and the old
+confirm auto-allowed execution — so the first denied write would have re-run
+unconfined, quietly. Full mode now auto-approves L1/L2 inside `enforcePermission`
+where the decision is scoped to permission levels, and answers every actual
+question with no. Authorization outcomes are unchanged; the silent escalation is
+gone. The retry request also carries `escalation: true` now, because it was
+otherwise indistinguishable from an ordinary execute approval — a human
+answering it is a legitimate approval, so the flag gates nothing in core and
+exists for hosts that answer without one.
+
+**A scheduled job's budget could be enforced by nothing.** `schedule add` refuses
+a job without `--max-cost`, and `docs/scheduling.md` said "there is no way to
+schedule an unbounded run". On a provider with no price table every request
+reports a cost of 0, so the cap never trips — the code's own comment said so
+while the doc did not. Scheduled runs now carry the same 8,000,000-token ceiling
+the webhook path already had.
+
+**Cancelling a run saved the login it interrupted.** `closeSession` defaulted to
+`persist = true`, so every teardown that was not a finished run — Ctrl+C, SIGTERM,
+a forced dispose — inherited "save", and stopping mid-login-redirect could
+replace a working profile with a broken one. `persist` is now explicit at every
+call site, cancellation is sticky on the session so a sibling operation cannot
+hand a cancelled session to an ordinary release, and the run carries its
+cancellation intent into teardown rather than inferring it — the loop's own
+cleanup aborts the run signal, so by release time a finished run and a cancelled
+one are byte-identical, and reading the signal there would be a timing heuristic
+deciding whether to overwrite a credential.
+
+**One keypress bought every later URL and selector.** `browser_*` and `web_*` are
+L3 `env` — "confirm on every call" is what the level means — but an
+allow-for-session answer stored the bare tool name, so answering `a` once
+auto-approved every subsequent navigation to any host and every click on any
+element. L3 approvals are no longer remembered. An explicit allow rule still
+covers them, because a rule names what it grants and a keypress does not.
+
+**`resolve` asked a human, and deleted the trace it told you to audit.** It never
+set an output format, so approvals fell through to the terminal — its guardrails
+held only because someone was there to decline. It also ran in a temp worktree it
+deleted on success, taking the session trace with it. It is headless now, and the
+trace is copied back to the repository before the worktree goes.
+
+**`ask` runs read-only commands, and said it did not.** Level-0 tools return
+allowed *before* the ask gate, so `git log` really is spawned. Three surfaces
+claimed otherwise; all three now say what happens. Same correction for the
+security scan's "the raw model response is never persisted" — true of the Finding
+queue, not of the session trace it also writes.
+
+Also corrected: eleven capabilities that existed with no way to reach them —
+including a GitLab CI adapter that shipped, was tested, was documented, and had
+no selector — eleven wrong numbers, and seventeen imprecise claims. And
+`LoopPhase` was declared twice with the copies already diverged: `"review"` is
+persisted by `--code-review` Loops and was missing from the shared DTO the REST
+list returns verbatim, so the contract could not describe a value already on the
+wire. It now lives in `@seekforge/shared` alone.
+
+The drift gate could not have caught any of this. It passes 9/9, and a verbatim
+sweep of every `seekforge …` line in all fourteen documents found zero errors:
+it catches a renamed command or an undocumented route, not a shipped adapter with
+no selector, a budget enforced by nothing, or two copies of a union that
+disagree. Those are the three shapes that produced every incident here.
+
 ### The surfaces a capability claimed, and the premise that was wrong
 
 **A `wait` node could not be woken without starting a server.** Graph's durable

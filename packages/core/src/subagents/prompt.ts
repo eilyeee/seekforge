@@ -25,7 +25,8 @@ export function buildSubagentPrompt(def: AgentDefinition, workspace: string): st
   if (def.mode === "ask") {
     parts.push(
       "Mode: ASK (read-only). Investigate and answer within your specialty. " +
-        "Write and command tools are disabled; never attempt writes or commands.",
+        "Write tools and mutating commands are disabled; never attempt them. " +
+        "Read-only git/gh queries still run, so use them to read history.",
     );
   } else if (def.mode === "edit") {
     parts.push(

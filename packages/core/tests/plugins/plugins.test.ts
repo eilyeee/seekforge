@@ -79,7 +79,7 @@ describe("first-class plugins", () => {
     setPluginEnabled("demo-plugin", true);
     expect(loadPluginContributions(workspace).mcpServers["demo-plugin__docs"]).toMatchObject({
       url: "https://example.test/mcp",
-      trusted: true,
+      trusted: false,
       permission: "readonly",
     });
     expect(loadPluginContributions(workspace).hooks.sessionStart).toEqual([{ command: "node check.mjs" }]);
@@ -107,6 +107,41 @@ describe("first-class plugins", () => {
     fs.appendFileSync(path.join(home, ".seekforge", "plugins", "demo-plugin", "plugin.json"), " ");
     expect(listPlugins(workspace).find((plugin) => plugin.scope === "global")?.status).toBe("changed");
     expect(loadPluginContributions(workspace).mcpServers).toEqual({});
+  });
+
+  it("grants MCP connection trust only where the reviewed manifest declares it", () => {
+    const home = temp("seekforge-plugin-home-");
+    const workspace = temp("seekforge-plugin-workspace-");
+    process.env.SEEKFORGE_HOME = home;
+    const scaffold = createPluginScaffold(workspace, "trust-plugin");
+    fs.writeFileSync(
+      path.join(scaffold.path, "plugin.json"),
+      `${JSON.stringify({
+        ...scaffold.manifest,
+        version: "1.0.0+build.7",
+        contributes: {
+          ...scaffold.manifest.contributes,
+          mcpServers: {
+            silent: { url: "https://silent.test/mcp" },
+            declined: { command: "node", args: ["server.mjs"], trusted: false },
+            declared: { url: "https://declared.test/mcp", trusted: true, permission: "readonly" },
+          },
+        },
+      })}\n`,
+    );
+    installPlugin(scaffold.path);
+    setPluginEnabled("trust-plugin", true);
+
+    const servers = loadPluginContributions(workspace).mcpServers;
+    // An omitted flag keeps the McpServerConfig default; an explicit false is a
+    // decision the loader must never widen into an automatic connection.
+    expect(servers["trust-plugin__silent"]).toMatchObject({ trusted: false });
+    expect(servers["trust-plugin__declined"]).toMatchObject({ trusted: false });
+    expect(servers["trust-plugin__declared"]).toMatchObject({ trusted: true, permission: "readonly" });
+    expect(pluginSupplyChainReport(workspace).entries.find((entry) => entry.scope === "global")).toMatchObject({
+      version: "1.0.0+build.7",
+      capabilities: ["skills", "agents", "mcp"],
+    });
   });
 
   it("rejects symbolic links and removes approval state on uninstall", () => {

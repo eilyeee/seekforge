@@ -36,8 +36,28 @@ function sessionToken(toolName: string, cls: ClassifiedCall): string {
   return toolName;
 }
 
+/**
+ * Whether an allow-for-session answer may cover LATER calls of this kind.
+ *
+ * L3 `env` may not. "Always confirm" is what the level means (PermissionName in
+ * @seekforge/shared, docs/security-model.md §1) and what the env tools promise
+ * individually: web_fetch/web_search show the raw URL, browser_navigate the raw
+ * URL, a browser interaction the raw selector and page. The session token for
+ * all of them is the BARE TOOL NAME — it carries no URL, no origin, no selector
+ * — so remembering one answer would auto-approve every later navigation to any
+ * host and every later click on any element, in a mode whose whole contract is
+ * that these are the calls a human still sees. One keypress must not buy that.
+ *
+ * A user-written `allow` rule can still cover an env tool, deliberately and
+ * with a `match` the user chose (e.g. a docs domain); it is checked before this.
+ */
+function sessionGrantable(cls: ClassifiedCall): boolean {
+  return PERMISSION_LEVEL[cls.permission] < PERMISSION_LEVEL.env;
+}
+
 /** True when a prior allow-for-session entry covers this call. */
 function sessionAllowed(toolName: string, cls: ClassifiedCall, ctx: ToolContext): boolean {
+  if (!sessionGrantable(cls)) return false;
   const list = ctx.policy.sessionAllowlist;
   if (!list || list.length === 0) return false;
   const token = sessionToken(toolName, cls);
@@ -107,6 +127,9 @@ async function confirmWithUser(toolName: string, cls: ClassifiedCall, ctx: ToolC
     // The rule the frontend may offer to persist — computed here so what it
     // shows and what gets written are the same object, never a paraphrase.
     ...(durable !== undefined ? { rememberRule: durable } : {}),
+    // Same reasoning as rememberRule: the frontend must not offer a grant this
+    // layer will refuse to remember.
+    ...(sessionGrantable(cls) ? {} : { sessionGrantable: false }),
   });
   // Normalize the boolean | { allow, remember } | { allow, selectedHunks }
   // contract. A bare boolean is treated exactly as before.
@@ -125,7 +148,7 @@ async function confirmWithUser(toolName: string, cls: ClassifiedCall, ctx: ToolC
         // Ignored on purpose — the session grant below still applies.
       }
     }
-    if (remember === "session" || remember === "always") {
+    if ((remember === "session" || remember === "always") && sessionGrantable(cls)) {
       // Grow the run's in-memory session allowlist in place so the next
       // matching call auto-allows. Mutating the array the caller shares
       // across the session's calls is the whole point of the channel.
@@ -290,7 +313,8 @@ export async function enforcePermission(
 
   // Allow-for-session: a prior "yes, don't ask again" covers this call. Scanned
   // after deny/dangerous/allow-rules (which stay authoritative) but before any
-  // fresh prompt, for write/execute/env alike.
+  // fresh prompt — for write/execute only; see sessionGrantable for why L3 env
+  // is confirmed every time whatever the user answered before.
   if (sessionAllowed(toolName, cls, ctx)) {
     return { allowed: true, decision: "session_allowlist" };
   }

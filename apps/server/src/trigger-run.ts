@@ -3,10 +3,11 @@
  *
  * Reuses the server's existing agent factory (createAgent → buildAgentDeps),
  * exactly like a WS-driven run, but with NO human in the loop:
- *   - the permission callback auto-DENIES anything that would prompt, and the
- *     run uses approvalMode "acceptEdits" so in-workspace edits still apply
- *     while command execution, env changes and dangerous calls (which are never
- *     auto-allowed) are refused — a triggered run can never hang on a prompt;
+ *   - the permission callback auto-DENIES anything that would prompt, and an
+ *     `edit` trigger uses approvalMode "acceptEdits" so in-workspace edits still
+ *     apply while command execution, env changes and dangerous calls (which are
+ *     never auto-allowed) are refused — a triggered run can never hang on a
+ *     prompt. An `ask` trigger stays on "confirm", i.e. denies everything;
  *   - ask_user questions are auto-declined for the same reason;
  *   - cumulative spend is watched and the run is aborted the moment it reaches
  *     the trigger's maxCostUsd (the same budget guard the auto-loop uses).
@@ -97,7 +98,12 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
         projectPath: input.workspace,
         task,
         mode: input.mode,
-        approvalMode: "acceptEdits",
+        // Only an `edit` trigger needs edits to apply without a human. An `ask`
+        // trigger gets no widening at all: with confirm auto-denying, "confirm"
+        // refuses everything that would prompt. (Read-only mode exposes no edit
+        // tools either way — this keeps the granted authority and the documented
+        // guarantee identical instead of relying on that second line of defence.)
+        approvalMode: input.mode === "edit" ? "acceptEdits" : "confirm",
         signal: controller.signal,
       })) {
         if (event.type === "session.created") sessionId = event.sessionId;

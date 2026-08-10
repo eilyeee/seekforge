@@ -13,9 +13,19 @@ valid credentials, the server starts a **headless, cost-bounded** agent run of
 the trigger's task and returns the new session id.
 
 Every triggered run is a **normal, auditable session** — it writes the same
-JSONL trace as an interactive run, so it shows up in `seekforge sessions`, can
-be replayed with `seekforge replay <id>`, reviewed with `seekforge audit <id>`,
-and undone with `seekforge rewind <id>`.
+JSONL trace as an interactive run, so it can be replayed with `seekforge replay
+<id>`, reviewed with `seekforge audit <id>`, and undone with `seekforge rewind
+<id>`.
+
+Where that trace lives depends on isolation. An `ask` trigger (and any trigger
+pinned to `isolation: "workspace"`) writes into the workspace, so it appears in
+`seekforge sessions` there. An `edit` trigger normally runs in its own git
+worktree (see guardrail 4 below) and **writes its session trace inside that
+worktree** — `seekforge sessions` run from the base repository will not list it.
+The run ledger stays in the base workspace either way: `GET /api/runs` (or
+`.seekforge/runs.jsonl`) gives you the `runId`, the `sessionId`, and the
+`worktreeId`/`worktreeBranch` labels; `cd` into that worktree to run
+`seekforge sessions` / `audit` / `replay` against the trace.
 
 ## Safety first
 
@@ -27,10 +37,15 @@ triggered run is locked down four ways:
    the exact request body with that trigger secret and sends
    `X-Hub-Signature-256`; it does not need to invent custom GitHub headers or
    expose the server bearer token. Secret comparisons are constant-time.
-2. **A cost budget is mandatory.** Every trigger requires `maxCostUsd`. The run
-   aborts gracefully the moment cumulative spend reaches the budget (the trace
-   is kept). A trigger with no budget is **rejected at creation** — there is no
-   way to register an unbounded trigger.
+2. **Every run is bounded — by cost where possible, by tokens always.** Every
+   trigger requires `maxCostUsd`; one without it is **rejected at creation**.
+   The run aborts gracefully the moment cumulative spend reaches the budget (the
+   trace is kept). But that budget is a no-op on a provider with no price table:
+   costs are reported as 0, so it can never be reached. The guarantee that holds
+   regardless of pricing is a hard ceiling of **8,000,000 cumulative tokens**
+   (prompt + completion) per triggered run, after which the run is aborted the
+   same graceful way. Set `modelPricing` in config if you want the dollar figure
+   you asked for to be the binding one.
 3. **The run is headless.** A triggered run uses the same engine as an
    interactive run, but in a machine (non-interactive) mode: the agent's
    approval callback **auto-denies** anything that would normally prompt.
@@ -38,7 +53,8 @@ triggered run is locked down four ways:
    are refused (there is no human to approve them, and a triggered run must
    never hang waiting for input). An `edit` trigger runs in *acceptEdits* so
    ordinary in-workspace file edits apply autonomously; everything riskier is
-   still refused.
+   still refused. An `ask` trigger is not widened at all — it is read-only and
+   every confirmation is denied.
 4. **Writable runs are isolated.** An `edit` trigger defaults to
    `isolation: "auto"`: in a git repository SeekForge creates a dedicated
    worktree/branch and records its id in the run labels for later review and
@@ -80,7 +96,7 @@ only authentication exception.
 | Method + path | Purpose |
 | --- | --- |
 | `GET /api/triggers` | List triggers (secrets masked). |
-| `POST /api/triggers` | Create a trigger (rejects missing `maxCostUsd`/`secret`). Returns `201`. |
+| `POST /api/triggers` | Create a trigger (rejects missing `maxCostUsd`/`secret` with `400`; an id that already exists with `409`). Returns `201`. |
 | `DELETE /api/triggers/:id` | Remove a trigger. |
 | `POST /api/triggers/:id` | **Fire** the trigger — start a headless run. Returns `202`. |
 
@@ -109,22 +125,41 @@ workspace, trigger, and delivery ID for 24 hours; a duplicate returns `409`.
 The persisted claim is protected by a cross-process workspace lease, so two
 Server instances sharing one workspace cannot both accept the same delivery.
 
+The delivery store also has a hard cap of **10,000 remembered deliveries per
+workspace**; past it the soonest-to-expire entries are dropped first. Under
+sustained high webhook volume a delivery id can therefore be forgotten before
+its 24 hours are up, and a redelivery of it would fire the run again. Dedup is
+a duplicate-suppression best effort, not a transactional exactly-once promise.
+
 An optional JSON request body (e.g. a GitHub webhook payload) is distilled into
 a short summary — action, repo, ref, PR/issue number + title, sender, head
-commit — and appended to the task so the run has context. The body is bounded;
-unknown shapes contribute only their top-level key names (no values).
+commit — and appended to the task so the run has context. The request body is
+capped at 25 MiB (GitHub's own webhook limit); a larger one is rejected with
+`413`. The summary appended to the task is bounded far more tightly, and unknown
+shapes contribute only their top-level key names (no values).
 
-On success the server answers `202 Accepted` with the new session id and returns
-immediately; the run continues in the background:
+On success the server answers `202 Accepted` with the new run id and session id
+and returns immediately; the run continues in the background:
 
 ```json
-{ "sessionId": "20260703-...-ab12", "triggerId": "ci-review" }
+{ "runId": "run-lz4k9x-3f8a1c2b5d6e", "sessionId": "20260703-...-ab12", "triggerId": "ci-review" }
 ```
+
+`runId` is the key that locates this run in the ledger (`GET /api/runs/:id`,
+`.seekforge/runs.jsonl`) — including its final status, cost, and the isolation
+labels you need to find the trace of a worktree-isolated run.
 
 Responses: `202` fired · `400` malformed body or invalid GitHub event metadata ·
 `401` bad/missing server token for a generic request · `403` bad trigger secret
 or GitHub signature · `404` unknown trigger · `409` trigger disabled or duplicate
-GitHub delivery.
+GitHub delivery · `413` request body over 25 MiB · `500` the run could not be
+started (a claimed GitHub delivery id is released again so a redelivery can
+retry).
+
+Note that a request carrying GitHub-shaped headers (`X-Hub-Signature-256` or
+`X-GitHub-Delivery`) never gets `404`: an unknown trigger id answers `403`, the
+same as a bad signature, so an unauthenticated caller cannot probe which trigger
+ids exist.
 
 ## Pointing a GitHub / CI webhook at it
 
@@ -154,6 +189,14 @@ GitHub delivery.
      --data-binary @event.json
    ```
 
+   **Do not send GitHub's headers on a generic call.** As soon as a request
+   carries `X-Hub-Signature-256` *or* `X-GitHub-Delivery`, it is treated as a
+   native GitHub delivery and must carry a valid `X-Hub-Signature-256` over the
+   exact body — a correct bearer token and trigger secret will not rescue it,
+   and the answer is `403`. This bites relay/proxy setups that forward
+   `X-GitHub-Delivery` while re-signing or dropping the signature: forward
+   **both** headers unchanged, or **neither**.
+
 ## Exposing to the internet
 
 The server binds `127.0.0.1` only, so a trigger is not directly reachable from
@@ -161,7 +204,8 @@ the public internet by design. To receive real GitHub/CI webhooks, front it with
 a reverse proxy or tunnel you control. Forward GitHub's signature, delivery,
 event, and content-type headers without rewriting the body; HMAC verification
 depends on the exact bytes. Generic callers must also forward the bearer and
-trigger-secret headers. The per-trigger secret means a leaked URL alone cannot
-fire a run or access management endpoints. Rotate a secret by
-`DELETE`-ing and re-creating the trigger (or editing `triggers.json` and
-restarting).
+trigger-secret headers — and must not have GitHub's signature or delivery header
+added to their requests, which would put them on the signature-only path. The
+per-trigger secret means a leaked URL alone cannot fire a run or access
+management endpoints. Rotate a secret by `DELETE`-ing and re-creating the
+trigger (or editing `triggers.json` and restarting).

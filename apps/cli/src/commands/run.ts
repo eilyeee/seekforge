@@ -98,6 +98,14 @@ export type RunOptions = {
    */
   maxDurationSeconds?: number;
   /**
+   * Per-run ceiling on cumulative tokens (prompt + completion). Independent of
+   * cost, so an UNATTENDED run stays bounded on a provider with no price table
+   * (where costUsd is always 0 and `maxCostUsd` can never trip). Set by the
+   * headless callers that have no human watching — `schedule run` — not by a
+   * user-facing flag; off when unset/non-positive.
+   */
+  maxTotalTokens?: number;
+  /**
    * Suppress the final result envelope on stdout even in a machine format.
    * The scheduler uses `outputFormat: "json"` only to force confirm-auto-deny
    * (headless ticks must never block on a prompt) — it does NOT want the
@@ -271,6 +279,22 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
     if (!isCostBudgetExceeded(costUsd, costBudgetUsd)) return;
     costBudgetReached = true;
     console.error(t("render.costBudgetReached", { budget: (costBudgetUsd as number).toFixed(4) }));
+    controller.abort();
+  };
+
+  // Token ceiling — the backstop for the case above. When no price is known the
+  // cost budget can never be reached, so an unattended run (a scheduled tick)
+  // would have no bound at all. Tokens are reported by every provider, priced
+  // or not. SOFT/reactive like the cost budget: we abort on the first usage
+  // event at/over the ceiling, so the in-flight turn can overshoot by one call.
+  const tokenCeiling = opts.maxTotalTokens;
+  let tokenCeilingReached = false;
+  const enforceTokenCeiling = (promptTokens: number, completionTokens: number): void => {
+    if (tokenCeiling === undefined || tokenCeiling <= 0) return;
+    if (tokenCeilingReached || controller.signal.aborted) return;
+    if (promptTokens + completionTokens < tokenCeiling) return;
+    tokenCeilingReached = true;
+    console.error(t("render.tokenCeilingReached", { ceiling: String(tokenCeiling) }));
     controller.abort();
   };
 
@@ -452,11 +476,15 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
       if (event.type === "session.created") sessionId = event.sessionId;
       // Prefer aborting mid-run on a usage event; session.completed.report.usage
       // is the backstop when usage is only reported at the end.
-      if (event.type === "usage.updated") enforceCostBudget(event.usage.costUsd);
+      if (event.type === "usage.updated") {
+        enforceCostBudget(event.usage.costUsd);
+        enforceTokenCeiling(event.usage.promptTokens, event.usage.completionTokens);
+      }
       if (event.type === "session.completed") {
         completed = true;
         finalReport = event.report;
         enforceCostBudget(event.report.usage.costUsd);
+        enforceTokenCeiling(event.report.usage.promptTokens, event.report.usage.completionTokens);
       }
       if (event.type === "session.failed") {
         outcome = outcomeFromErrorCode(event.error.code, event.error.message);

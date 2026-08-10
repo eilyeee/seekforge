@@ -56,6 +56,15 @@ type WorkspaceSession = {
   network: NetworkEntry[];
   /** Teardown in flight for this workspace, so a second caller joins it. */
   closing: Promise<void> | null;
+  /**
+   * Sticky: a cancellation reached this session, so it must never be written
+   * back to the profile — whichever teardown happens to be the one that closes
+   * it. Not a parameter of the teardown call, because the teardown that
+   * eventually runs is often NOT the one that observed the cancel: a sibling
+   * operation (dispatch_team members share a workspace) can keep the session
+   * alive past the abort and hand it to an ordinary lease release afterwards.
+   */
+  cancelled: boolean;
 };
 
 /** The Chromium process. Shared: expensive to launch, and isolating nothing. */
@@ -178,7 +187,16 @@ async function openPage(workspace: string): Promise<PlaywrightPage> {
         await route.abort("blockedbyclient");
       }
     });
-    session = { context, page: null, console: [], errors: [], failedRequests: [], network: [], closing: null };
+    session = {
+      context,
+      page: null,
+      console: [],
+      errors: [],
+      failedRequests: [],
+      network: [],
+      closing: null,
+      cancelled: false,
+    };
     sessions.set(workspace, session);
   }
   if (!session.page) {
@@ -323,6 +341,11 @@ export async function runBrowserOperation<T>(
   // promise is already rejected by abortablePromise either way. Cancellation
   // also does not persist the session — see closeSession.
   const offAbort = onAbortOnce(signal, () => {
+    // Mark before deciding who closes: a sibling that is still running keeps
+    // the session open, and its ordinary teardown must not save what this
+    // cancellation just interrupted.
+    const session = liveSession(workspace);
+    if (session) session.cancelled = true;
     if (leave() <= 0) void closeSession(workspace, false);
   });
   try {
@@ -337,6 +360,15 @@ export async function runBrowserOperation<T>(
 /**
  * Force-close every workspace's session and the browser, invalidating all
  * leases. Normal agent-run cleanup releases its BrowserLease instead.
+ *
+ * Never persists. This is the abrupt path — the SIGINT/SIGTERM/beforeExit hook
+ * below, and any host that hard-stops the browser — and an abrupt stop is not a
+ * finished run: writing the live context back here is exactly the "Ctrl+C
+ * replaced my working login with a half-finished one" the profile contract
+ * promises will not happen. A run that ended normally has already released its
+ * lease (which does persist), so by the time this runs there is nothing left to
+ * write; a teardown already in flight is joined, not skipped, so its write
+ * still completes.
  */
 export async function disposeBrowser(): Promise<void> {
   leases.clear();
@@ -346,7 +378,7 @@ export async function disposeBrowser(): Promise<void> {
   // bound is a backstop against a pathological open/close loop keeping this
   // spinning; disposal is teardown, not a place to hang.
   for (let pass = 0; pass < 10 && sessions.size > 0; pass++) {
-    await Promise.all([...sessions.keys()].map((workspace) => closeSession(workspace)));
+    await Promise.all([...sessions.keys()].map((workspace) => closeSession(workspace, false)));
   }
   await closeBrowserProcess();
 }
@@ -355,11 +387,19 @@ export async function disposeBrowser(): Promise<void> {
  * Close one workspace's context.
  *
  * `persist` decides whether its session is written to the configured profile.
+ * It is explicit at every call site rather than defaulted, because the default
+ * that used to be here was "save", and every teardown that is NOT a finished
+ * run — process signal, forced dispose, cancellation — inherited it silently.
  * A cancelled run passes false, and that is a deliberate answer to a question
  * with two defensible sides: stopping mid-flow — halfway through a login
  * redirect, just after a cookie rotated — would otherwise overwrite a good
  * saved login with a broken one. Cancel means "forget what I was doing", so the
  * last successfully finished run stays the one on disk.
+ *
+ * A session the cancellation already touched refuses to persist regardless of
+ * what this caller asks: `session.cancelled` outlives the call that observed
+ * the abort (see WorkspaceSession), so a sibling operation cannot hand a
+ * cancelled session to an ordinary release and have it saved.
  *
  * A teardown already in flight is returned rather than started again: it nulls
  * its state synchronously and then awaits — a CDP round trip for the session
@@ -367,17 +407,18 @@ export async function disposeBrowser(): Promise<void> {
  * otherwise see nothing to do and report "released" while the profile write was
  * still going.
  */
-function closeSession(workspace: string, persist = true): Promise<void> {
+function closeSession(workspace: string, persist: boolean): Promise<void> {
   const session = sessions.get(workspace);
   if (!session) return Promise.resolve();
   if (session.closing) return session.closing;
   const { context } = session;
   const profile = storageStatePathFor(workspace);
+  const save = persist && !session.cancelled;
   session.closing = (async () => {
     // While the context still exists. A failure must not become a tool error —
     // teardown runs on the cancellation path too — but it must not be silent
     // either, or the next run would start logged out with no explanation.
-    if (persist && profile !== null) {
+    if (save && profile !== null) {
       try {
         writeBrowserProfile(await context.storageState(), profile);
       } catch (error) {
@@ -422,8 +463,18 @@ async function closeBrowserProcess(): Promise<void> {
 }
 
 export type BrowserLease = {
-  /** Release this run's ownership. The final active release closes the browser. */
-  release(): Promise<void>;
+  /**
+   * Release this run's ownership. The final active release closes the browser.
+   *
+   * `persist` defaults to true — a run reaching its own cleanup is the "run
+   * finished" event the profile contract is written against. A caller that
+   * knows the run was CANCELLED (its own signal aborted before cleanup, not by
+   * cleanup) must say so with `{ persist: false }`: the browser session cannot
+   * infer it, because a run's controller is aborted by its cleanup on the
+   * success path too, so by the time release() is called the signal looks
+   * identical either way.
+   */
+  release(options?: { persist?: boolean }): Promise<void>;
 };
 
 /**
@@ -441,13 +492,20 @@ export function acquireBrowserLease(workspace: string): BrowserLease {
   held.add(token);
   let released = false;
   return {
-    async release(): Promise<void> {
+    async release(options?: { persist?: boolean }): Promise<void> {
       if (released) return;
       released = true;
+      // Before the "am I the last one out" test: a cancelled run that is not
+      // the last lease holder still forbids the save, and the release that
+      // does close the session may be a sibling's.
+      if (options?.persist === false) {
+        const session = liveSession(workspace);
+        if (session) session.cancelled = true;
+      }
       const own = leases.get(workspace);
       if (!own?.delete(token) || own.size > 0) return;
       leases.delete(workspace);
-      await closeSession(workspace);
+      await closeSession(workspace, options?.persist ?? true);
       await closeBrowserProcess();
     },
   };

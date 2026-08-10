@@ -129,6 +129,10 @@ lsp_diagnostics({ path: "src/widget.ts" })            # 确认仍能编译
   （及 `codeAction/resolve`）、`textDocument/formatting`、
   `textDocument/rename`、`workspace/symbol`，以及服务器推送的
   `textDocument/publishDiagnostics` 通知（在打开/修改文件后短暂等待）。
+  两个层级工具分两步发出：先 `textDocument/prepareCallHierarchy`，再
+  `callHierarchy/incomingCalls` 或 `callHierarchy/outgoingCalls`；先
+  `textDocument/prepareTypeHierarchy`，再 `typeHierarchy/supertypes` 或
+  `typeHierarchy/subtypes`——若该位置准备不出任何条目，返回空结果而非报错。
   位置在边界处从我们的 1-based `line` 转换为 LSP 的 0-based 行/列。
 - **应用重命名。** `tools/lsp/workspace-edit.ts` 会归一化 WorkspaceEdit 的两种
   形态（`changes` 与 `documentChanges`），把 LSP 位置换算成字符串偏移

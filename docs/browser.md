@@ -29,7 +29,7 @@ nothing. Until it's installed, every browser tool returns a single actionable
 error:
 
 ```
-browser tools need Playwright: pnpm add -w playwright-core && npx playwright install chromium
+browser tools need Playwright: pnpm add -w playwright-core && npx playwright install chromium (or point SEEKFORGE_PLAYWRIGHT at an existing playwright-core installation)
 ```
 
 Playwright is loaded via a **dynamic import inside the tool**, never at the top
@@ -88,7 +88,11 @@ password.
 `browser_navigate` is the only tool that takes an outward action, so it is
 classified at the **`env`** level — exactly like `web_fetch`/`web_search`. It is
 **always confirmed**, even in auto-approval mode, and the raw URL is shown to
-the user verbatim.
+the user verbatim. "Yes, don't ask again this session" does not apply to it:
+a remembered session approval is keyed by tool name alone, so one keypress would
+otherwise become a standing grant for every later URL. `env` calls are always
+re-confirmed. A hand-written `allow` rule in your own config still works — that
+one names what it grants.
 
 Browser verification has one narrow exception to the normal `web_fetch` SSRF
 policy: after that explicit confirmation it may open a loopback development
@@ -117,7 +121,8 @@ decides what a click can actually do:
 - **Any other page** → `env`, confirmed on **every** call even in auto mode, with
   the selector and the page shown verbatim. A click on someone else's site can
   post, purchase or delete; one approval of the navigation is not an approval of
-  everything done afterwards.
+  everything done afterwards, and "don't ask again" cannot buy one either — the
+  remembered token would carry neither the page nor the selector.
 
 `browser_wait_for` only observes, so it stays `readonly` wherever the page came
 from.
@@ -170,10 +175,17 @@ my work login". They then share the file, so the run that finishes LAST writes
 it back: if one logged in while the other was open, the later teardown replaces
 that session. Give them different names to keep their logins apart.
 
-The profile is written when a run **finishes**. Cancelling a run (Ctrl+C, stop)
-closes the browser without saving: stopping halfway through a login redirect, or
-just after a cookie rotated, would otherwise replace a working session with a
-broken one. The last run that finished stays the one on disk.
+The profile is written when a run **finishes**. A cancelled run never overwrites
+it — Ctrl+C, SIGTERM, a stop key in a UI that keeps the process alive, and a
+cancellation that lands while a browser call is still running all close the
+browser without saving. Stopping halfway through a login redirect, or just after
+a cookie rotated, would otherwise replace a working session with a broken one, so
+the last run that finished stays the one on disk.
+
+The run carries its cancellation intent into teardown rather than inferring it:
+the loop's own cleanup aborts the run signal, so by release time a finished run
+and a cancelled one look identical, and reading the signal there would be a
+timing heuristic deciding whether to overwrite a credential.
 
 Sessions are per workspace: one Chromium process serves everything, but each
 workspace gets its own browser context — separate cookies, separate pages — so

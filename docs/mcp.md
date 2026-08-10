@@ -152,9 +152,15 @@ The config merge order (later wins) is:
 settings file  >  project .seekforge/config.json  >  global ~/.seekforge/config.json
 ```
 
-Per-server configs are shallow-merged by key: later layers override earlier
-ones. A repository entry that shadows a global entry remains untrusted; trust
-is never inherited across that boundary. For the full layering model see
+The merge is per **server name**, not per key inside a server entry: a higher
+layer that defines `myserver` **replaces** the whole entry, it does not merge
+field by field. A project layer that only wants to change `args` therefore also
+drops the global layer's `permission` and `toolPermissions` hardening for that
+server, which then falls back to the annotation-derived default. Redefine a
+server in a higher layer only with the complete entry you intend to run.
+
+A repository entry that shadows a global entry remains untrusted; trust is
+never inherited across that boundary. For the full layering model see
 [cli-reference.md](cli-reference.md#settings-layering).
 
 ### 1.4 Tool Naming
@@ -173,6 +179,22 @@ Examples:
 | `filesystem`  | `read_file`  | `mcp__filesystem__read_file`  |
 | `filesystem`  | `write_file` | `mcp__filesystem__write_file` |
 | `web-search`  | `search`     | `mcp__web-search__search`     |
+
+That simple form is used only when it is unambiguous and legal as a tool name:
+at most 64 characters, matching `^[A-Za-z0-9_-]+$`, and with neither the server
+name nor the tool name containing `__` (which would make the three-part split
+ambiguous). Anything else — a long name, a name with a space, a dot or a
+slash, a server called `a__b` — falls back to a sanitized, collision-resistant
+form: each segment is reduced to `[A-Za-z0-9_-]`, truncated (server to 15
+characters, tool to 25) and followed by the first 10 hex characters of
+`sha256(server, tool)`:
+
+```text
+mcp__<safe-server>__<safe-tool>__<10-hex-digest>
+```
+
+The digest is derived from the original names, so the mapping is stable across
+runs and two tools that sanitize to the same text still get distinct names.
 
 The `inputSchema` from the server's `tools/list` response is passed through to
 the model as `parametersOverride` so the model sees the real parameter schema.
@@ -222,18 +244,33 @@ gets JSON-RPC `-32601`, not a hang.
 
 | Capability | Method | Wired when | What happens |
 | --- | --- | --- | --- |
-| `sampling` | `sampling/createMessage` | the frontend has a confirm channel and a model is configured | The server's prompt is shown to you verbatim (capped) and, once you approve, run against your own model. |
+| `sampling` | `sampling/createMessage` | the frontend has a confirm channel | The server's prompt is shown to you verbatim (capped) and, once you approve, run against your own model. |
 | `elicitation` | `elicitation/create` | the frontend has an ask-the-user channel | The server's question is put to you, and your answer is returned. |
+
+Whether a model is configured is a separate question, answered when a request
+actually arrives rather than at capability time. The CLI and the TUI build the
+sampling provider from the run's own configuration and skip the capability
+entirely when there is no API key; `seekforge serve` resolves the provider
+lazily (the MCP clients exist before the agent deps that own it) and so always
+advertises sampling, answering `mcp_sampling_unavailable` if no model turns out
+to be configured.
 
 **Sampling spends your tokens on a prompt you did not write**, so it is confirmed
 on **every** call — there is no approval-mode bypass, only whatever your
 frontend's confirm does (a headless `-y` run therefore approves it, exactly as
 `-y` approves everything else). The prompt names the server, the model, and the
-text being sent. What the call cost is written to stderr as
-`[mcp:<server>] sampling used <n> tokens ($x.xxxx)` **and** folded into the
-session's own total, so it appears in `usage.updated`, in the session record,
-and in whatever the frontend shows you — the same place as every other token
-you paid for.
+text being sent. What the call cost is folded into the session's own total, so
+it appears in `usage.updated`, in the session record, and in whatever the
+frontend shows you — the same place as every other token you paid for. Every
+shipped frontend does this. An embedder that supplies no usage sink instead
+gets the fallback, one line per call on stderr:
+
+```text
+[mcp:<server>] sampling used <n> tokens ($x.xxxx)
+```
+
+The two are alternatives, not both: a frontend that accounts for the usage does
+not also print it.
 
 The sampling provider is built from the same configuration as the agent's but is
 a separate instance, so a server's model calls stay out of the agent's retry bus
@@ -348,6 +385,27 @@ or with `--allow-write`:
 seekforge mcp-serve: FULL ACCESS (trusted callers only) on /path/to/workspace
 ```
 
+#### Configuration
+
+`mcp-serve` reads `.seekforge/config.json` the same way every other command
+does, and applies it to the tool calls the MCP client makes:
+
+| Key | Effect on `mcp-serve` |
+|---|---|
+| `permissionRules` | Applied. A deny rule blocks at every level, including a read-only call, and never prompts. In full mode an allow rule pre-authorizes a tool, `env` tools included. |
+| `hooks` | Applied. `preToolUse` runs before every tool call and a non-zero exit blocks it; `updatedInput` rewrites are re-validated and re-permission-checked as usual. |
+| `sandbox` | Applied to `run_command` / `run_tests` in full mode. An unavailable sandbox mechanism fails the command rather than running it unsandboxed. |
+| `commandAllowlist` | Applied, though it changes nothing here: full mode already auto-approves `execute`, and read-only mode forbids it. |
+| `visionModel`, `webSearch`, `browserProfile` | Configured, but by default nothing here reaches them: `image_analyze`, `web_search`, `web_fetch` and `browser_navigate` all classify as `env` and are refused. They take effect only if one of your `permissionRules` allows that tool. |
+| `mcpServers`, `runtimeBin`, model/provider keys | **Not** applied. This process runs no agent: it neither talks to a model nor connects to other MCP servers, so it has nothing to spend them on. |
+
+Only the layers a repository cannot write reach this transport: project and
+local configs contribute deny rules (and untrusted `mcpServers` definitions,
+unused here), while `hooks`, `sandbox` and `commandAllowlist` come from your
+user-owned config. Plugin hooks are deliberately not merged — the default here
+is a read-only tool set, and a repository-supplied hook command would turn it
+back into arbitrary command execution.
+
 ### 2.2 Protocol
 
 The server speaks protocol version `2025-06-18`. Server info:
@@ -399,8 +457,9 @@ In read-only mode **8 tools** are exposed, all classifying as `L0 readonly`:
 | `git_blame`     | readonly         |
 | `git_show`      | readonly         |
 
-The `ToolContext` runs in `"ask"` approval mode and the `confirm` callback
-**always denies** — three independent layers prevent writes.
+The `ToolContext` runs with `mode: "ask"` (which forbids everything above L0
+outright) and `approvalMode: "confirm"` over a `confirm` callback that **always
+denies** — three independent layers prevent writes.
 
 Trying to call any other tool (e.g. `write_file`) returns a JSON-RPC error:
 
@@ -413,12 +472,23 @@ Trying to call any other tool (e.g. `write_file`) returns a JSON-RPC error:
 When `--allow-write` is passed, every built-in tool except `ask_user` is
 exposed. `ask_user` is excluded because MCP has no interactive human channel.
 
-The `confirm` callback **auto-allows** permission levels:
+The `ToolContext` runs with `mode: "edit"` and `approvalMode: "auto"`:
 
 - `L1 (write)` — auto-allowed
 - `L2 (execute)` — auto-allowed
 - `L3 (env)` — always denied (web fetches, dependency installs and similar
-  always require a real human)
+  always require a real human), unless one of your own `permissionRules`
+  allows that exact tool
+- `L4 (dangerous)` — never run, never askable, in either mode
+
+The `confirm` callback still **always denies**, in both modes. Auto-approval
+lives in `approvalMode`, where it is scoped to the levels above; `confirm` is
+then reached only by questions that genuinely need a human, and there is none.
+The one that matters is the retry a command is offered when it fails inside the
+OS sandbox: an auto-allowing `confirm` would answer "yes, run it unsandboxed"
+to any command whose failure output merely resembles a denial, which would make
+a configured `sandbox` decorative. Here that offer is declined and the sandboxed
+failure stands.
 
 > **Security:** Full mode gives the MCP client a shell in the workspace.
 > Connect it only to callers you trust with arbitrary command execution.
@@ -434,10 +504,16 @@ The `confirm` callback **auto-allows** permission levels:
 | `mcp_config`       | Missing or invalid configuration              |
 | `mcp_crashed`      | Server process exited unexpectedly            |
 | `mcp_timeout`      | No response within the idle timeout (30s), or past the 10-minute total |
+| `mcp_cancelled`    | The caller's AbortSignal fired before the request completed |
 | `mcp_error`        | Server returned a JSON-RPC error              |
 | `mcp_tool_error`   | Tool call returned `isError: true`            |
 | `mcp_http_error`   | HTTP transport: unreachable or non-200        |
 | `mcp_parse_error`  | Unparseable response body                     |
+| `mcp_auth_error`   | OAuth: invalid metadata/endpoint, no PKCE S256, mismatched issuer or state, or a token response without an access token |
+| `mcp_pagination_limit` | A paginated list exceeded 100 pages or 10,000 items |
+| `mcp_pagination_loop`  | A paginated list repeated a cursor it had already returned |
+| `mcp_sampling_denied`      | The user declined the server's `sampling/createMessage` request |
+| `mcp_sampling_unavailable` | The server asked to sample but this session has no model |
 | `mcp_write_failed` | Could not write to stdin (stdio)              |
 | `disposed`         | Client disposed before request completed      |
 | `unknown_server`   | Server name not in the connected set          |
@@ -446,8 +522,12 @@ The `confirm` callback **auto-allows** permission levels:
 
 | Code   | Meaning                              |
 |---|---|
-| -32601 | Method not found (e.g. prompts/list) |
-| -32602 | Invalid params (bad tool name, tool not exposed) |
+| -32600 | Invalid request (a second `initialize`) |
+| -32601 | Method not found — a method outside the table in §2.2 |
+| -32602 | Invalid params (bad tool name, tool not exposed, unknown resource or prompt) |
+| -32603 | Internal error — a handler threw where a tool failure would normally be reported as `isError` |
+| -32700 | Parse error — a frame above the 1 MiB message limit |
+| -32002 | A request arrived before `initialize` / `notifications/initialized` completed |
 
 ---
 
@@ -499,5 +579,10 @@ server that ignores the token behaves exactly as it did before.
 
 A heartbeat that can extend a deadline needs its own ceiling, or a server holds
 the call open for as long as it likes — hence the total, which no amount of
-progress extends past. Both are configurable per client
-(`requestTimeoutMs`, `maxRequestTotalMs`).
+progress extends past.
+
+Both are `createMcpClient` options (`requestTimeoutMs`, `maxRequestTotalMs`) —
+an **embedder** seam, not configuration. They are not fields of
+`McpServerConfig`, and `loadMcpToolSpecs` does not forward them, so a server
+entry in `.seekforge/config.json` cannot change its own timeouts and every
+configured server runs on the defaults above.

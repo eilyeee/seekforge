@@ -140,6 +140,31 @@ describe("headless run ceilings", () => {
   });
 });
 
+describe("headless run approval mode", () => {
+  it("widens to acceptEdits only for an edit trigger", async () => {
+    const modes: string[] = [];
+    const createAgent = fakeAgentFactory(async function* (_opts, input) {
+      modes.push(String(input.approvalMode));
+      yield { type: "session.created", sessionId: `s-${input.mode}` };
+      yield { type: "session.completed", report: emptyReport() };
+    });
+    for (const mode of ["ask", "edit"] as const) {
+      const handle = startManagedTriggerRun({
+        createAgent,
+        workspace: makeWorkspace(),
+        task: "t",
+        mode,
+        maxCostUsd: 1,
+      });
+      await handle.started;
+      await handle.completion;
+    }
+    // An `ask` trigger gets no widening at all: "confirm" plus the auto-denying
+    // confirm callback refuses everything that would prompt.
+    expect(modes).toEqual(["confirm", "acceptEdits"]);
+  });
+});
+
 describe("trigger registry paths", () => {
   it("rejects a symlinked project registry for reads and writes", () => {
     const ws = makeWorkspace();

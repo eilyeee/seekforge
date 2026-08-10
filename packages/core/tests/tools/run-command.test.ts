@@ -669,6 +669,10 @@ describe("run_command sandbox escalation", () => {
     expect(prompts[0]!.permission).toBe("execute");
     expect(prompts[0]!.description).toBe("Command failed inside the sandbox — retry WITHOUT sandbox?");
     expect(prompts[0]!.command).toBe("mkdir /etc/x");
+    // Otherwise indistinguishable from an ordinary execute approval, which is
+    // how a host with an auto-answering confirm would undo the sandbox without
+    // anyone deciding to. mcp-serve refuses on exactly this flag.
+    expect(prompts[0]!.escalation).toBe(true);
 
     expect(calls).toHaveLength(2);
     expect(calls[0]!.options.sandbox).toBe("workspace-write");

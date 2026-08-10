@@ -13,7 +13,7 @@ feedback. Existing local `seekforge/issue-<n>` branches are reused when they are
 not checked out elsewhere. `--wait-ci` can perform one bounded CI repair pass.
 
 ```
-seekforge resolve <issue-number-or-url> --max-cost <n> [--base <branch>] [--model <m>] [--no-draft] [--no-worktree] [--wait-ci] [--dry-run]
+seekforge resolve <issue-number-or-url> --max-cost <n> [--base <branch>] [--model <m>] [--no-draft] [--no-worktree] [--wait-ci] [--dry-run] [-y]
 ```
 
 ## The moat: the agent fixes, the command pushes
@@ -24,6 +24,24 @@ The agent only edits files during the headless fix run; it never pushes and
 never opens a PR. SeekForge's push-approval gate is therefore fully intact: an
 autonomous agent still cannot get code onto your remote without an explicit human
 command.
+
+## What "headless" means here
+
+The fix run is genuinely unattended — it can never stop and ask you something:
+
+- **Every approval that would prompt is auto-denied.** The run uses a machine
+  output format for exactly the reason `schedule run` does, so anything outside
+  `acceptEdits` (shell execution, environment changes, denied-by-policy calls)
+  is refused rather than escalated to a human. A guardrail that only holds
+  because somebody is watching the terminal is not a guardrail.
+- **Only file edits apply autonomously** (`acceptEdits`), inside the work branch.
+- **Per-step agent output is not streamed.** You get resolve's own progress lines
+  (worktree, verify, PR URL), not a live tool-by-tool render.
+- **Folder consent still applies.** SeekForge must be authorized for the
+  directory it edits. An already-authorized repository carries that consent into
+  the temporary worktree it creates for this run; a checkout that has never been
+  authorized (a fresh CI clone) must pass `-y`, because a headless run has no
+  prompt to fall back on and fails fast instead.
 
 ## Flow
 
@@ -48,11 +66,14 @@ command.
 5. **Commit + push + open the PR** (the command does this directly):
    `git add -A` → `git commit -m "Resolve #<n>: <title>"` →
    `git push -u origin seekforge/issue-<n>` →
-   `gh pr create --draft --base <base> --head <branch> --title "…" --body "Resolves #<n> …"`.
+   `gh pr create --base <base> --head <branch> --title "…" --body "Resolves #<n> …" --draft`
+   (`--draft` is appended last, and omitted with `--no-draft`).
 6. **Print the PR URL.** With `--wait-ci`, a failed check triggers at most one
    repair: the newest failed Actions run's failed-step logs are capped at 20,000
    characters, fenced as untrusted data, fed to the agent, verified, committed,
    pushed, and checked once more.
+7. **Copy the session trace back into the repository** before the temporary
+   worktree is deleted, so the run stays auditable (see below).
 
 If the agent made no changes, `resolve` stops before committing (nothing to PR).
 
@@ -66,7 +87,8 @@ If the agent made no changes, `resolve` stops before committing (nothing to PR).
 | `--no-draft` | Open a ready-for-review PR instead of a draft (draft is the default). |
 | `--dry-run` | Do steps 1–4 (fetch + branch + fix + verify), then **print** the exact commit/push/PR commands that *would* run — without pushing or opening a PR. |
 | `--no-worktree` | Use the current checkout instead of the default temporary isolated worktree. |
-| `--wait-ci` | Wait for hosted PR checks; on failure, allow one bounded failed-log repair and check once more. |
+| `--wait-ci` | Wait **up to 15 minutes** for hosted PR checks; on failure, allow one bounded failed-log repair and check once more. Hitting the 15-minute limit is reported as a warning, **not** a failure: the PR is already open, so the command still exits successfully and prints the `gh pr checks` command to follow it yourself. |
+| `-y`, `--yes` | Pre-authorize the working directory (folder-access consent). Only needed on a checkout SeekForge has never been authorized for — typically CI. It does **not** widen the run's approvals: the fix run stays `acceptEdits`. |
 
 ## Prerequisites
 
@@ -88,15 +110,39 @@ seekforge resolve https://github.com/owner/repo/issues/42 \
 
 # See what it would do without pushing or opening a PR.
 seekforge resolve 42 --max-cost 1.00 --dry-run
+
+# In CI, on a checkout SeekForge has not been authorized for.
+seekforge resolve 42 --max-cost 1.00 --wait-ci -y
 ```
 
-Each fix is a normal, auditable SeekForge session — inspect it with
-`seekforge sessions` / `seekforge audit`, or undo it with `seekforge rewind`.
+## Auditing a run afterwards
+
+Each fix is a normal SeekForge session. The fix runs *inside* the temporary
+worktree, which is deleted when the run succeeds — so `resolve` copies the
+session trace back into your repository's `.seekforge/sessions/` before removing
+it. `seekforge sessions` and `seekforge audit`, run from the repository,
+therefore show the fix run exactly like any other session, worktree or not.
+
+`seekforge rewind` is the exception: it restores files in the checkout it is run
+*in*. With the default worktree the fix never touched your checkout — it lives on
+the pushed `seekforge/issue-<n>` branch, so you undo it by closing the PR and
+deleting that branch. Under `--no-worktree` the changes *are* in your checkout,
+and `seekforge rewind` undoes them there.
 
 ## Review feedback
 
 `seekforge resolve-review <pr> --max-cost <usd>` checks out an existing PR in an
 isolated worktree, gives its comments and reviews to a bounded headless agent
 run, verifies the changes, then commits and pushes them. It supports
-`--no-worktree`, `--dry-run`, `--wait-ci`, and `--model` with the same safety
-model as `resolve`.
+`--no-worktree`, `--dry-run`, `--wait-ci`, `--model`, and `-y`.
+
+It shares `resolve`'s boundaries — the agent only edits files, the command
+performs the push, the run is cost-bounded, non-interactive, and auditable —
+with two deliberate differences:
+
+- **`--wait-ci` does not repair CI here.** It waits (same 15-minute limit) and
+  reports a check failure; it never starts a second agent run against the failed
+  logs. Re-run `resolve-review` after pushing a fix if you want another pass.
+- **It pushes with a plain `git push`**, to the upstream `gh pr checkout`
+  configured — which for a PR from a fork is *that fork's* branch, not your
+  repository. Check whose PR you are fixing before you run it.

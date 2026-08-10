@@ -8,19 +8,38 @@
  * There is no human on the other end of this transport, so permission
  * prompts cannot exist; the `confirm` channel is replaced by policy:
  *
- * - readOnly (DEFAULT): only the read-only subset (read_file, list_files,
- *   search_text, git_status, git_diff) is advertised or callable, the
- *   ToolContext runs in "ask" mode (everything above L0 is forbidden), and
- *   confirm auto-DENIES — three independent layers against writes.
+ * - readOnly (DEFAULT): only the read-only subset (MCP_READONLY_TOOLS) is
+ *   advertised or callable, the ToolContext runs in "ask" mode (everything
+ *   above L0 is forbidden), and confirm auto-DENIES — three independent
+ *   layers against writes.
  * - readOnly:false (FULL access — trusted callers only): every builtin tool
- *   except ask_user (no interactive channel) is advertised, and confirm
- *   auto-allows L1 (write) and L2 (execute). L3 "env" requests (web tools,
- *   dependency installs) are still auto-DENIED — they always require a real
- *   human. Only wire full mode to callers you would trust with a shell.
+ *   except ask_user (no interactive channel) is advertised, and the policy's
+ *   approvalMode is "auto", which allows L1 (write) and L2 (execute) without
+ *   consulting anybody. L3 "env" requests (web tools, dependency installs)
+ *   still reach confirm and are DENIED — they always require a real human.
+ *   Only wire full mode to callers you would trust with a shell.
+ *
+ * `confirm` therefore always answers NO, in both modes. Auto-approval lives in
+ * approvalMode, where it is scoped to the permission levels this transport is
+ * allowed to grant, and every OTHER question a tool can ask a human is refused
+ * by construction. The one that matters is the unsandboxed retry offered when
+ * a command fails inside the OS sandbox (tools/shell-execution.ts): an
+ * auto-allowing confirm would answer "yes, run it without the sandbox" to any
+ * command whose failure output merely looks like a denial, turning the
+ * configured sandbox into a suggestion.
+ *
+ * Everything ABOVE the approval channel still applies, and the host is
+ * expected to pass it in: `permissionRules` (a deny rule blocks at every
+ * level, including L0), `hooks` (preToolUse can block any call), `sandbox`
+ * (OS-level confinement for run_command) and `commandAllowlist`. Without them
+ * this transport would be the one entry point where a user's hardening
+ * silently does not apply.
  */
 
+import type { PermissionRule } from "@seekforge/shared";
 import type { Readable, Writable } from "node:stream";
-import { createDefaultDispatcher, type ToolContext } from "../tools/index.js";
+import { createDefaultDispatcher, type SandboxLevel, type ToolContext } from "../tools/index.js";
+import type { HookConfig } from "../hooks/index.js";
 import { createBoundedLineReader, MAX_MCP_MESSAGE_BYTES } from "./framing.js";
 import { SEEKFORGE_VERSION } from "../version.js";
 
@@ -64,6 +83,26 @@ export type ServeMcpOptions = {
   /** Defaults to process.stdin / process.stdout. */
   input?: Readable;
   output?: Writable;
+  /**
+   * Fine-grained allow/deny rules from the user's config. Deny rules apply at
+   * every permission level (a readonly call included) and never prompt. Allow
+   * rules cannot widen read-only mode — "ask" mode refuses everything above L0
+   * before rules are consulted, and the exposed set is L0-only anyway — but in
+   * full mode a user's allow rule does pre-authorize an L3 "env" tool, exactly
+   * as it does in every other frontend. That is the user's own prior decision,
+   * and a caller that already has run_command needs no help reaching the
+   * network.
+   */
+  permissionRules?: PermissionRule[];
+  /** Extra command prefixes auto-approved at L2 (config `commandAllowlist`). */
+  commandAllowlist?: string[];
+  /**
+   * User-configured shell hooks. preToolUse runs before every tool call and a
+   * non-zero exit blocks it — the same contract every other frontend has.
+   */
+  hooks?: HookConfig;
+  /** OS-level command sandbox (config `sandbox`); "off"/absent = no wrapper. */
+  sandbox?: SandboxLevel;
 };
 
 export type McpServerHandle = {
@@ -95,16 +134,22 @@ export function serveMcp(opts: ServeMcpOptions): McpServerHandle {
   );
 
   // One long-lived ToolContext for the whole connection. See the trust-model
-  // note above: "ask" mode + auto-deny in readOnly; auto-allow L1/L2 in full.
+  // note above: "ask" mode + auto-deny in readOnly; approvalMode "auto" (L1/L2)
+  // in full mode. readOnly keeps approvalMode "confirm" so that even a call
+  // that somehow got past the exposed-set filter and "ask" mode still has a
+  // refusing approval channel under it.
   const ctx: ToolContext = {
     sessionId: `mcp-${Date.now().toString(36)}`,
     workspace: opts.workspace,
     policy: {
-      approvalMode: "confirm",
+      approvalMode: readOnly ? "confirm" : "auto",
       mode: readOnly ? "ask" : "edit",
-      commandAllowlist: [],
+      commandAllowlist: opts.commandAllowlist ?? [],
+      ...(opts.permissionRules ? { rules: opts.permissionRules } : {}),
     },
-    confirm: async (req) => !readOnly && (req.permission === "write" || req.permission === "execute"),
+    confirm: async () => false,
+    hooks: opts.hooks,
+    sandbox: opts.sandbox,
   };
 
   let closed = false;

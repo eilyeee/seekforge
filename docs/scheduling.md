@@ -15,14 +15,26 @@ undone with `seekforge rewind <id>`.
 
 ## Safety first
 
-A scheduled job runs the agent **autonomously**, with no human watching. Two
+A scheduled job runs the agent **autonomously**, with no human watching. Three
 guardrails make that safe:
 
 1. **A cost budget is mandatory.** Every job requires `--max-cost <usd>`. The run
    aborts gracefully the moment cumulative spend reaches the budget (the trace is
-   kept). A job with no budget is rejected at registration time — there is no way
-   to schedule an unbounded run.
-2. **Every tick is headless.** `schedule run` runs each job through the same
+   kept). A job with no budget is rejected at registration time.
+
+   The budget is only *enforceable* where SeekForge knows the model's price. On a
+   custom provider with no built-in price table and no `modelPricing` in config,
+   every request reports a cost of 0, so the budget can never be reached —
+   `schedule add` warns about exactly this, and the fix is to set `modelPricing`.
+2. **A token ceiling always applies.** Independently of price, every scheduled
+   run stops once its cumulative prompt + completion tokens reach **8,000,000**
+   (the same ceiling [webhook triggers](automation.md) use). This is what keeps
+   the promise on *every* provider: there is no way to schedule a run with no
+   ceiling at all. It is a coarse backstop, not a substitute for a working cost
+   budget — and it bounds one run, not a job's lifetime: a job that keeps failing
+   is bounded per tick, with the consecutive-failure auto-disable below bounding
+   the repetition.
+3. **Every tick is headless.** `schedule run` runs each job through the same
    engine as `seekforge -p`, but in a machine (non-interactive) mode, so the
    agent's approval callback **auto-denies** anything that would normally prompt:
    dangerous commands stay denied, and `execute`/environment actions are refused
@@ -49,7 +61,9 @@ gitignore as you prefer). Each job is:
       "mode": "ask",                  // "ask" (read-only) | "edit" (may modify files)
       "maxCostUsd": 0.50,             // REQUIRED per-run budget (USD); must be > 0
       "enabled": true,
-      "lastRunAt": "2026-07-02T03:00:00.000Z"  // set by `schedule run`; absent until first run
+      "lastRunAt": "2026-07-02T03:00:00.000Z", // set by `schedule run`; absent until first run
+      "failureCount": 0,                       // consecutive failures; written by `schedule run`, cleared on success
+      "nextRetryAt": "2026-07-02T03:01:00.000Z" // backoff floor after a failure; absent while healthy
     }
   ]
 }
@@ -66,7 +80,10 @@ gitignore as you prefer). Each job is:
     most once per matching minute.
 - **`mode`** — `ask` for read-only Q&A/report jobs; `edit` for jobs that may
   change files (edits auto-approved; commands/dangerous actions still denied).
-- **`maxCostUsd`** — required; the run stops once it reaches this.
+- **`maxCostUsd`** — required; the run stops once it reaches this (see the
+  price-table caveat above).
+- **`failureCount` / `nextRetryAt`** — written by `schedule run`, not by you.
+  They carry the retry backoff and the auto-disable counter described below.
 
 ## Commands
 
@@ -113,8 +130,18 @@ seekforge schedule uninstall
 
 Every attempt is appended to `.seekforge/runs.jsonl` with its `runId`, attempt,
 status, session, cost, and error. Failures retry with exponential backoff from
-one minute up to one hour; success clears the failure counter. `--json` is
-available on list/run/next/history/install/uninstall/status.
+one minute up to one hour; success clears the failure counter.
+
+**After 5 consecutive failures a job is auto-disabled** (`enabled` flips to
+`false` in the registry) instead of being retried again — a permanently broken
+job would otherwise spend its budget every hour forever. Nothing is printed at
+disable time, so a job that has quietly stopped running shows up as
+`[disabled]` in `seekforge schedule list` with its `failureCount` intact;
+`.seekforge/runs.jsonl` holds the failures that led there. Re-enabling it with
+`seekforge schedule enable <id>` clears both `failureCount` and `nextRetryAt`,
+so it starts from a clean slate.
+
+`--json` is available on list/run/next/history/install/uninstall/status.
 
 ## Wiring the tick into your OS scheduler
 

@@ -45,6 +45,12 @@ and runs in a fixed order:
    an `allow` rule can never rescue it (`permissions.ts:173`).
 5. **Allow rules**, then the **session allowlist**, then a fresh confirmation
    (`permissions.ts:185`, `:193`, `:197`).
+6. **The session allowlist covers L1/L2 only.** An `env` (L3) approval is never
+   remembered, because the token it would store is a bare tool name and cannot
+   carry what the user actually approved — remembering `browser_click` would
+   grant every later selector, and `web_fetch` every later URL, from one
+   keypress. L3 confirms on every call; only an explicit allow rule, which names
+   its subject, can widen it.
 
 ### Boundary matching (no prefix smuggling)
 

@@ -102,6 +102,7 @@ export const common = {
     "render.costBudgetUnenforceable":
       "warning: cost budget ${budget} cannot be enforced \u2014 no price is known for this model, so cost reports 0 " +
       "and the budget will never be reached; set modelPricing in config",
+    "render.tokenCeilingReached": "\ntoken ceiling {ceiling} reached \u2014 stopping",
     "render.durationBudgetReached": "\ntime budget {budget}s reached after {elapsed}s \u2014 stopping",
     "render.planKept": "plan kept, nothing executed (resume later: seekforge resume {sessionId})",
     "render.shuttingDown": "\nshutting down\u2026",
@@ -200,6 +201,7 @@ export const common = {
     "render.costBudgetReached": "\n已达成本预算 ${budget} — 正在停止",
     "render.costBudgetUnenforceable":
       "警告：成本预算 ${budget} 无法生效 —— 当前模型没有已知价格，成本恒报 0，预算永远不会触发；请在配置中设置 modelPricing",
+    "render.tokenCeilingReached": "\n已达 token 上限 {ceiling} — 正在停止",
     "render.durationBudgetReached": "\n已达时间预算 {budget} 秒（实际用时 {elapsed} 秒）— 正在停止",
     "render.planKept": "计划已保留，未执行（稍后恢复：seekforge resume {sessionId}）",
     "render.shuttingDown": "\n正在关闭…",

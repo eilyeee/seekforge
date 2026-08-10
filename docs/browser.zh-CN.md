@@ -18,7 +18,7 @@ npx playwright install chromium
 我们有意依赖 `playwright-core`（而非 `playwright`）：它在安装时不会下载浏览器，因此 CI 以及从不使用这些工具的用户不付出任何代价。在安装完成之前，每个浏览器工具都会返回同一条可操作的错误信息：
 
 ```
-browser tools need Playwright: pnpm add -w playwright-core && npx playwright install chromium
+browser tools need Playwright: pnpm add -w playwright-core && npx playwright install chromium (or point SEEKFORGE_PLAYWRIGHT at an existing playwright-core installation)
 ```
 
 Playwright 通过**工具内部的动态 import** 加载，绝不在顶层加载，因此无论是否安装，typecheck、构建与测试套件都能通过。
@@ -58,7 +58,7 @@ export SEEKFORGE_PLAYWRIGHT=/path/to/node_modules/playwright-core/index.mjs
 
 ### 安全性
 
-`browser_navigate` 是唯一会发起对外动作的工具，因此被归为 **`env`** 级别——与 `web_fetch`/`web_search` 完全一致。它**总是需要确认**，即使在自动批准模式下也是如此，且原始 URL 会原样展示给用户。
+`browser_navigate` 是唯一会发起对外动作的工具，因此被归为 **`env`** 级别——与 `web_fetch`/`web_search` 完全一致。它**总是需要确认**，即使在自动批准模式下也是如此，且原始 URL 会原样展示给用户。「同意，本次会话不再询问」对它不生效：被记住的会话批准只以工具名为键，一次按键否则就会变成对之后任意 URL 的长期授权，因此 `env` 级调用每次都会重新确认。你自己配置里手写的 `allow` 规则仍然有效——那条规则说明了它到底授权了什么。
 
 浏览器验证对常规 `web_fetch` 的 SSRF 策略有一个狭窄的例外：在获得上述显式确认后，它可以打开 `localhost`、`127.0.0.0/8` 或 `::1` 上的回环开发服务器。其他私有、链路本地及特殊网络目标仍被阻止，包括 RFC-1918 地址、`169.254.169.254`、IPv6 ULA/链路本地地址、IPv4 映射的私有形式，以及非 `http(s)` 协议。该例外仅限于 `browser_navigate`；`web_fetch` 依旧拒绝回环目标。
 
@@ -69,7 +69,7 @@ export SEEKFORGE_PLAYWRIGHT=/path/to/node_modules/playwright-core/index.mjs
 交互类工具的权限**由当前页面指向哪里决定**，因为那才决定一次点击真正能造成什么后果：
 
 - **回环页面**（`localhost`、`127.0.0.0/8`、`::1`）→ `execute`。操作你自己的开发服务器属于日常工作，在 auto 模式下无人值守地执行。
-- **其他任何页面** → `env`，**每次调用**都确认（auto 模式也不例外），并原样展示选择器与页面地址。在别人的站点上点一下可能意味着发帖、下单或删除；批准了打开页面，不等于批准了之后在上面做的每一件事。
+- **其他任何页面** → `env`，**每次调用**都确认（auto 模式也不例外），并原样展示选择器与页面地址。在别人的站点上点一下可能意味着发帖、下单或删除；批准了打开页面，不等于批准了之后在上面做的每一件事；「不再询问」也买不到这种批准——被记住的令牌里既没有页面也没有选择器。
 
 `browser_wait_for` 只是观察，因此无论页面来自哪里都保持 `readonly`。
 
@@ -112,9 +112,15 @@ npx playwright codegen --save-storage ~/.seekforge/browser-profiles/work.json ht
 它们于是共用同一个文件，因此**最后结束**的那次运行写回：如果其中一个在另一个还开着时
 登录了，后结束的那次销毁会把它替换掉。想让两份登录互不干扰，就取不同的名字。
 
-profile 是在一次运行**正常结束**时写入的。取消运行（Ctrl+C、停止）会关闭浏览器但
-不保存：在登录跳转跑到一半、或某个 cookie 刚刚轮换之后停下来，否则就会用一个坏掉的
-会话覆盖掉本来能用的那个。留在磁盘上的，始终是最后一次正常结束的运行。
+profile 是在一次运行**正常结束**时写入的。被取消的运行绝不会覆盖它——终止进程的
+Ctrl+C 与 SIGTERM、不终止进程的界面里按下的停止键，以及任何在某个浏览器调用仍在进行时
+到达的取消，都会关闭浏览器而不保存。否则在登录跳转跑到一半、或某个 cookie 刚刚轮换之后
+停下来，就会用一个坏掉的会话覆盖掉本来能用的那个；留在磁盘上的，始终是最后一次正常结束
+的运行。
+
+取消意图是被显式传递到销毁阶段的，而不是推断出来的：循环自身的清理会 abort 运行信号，
+因此到释放租约时，正常结束与被取消看起来完全一样——在那里读信号，等于用一个时序启发式
+来决定要不要覆盖一份凭据。
 
 会话按工作区隔离：整个进程只有一个 Chromium，但每个工作区有自己的浏览器 context
 ——各自独立的 cookie 与页面——因此 `seekforge serve` 上同时运行的两个工作区，既看不到

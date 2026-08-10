@@ -118,30 +118,29 @@ is the filename without `.md`. Subdirectories namespace with `:` —
 copy wins over the user copy, and a custom command overrides a same-named
 built-in.
 
-The body is the prompt. An optional YAML frontmatter block tunes it:
+The body is the prompt. An optional YAML frontmatter block carries a label:
 
 ```markdown
 ---
 description: Open a PR for the current branch
-argument-hint: <title>
-model: deepseek-reasoner
-allowed-tools: run_command, read_file, write_file
-disable-model-invocation: false
 ---
-Open a pull request titled "$1" for the current branch.
+Open a pull request for the current branch.
 
-Current diff:
-!`git diff --stat`
+Arguments: $ARGUMENTS
 ```
 
-- `description` — palette/roster label (defaults to the first non-empty body line).
-- `argument-hint` — placeholder shown when prompting for arguments.
-- `model` — run this command with a specific model.
-- `allowed-tools` — comma/space-separated tool names the run is restricted to.
-- `disable-model-invocation: true` — hides it from the model's
-  `run_user_command` tool (still usable by you).
+- `description` — palette label (defaults to the first non-empty body line).
+- `$ARGUMENTS` — replaced with whatever you typed after the command name.
 
 The frontmatter is stripped from the sent body.
+
+**The TUI reads only those two.** `argument-hint`, `model`, `allowed-tools`,
+`disable-model-invocation`, positional `$1`..`$9`, and `` !`shell` ``
+interpolation are implemented in Core (`packages/core/src/agent/commands.ts`)
+and reachable from the CLI REPL — `seekforge` with no subcommand — but the TUI
+parses command files with its own reader (`apps/tui/src/custom-commands.ts`),
+which extracts `description:` and expands `$ARGUMENTS` and nothing else. A file
+using the richer form still works here; the extra keys are simply inert.
 
 **Arguments.** `$ARGUMENTS` (every occurrence) is replaced with the full
 argument string; positional `$1`..`$9` take the whitespace-split arguments. If

@@ -150,6 +150,14 @@ export async function executeCommandInWorkspace(
       permission: "execute",
       description: "Command failed inside the sandbox — retry WITHOUT sandbox?",
       command,
+      // This request is otherwise shaped exactly like an ordinary `execute`
+      // approval, so a host whose confirm auto-answers would undo the sandbox
+      // the user separately configured without anyone deciding to. The flag
+      // does not gate anything here — a human answering `-y` interactively is a
+      // legitimate approval, and the documented promise is that the fallback is
+      // never SILENT, not that it never happens — it exists so such a host can
+      // refuse this one case explicitly. `mcp-serve` does.
+      escalation: true,
     });
     if (typeof approved === "boolean" ? approved : approved.allow) {
       return settle(await execute("off"), true);

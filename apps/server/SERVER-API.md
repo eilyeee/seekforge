@@ -250,7 +250,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/triggers | webhook triggers `{id, task, mode, maxCostUsd, secret:"***", enabled}[]` — secrets always masked |
 | POST /api/triggers | body `{id, task, mode:"ask"\|"edit", maxCostUsd, secret, enabled?}` → `201` masked trigger. `maxCostUsd` and `secret` (≥8 chars) are **required**; 400 on missing/invalid, 409 duplicate id |
 | DELETE /api/triggers/:id | `{deleted: true}`; 404 unknown id |
-| POST /api/triggers/:id | **fire** the trigger — start a headless, cost-bounded run → `202 {sessionId, triggerId}`. Generic callers use server bearer token + `x-seekforge-trigger-secret` (or `?secret=`). Native GitHub webhooks may instead authenticate with `X-Hub-Signature-256` over the exact raw body plus `X-GitHub-Delivery` and an allowed `X-GitHub-Event`; this signed route is the only `/api` bearer-token exception. Optional JSON is summarised into the task. 400 malformed/unsupported event metadata, 401 missing server token for generic calls, 403 bad secret/signature, 404 unknown id, 409 disabled/duplicate delivery. |
+| POST /api/triggers/:id | **fire** the trigger — start a headless, cost-bounded run → `202 {runId, sessionId, triggerId}`. Generic callers use server bearer token + `x-seekforge-trigger-secret` (or `?secret=`). Native GitHub webhooks may instead authenticate with `X-Hub-Signature-256` over the exact raw body plus `X-GitHub-Delivery` and an allowed `X-GitHub-Event`; this signed route is the only `/api` bearer-token exception. Optional JSON is summarised into the task. 400 malformed/unsupported event metadata, 401 missing server token for generic calls, 403 bad secret/signature (also an unknown id on a GitHub-shaped request), 404 unknown id, 409 disabled/duplicate delivery, 413 body over 25 MiB, 500 run failed to start (the delivery id is released). |
 
 Errors: `{error: {code, message}}` with appropriate HTTP status.
 
@@ -267,13 +267,20 @@ cost-bounded** agent run of the trigger's task and returns `202` with the new
   `X-Hub-Signature-256`. Signed deliveries require a unique
   `X-GitHub-Delivery`, are deduplicated for 24 hours with a bounded persisted
   store protected by a cross-process lease, and accept only `push`, `pull_request`, `issues`, `issue_comment`, and
-  `workflow_run`. No server bearer token is required for this one fire route;
-  management routes remain bearer-protected.
+  `workflow_run`. Deduplication is best effort, not exactly-once: the store also
+  caps at 10,000 deliveries and evicts the soonest-to-expire first, so under
+  heavy traffic the 24-hour window can close early. No server bearer token is
+  required for this one fire route; management routes remain bearer-protected.
+  A GitHub-shaped request for an unknown trigger id answers **403, not 404**, so
+  the route does not leak which ids exist.
 - **Bounded + headless.** `maxCostUsd` is mandatory (unbounded triggers are
-  rejected at creation) and the run aborts on reaching it. The run is
+  rejected at creation) and the run aborts on reaching it — but on a provider
+  with no price table every request reports 0, so that cap can never trip. The
+  guarantee that always holds is the 8,000,000-token ceiling per run. The run is
   non-interactive: the approval callback auto-denies anything that would prompt
-  (dangerous stays denied, commands/env refused); an `edit` trigger runs in
-  *acceptEdits* so in-workspace edits still apply. Triggers persist to the
+  (dangerous stays denied, commands/env refused). Only an `edit` trigger runs in
+  *acceptEdits*, so in-workspace edits apply; an `ask` trigger stays in
+  *confirm* and is granted nothing extra. Triggers persist to the
   workspace `.seekforge/triggers.json` (owner-only, `0600`).
 
 ## WebSocket (path /ws?token=...)

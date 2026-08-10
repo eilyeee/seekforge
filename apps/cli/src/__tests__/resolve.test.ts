@@ -306,7 +306,7 @@ test("formatCommand prefixes the binary and quotes multi-word args", () => {
 // resolveCommand fails fast (via colors.fail → process.exitCode) before any
 // gh/git/agent work when --max-cost is missing or non-positive. We capture
 // stderr and assert nothing was spawned (no PR-shaped output on stdout).
-import { resolveCommand } from "../commands/resolve.js";
+import { headlessRunOptions, preserveSessionTraces, resolveCommand } from "../commands/resolve.js";
 
 async function expectMaxCostRequired(badCost: unknown): Promise<void> {
   const errs: string[] = [];
@@ -342,4 +342,81 @@ test("resolveCommand fails fast when --max-cost is zero", async () => {
 });
 test("resolveCommand fails fast when --max-cost is negative", async () => {
   await expectMaxCostRequired(-1);
+});
+
+// --- the fix run is genuinely headless --------------------------------------
+// `resolve` is documented as unattended. run.ts turns approvals into an
+// auto-DENY only for a MACHINE output format; with the default "text" format it
+// would call confirmInTerminal and block on a human. These assertions lock the
+// exact option shape that keeps the run non-interactive.
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+test("headlessRunOptions forces a machine format so no approval can prompt", () => {
+  const options = headlessRunOptions({ consent: true, maxCost: 1.5, model: "deepseek-v4-pro" });
+  assert.equal(options.outputFormat, "json"); // machine ⇒ confirm auto-denies
+  assert.equal(options.suppressResult, true); // …without polluting resolve's stdout
+  assert.equal(options.mode, "edit");
+  assert.equal(options.permissionMode, "acceptEdits"); // auto-approves ONLY file edits
+  assert.equal(options.maxCostUsd, 1.5);
+  assert.equal(options.model, "deepseek-v4-pro");
+});
+
+test("headlessRunOptions passes folder consent through without widening approvals", () => {
+  for (const consent of [true, false]) {
+    const options = headlessRunOptions({ consent, maxCost: 1 });
+    assert.equal(options.yes, consent);
+    // -y must never escalate the approval mode here: permissionMode wins.
+    assert.equal(options.permissionMode, "acceptEdits");
+    assert.equal(options.model, undefined);
+  }
+});
+
+// --- the trace survives the temporary worktree ------------------------------
+function tempPair(): { work: string; project: string; cleanup: () => void } {
+  const work = mkdtempSync(join(tmpdir(), "seekforge-resolve-test-work-"));
+  const project = mkdtempSync(join(tmpdir(), "seekforge-resolve-test-repo-"));
+  return { work, project, cleanup: () => rmSync(work, { recursive: true, force: true }) };
+}
+
+function writeTrace(root: string, id: string, content: string): void {
+  const dir = join(root, ".seekforge", "sessions", id);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "meta.json"), content);
+}
+
+test("preserveSessionTraces copies the worktree's sessions into the base repo", () => {
+  const { work, project, cleanup } = tempPair();
+  try {
+    writeTrace(work, "20240101-aaa", '{"id":"20240101-aaa"}');
+    writeTrace(work, "20240101-bbb", '{"id":"20240101-bbb"}');
+    preserveSessionTraces(work, project);
+    rmSync(work, { recursive: true, force: true }); // the worktree is removed next
+    const copied = readdirSync(join(project, ".seekforge", "sessions")).sort();
+    assert.deepEqual(copied, ["20240101-aaa", "20240101-bbb"]);
+  } finally {
+    cleanup();
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("preserveSessionTraces never overwrites an existing session id and tolerates no sessions", () => {
+  const { work, project, cleanup } = tempPair();
+  try {
+    preserveSessionTraces(work, project); // nothing recorded → no-op, no throw
+    writeTrace(work, "20240101-aaa", "from-worktree");
+    writeTrace(project, "20240101-aaa", "from-base-repo");
+    preserveSessionTraces(work, project);
+    const kept = readFileSync(join(project, ".seekforge", "sessions", "20240101-aaa", "meta.json"), "utf8");
+    assert.equal(kept, "from-base-repo");
+    assert.equal(
+      readdirSync(join(project, ".seekforge", "sessions")).length,
+      1,
+      "an existing trace must not be replaced by the worktree copy",
+    );
+  } finally {
+    cleanup();
+    rmSync(project, { recursive: true, force: true });
+  }
 });

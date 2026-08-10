@@ -14,13 +14,13 @@ the SeekForge feature you already know from another tool.
 | Model setting (`--model`, `model:` in config) | `model` config key + `--model`/`-m` flag; `provider` selects the endpoint preset; `modelPricing` supplies per-model costs. |
 | Config file (`.aider.conf.yml`, `.clinerules`, `settings.json`, `config.toml`) | `.seekforge/config.json` (project) + `~/.seekforge/config.json` (global) + `.seekforge/config.local.json` (gitignored). See [Configuration](configuration.md). |
 | API key env var | `DEEPSEEK_API_KEY` (or `ARK_API_KEY` for the Ark provider); also the `apiKey` config key. |
-| Project instructions (`CONVENTIONS.md`, `.clinerules`, `CLAUDE.md`, `AGENTS.md`) | `AGENTS.md` (created by `seekforge init`), plus curated `.seekforge/project.md` memory. |
+| Project instructions (`CONVENTIONS.md`, `.clinerules`, `CLAUDE.md`, `AGENTS.md`) | `AGENTS.md` (created by `seekforge init`), plus curated `.seekforge/memory/project.md` memory. |
 | MCP servers | `mcpServers` config + `seekforge mcp add/list/remove`. See [MCP](mcp.md). |
-| Slash commands / custom commands | Built-in TUI slash commands + custom commands (frontmatter, `$ARGUMENTS`, `` !`shell` ``). See the [TUI README](../apps/tui/README.md#custom-commands). |
+| Slash commands / custom commands | Built-in slash commands + custom commands under `.seekforge/commands/`. `description:` frontmatter and `$ARGUMENTS` work on every surface; `` !`shell` `` interpolation is expanded by the CLI REPL (`seekforge` with no command) and the server, **not** by the TUI. See the [TUI README](../apps/tui/README.md#custom-commands) for the file format. |
 | Subagents / specialist agents | `dispatch_agent` roster — `seekforge agent list/show/import`, definitions under `.seekforge/agents/`. |
 | Skills / reusable procedures | `.seekforge/skills/<id>/SKILL.md` — `seekforge skill create/list/import`. |
 | Session history / transcripts | Session traces under `.seekforge/` — `seekforge sessions`, `resume`, `replay`, `audit`. |
-| Permission / approval modes (auto-approve, plan mode) | Approval modes `confirm` / `acceptEdits` / `auto` / `plan`; `-y`, `--permission-mode`, `--plan`, `permissionRules`. |
+| Permission / approval modes (auto-approve, plan mode) | Approval modes `auto` / `acceptEdits` / `confirm` / `manual`; `-y`, `--permission-mode`, `permissionRules`. Plan mode is not an approval mode — `--plan` (or `--permission-mode plan`) runs read-only under `confirm`. |
 | Cost / token tracking | Built-in for DeepSeek; `modelPricing` + `maxCostUsd` budget for other providers; `seekforge models`, TUI `/usage`. |
 | Headless / scripting mode | `seekforge -p "<prompt>"` with `--output-format json|stream-json`. See [CLI reference](cli-reference.md). |
 

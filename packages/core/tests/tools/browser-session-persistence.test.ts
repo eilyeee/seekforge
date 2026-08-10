@@ -132,6 +132,86 @@ describe("browser session persistence", () => {
     expect(JSON.parse(fs.readFileSync(profile, "utf8")).cookies[0].value).toBe("the good one");
   });
 
+  it("a sibling's ordinary teardown cannot save a session a cancel already touched", async () => {
+    const home = fakeHome();
+    const profile = resolveBrowserProfilePath(home, "work");
+    configureBrowserProfile(profile);
+    fs.mkdirSync(path.dirname(profile), { recursive: true });
+    fs.writeFileSync(profile, JSON.stringify({ cookies: [{ name: "session", value: "the good one" }] }));
+
+    // dispatch_team members share one workspace: the cancelled call is not the
+    // last one out, so it does not close the session — the sibling's normal
+    // finish hands it to an ordinary lease release afterwards.
+    const controller = new AbortController();
+    const lease = acquireBrowserLease(WS);
+    await getPage(WS);
+    let finishSibling: (() => void) | undefined;
+    const sibling = runBrowserOperation(
+      WS,
+      new Promise<void>((resolve) => {
+        finishSibling = resolve;
+      }),
+      undefined,
+      "sibling",
+    );
+    const cancelled = runBrowserOperation(WS, new Promise(() => {}), controller.signal, "navigate").catch(() => {});
+    controller.abort();
+    await cancelled;
+    finishSibling?.();
+    await sibling;
+    await lease.release();
+
+    expect(JSON.parse(fs.readFileSync(profile, "utf8")).cookies[0].value).toBe("the good one");
+  });
+
+  it("a run released as cancelled does not save, even as the last lease", async () => {
+    const home = fakeHome();
+    const profile = resolveBrowserProfilePath(home, "work");
+    configureBrowserProfile(profile);
+    fs.mkdirSync(path.dirname(profile), { recursive: true });
+    fs.writeFileSync(profile, JSON.stringify({ cookies: [{ name: "session", value: "the good one" }] }));
+
+    const lease = acquireBrowserLease(WS);
+    await getPage(WS);
+    await lease.release({ persist: false });
+
+    expect(fake.stateCalls).toBe(0);
+    expect(JSON.parse(fs.readFileSync(profile, "utf8")).cookies[0].value).toBe("the good one");
+  });
+
+  it("a cancelled release forbids the save even when a sibling lease closes the session", async () => {
+    const home = fakeHome();
+    const profile = resolveBrowserProfilePath(home, "work");
+    configureBrowserProfile(profile);
+    fs.mkdirSync(path.dirname(profile), { recursive: true });
+    fs.writeFileSync(profile, JSON.stringify({ cookies: [{ name: "session", value: "the good one" }] }));
+
+    const cancelledRun = acquireBrowserLease(WS);
+    const otherRun = acquireBrowserLease(WS);
+    await getPage(WS);
+    await cancelledRun.release({ persist: false });
+    await otherRun.release();
+
+    expect(JSON.parse(fs.readFileSync(profile, "utf8")).cookies[0].value).toBe("the good one");
+  });
+
+  it("a forced dispose never writes the login back", async () => {
+    const home = fakeHome();
+    const profile = resolveBrowserProfilePath(home, "work");
+    configureBrowserProfile(profile);
+    fs.mkdirSync(path.dirname(profile), { recursive: true });
+    fs.writeFileSync(profile, JSON.stringify({ cookies: [{ name: "session", value: "the good one" }] }));
+
+    // The SIGINT/SIGTERM/beforeExit hook's path: an abrupt stop is not a
+    // finished run, so it must not replace the last good login.
+    acquireBrowserLease(WS);
+    await getPage(WS);
+    await disposeBrowser();
+
+    expect(fake.stateCalls).toBe(0);
+    expect(JSON.parse(fs.readFileSync(profile, "utf8")).cookies[0].value).toBe("the good one");
+  });
+
   it("a second teardown waits for the write already in flight", async () => {
     const home = fakeHome();
     const profile = resolveBrowserProfilePath(home, "work");

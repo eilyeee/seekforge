@@ -182,8 +182,13 @@ client** over the server's stdio:
   (+ `codeAction/resolve`), `textDocument/formatting`,
   `textDocument/rename`, `workspace/symbol`, and the server-pushed
   `textDocument/publishDiagnostics` notification (awaited briefly after
-  opening/changing the file). Positions are converted from our 1-based `line`
-  to LSP's 0-based line/character at the boundary.
+  opening/changing the file). The two hierarchy tools are two-step:
+  `textDocument/prepareCallHierarchy` then `callHierarchy/incomingCalls` or
+  `callHierarchy/outgoingCalls`, and `textDocument/prepareTypeHierarchy` then
+  `typeHierarchy/supertypes` or `typeHierarchy/subtypes` — a position that
+  prepares to no item yields an empty result rather than an error. Positions
+  are converted from our 1-based `line` to LSP's 0-based line/character at the
+  boundary.
 - **Applying a rename.** `tools/lsp/workspace-edit.ts` normalizes both
   WorkspaceEdit shapes (`changes` and `documentChanges`), converts LSP positions
   to string offsets (`character` counts UTF-16 code units, which is exactly a

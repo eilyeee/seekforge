@@ -29,16 +29,21 @@ seekforge security export --format sarif -o reports/security.sarif
 
 该目录以 `0700` 模式创建，JSONL 文件以 `0600` 模式创建。当前的 Finding、扫描、修复与威胁模型视图均由事件重建；旧事件不会被改写。
 
-Finding 的生命周期状态为：
+Finding 的生命周期状态为 `open`、`triaged`、`fixing`、`resolved`、`accepted_risk`、
+`dismissed`、`reopened`。只有下列转换会被接受，其余一律以 `invalid finding transition` 失败：
 
 ```text
-open -> triaged -> fixing -> resolved
-  \         \          \-> accepted_risk
-   \         \----------> dismissed
-    \--------------------> accepted_risk / dismissed
-
-resolved / accepted_risk / dismissed -> reopened
+open          -> triaged | fixing | resolved | accepted_risk | dismissed
+triaged       -> fixing | resolved | accepted_risk | dismissed | reopened
+fixing        -> open | resolved | reopened
+resolved      -> reopened
+accepted_risk -> reopened
+dismissed     -> reopened
+reopened      -> triaged | fixing | resolved | accepted_risk | dismissed
 ```
+
+注意 `fixing` 是刻意收窄的：正在修复中的 Finding 不能直接跳到 `accepted_risk` 或
+`dismissed`，要先退回 `open`。把 Finding 改成它已经处于的状态是空操作，不会报错。
 
 验证状态独立于生命周期：`unverified`、`verified`、`failed` 或 `stale`。把一个 Finding 改为 `resolved` 并不能证明修复有效。若之后的扫描再次检出一个已 resolved 的 Finding，它会被重新打开，且先前的验证会变为 stale。
 
@@ -55,9 +60,15 @@ resolved / accepted_risk / dismissed -> reopened
 
 ## 证据与提示注入防御
 
-仓库内容与工具输出都被视为不可信数据。扫描器输出必须是恰好一个符合 Core schema 的 JSON 对象。未知字段、markdown 包装、格式非法的值、绝对路径或逃逸路径、不存在的文件、无效的行号范围，以及未在被引用源码行中出现的摘录，都会被拒绝。原始模型响应绝不持久化。
+仓库内容与工具输出都被视为不可信数据。扫描器输出必须是恰好一个符合 Core schema 的 JSON 对象。未知字段、markdown 包装、格式非法的值、绝对路径或逃逸路径、不存在的文件、无效的行号范围，以及未在被引用源码行中出现的摘录，都会被拒绝。原始模型响应绝不会进入安全事件日志：写入
+`.seekforge/security/events.jsonl` 的只有经过校验与清洗的 Finding 字段。
 
-存储的文本与命令输出有长度限制，常见的 secret 格式会被打码。证据路径为仓库相对路径，并使用与 Core 工具相同的、symlink 感知的工作区边界解析。不要仅因为一个 LLM Finding 通过了结构校验就认定它成立；需要人工分诊其可达性与影响。
+这是一个有范围的保证，不是全局保证。扫描本身是一次普通的 Agent 会话，因此它的最终消息
+——那段原始 JSON，逐字——会被记录进该会话在 `.seekforge/sessions/<id>/` 下的追踪文件
+（`events.jsonl` 与 `messages.jsonl`），既未清洗也未打码。请把扫描会话的追踪目录当作敏感数据；
+如果原始响应不允许留存，请删除它（`seekforge sessions prune`，或直接删除该目录）。
+
+安全日志中存储的文本与命令输出有长度限制，常见的 secret 格式会被打码。证据路径为仓库相对路径，并使用与 Core 工具相同的、symlink 感知的工作区边界解析。不要仅因为一个 LLM Finding 通过了结构校验就认定它成立；需要人工分诊其可达性与影响。
 
 ## 威胁模型
 
