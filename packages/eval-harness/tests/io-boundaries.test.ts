@@ -1,4 +1,14 @@
-import { lstatSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -11,6 +21,7 @@ import {
   MAX_TASK_FILE_BYTES,
   MAX_TREND_REPORT_BYTES,
 } from "../src/limits.js";
+import { repoRoot, resolveBaselinePath } from "../src/paths.js";
 import { hashDataset } from "../src/run-metadata.js";
 import { loadSuiteConfig } from "../src/suite-config.js";
 import { loadTasks, type TaskDef } from "../src/tasks.js";
@@ -71,5 +82,37 @@ describe("eval file boundaries", () => {
     expect(lstatSync(target).isSymbolicLink()).toBe(false);
     expect(readFileSync(outside, "utf8")).toBe("keep");
     expect(readFileSync(target, "utf8")).toContain("<testsuite");
+  });
+});
+
+describe("resolveBaselinePath", () => {
+  it("finds a repo-root-relative baseline from the package cwd", () => {
+    // The documented invocation runs under pnpm --filter, whose cwd is the
+    // package; `--baseline evals/baseline.json` from there used to resolve to a
+    // path that does not exist, and the throw took the finished run's report
+    // with it.
+    const fromPackage = resolveBaselinePath("evals/config.json");
+    expect(fromPackage).toBe(join(repoRoot, "evals/config.json"));
+    expect(existsSync(fromPackage)).toBe(true);
+  });
+
+  it("prefers a path that exists relative to the cwd", () => {
+    const dir = makeFixture();
+    const file = join(dir, "baseline.json");
+    writeFileSync(file, "{}");
+    const cwd = process.cwd();
+    try {
+      process.chdir(dir);
+      // Compared against the real path: chdir into a macOS temp dir reports the
+      // resolved /private/var form, and comparing the two spellings of one
+      // directory is the symlinked-workspace trap this repo has hit before.
+      expect(resolveBaselinePath("baseline.json")).toBe(realpathSync(file));
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
+  it("takes an absolute path as given", () => {
+    expect(resolveBaselinePath("/nowhere/baseline.json")).toBe("/nowhere/baseline.json");
   });
 });

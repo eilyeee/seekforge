@@ -32,7 +32,7 @@ import { createDefaultAgentFactory } from "./agent-factory.js";
 import { loadEvalConfig } from "./config.js";
 import { evaluateGates, type GateResult } from "./gates.js";
 import { writeJunit } from "./junit.js";
-import { fixturesDir, reportsDir, tasksDir } from "./paths.js";
+import { fixturesDir, reportsDir, resolveBaselinePath, tasksDir } from "./paths.js";
 import { compare, regressions, toMarkdown, writeReport } from "./report.js";
 import { createRunMetadata } from "./run-metadata.js";
 import { rankSkills, toSkillRankingMarkdown } from "./skill-ranking.js";
@@ -221,10 +221,21 @@ async function main(): Promise<void> {
   console.log(`\n${toMarkdown(results)}`);
   let regressed: string[] = [];
   let baselineJson: string | undefined;
+  // A run that reached here has already spent real money and real minutes, and
+  // its report is the only durable record of it. An unreadable --baseline used
+  // to throw right here, which threw the whole run away over an optional
+  // comparison; it is now held and raised after the report is on disk.
+  let baselineError: unknown;
   if (args.baseline !== undefined) {
-    baselineJson = readTextFileBounded(args.baseline, MAX_BASELINE_BYTES);
-    console.log(`\nComparison vs baseline:\n${compare(results, baselineJson)}`);
-    regressed = regressions(results, baselineJson);
+    try {
+      baselineJson = readTextFileBounded(resolveBaselinePath(args.baseline), MAX_BASELINE_BYTES);
+    } catch (err) {
+      baselineError = err;
+    }
+    if (baselineJson !== undefined) {
+      console.log(`\nComparison vs baseline:\n${compare(results, baselineJson)}`);
+      regressed = regressions(results, baselineJson);
+    }
   }
   if (args.skillRanking) {
     console.log(`\n${toSkillRankingMarkdown(rankSkills(results))}`);
@@ -256,6 +267,15 @@ async function main(): Promise<void> {
   if (args.junit !== undefined) writeJunit(results, args.junit, `SeekForge ${args.suite ?? "eval"}`);
   console.log(`\nReport written:\n  ${markdownPath}\n  ${jsonPath}\n  ${trends.markdownPath}\n  ${trends.jsonPath}`);
   if (args.junit !== undefined) console.log(`  ${args.junit}`);
+  if (baselineError !== undefined) {
+    console.error(
+      `\n✗ --baseline ${args.baseline} could not be read: ${
+        baselineError instanceof Error ? baselineError.message : String(baselineError)
+      }\n  The run above completed and its report is written; only the comparison was skipped.`,
+    );
+    process.exitCode = 1;
+    return;
+  }
 
   // --fail-on-regression: the gate fails ONLY on a pass→fail vs the baseline
   // (a known-red/flaky task stays non-blocking). Without it, any absolute

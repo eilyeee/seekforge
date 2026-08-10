@@ -94,10 +94,37 @@ samples, negative values, and non-finite numeric values are rejected.
 ## baseline.json
 
 `baseline.json` records **real run results** (checks + execution metrics), so it
-is only updated from an actual eval run, never by hand. A baseline may lag the
-55-task dataset; newly added tasks do not count as pass→fail regressions. Copy a
-reviewed, representative report over `baseline.json` only when intentionally
-refreshing the comparison point.
+is only updated from an actual eval run, never by hand. Newly added tasks do not
+count as pass→fail regressions. Copy a reviewed, representative report over
+`baseline.json` only when intentionally refreshing the comparison point.
+
+**Current baseline: 2026-08-08, all 63 tasks at three samples** — 187/189
+(98.9%), $0.551 total, $0.00295 per success, 96,875 tokens per success, 1.5%
+tool failures, 0 session errors, deepseek-v4-flash. `foreach-await-bug` passed
+1/3; everything else passed 3/3.
+
+> The recorded `gitSha` is `58aed14`, the commit the run's tree was based on —
+> it carried the uncommitted change that was in flight at the time. The
+> `datasetHash` is exact. The next scheduled CI run records one whose sha is
+> unambiguous.
+
+**Sample it three times.** Recorded at ONE sample the previous day, the same
+suite reported 60/63 with `foreach-await-bug`, `go-pagination-window` and
+`memory-convention-recall` failing. At three, the last two pass 3/3: they were
+noise, and a single-sample baseline had frozen them as failures — which would
+have made a later run that passed them look like an improvement, and set
+`maxSuccessRateDrop` against an inflated failure count. Only
+`foreach-await-bug` is a real weakness, and its 1/3 says so with a number.
+
+The baseline before that was recorded 2026-07-01 against 49 tasks and carried
+**no token metrics at all** — so `maxTokensPerSuccess` had only ever been
+checked against its absolute ceiling, and that ceiling (100,000) was written
+before the 14 long-running tasks added since (`loop-*`, `hard-*`,
+`large-context-nav`). Measured since: 106,435 and 118,742 at one sample, 96,875
+at three. The ceiling is **150,000** — headroom over the spread a single-sample
+run produces, not a target. The gate that catches drift from here on is
+`maxTokensPerSuccessIncreaseRatio` against this baseline, which for the first
+time has tokens to compare against.
 
 ## Prompt A/B variants
 
@@ -112,6 +139,11 @@ Built-in variants:
 - `terse-prompt` — appends a brevity/no-narration instruction to the task.
 - `llm-compaction` — flips full-context compaction to LLM summarization.
 - `no-memory` — disables project-memory injection (pair with a memory-seeded task).
+- `with-subagents` — gives the agent the builtin specialist subagents. The
+  harness withholds them by default, and always has: `dispatch_agent` is in the
+  catalog but has nothing to dispatch, so the specialists a real coding run uses
+  were not merely unmeasured, they were unreachable here. Control keeps the old
+  behavior so recorded comparisons stay valid; this variant is what prices them.
 - `verify-gate` — sets `verifyCommand=npm test` so edits are verified before finishing.
 - `no-auto-verify` — `verify-gate` but with `autoVerify=false` (nudge-only); A/B vs
   `verify-gate` to isolate the value of the loop auto-running the command.

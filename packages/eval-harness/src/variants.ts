@@ -72,6 +72,15 @@ export type AgentBuildOptions = {
   guardNoProgress?: boolean;
   /** Skill selection/injection (default true). */
   injectSkills?: boolean;
+  /**
+   * Give the agent the specialist subagents a real run dispatches
+   * (AgentCoreDeps.subagents). Default OFF here, which is what the harness has
+   * always done: `dispatch_agent` exists but has nothing to dispatch, so the
+   * specialists shipped for coding runs were not merely unmeasured — they were
+   * unreachable. Off remains the baseline so recorded comparisons stay valid;
+   * the with-subagents variant is what measures them.
+   */
+  subagents?: boolean;
 };
 
 export type Variant = {
@@ -113,6 +122,13 @@ export const VARIANTS: Variant[] = [
     name: "no-memory",
     describe: "Disables project-memory injection — pair with a memory-seeded task to measure memory's value.",
     apply: (base) => ({ ...base, injectMemory: false }),
+  },
+  {
+    name: "with-subagents",
+    describe:
+      "Give the agent the builtin specialist subagents, which the harness otherwise withholds — " +
+      "A/B vs control answers whether dispatching a specialist pays for the turns it costs.",
+    apply: (base) => ({ ...base, subagents: true }),
   },
   {
     name: "no-skills",

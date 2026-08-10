@@ -43,7 +43,16 @@ export type CreatedAgent = {
   deps?: AgentCoreDeps;
   dispose?: () => void;
 };
-export type CreateAgentFn = () => CreatedAgent | Promise<CreatedAgent>;
+/**
+ * Builds the agent for one task run, in the throwaway workspace the fixture was
+ * copied into.
+ *
+ * The workspace is a parameter because a factory may need to read from it — the
+ * subagent definitions a real run loads live under `.seekforge/agents`, and
+ * reading them from anywhere else would let the SeekForge repository's own
+ * agents leak into an eval. Existing zero-argument fakes still satisfy this.
+ */
+export type CreateAgentFn = (workspace: string) => CreatedAgent | Promise<CreatedAgent>;
 
 export type RunTaskOptions = {
   createAgent: CreateAgentFn;
@@ -818,7 +827,7 @@ export async function runTask(task: TaskDef, opts: RunTaskOptions): Promise<Task
     };
     let error: string | undefined;
     try {
-      created = await opts.createAgent();
+      created = await opts.createAgent(dir);
       const outcome =
         runner === "loop"
           ? await runLoopTaskMode(task, created, dir, opts.taskSuffix, opts, metrics)

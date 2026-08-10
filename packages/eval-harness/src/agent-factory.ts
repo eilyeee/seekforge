@@ -6,14 +6,20 @@
  * (e.g. compaction strategy) per run — see variants.ts.
  */
 
-import { buildProvider, createAgentCore, createDefaultDispatcher, type AgentCoreDeps } from "@seekforge/core";
+import {
+  buildProvider,
+  createAgentCore,
+  createDefaultDispatcher,
+  loadAgentDefinitions,
+  type AgentCoreDeps,
+} from "@seekforge/core";
 import { apiKeyEnvVar } from "@seekforge/shared/provider-env";
 import type { EvalConfig } from "./config.js";
 import type { CreateAgentFn } from "./task-runner.js";
 import type { AgentBuildOptions } from "./variants.js";
 
 export function createDefaultAgentFactory(config: EvalConfig, options: AgentBuildOptions = {}): CreateAgentFn {
-  return () => {
+  return (workspace: string) => {
     // A provider variant runs against a different vendor entirely, so it brings
     // its own key and must NOT inherit a baseUrl written for the configured
     // one. Without the override this is exactly the configured provider.
@@ -59,6 +65,10 @@ export function createDefaultAgentFactory(config: EvalConfig, options: AgentBuil
       ...(options.finalizeReview ? { finalizeReview: true } : {}),
       ...(options.guardNoProgress ? { guardNoProgress: true } : {}),
       ...(options.injectSkills === false ? { injectSkills: false } : {}),
+      // Read from the fixture's own workspace, never the repository this runs
+      // in: a fixture has no `.seekforge/agents`, so this is exactly the
+      // builtin specialists and nothing of SeekForge's own.
+      ...(options.subagents ? { subagents: loadAgentDefinitions(workspace) } : {}),
       ...(options.planModel ? { planModel: options.planModel } : {}),
       // Same key/endpoint, different model — needed for plan/escalation.
       ...(options.planModel ? { providerForModel: (m: string) => buildProvider(providerInput, m) } : {}),

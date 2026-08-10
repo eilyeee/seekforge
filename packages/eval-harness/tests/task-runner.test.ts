@@ -226,8 +226,8 @@ describe("runTask", () => {
     const createBaseAgent = fakeAgent(() => completedEvents());
     const result = await runTask(makeTask(), {
       fixturesDir: fx.fixturesDir,
-      createAgent: async () => ({
-        ...(await createBaseAgent()),
+      createAgent: async (workspace) => ({
+        ...(await createBaseAgent(workspace)),
         dispose: () => {
           throw new Error("runtime dispose failed");
         },
