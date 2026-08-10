@@ -144,14 +144,27 @@ test("every CLI subcommand appears in both languages of documentation", () => {
   }
 });
 
-/** Config keys declared by the CLI's CliConfig type. */
+/**
+ * Config keys every surface declares. This used to read `CliConfig` alone, so a
+ * key that only the server or the TUI honors was unguarded — `runRetentionMaxCount`,
+ * `accent`, `bell`, `vim` and friends were live, effective, and documented nowhere.
+ */
 function configKeys() {
-  const source = read("apps", "cli", "src", "config.ts");
-  const body = source.slice(source.indexOf("export type CliConfig = {"));
-  const end = body.indexOf("\n};");
-  assert.ok(end > 0, "could not find the end of CliConfig");
+  const sources = [
+    [["apps", "cli", "src", "config.ts"], "export type CliConfig = {"],
+    [["apps", "tui", "src", "config.ts"], "export type TuiConfig = {"],
+    [["apps", "server", "src", "config.ts"], "export type ServerConfig = {"],
+  ];
   const keys = new Set();
-  for (const match of body.slice(0, end).matchAll(/^ {2}([a-zA-Z][a-zA-Z0-9]*)\??:/gm)) keys.add(match[1]);
+  for (const [parts, marker] of sources) {
+    const source = read(...parts);
+    const at = source.indexOf(marker);
+    assert.ok(at >= 0, `could not find ${marker}`);
+    const body = source.slice(at);
+    const end = body.indexOf("\n};");
+    assert.ok(end > 0, `could not find the end of ${marker}`);
+    for (const match of body.slice(0, end).matchAll(/^ {2}([a-zA-Z][a-zA-Z0-9]*)\??:/gm)) keys.add(match[1]);
+  }
   return keys;
 }
 
@@ -163,12 +176,8 @@ test("every config key is documented in both configuration guides", () => {
     ["docs/configuration.zh-CN.md", "Chinese configuration guide"],
   ]) {
     const source = read(file);
-    for (const key of keys) {
-      assert.ok(
-        source.includes(`\`${key}\``),
-        `${label} never mentions the \`${key}\` config key — an undocumented key is an unusable one`,
-      );
-    }
+    const missing = [...keys].filter((key) => !source.includes(`\`${key}\``));
+    assert.deepEqual(missing, [], `${label} never mentions these config keys — an undocumented key is an unusable one`);
   }
 });
 
@@ -206,6 +215,52 @@ test("every REST route path is described in SERVER-API.md", () => {
       })),
       ...[...source.matchAll(/path === "(\/api\/[^"]*)"/g)].map((m) => ({ method: "", path: m[1] })),
     ];
+    // A third style appeared after the two above and was again invisible here:
+    // segment dispatch (`segs[3] === "control"`). Every route in graphs.ts,
+    // loops.ts, orchestration.ts and sessions.ts is written that way, so the
+    // check named "every REST route" was once more exempting most of them.
+    // Literals are scoped to the nearest preceding `segs[1]` guard because a
+    // file can own several bases (skills-agents.ts owns four).
+    const guards = [...source.matchAll(/segs\[1\]\s*(?:===|!==)\s*"([a-z0-9-]+)"/g)];
+    const baseAt = (index) => {
+      let base;
+      for (const guard of guards) {
+        if (guard.index < index) base = guard[1];
+        else break;
+      }
+      return base ?? guards[0]?.[1];
+    };
+    const segmented = new Set();
+    for (const match of source.matchAll(/segs\[([2-9])\]\s*===\s*"([a-z0-9-]+)"/g)) {
+      if (guards.length > 0) segmented.add(`${baseAt(match.index)} ${match[2]}`);
+    }
+    for (const match of source.matchAll(/\[([^\]]*)\]\.includes\(\s*segs\[[2-9]\]/g)) {
+      for (const literal of match[1].matchAll(/"([a-z0-9-]+)"/g)) {
+        if (guards.length > 0) segmented.add(`${baseAt(match.index)} ${literal[1]}`);
+      }
+    }
+    const documentedLines = documented.split("\n");
+    for (const entry of segmented) {
+      const [base, segment] = entry.split(" ");
+      // Do not reconstruct the full path: `/api/graphs/templates/:id/:version/
+      // deprecate` nests deeper than its dispatch index suggests. Require only
+      // that some documented route under this base carries this segment, and
+      // accept the `accept\|reject\|apply` alternation this file writes routes
+      // in — there the segment follows a pipe rather than a slash.
+      const carries = new RegExp(`[/|]${segment}(?![A-Za-z0-9-])`);
+      const covered = documentedLines.some((line, index) => {
+        if (!carries.test(line)) return false;
+        if (line.includes(`/api/${base}`)) return true;
+        // Long bullets continue a route as `.../:id/apply` once the base is
+        // established, so look back a few lines for it rather than demanding
+        // the base be repeated on every line.
+        return (
+          line.includes(".../") &&
+          documentedLines.slice(Math.max(0, index - 6), index).some((prior) => prior.includes(`/api/${base}`))
+        );
+      });
+      if (!covered) missing.push(`${name}: /api/${base} … /${segment}`);
+    }
     for (const route of routes) {
       // Path parameters are named freely in docs (:id vs :sessionId), so compare
       // on the static prefix before the first parameter.

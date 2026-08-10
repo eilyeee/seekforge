@@ -1184,3 +1184,29 @@ tree-sitter 以**可选依赖**的形式发布（`web-tree-sitter` +
 > 功能被稳定使用，但模型对 `find_definition` 的采纳很弱（它往往更偏好
 > `search_text`，后者同样能用）。这些工具是**可用而非强制**的；
 > 尚未确立可测量的效率收益。
+
+### 其它仅 TUI 生效的键
+
+这些键只被 `seekforge-tui` 读取。它们早在本节存在之前就已生效；漂移门禁现在会同时
+读取 `TuiConfig` 与 `ServerConfig`，因此只在某一个面生效的键不会再无文档地交付。
+
+| 键 | 默认值 | 作用 |
+| --- | --- | --- |
+| `accent` | 主题默认 | 强调色，可用任意 Ink 颜色名。`SEEKFORGE_TUI_ACCENT` 优先。 |
+| `bell` | `true` | 权限提示与运行结束时响终端提示音。 |
+| `notify` | `true` | 同样事件下发系统通知（macOS 用 `osascript`，Linux 用 `notify-send`）。把 `notify` 设为 false、`bell` 保持 true，就只保留提示音。 |
+| `vim` | `false` | 启动时进入 vim 模式；运行中用 `/vim` 切换。 |
+| `mouse` | `false` | 捕获鼠标以支持滚轮滚动。默认关闭，因为捕获鼠标会让终端无法选中文本。 |
+| `costBudgetUsd` | 未设置 | 观测到的累计成本达到该值时停止该标签页的运行。 |
+| `llmCache` | `false` | 把内容相同的非流式 provider 调用缓存到 `~/.seekforge/llm-cache`。面向评估与大量子代理的场景，不适合日常会话。 |
+| `routing` | 未设置 | 兼容用的对象，内含 `routing.planModel`，是 `planModel` 的旧写法；两者同时存在时以扁平的 `planModel` 为准。 |
+
+### 服务端运行保留策略
+
+仅 `seekforge serve` 读取，作用于持久化运行台账。`docs/cli-reference.zh-CN.md`
+中 `--loop-auto-prune` 的描述用的就是这两个数字。
+
+| 键 | 默认值 | 作用 |
+| --- | --- | --- |
+| `runRetentionMaxCount` | `500` | 台账中保留的终态运行条数。非终态运行始终保留。 |
+| `runRetentionMaxAgeDays` | 未设置 | 终态运行的可选年龄上限。省略则只按数量保留。 |

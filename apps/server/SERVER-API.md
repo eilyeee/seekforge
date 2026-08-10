@@ -119,6 +119,8 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/loops/:id/history?after=N&limit=N | up to 1000 retained lifecycle log entries after the sequence cursor; 404 when the Loop is absent |
 | GET /api/loops/:id/evidence?compare=:otherId | integrity-digested evidence report, or a bounded comparison with another persisted Loop |
 | GET /api/loops/:id/health | budget-burn forecast, affordable iterations, exact-stage reliability, recovery risk, and findings |
+| GET /api/loops/:id/diagnose | compare the checkpoint against the newest retained history window without mutating it |
+| POST /api/loops/:id/control | enqueue durable `pause`/`resume`/`steer` for a live Loop owned by any process; applied at the next safe iteration boundary |
 | POST /api/loops/recover | body `{limit?:1..100}`; mark orphaned active records `interrupted` and return them |
 | POST /api/loops/prune | body `{maxAgeDays?,maxTerminalCount?,dryRun?}`; prune only retention-eligible terminal records |
 | POST /api/loops/:id/priority | body `{priority:-10..10}`; update recovery order under the Loop lifecycle guard |
@@ -130,6 +132,11 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/graphs | bounded Engineering Graph summaries with cumulative active `elapsedMs` (definitions/node outputs omitted, latest events only) |
 | GET /api/graph-scheduling-intelligence?graphId=:id | bounded output-free, definition-fingerprinted node scheduling history and anomaly findings |
 | POST /api/graphs/validate | validate a definition/template with optional `parameters` and return its normalized recursive dry-run plan |
+| POST /api/graphs/simulate | side-effect-free resource, budget, and duration simulation; `{retryMode:"baseline"\|"worst_case"}` |
+| GET /api/graphs/:id/diagnose | compare the checkpoint against the newest retained lifecycle window without mutating it |
+| GET /api/graphs/:id/explain/:nodeId | why one persisted node can or cannot run right now |
+| POST /api/graphs/:id/migration-apply | commit the journaled child-first, root-last tree migration |
+| POST /api/graphs/:id/expansion-apply | apply validated append-only expansion through the same transaction owner |
 | GET /api/graphs/templates | list exact-version schema-v2 Graph templates registered in this workspace |
 | POST /api/graphs/templates | register or replace one exact `templateId@version` schema-v2 template |
 | GET /api/graphs/templates/:id/:version | resolve one exact registered template |
@@ -157,6 +164,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/loop-speculations/:id | one persisted speculative run |
 | POST /api/loop-speculations/:id/promote | explicitly merge the passing winner |
 | GET /api/workspaces | `[{id, name, path, placeholder?, removable}]` (global; ordered, first is the default; includes registered worktrees `wt-<slug>`) |
+| DELETE /api/workspaces/recent | clear the recent-workspace list without touching registered workspaces |
 | POST /api/worktrees | body `{name?}` → `{id, path, branch}` — create a worktree session (see "Worktrees"); 400 `not_a_git_repo` |
 | GET /api/worktrees | `[{id, branch, path, dirty, ahead}]` — worktrees of the `?ws=` base workspace |
 | POST /api/worktrees/:id/merge | `{merged: true}` \| `{conflict: true, files}` — dirty worktree auto-committed; conflicts abort cleanly |
@@ -173,6 +181,9 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/raw?path=`<workspace-relative>` | streams the raw image bytes with the matching `Content-Type` (png/jpg/jpeg/gif/webp) so the UI can render real `<img>` thumbnails of uploaded images. **Hard-confined**: `path` must resolve to a regular file *inside* the physical `.seekforge/uploads/` directory of the workspace — traversal (`..`), absolute paths, any symlinked path component, and paths outside `.seekforge/uploads/` are refused. This is deliberately NOT a general file-serving endpoint. Cached `immutable` (upload names are unique). Errors: 400 `bad_request` (missing/escaping/outside-uploads path), 415 `unsupported_media_type` (non-image extension), 404 `not_found` (missing/not a file), 413 `too_large` (over 8 MB). Like all `/api/*` routes the token is required; `<img>` tags pass it via `?token=`. |
 | GET /api/sessions/:id | `{meta: SessionMeta, messages: ChatMessage[], events: AgentEvent[]}`; events let Desktop reconstruct persisted subagent state |
 | GET /api/sessions/:id/turns | `[{turn, text, backtrackable}]` — every `role:"user"` message of messages.jsonl in file order, numbered 0..N-1 (the same all-user-messages indexing the core's truncateSessionAtUserTurn / rewindSessionToTurn use). Turn 0 (the original task) has `backtrackable: false`; `[]` when no messages.jsonl exists yet; 404 unknown session |
+| POST /api/sessions/:id/compact | mechanically compact the stored session and return the new message counts |
+| POST /api/sessions/:id/fork | copy the session into a new id so the original stays intact |
+| GET /api/sessions/:id/audit | reviewable report of what the agent did in this stored session |
 | POST /api/sessions/:id/backtrack | body `{turn: integer, files?: boolean}` — truncates the conversation to just before user turn `turn` (truncateSessionAtUserTurn) and, when `files` is true, restores the file checkpoints of turns >= `turn` (rewindSessionToTurn). Returns `{removedMessages, keptMessages, files}` where `files` is `{restored, deleted, skipped}` counts, or `null` when file restore was not requested. 400 when `turn` is 0 or out of range, 404 unknown session |
 | GET /api/todos | `[{index, text, done}]` — checklist lines of `.seekforge/todos.md` (same format contract as the TUI; 1-based indices count checklist lines only) |
 | POST /api/todos | body `{op: "add", text}` \| `{op: "toggle"\|"remove", index}` — atomically mutates `.seekforge/todos.md` without following project symlinks, preserving every non-checklist line (headings/prose) verbatim; returns the updated todo list. 400 bad op/args, 404 index out of range, 409 while the workspace is active |
@@ -210,6 +221,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | POST /api/memory/:id/reject | updated `MemoryCandidate` |
 | GET /api/doctor | environment report — `{nodeVersion, git, runtimeBin: {set, exists}, mcpServerCount, modelCount, workspace}`; `git` is null when git is absent |
 | GET /api/git/status | `{notGit?, branch, files}` — working-tree status with the paths the UI stages/discards by |
+| POST /api/git/stage\|unstage\|discard | body `{paths}` — stage, unstage, or discard the named working-tree paths |
 | POST /api/git/commit | body `{message}` → `{ok, commit}` — commits the staged tree and returns the new HEAD |
 | POST /api/sessions/prune | body `{olderThanDays?, keepLast?, dryRun?}` — removes stored sessions; 409 `session_busy` while a session is running |
 | GET /api/output-styles | `{styles: [{name, kind: "builtin"\|"custom"}]}` — selectable output styles: the in-package built-ins plus every custom `.seekforge/output-styles/*.md` of the workspace |
@@ -219,6 +231,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/config | config with `apiKey` masked (`sk-xxx****`), plus `{model, baseUrl, runtimeBin, commandAllowlist}` and the engine knobs `{sandbox, compaction, thinking, reasoningEffort}` plus resolved `memoryMaintenance` defaults (always present); `mcpServers` is omitted (env values may be secret — see GET /api/mcp) |
 | GET /api/agents | `AgentDefinition[]` without prompt bodies (id, name, scope, mode, model?, tools?, description, triggers, ...) |
 | GET /api/agents/:id | full definition incl. prompt body (404 unknown) |
+| POST /api/agents/import | import a subagent definition from a supplied path into the workspace roster |
 | GET /api/evolution | `EvolutionProposal[]` (pending first, newest first within each group) |
 | POST /api/evolution/:id/accept\|reject\|apply | updated proposal (apply returns `{proposal, changedPath}`); 404 unknown id, 409 on wrong-state transitions and apply failures (e.g. skill_exists) |
 | GET /api/mcp | effective global/project servers with transport, scope, shadowing, and masked env/header/OAuth values; project entries shadow same-name global entries but are always reported untrusted |

@@ -1070,6 +1070,34 @@ shell code. The command receives only a minimal process environment plus the
 documented `SEEKFORGE_*` fields; provider keys and unrelated host variables are
 not inherited.
 
+### Other TUI-only keys
+
+These are read by `seekforge-tui` and by nothing else. They were live and
+effective long before this section existed; the drift gate now reads `TuiConfig`
+and `ServerConfig` as well as `CliConfig`, so a surface-specific key can no
+longer ship undocumented.
+
+| Key | Default | Effect |
+| --- | --- | --- |
+| `accent` | theme default | Accent colour, any Ink colour name. `SEEKFORGE_TUI_ACCENT` overrides it. |
+| `bell` | `true` | Terminal bell on permission prompts and run completion. |
+| `notify` | `true` | OS notification on the same events (macOS `osascript`, Linux `notify-send`). Set `notify` false and `bell` true to keep only the bell. |
+| `vim` | `false` | Start the composer in vim mode; `/vim` toggles at runtime. |
+| `mouse` | `false` | Capture the mouse for wheel scrolling. Off by default because capturing it stops the terminal from selecting text. |
+| `costBudgetUsd` | unset | Stop the tab's run once observed cumulative cost reaches this. |
+| `llmCache` | `false` | Cache identical non-streaming provider calls on disk under `~/.seekforge/llm-cache`. Intended for evals and subagent-heavy work, not normal sessions. |
+| `routing` | unset | Back-compatible object holding `routing.planModel`, an older spelling of `planModel`; the flat `planModel` key wins when both are set. |
+
+### Server run-retention keys
+
+Read by `seekforge serve` only, and applied to the persistent run ledger.
+`docs/cli-reference.md` describes `--loop-auto-prune` in terms of these numbers.
+
+| Key | Default | Effect |
+| --- | --- | --- |
+| `runRetentionMaxCount` | `500` | Terminal runs retained in the ledger. Non-terminal runs are always kept. |
+| `runRetentionMaxAgeDays` | unset | Optional age limit for terminal runs. Omit to retain by count only. |
+
 ### `profiles`
 
 Named config overlays selectable at runtime with `--profile <name>` (or the
