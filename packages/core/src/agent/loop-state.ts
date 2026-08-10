@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { AgentError, LoopDeliverySummary, LoopPersistedStatus } from "@seekforge/shared";
+import type {
+  AgentError,
+  LoopDeliverySummary,
+  LoopPersistedStatus,
+  LoopPhase as SharedLoopPhase,
+} from "@seekforge/shared";
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import type { LoopIterationSnapshot, LoopStageResult, LoopVerificationStage } from "./auto-loop.js";
@@ -93,7 +98,8 @@ export function hasCompleteLoopDeliveryEvidence(
 }
 export type LoopRecoveryMetadata = AutomaticRecoveryMetadata;
 export type LoopAutomaticRecoveryIdentity = { priorControlRunId: string; recoveryAttemptId: string };
-export type LoopPhase = "requirements" | "precheck" | "editing" | "verification" | "acceptance" | "review" | "settled";
+/** Re-exported from the shared contract so the two cannot drift again. */
+export type LoopPhase = SharedLoopPhase;
 export type LoopPruneOptions = {
   /** Remove eligible terminal records older than this many days. */
   maxAgeDays?: number;

@@ -60,7 +60,8 @@ flowchart LR
   列表/详情/资源视图按领域拆分。Server/Desktop 的 Loop 响应类型统一来自
   `@seekforge/shared`，不再由客户端手工镜像。
 - 证据构建、完整性比较与 JSON/SARIF/JUnit 格式化彼此独立，新增导出格式不会改变已签名报告。
-  持久状态、交付和证据 DTO 只在 `@seekforge/shared` 定义一次；Core 直接使用同一类型，不再维护镜像。
+  持久状态、阶段（phase）、交付和证据 DTO 只在 `@seekforge/shared` 定义一次；Core 以别名引用，不再维护镜像。
+  `phase` 此前确实漂移过——Core 有 `"review"` 而共享 DTO 没有，导致契约无法描述 REST 列表原样返回的状态——因此现在别名只有单向。
 
 ### 运行时序
 

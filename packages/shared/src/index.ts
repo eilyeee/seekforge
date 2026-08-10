@@ -1169,10 +1169,19 @@ export type AutomaticRecoverySummary = {
   lastError?: string;
 };
 
+/**
+ * The phase a persisted Loop last entered. Core owns the values but this is the
+ * cross-package contract, so it is declared here once and aliased there — the
+ * two copies had already drifted: `"review"` is persisted by `--code-review`
+ * Loops and was missing from this union, so the DTO could not describe a state
+ * the server returns verbatim.
+ */
+export type LoopPhase = "requirements" | "precheck" | "editing" | "verification" | "acceptance" | "review" | "settled";
+
 export type LoopStateSummary = {
   loopId: string;
   status: LoopPersistedStatus;
-  phase?: "requirements" | "precheck" | "editing" | "verification" | "acceptance" | "settled";
+  phase?: LoopPhase;
   task: string;
   workspace: string;
   parentGraph?: { graphId: string; nodeId: string };

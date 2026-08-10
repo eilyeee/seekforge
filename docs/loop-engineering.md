@@ -68,8 +68,11 @@ The implementation keeps these boundaries explicit:
   instead of client-side mirrors.
 - Evidence construction, integrity comparison, and JSON/SARIF/JUnit formatting
   are separate so adding an export format cannot change the signed report.
-  Persisted status, delivery, and evidence DTOs are defined once in
-  `@seekforge/shared`; Core uses those same types instead of parallel mirrors.
+  Persisted status, phase, delivery, and evidence DTOs are defined once in
+  `@seekforge/shared`; Core aliases those types instead of maintaining parallel
+  mirrors. `phase` had in fact drifted — Core knew `"review"` and the shared DTO
+  did not, so the contract could not describe a state the REST list returns
+  verbatim — which is why the alias now runs one way only.
 
 ### Run sequence
 
