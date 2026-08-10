@@ -50,6 +50,16 @@ export type ProviderCapabilities = {
    * never saw.
    */
   images?: boolean;
+  /**
+   * The endpoint states what the request cost, in USD, in its own usage block.
+   *
+   * This is the one price that needs no table and cannot go stale: a router
+   * whose per-model rates change daily, and whose 400-model catalog no shipped
+   * table could track, still knows exactly what it charged. Where it is set,
+   * that number is the cost — above the built-in table, below only a user's own
+   * `modelPricing`, which is an explicit override of what the bill says.
+   */
+  usageCost?: boolean;
 };
 
 /** Full DeepSeek-direct capability set (the default when `capabilities` is unset). */
@@ -107,9 +117,12 @@ export type ProviderConfig = {
   capabilities?: ProviderCapabilities;
   /**
    * User-supplied per-model price table (model id → per-1M rates) for providers
-   * that ship no built-in pricing (Ark, OpenAI, …). When an entry exists for the
-   * active model its cost is ALWAYS computed from these rates — even when
-   * `capabilities.costAccounting` is false — so budgets work on those providers.
+   * that can answer the price no other way — Ark, Ollama, a bare `baseUrl`.
+   * (DeepSeek, Anthropic and OpenAI ship tables; OpenRouter states the charge on
+   * every response.) When an entry exists for the active model its cost is
+   * ALWAYS computed from these rates — even when `capabilities.costAccounting`
+   * is false, and above a cost the endpoint reported itself — so a user who
+   * writes a price gets the price they wrote.
    * Unset (the DeepSeek default) leaves cost accounting byte-for-byte unchanged.
    */
   modelPricing?: Record<string, ModelPricing>;

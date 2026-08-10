@@ -47,6 +47,12 @@ export type TuiConfig = {
    * it cost stays 0 there. Edit the file directly; not settable via `config set`.
    */
   modelPricing?: Record<string, ModelPricing>;
+  /**
+   * Whether images travel inline to the model (a screenshot attached to the tool
+   * result that produced it). Unset follows the provider preset. Edit the file
+   * directly; not settable via `config set`.
+   */
+  inlineImages?: boolean;
   /** DeepSeek V4 thinking mode (default: API default). /think toggles. */
   thinking?: boolean;
   /** V4 reasoning effort: "high" or "max". */
@@ -60,11 +66,11 @@ export type TuiConfig = {
   /** Vision model for the image_analyze tool (OpenAI-compatible endpoint). */
   visionModel?: { model: string; baseUrl?: string; apiKey?: string };
   /**
-   * web_search's endpoint. A SearXNG base URL makes that instance the primary
-   * backend with DuckDuckGo as the fallback. User config only — see
-   * PROJECT_PREFERENCE_KEYS.
+   * web_search's backends, most authoritative first: a Brave Search API key,
+   * then a SearXNG base URL, then the DuckDuckGo scrape that is always there.
+   * User config only — see PROJECT_PREFERENCE_KEYS.
    */
-  webSearch?: { searxngUrl?: string };
+  webSearch?: { searxngUrl?: string; braveApiKey?: string };
   /**
    * Name of a persistent browser session profile. When set, the browser tools
    * start from `~/.seekforge/browser-profiles/<name>.json` and write it back on

@@ -6,6 +6,7 @@ import {
   configureBrowserProfile,
   configureVision,
   configureWebSearch,
+  resolveWebSearchConfig,
   resolveBrowserProfilePath,
   seekforgeHome,
   createMcpElicitationHandler,
@@ -66,10 +67,7 @@ async function main(): Promise<void> {
   // PROJECT_PREFERENCE_KEYS, so a cloned repository cannot point this
   // agent's searches at an endpoint of its choosing and feed the model
   // whatever it likes back.
-  configureWebSearch(
-    config.webSearch?.searxngUrl ? { searxngUrl: config.webSearch.searxngUrl } : undefined,
-    projectPath,
-  );
+  configureWebSearch(resolveWebSearchConfig(config.webSearch), projectPath);
   configureVision(
     config.visionModel?.baseUrl
       ? {

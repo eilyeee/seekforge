@@ -12,6 +12,7 @@ import {
   configureBrowserProfile,
   configureVision,
   configureWebSearch,
+  resolveWebSearchConfig,
   resolveBrowserProfilePath,
   graphHandlersWithPlugins,
   createAgentCore,
@@ -133,7 +134,7 @@ export function configureServerTools(workspace: string, config: ServerConfig): v
   // PROJECT_PREFERENCE_KEYS, so a cloned repository cannot point this
   // agent's searches at an endpoint of its choosing and feed the model
   // whatever it likes back.
-  configureWebSearch(config.webSearch?.searxngUrl ? { searxngUrl: config.webSearch.searxngUrl } : undefined, workspace);
+  configureWebSearch(resolveWebSearchConfig(config.webSearch), workspace);
   configureVision(
     config.visionModel?.baseUrl
       ? {
@@ -186,24 +187,37 @@ export function buildAgentDeps(
   // onModelDelta bridges, and permissionRules/hooks spread ONLY when
   // configured (a contract test asserts the keys are absent otherwise).
   return {
-    ...buildAgentCoreDeps({
-      provider: config.provider,
-      apiKey: config.apiKey,
-      baseUrl: config.baseUrl,
-      model,
-      thinking,
-      reasoningEffort,
-      modelPricing: config.modelPricing,
-      commandAllowlist: config.commandAllowlist,
-      sandbox: opts.overrides?.sandbox ?? config.sandbox,
-      compaction: config.compaction,
-      planModel: config.planModel,
-      escalateOnFailure: config.escalateOnFailure,
-      memoryAutoApproveConfidence: config.memoryAutoApproveConfidence,
-      lintCommand: config.lintCommand,
-      autoLint: config.autoLint,
-      editFormat: config.editFormat,
-    }),
+    ...buildAgentCoreDeps(
+      {
+        provider: config.provider,
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        model,
+        thinking,
+        reasoningEffort,
+        modelPricing: config.modelPricing,
+        inlineImages: config.inlineImages,
+        commandAllowlist: config.commandAllowlist,
+        sandbox: opts.overrides?.sandbox ?? config.sandbox,
+        compaction: config.compaction,
+        planModel: config.planModel,
+        escalateOnFailure: config.escalateOnFailure,
+        memoryAutoApproveConfidence: config.memoryAutoApproveConfidence,
+        lintCommand: config.lintCommand,
+        autoLint: config.autoLint,
+        editFormat: config.editFormat,
+      },
+      {
+        // Goes to the server's own log, which is where an operator watching
+        // `seekforge serve` will see it. The Desktop and the web workbench both
+        // display a cost; a 0 that means "unknown" has to be said somewhere.
+        onPricingUnavailable: ({ provider, model }) =>
+          console.error(
+            `warning: no price is known for ${model}${provider ? ` on provider "${provider}"` : ""} — ` +
+              "cost and cost budgets will report 0; set modelPricing in config to track spend",
+          ),
+      },
+    ),
     dispatcher: createDefaultDispatcher(mcpToolSpecs),
     confirm: opts.confirm,
     ...(opts.persistRule ? { persistRule: opts.persistRule } : {}),

@@ -409,16 +409,27 @@ provider。它们不产生任何事件，因此基于事件的检查永远不会
 
 ### `modelPricing`（在其他 provider 上开启成本跟踪）
 
-**默认关闭。** `deepseek` 与 `anthropic` provider 自带内置价格表，所以在它们的
-模型上成本和 `maxCostUsd` 预算开箱即用。其他 provider（`ark`、`openai`、
-`ollama`、`openrouter`……）**没有**价格表，因此在这些 provider 上报告的成本恒为
-`0`，`maxCostUsd` 也永远不会触发。设置 `modelPricing` 提供你自己的按模型费率，
-即可为这些 provider 打开成本/预算跟踪。
+**默认关闭。** 成本由「谁能诚实回答，就由谁回答」，逐 provider 决定：
 
-SeekForge 刻意**不**为这些 provider 附带价格表，而不是塞一份猜出来的：一个错误的
-费率会悄悄把建立在它之上的每一个预算都算错，那比什么都不报还糟。在你设置
-`modelPricing` 之前，CLI 每个会话会警告一次「当前模型的成本将报告为 0」——一个
-其实是「未知」的 0，不该被当成「这次调用是免费的」。
+| 预设 | 价格从哪里来 | 预算是否开箱即用 |
+| --- | --- | --- |
+| `deepseek`、`anthropic`、`openai` | 各自公布的价目表，随 SeekForge 一起发布 | 是 |
+| `openrouter` | 端点在每次响应的 `usage.cost` 里直接给出本次扣费 | 是 |
+| `ark`、`ollama`、裸 `baseUrl` | 无处可取 —— 成本恒报 `0` | **否**，需先设 `modelPricing` |
+
+最后一行意味着 `maxCostUsd` 和 Loop 成本预算永远不会触发，因为每次请求都报 `0`。
+SeekForge 会明说这一点，而不是让你误以为有护栏：CLI、TUI、server 每个会话各警告
+一次「该模型价格未知」，`seekforge run --max-cost` 会提示该预算无法生效，
+`seekforge schedule add` 则在创建时就警告 —— 定时任务是无人值守的，一个形同虚设
+的预算在那里最要命。
+
+设置 `modelPricing` 提供你自己的按模型费率，即可在那些 provider 上打开成本与预算
+跟踪。以这种方式定价的模型在任何地方都按你的费率计价，包括预设没有价格表的
+provider。
+
+SeekForge 刻意**不**为无价目表的 provider 塞一份猜出来的价格：一个错误的费率会
+悄悄把建立在它之上的每一个预算都算错，那比什么都不报还糟。一个其实是「未知」的
+`0`，不该被当成「这次调用是免费的」。
 
 它是一个**模型 id → 每 100 万 token 价格**的映射，单位美元：
 
@@ -442,6 +453,40 @@ SeekForge 刻意**不**为这些 provider 附带价格表，而不是塞一份�
 列在这里的模型**始终**按你的费率计价——即便所在 provider 的预设禁用了
 成本核算——因此其成本和预算跟踪都能工作。而这类 provider 上你没有列出的
 模型仍保持 `0`。DeepSeek 的默认行为（不设 `modelPricing`）不变。
+
+可通过 `config set` 设置？**不可以** —— 直接编辑文件。
+
+### `inlineImages`（让模型自己看截图）
+
+**默认：跟随 provider 预设。** 产出图片的工具（目前是 `browser_screenshot`）
+在返回路径的同时也把字节一并奉上。图片是否真的送到模型，由 provider 回答而非
+工具决定：端点能收图时，截图随工具结果一起送达，模型直接看；不能收时，结果里
+用文字说明这一点，图片仍可经 [`visionModel`](#visionmodel) 和 `image_analyze`
+读取。
+
+| 预设 | 内联图片 | 原因 |
+| --- | --- | --- |
+| `anthropic` | **开** | 现行 Claude 模型全部接受图片 |
+| `openai` | **开** | 预设目录里的模型同样全部接受 |
+| `openrouter` | **开** | 路由型端点：由模型 id 决定，拒绝时报错明确 |
+| `ark` | 关 | 目录混合 —— doubao-seed 多模态，kimi 与 minimax 不是 |
+| `ollama` | 关 | 常见的 `llama3.1`、`qwen2.5-coder` 都是纯文本模型 |
+| `deepseek`（默认） | 关 | DeepSeek 没有视觉模型 |
+
+当你的模型与预设的默认答案不符时设置它 —— 例如 Ark 上的
+`doubao-seed-2.0-pro`、Ollama 上拉取的 `llava`，或某个同门模型都有眼睛而它
+没有的纯文本模型：
+
+```json
+{ "provider": "ark", "model": "doubao-seed-2.0-pro", "inlineImages": true }
+```
+
+对读不了图的模型开启它会让请求**直接失败**，而不是降级 —— 所以面对混合目录，
+预设宁可保守作答，也不按模型 id 猜。关掉它则永远安全：图片会变成一句指向
+`image_analyze` 的说明。
+
+属于用户所有：它描述的是你的端点与账号，因此仓库配置无法设置它（与
+`modelPricing` 同理）。
 
 可通过 `config set` 设置？**不可以** —— 直接编辑文件。
 
@@ -858,17 +903,22 @@ Playwright 用来做隔离的原语，各自独立的 cookie 和页面。在此�
 
 ### `webSearch`
 
-**默认关闭。** `web_search` 把查询发到哪里。设置了 SearXNG 的 base URL 后，会先问该实例，
-DuckDuckGo 退为兜底：
+**默认关闭。** `web_search` 把查询发到哪里。按「谁更权威先问谁」的顺序尝试，你配置了哪一个，
+它就排在没配置的前面：
+
+| 后端 | 配置项 | 说明 |
+| --- | --- | --- |
+| Brave Search API | `braveApiKey` | 真正的搜索 API：JSON、一个 key、有免费额度。排第一 —— 会去配 key 的人，就是想让它来回答 |
+| SearXNG | `searxngUrl` | JSON、无需 key、可自托管 |
+| DuckDuckGo | 无 | 永远存在、永远垫底。抓取 HTML 页面 |
 
 ```json
-{ "webSearch": { "searxngUrl": "http://localhost:8888" } }
+{ "webSearch": { "braveApiKey": "BSA…", "searxngUrl": "http://localhost:8888" } }
 ```
 
-在此之前 `web_search` 只有一个提供方——抓取 DuckDuckGo 的 HTML 页面——而且没有任何绕开的
-办法。一旦 DuckDuckGo 改版或返回拦截页，所有工作区的所有搜索都会返回空，没有任何配置能
-补救。选 SearXNG 作为第二条腿，是因为它和这个工具的其余部分气质一致：JSON API、不需要
-API key、可自托管。
+在这些出现之前 `web_search` 只有一个提供方——抓取 DuckDuckGo 的 HTML 页面——而且没有任何
+绕开的办法。一旦 DuckDuckGo 改版或返回拦截页，所有工作区的所有搜索都会返回空，没有任何
+配置能补救。另外两条腿就是出路：一条你可以自托管，一条你可以花钱买。
 
 **只有「没跑成」的后端才会交棒。** 搜索跑通了但没匹配到结果，这本身就是一个答案；再叫第二
 个提供方来「唱反调」，只会把「确实没有」洗成噪音。工具现在会通过 `searched` 字段和返回的
@@ -1059,7 +1109,7 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 | `reasoningEffort` | enum | `high` / `max` |
 
 其余的键 —— `planModel`、`escalateOnFailure`、`maxCostUsd`、
-`modelPricing`、`verifyCommand`、`autoVerify`、`lintCommand`、`autoLint`、
+`modelPricing`、`inlineImages`、`verifyCommand`、`autoVerify`、`lintCommand`、`autoLint`、
 `editFormat`、`finalizeReview`、`guardNoProgress`、
 `memoryAutoApproveConfidence`、`memoryMaintenance`、`permissionRules`、
 `mcpServers`、`hooks` —— **不可**通过 `config set` 设置。必须直接编辑 JSON

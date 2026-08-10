@@ -48,11 +48,11 @@ export type CliConfig = {
    */
   visionModel?: { model: string; baseUrl?: string; apiKey?: string };
   /**
-   * web_search's endpoint. A SearXNG base URL makes that instance the primary
-   * backend with DuckDuckGo as the fallback. User config only — see
-   * PROJECT_PREFERENCE_KEYS.
+   * web_search's backends, most authoritative first: a Brave Search API key,
+   * then a SearXNG base URL, then the DuckDuckGo scrape that is always there.
+   * User config only — see PROJECT_PREFERENCE_KEYS.
    */
-  webSearch?: { searxngUrl?: string };
+  webSearch?: { searxngUrl?: string; braveApiKey?: string };
   /**
    * Name of a persistent browser session profile. When set, the browser tools
    * start from `~/.seekforge/browser-profiles/<name>.json` and write it back
@@ -84,6 +84,16 @@ export type CliConfig = {
    * settable via `config set`.
    */
   modelPricing?: Record<string, ModelPricing>;
+  /**
+   * Whether images travel inline to the model — a screenshot attached to the
+   * tool result that produced it, rather than a path the model must open with
+   * `image_analyze`. Unset follows the provider preset, which answers for the
+   * catalog it ships; set it when your model disagrees with that default (a
+   * multimodal doubao on Ark, a pulled llava on Ollama, a text-only model on an
+   * endpoint whose others have eyes). Edit the file directly; not settable via
+   * `config set`.
+   */
+  inlineImages?: boolean;
   /**
    * Stronger model for plan runs (`/plan`) and failure escalation, resolved on
    * the same key/endpoint (e.g. "deepseek-v4-pro" while edits run on flash).

@@ -29,6 +29,28 @@ SeekForge 可以对接真实的**语言服务器（Language Server，LSP）**，
 | TypeScript / JavaScript | `.ts .tsx .mts .cts .js .jsx .mjs .cjs` | `npm i -g typescript-language-server typescript` | `typescript-language-server` |
 | Python | `.py` | `pip install pyright` **或** `pip install python-lsp-server` | `pyright-langserver`，否则 `pylsp` |
 | Go | `.go` | `go install golang.org/x/tools/gopls@latest` | `gopls` |
+| Rust | `.rs` | `rustup component add rust-analyzer` | `rust-analyzer` |
+| C / C++ | `.c .h .cc .cpp .cxx .hpp .hh .hxx` | `brew install llvm`，或发行版的 clangd 包 | `clangd` |
+| Java | `.java` | `brew install jdtls`，或解压 eclipse.jdt.ls | `jdtls` —— **运行它需要 Java 21+**（见下） |
+| C# | `.cs` | `dotnet tool install --global csharp-ls` | `csharp-ls`，否则 `OmniSharp` |
+| Ruby | `.rb` | `gem install ruby-lsp` **或** `gem install solargraph` | `ruby-lsp`，否则 `solargraph` |
+| PHP | `.php` | `npm i -g intelephense`，或安装 phpactor | `intelephense`，否则 `phpactor` |
+| Kotlin | `.kt .kts` | 见 fwcd/kotlin-language-server | `kotlin-language-server` |
+| Swift | `.swift` | 随 Swift 工具链 / Xcode 附带 | `sourcekit-lsp` |
+| Scala | `.scala .sc` | `brew install coursier` 后 `cs install metals` | `metals` |
+| Lua | `.lua` | `brew install lua-language-server` | `lua-language-server` |
+| Zig | `.zig` | `brew install zls` | `zls` |
+| Bash | `.sh .bash .zsh` | `npm i -g bash-language-server` | `bash-language-server` |
+
+> **jdtls 自身需要 Java 21 或更高版本**，与被分析项目所用的 Java 版本无关。在更低
+> 的 JDK 上它会立即退出并打印 `jdtls requires at least Java 21`；把 `JAVA_HOME`
+> 指向 21+ 的 JDK 即可。（SeekForge 会把服务器退出前打印的内容原样带出来，所以你
+> 看到的是这句话，而不是一句干巴巴的「jdtls exited」。）
+>
+> Java 的项目级搜索（`lsp_symbols`）需要一个**被导入的构建**——`pom.xml`、Gradle
+> 脚本或 Eclipse `.project`。在一堆散装 `.java` 文件的目录里，凡是以打开的文档为
+> 作用域的功能（outline、定义、引用）都照常工作，而项目级搜索会返回空。这是 jdtls
+> 的实测行为。
 
 在找到服务器之前，每个 LSP 工具都会返回一条可操作的错误信息，指出应安装哪些服务器，例如：
 

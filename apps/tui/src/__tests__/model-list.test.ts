@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { PROVIDER_PRESETS } from "@seekforge/core";
 import { KNOWN_MODELS, modelPickerLines, modelsForProvider } from "../model-list.js";
 
 describe("KNOWN_MODELS", () => {
@@ -41,8 +42,11 @@ describe("modelsForProvider", () => {
   });
 
   it("returns a preset's own catalog for a non-deepseek provider (e.g. openai)", () => {
+    // The catalog is core's, not a copy here — asserting the exact list would
+    // make this test a second place to remember when OpenAI ships a model.
     const models = modelsForProvider("openai");
-    expect(models.map((m) => m.id)).toEqual(["gpt-4o", "gpt-4o-mini", "o3-mini"]);
+    expect(models.length).toBeGreaterThan(0);
+    expect(models.map((m) => m.id)).toEqual([...(PROVIDER_PRESETS.openai?.models ?? [])]);
     expect(models.every((m) => m.note === "openai model")).toBe(true);
   });
 });

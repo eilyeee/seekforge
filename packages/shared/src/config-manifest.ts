@@ -14,6 +14,7 @@ export const COMMON_CONFIG_KEYS = [
   "thinking",
   "reasoningEffort",
   "modelPricing",
+  "inlineImages",
   "planModel",
   "escalateOnFailure",
   "memoryAutoApproveConfidence",

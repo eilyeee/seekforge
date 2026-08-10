@@ -77,6 +77,18 @@ export async function runSession(task: string, signal: AbortSignal, deps: RunSes
     askUser: deps.askUser,
     dispatchManager,
     ...(deps.usageBus ? { usageBus: deps.usageBus } : {}),
+    // The status line's cost and any costBudgetUsd threshold are both 0 forever
+    // on an unpriced model, and a reading of $0.0000 is indistinguishable from
+    // a run that was free. Fired once per (provider, model) — the agent is
+    // rebuilt every turn, and buildAgentCoreDeps owns that gate for every
+    // frontend rather than each keeping its own.
+    onPricingUnavailable: ({ provider, model }) => {
+      deps.dispatch({
+        type: "notice",
+        tone: "error",
+        text: `no price is known for ${model}${provider ? ` on provider "${provider}"` : ""} — cost reports 0; set modelPricing in config`,
+      });
+    },
   });
 
   // One capture per run: snapshots files around write tools to render diffs.

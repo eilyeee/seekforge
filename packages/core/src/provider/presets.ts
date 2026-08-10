@@ -6,7 +6,7 @@
  * /user/balance) are disabled.
  */
 
-import { ANTHROPIC_MODELS, DEFAULT_BASE_URL, type ModelPricing } from "./constants.js";
+import { ANTHROPIC_MODELS, DEFAULT_BASE_URL, type ModelPricing, OPENAI_MODELS } from "./constants.js";
 import type { WireProtocolId } from "./protocols/types.js";
 import { DEEPSEEK_CAPABILITIES, type ProviderCapabilities, type ProviderConfig, type RetryInfo } from "./types.js";
 
@@ -54,15 +54,33 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
     capabilities: { thinking: true, cacheHitTokens: true, costAccounting: true, balance: false, images: true },
     models: ANTHROPIC_MODELS,
   },
-  // The presets below are generic OpenAI-compatible endpoints. Like `ark`, they
-  // carry no built-in pricing table, so costAccounting is false and reported
-  // cost stays 0 until a per-model price override exists; the DeepSeek-only
-  // thinking body, context-cache tokens, and /user/balance are likewise off.
+  // The presets below are generic OpenAI-compatible endpoints. The DeepSeek-only
+  // thinking body and /user/balance are off for all of them.
+  //
+  // Cost is answered per endpoint by whoever can answer it honestly: OpenAI
+  // publishes a price list, so that preset uses it; OpenRouter states the charge
+  // in every response, so that preset reads it; `ark` and `ollama` do neither,
+  // so they report 0 until the user supplies `modelPricing` — and every surface
+  // that shows a cost or arms a cost budget says so rather than showing $0.0000.
+  //
+  // `images` is a per-ENDPOINT answer to a per-MODEL question, so it is only on
+  // where every model in the catalog above accepts an image part: OpenAI's, and
+  // OpenRouter's (a router, where the model id picks and the refusal is
+  // explicit). It is off for `ark` (doubao-seed is multimodal, kimi and minimax
+  // are not — one attached screenshot would 400 the run), off for `ollama`
+  // (llama3.1/qwen2.5-coder/deepseek-r1 are text-only; a pulled llava is not),
+  // and off for DeepSeek, which has no vision model at all. Any of those is one
+  // `inlineImages` setting away from the other answer.
   openai: {
     baseUrl: "https://api.openai.com/v1",
-    capabilities: { thinking: false, cacheHitTokens: false, costAccounting: false, balance: false },
+    // cacheHitTokens is on: OpenAI reports its cached input under
+    // prompt_tokens_details.cached_tokens, which mapUsage already reads, and
+    // the price table below bills those tokens at a tenth. costAccounting is on
+    // because that table is OpenAI's own published one — a model missing from
+    // it still reports "unknown" rather than borrowing a neighbor's rate.
+    capabilities: { thinking: false, cacheHitTokens: true, costAccounting: true, balance: false, images: true },
     // Short representative catalog; users can point at any OpenAI model id.
-    models: ["gpt-4o", "gpt-4o-mini", "o3-mini"],
+    models: [...OPENAI_MODELS],
   },
   ollama: {
     baseUrl: "http://localhost:11434/v1",
@@ -72,9 +90,20 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
   },
   openrouter: {
     baseUrl: "https://openrouter.ai/api/v1",
-    capabilities: { thinking: false, cacheHitTokens: false, costAccounting: false, balance: false },
+    // No price table and no need for one: OpenRouter states the charge for
+    // every request in usage.cost, and it reports cached reads and writes
+    // alongside it. costAccounting stays false — there is no built-in table for
+    // 400 models from a dozen vendors — but cost is real here, not 0.
+    capabilities: {
+      thinking: false,
+      cacheHitTokens: true,
+      costAccounting: false,
+      balance: false,
+      images: true,
+      usageCost: true,
+    },
     // Short representative catalog; OpenRouter exposes many more model ids.
-    models: ["anthropic/claude-3.5-sonnet", "openai/gpt-4o", "deepseek/deepseek-chat"],
+    models: ["anthropic/claude-opus-5", "openai/gpt-5.6-sol", "deepseek/deepseek-v4-pro"],
   },
 };
 
@@ -97,6 +126,26 @@ export function resolveProviderPreset(name?: string): ProviderPreset | undefined
  * Every other field is spread through only when defined, matching the
  * conditional-spread style at the construction sites.
  */
+/**
+ * Apply the user's `inlineImages` answer over the preset's.
+ *
+ * Whether a model has eyes is not something a base URL can be asked, so the
+ * preset only holds the default for the catalog it ships. A user pointing at
+ * doubao-seed, a pulled llava, or a text-only model on an endpoint whose other
+ * models are multimodal knows better than the preset does.
+ *
+ * When the setting is absent this returns the preset's capabilities unchanged —
+ * including `undefined` for the no-preset DeepSeek path, which is what keeps
+ * createDeepSeekProvider on its own defaults.
+ */
+function withInlineImages(
+  capabilities: ProviderCapabilities | undefined,
+  inlineImages: boolean | undefined,
+): ProviderCapabilities | undefined {
+  if (inlineImages === undefined) return capabilities;
+  return { ...(capabilities ?? DEEPSEEK_CAPABILITIES), images: inlineImages };
+}
+
 export function resolveProviderConfig(input: {
   provider?: string;
   apiKey: string;
@@ -109,10 +158,11 @@ export function resolveProviderConfig(input: {
   onRetry?: (info: RetryInfo) => void;
   fallbackModel?: string;
   modelPricing?: Record<string, ModelPricing>;
+  inlineImages?: boolean;
 }): ProviderConfig {
   const preset = resolveProviderPreset(input.provider);
   const baseUrl = input.baseUrl ?? preset?.baseUrl;
-  const capabilities = preset?.capabilities;
+  const capabilities = withInlineImages(preset?.capabilities, input.inlineImages);
   return {
     apiKey: input.apiKey,
     ...(baseUrl !== undefined ? { baseUrl } : {}),

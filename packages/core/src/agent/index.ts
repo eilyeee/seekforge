@@ -83,6 +83,7 @@ export {
 export {
   buildAgentCoreDeps,
   buildProvider,
+  resolvedPricingSource,
   type AgentCoreDepsCommon,
   type BuildAgentCoreDepsExtras,
   type BuildAgentCoreDepsInput,

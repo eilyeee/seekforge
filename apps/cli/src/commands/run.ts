@@ -1,5 +1,11 @@
 import { createInterface } from "node:readline/promises";
-import { createUsageBus, listSessions, loadAgentDefinitions, readSessionMeta } from "@seekforge/core";
+import {
+  createUsageBus,
+  listSessions,
+  loadAgentDefinitions,
+  readSessionMeta,
+  resolvedPricingSource,
+} from "@seekforge/core";
 import type { AgentEvent, ApprovalMode, FinalReport } from "@seekforge/shared";
 import { cliMcpServerRequestHandlers, createCliAgent, prepareMcp } from "../agent-factory.js";
 import { colorIsEnabled, fail } from "../colors.js";
@@ -244,6 +250,20 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
   // usage.updated/session.completed is cumulative-per-run, so we just compare
   // the latest value against the budget and abort once on the crossing.
   const costBudgetUsd = opts.maxCostUsd ?? config.maxCostUsd;
+  // A budget on a run whose price is unknown is a bound that can never be
+  // reached: every request reports 0, so the comparison below never fires. That
+  // is worse than having no budget, because the user believes there is one.
+  if (
+    costBudgetUsd !== undefined &&
+    costBudgetUsd > 0 &&
+    resolvedPricingSource({
+      provider: config.provider,
+      model: opts.model ?? config.model,
+      ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
+    }) === "unavailable"
+  ) {
+    console.error(t("render.costBudgetUnenforceable", { budget: costBudgetUsd.toFixed(4) }));
+  }
   let costBudgetReached = false;
   const enforceCostBudget = (costUsd: number): void => {
     if (costBudgetReached || controller.signal.aborted) return;

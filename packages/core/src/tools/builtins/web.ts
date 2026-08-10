@@ -587,12 +587,39 @@ export function parseDdgResults(html: string, limit: number): WebSearchResult[] 
  */
 export type WebSearchConfig = {
   /**
-   * Base URL of a SearXNG instance. When set it is tried FIRST and DuckDuckGo
-   * becomes the fallback, so a self-hosted instance is authoritative while the
-   * public scrape stays as a backstop.
+   * Base URL of a SearXNG instance. When set it is tried before DuckDuckGo, so
+   * a self-hosted instance is authoritative while the public scrape stays as a
+   * backstop.
    */
   searxngUrl?: string;
+  /**
+   * Brave Search API subscription token. Tried FIRST when present: someone who
+   * paid for a search API meant it to be the one that answers, and it is the
+   * only leg here that is neither a scrape nor a service the user has to run.
+   */
+  braveApiKey?: string;
 };
+
+/**
+ * Turn a frontend's `webSearch` config block into a WebSearchConfig, or
+ * undefined when it configures nothing.
+ *
+ * Shared because three frontends apply the same block and each used to inline
+ * the mapping: the second key would otherwise have had to be remembered in
+ * three places, which is how the first one ended up honored by the CLI and
+ * ignored by the TUI in earlier rounds of this repository.
+ */
+export function resolveWebSearchConfig(
+  input: { searxngUrl?: string; braveApiKey?: string } | undefined,
+): WebSearchConfig | undefined {
+  const searxngUrl = input?.searxngUrl?.trim();
+  const braveApiKey = input?.braveApiKey?.trim();
+  if (!searxngUrl && !braveApiKey) return undefined;
+  return {
+    ...(searxngUrl ? { searxngUrl } : {}),
+    ...(braveApiKey ? { braveApiKey } : {}),
+  };
+}
 
 const searchConfigs = new Map<string, WebSearchConfig>();
 let defaultSearchConfig: WebSearchConfig | undefined;
@@ -618,7 +645,11 @@ function searchConfigFor(workspace: string | undefined): WebSearchConfig {
 /** One backend's answer: rows, plus why there were none. */
 type BackendOutcome = { kind: SearchPageKind; results: WebSearchResult[] };
 
-async function fetchSearchBody(url: URL, signal: AbortSignal | undefined): Promise<string> {
+async function fetchSearchBody(
+  url: URL,
+  signal: AbortSignal | undefined,
+  headers: Record<string, string> = {},
+): Promise<string> {
   const controller = new AbortController();
   const offAbort = onAbortOnce(signal, () => controller.abort());
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -627,7 +658,7 @@ async function fetchSearchBody(url: URL, signal: AbortSignal | undefined): Promi
       method: "GET",
       signal: controller.signal,
       redirect: "follow",
-      headers: { "user-agent": "seekforge-agent" },
+      headers: { "user-agent": "seekforge-agent", ...headers },
     });
     if (!res.ok) throw new ToolError("search_failed", `Search failed: HTTP ${res.status}`);
     return (await readResponseBody(res)).toString("utf8");
@@ -652,15 +683,33 @@ async function searchDuckDuckGo(query: string, count: number, signal?: AbortSign
  * self-hosted instance can still be fed a hostile result by an upstream engine.
  */
 export function parseSearxngResults(body: string, limit: number): WebSearchResult[] {
+  return searxngOutcome(body, limit).results;
+}
+
+/**
+ * Whether this body was a SearXNG answer at all, and what it said.
+ *
+ * `results` being an empty ARRAY is the instance saying the query matched
+ * nothing; `results` being absent means this parser no longer understands the
+ * response. Deciding it by "did the body start with a brace" — which is what
+ * this used to do — reports a renamed field, an error envelope, or an instance
+ * answering `{"detail":"..."}` as a confident "no such thing exists".
+ */
+export function searxngOutcome(body: string, limit: number): BackendOutcome {
   let payload: unknown;
   try {
     payload = JSON.parse(body);
   } catch {
-    return [];
+    return { kind: "drift", results: [] };
   }
-  if (typeof payload !== "object" || payload === null) return [];
+  if (typeof payload !== "object" || payload === null) return { kind: "drift", results: [] };
   const rows = (payload as { results?: unknown }).results;
-  if (!Array.isArray(rows)) return [];
+  if (!Array.isArray(rows)) return { kind: "drift", results: [] };
+  const results = searxngRows(rows, limit);
+  return { kind: results.length > 0 ? "results" : "empty", results };
+}
+
+function searxngRows(rows: unknown[], limit: number): WebSearchResult[] {
   const out: WebSearchResult[] = [];
   const seen = new Set<string>();
   for (const row of rows) {
@@ -686,10 +735,89 @@ async function searchSearxng(
   url.searchParams.set("q", query);
   url.searchParams.set("format", "json");
   const body = await fetchSearchBody(url, signal);
-  const results = parseSearxngResults(body, count);
-  // A JSON response that parsed to zero rows really is zero hits; a body that
-  // is not the JSON shape at all is drift (or an instance serving HTML).
-  return { kind: results.length > 0 ? "results" : body.trimStart().startsWith("{") ? "empty" : "drift", results };
+  return searxngOutcome(body, count);
+}
+
+/**
+ * Parse a Brave Search API response (`web.results[]`).
+ *
+ * Same posture as the other parsers: unrecognized rows are skipped rather than
+ * thrown, and every URL goes through the http(s)-only filter — a search API is
+ * still returning URLs chosen by someone else.
+ */
+export function parseBraveResults(body: string, limit: number): WebSearchResult[] {
+  return braveOutcome(body, limit).results;
+}
+
+/**
+ * Whether this body was a Brave answer at all, and what it said.
+ *
+ * The distinction is the whole point of the classification: `web.results` being
+ * an empty ARRAY is Brave telling us the query matched nothing, while
+ * `web.results` being absent means this parser no longer understands Brave's
+ * response — and those two call for opposite actions. Deciding it by "did we
+ * get any rows" would report a renamed field as a confident "no such thing
+ * exists", which is exactly what the `drift` outcome exists to prevent.
+ */
+export function braveOutcome(body: string, limit: number): BackendOutcome {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    return { kind: "drift", results: [] };
+  }
+  if (typeof payload !== "object" || payload === null) return { kind: "drift", results: [] };
+  const rows = (payload as { web?: { results?: unknown } }).web?.results;
+  if (!Array.isArray(rows)) return { kind: "drift", results: [] };
+  const results = braveRows(rows, limit);
+  return { kind: results.length > 0 ? "results" : "empty", results };
+}
+
+function braveRows(rows: unknown[], limit: number): WebSearchResult[] {
+  const out: WebSearchResult[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (out.length >= limit) break;
+    if (typeof row !== "object" || row === null) continue;
+    const { url, title, description } = row as { url?: unknown; title?: unknown; description?: unknown };
+    if (typeof url !== "string" || typeof title !== "string") continue;
+    // Brave marks the query terms with <strong> in both fields — the same
+    // decodeEntities the DuckDuckGo path uses strips the tags and the entities.
+    // A title that is only markup leaves nothing to show, so it is skipped here
+    // rather than after the URL is claimed as seen.
+    const cleanTitle = decodeEntities(title);
+    if (cleanTitle === "") continue;
+    const safe = decodeDdgUrl(url); // http(s)-only, same filter as every other path
+    if (!safe || seen.has(safe)) continue;
+    seen.add(safe);
+    out.push({
+      title: cleanTitle,
+      url: safe,
+      snippet: typeof description === "string" ? decodeEntities(description) : "",
+    });
+  }
+  return out;
+}
+
+async function searchBrave(
+  apiKey: string,
+  query: string,
+  count: number,
+  signal?: AbortSignal,
+): Promise<BackendOutcome> {
+  const url = new URL("https://api.search.brave.com/res/v1/web/search");
+  url.searchParams.set("q", query);
+  url.searchParams.set("count", String(count));
+  // No accept-encoding here on purpose. Brave's docs suggest sending `gzip`,
+  // but fetch negotiates and decompresses on its own, and setting the header by
+  // hand is the kind of thing that gets a compressed body handed back
+  // undecoded — which would parse to zero rows and read as "the search ran and
+  // found nothing", the exact failure this backend exists to avoid.
+  const body = await fetchSearchBody(url, signal, {
+    accept: "application/json",
+    "x-subscription-token": apiKey,
+  });
+  return braveOutcome(body, count);
 }
 
 /** How each outcome reads to the model — the reason it got nothing, or the caveat. */
@@ -732,13 +860,17 @@ const webSearch = defineTool({
   }),
   async run(args, ctx) {
     const count = Math.min(args.count ?? SEARCH_DEFAULT_COUNT, SEARCH_MAX_COUNT);
-    const { searxngUrl } = searchConfigFor(ctx.workspace);
+    const { searxngUrl, braveApiKey } = searchConfigFor(ctx.workspace);
 
-    // A configured SearXNG instance leads and DuckDuckGo backstops it. Only a
-    // backend that did NOT run (drift/block) hands over — a search that ran and
-    // matched nothing is an answer, and asking a second provider to disagree
-    // with it would just launder "no hits" into noise.
+    // Most authoritative first: a paid API, then a self-hosted instance, then
+    // the public scrape as the backstop that is always there. Only a backend
+    // that did NOT run (drift/block) hands over — a search that ran and matched
+    // nothing is an answer, and asking a second provider to disagree with it
+    // would just launder "no hits" into noise.
     const chain: { name: string; run: () => Promise<BackendOutcome> }[] = [];
+    if (braveApiKey !== undefined && braveApiKey.trim() !== "") {
+      chain.push({ name: "brave", run: () => searchBrave(braveApiKey, args.query, count, ctx.signal) });
+    }
     if (searxngUrl !== undefined && searxngUrl.trim() !== "") {
       chain.push({ name: "searxng", run: () => searchSearxng(searxngUrl, args.query, count, ctx.signal) });
     }

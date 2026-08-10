@@ -40,9 +40,9 @@
  *     shares buildProvider below instead.
  */
 
-import type { ChatProvider, ModelPricing, RetryInfo } from "../provider/index.js";
+import type { ChatProvider, ModelPricing, PricingSource, RetryInfo } from "../provider/index.js";
 import { resolveMemoryMaintenanceConfig, type MemoryMaintenanceConfig } from "../memory/index.js";
-import { createDeepSeekProvider, pricingSourceFor, resolveProviderConfig } from "../provider/index.js";
+import { createDeepSeekProvider, DEFAULT_MODEL, pricingSourceFor, resolveProviderConfig } from "../provider/index.js";
 import { createRetryBus, type AgentCoreDeps, type RetryBus } from "./loop.js";
 
 /**
@@ -64,7 +64,39 @@ export type ProviderBuildInput = {
   onRetry?: (info: RetryInfo) => void;
   /** Retry the request on this model when the primary is overloaded. */
   fallbackModel?: string;
+  /**
+   * Override whether images travel inline to the model (a screenshot attached
+   * to the tool result that produced it). Unset follows the provider preset.
+   */
+  inlineImages?: boolean;
 };
+
+/**
+ * Where the price for a configured run comes from, if anywhere.
+ *
+ * The provider preset decides whether a built-in table applies at all and
+ * whether the endpoint reports its own charge, so answering this needs the same
+ * resolution a provider build does — which is why it lives beside it rather
+ * than being re-derived by each caller that arms a cost budget.
+ *
+ * `unavailable` is the answer that matters: cost will be 0 for every request,
+ * so a `maxCostUsd` or Loop cost budget can never be reached. A surface that
+ * arms one has to say that instead of implying a bound it cannot hold.
+ */
+export function resolvedPricingSource(input: ProviderBuildInput & { model?: string }): PricingSource {
+  const resolved = resolveProviderConfig({ provider: input.provider, apiKey: "", model: input.model });
+  // An unset model is the provider's default, which is what will actually be
+  // billed — asking about "" would report every default run as unpriced.
+  return pricingSourceFor(input.model ?? DEFAULT_MODEL, {
+    ...(input.modelPricing ? { pricing: input.modelPricing } : {}),
+    ...(resolved.capabilities
+      ? {
+          costAccounting: resolved.capabilities.costAccounting,
+          ...(resolved.capabilities.usageCost !== undefined ? { usageCost: resolved.capabilities.usageCost } : {}),
+        }
+      : {}),
+  });
+}
 
 /**
  * Builds one provider for `model` from the shared inputs — the exact
@@ -84,6 +116,7 @@ export function buildProvider(input: ProviderBuildInput, model?: string): ChatPr
       ...(input.modelPricing ? { modelPricing: input.modelPricing } : {}),
       ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
       ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+      ...(input.inlineImages !== undefined ? { inlineImages: input.inlineImages } : {}),
     }),
   );
 }
@@ -149,6 +182,21 @@ export type AgentCoreDepsCommon = Pick<
 };
 
 /**
+ * The (provider, model) pairs already reported as having no known price.
+ *
+ * Every frontend documents this warning as arriving once per session, and the
+ * agent is rebuilt on every turn — on a server, on every run of every workspace
+ * — so without a gate here it arrives once per TURN. The TUI had noticed and
+ * carried its own set; the server had not, and printed it forever. One owner,
+ * at the only place the decision is made, is what keeps the third frontend from
+ * having to remember.
+ *
+ * Keyed by the pair the fact is about, not by workspace: "no price is known for
+ * this model on this provider" does not become true again in another directory.
+ */
+const pricingReported = new Set<string>();
+
+/**
  * Builds the common AgentCoreDeps core (see the module header for the exact
  * split). The caller spreads the result and layers its app-specific deps
  * (dispatcher, confirm, runtime, permissionRules, hooks, …) on top.
@@ -172,12 +220,10 @@ export function buildAgentCoreDeps(
   const providerInput: ProviderBuildInput = { ...input, onRetry: retryBus.onRetry };
   const baseProvider = buildProvider(providerInput, input.model);
   if (extras.onPricingUnavailable) {
-    const resolved = resolveProviderConfig({ provider: input.provider, apiKey: "", model: input.model });
-    const source = pricingSourceFor(baseProvider.model, {
-      ...(input.modelPricing ? { pricing: input.modelPricing } : {}),
-      ...(resolved.capabilities ? { costAccounting: resolved.capabilities.costAccounting } : {}),
-    });
-    if (source === "unavailable") {
+    const source = resolvedPricingSource({ ...input, model: baseProvider.model });
+    const key = `${input.provider ?? ""} ${baseProvider.model}`;
+    if (source === "unavailable" && !pricingReported.has(key)) {
+      pricingReported.add(key);
       extras.onPricingUnavailable({
         ...(input.provider ? { provider: input.provider } : {}),
         model: baseProvider.model,

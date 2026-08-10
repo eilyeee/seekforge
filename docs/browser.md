@@ -194,8 +194,12 @@ To forget a session, delete the file.
 5. Drive the flow you actually changed: `browser_fill({selector:"#user",
    text:"ada"})` → `browser_select({selector:"#team", label:"Tools team"})` →
    `browser_click({selector:"#submit"})` → `browser_wait_for({text:"Welcome"})`.
-6. `browser_screenshot()` — capture a PNG for the record, or to hand to
-   `image_analyze` for a visual check ("is the layout broken?").
+6. `browser_screenshot()` — capture a PNG for the record. On a model that
+   accepts images the shot is handed straight to it and it simply looks at the
+   page; on one that does not, the result says so and the path goes to
+   `image_analyze` for the visual check ("is the layout broken?"). Which of the
+   two happens is the [`inlineImages`](configuration.md#inlineimages) answer for
+   your provider.
 
 Iterate: edit → re-`browser_navigate` (or reload) → interact → `browser_console`
 until the page is clean.

@@ -30,19 +30,24 @@ export type UsageTokens = Pick<TokenUsage, "promptTokens" | "completionTokens" |
  * a free call, so a caller that reports spend has to be able to say "unknown"
  * instead of "$0.0000".
  */
-export type PricingSource = "configured" | "builtin" | "fallback" | "unavailable";
+export type PricingSource = "configured" | "provider" | "builtin" | "fallback" | "unavailable";
 
 /**
  * Where the price used for `model` comes from.
  *
- * `costAccounting: false` (every non-DeepSeek preset) means no built-in table
- * applies at all, so only a user-supplied `modelPricing` entry can price it.
+ * `costAccounting: false` means no built-in table applies, so the price has to
+ * come from somewhere else: the endpoint's own reported charge (`usageCost`, on
+ * a router whose rates no shipped table could track) or a user-supplied
+ * `modelPricing` entry. With neither, it is genuinely unknown — and a caller
+ * that reports spend or arms a cost budget has to say so rather than treat the
+ * resulting 0 as a real number.
  */
 export function pricingSourceFor(
   model: string,
-  options: { pricing?: Record<string, ModelPricing>; costAccounting?: boolean } = {},
+  options: { pricing?: Record<string, ModelPricing>; costAccounting?: boolean; usageCost?: boolean } = {},
 ): PricingSource {
   if (options.pricing?.[model] !== undefined) return "configured";
+  if (options.usageCost === true) return "provider";
   if (options.costAccounting === false) return "unavailable";
   if (MODEL_PRICING[model] !== undefined) return "builtin";
   return fallbackPricingFor(model) !== undefined ? "fallback" : "unavailable";

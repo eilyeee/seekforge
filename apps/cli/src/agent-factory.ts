@@ -4,6 +4,7 @@ import {
   configureBrowserProfile,
   configureVision,
   configureWebSearch,
+  resolveWebSearchConfig,
   resolveBrowserProfilePath,
   seekforgeHome,
   createAgentCore,
@@ -94,7 +95,7 @@ export function configureCliTools(config: CliConfig, workspace?: string): void {
   // PROJECT_PREFERENCE_KEYS, so a cloned repository cannot point this
   // agent's searches at an endpoint of its choosing and feed the model
   // whatever it likes back.
-  configureWebSearch(config.webSearch?.searxngUrl ? { searxngUrl: config.webSearch.searxngUrl } : undefined, workspace);
+  configureWebSearch(resolveWebSearchConfig(config.webSearch), workspace);
   configureVision(
     config.visionModel?.baseUrl
       ? {
@@ -161,6 +162,7 @@ export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
         thinking: config.thinking,
         reasoningEffort: config.reasoningEffort,
         modelPricing: config.modelPricing,
+        inlineImages: config.inlineImages,
         commandAllowlist: config.commandAllowlist,
         sandbox: config.sandbox,
         compaction: config.compaction,

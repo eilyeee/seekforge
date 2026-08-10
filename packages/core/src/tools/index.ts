@@ -166,10 +166,12 @@ export {
   builtinTools,
   configureVision,
   configureWebSearch,
+  resolveWebSearchConfig,
   disposeBrowser,
   disposeLspServers,
   type BrowserLease,
   type LspServerLease,
   type VisionConfig,
+  type WebSearchConfig,
 } from "./builtins/index.js";
 export { truncateHeadTail, digestCommandOutput } from "./text.js";

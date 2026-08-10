@@ -445,12 +445,24 @@ Settable via `config set`? **No** — edit the file directly.
 
 ### `modelPricing` (cost tracking on other providers)
 
-**Default off.** The `deepseek` and `anthropic` providers ship built-in price
-tables, so cost and the `maxCostUsd` budget work out of the box on their models.
-The other providers (`ark`, `openai`, `ollama`, `openrouter`, …) carry **no**
-price table, so reported cost stays `0` there and `maxCostUsd` never triggers.
-Set `modelPricing` to supply your own per-model rates and turn cost/budget
-tracking on for those providers.
+**Default off.** Cost is answered per provider by whoever can answer it:
+
+| Preset | Where the price comes from | Budgets work out of the box |
+| --- | --- | --- |
+| `deepseek`, `anthropic`, `openai` | Their published price lists ship with SeekForge | Yes |
+| `openrouter` | The endpoint states the charge for every request in `usage.cost` | Yes |
+| `ark`, `ollama`, a bare `baseUrl` | Nowhere — cost reports `0` | **No**, until you set `modelPricing` |
+
+On the last row `maxCostUsd` and the Loop cost budget can never be reached,
+because every request reports `0`. SeekForge says so rather than letting you
+believe otherwise: the CLI, the TUI and the server each warn once per session
+that no price is known, `seekforge run --max-cost` warns that the budget cannot
+be enforced, and `seekforge schedule add` warns at creation — a scheduled run is
+unattended, so a budget it cannot enforce is the one that matters most.
+
+Set `modelPricing` to supply your own per-model rates and turn cost and budget
+tracking on there. A model that is priced this way is priced everywhere,
+including on a provider whose preset has no table.
 
 SeekForge deliberately ships **no** price table for those providers rather than
 a guessed one: a wrong rate quietly mis-bills every budget built on it, which is
@@ -481,6 +493,43 @@ A model listed here is **always** priced from your rates — even on a provider
 whose preset disables cost accounting — so its cost and budget tracking work. A
 model on such a provider that you don't list stays `0`. DeepSeek's default
 behavior (no `modelPricing`) is unchanged.
+
+Settable via `config set`? **No** — edit the file directly.
+
+### `inlineImages` (let the model see a screenshot itself)
+
+**Default: follows the provider preset.** A tool that produces an image —
+`browser_screenshot` today — offers the bytes along with the path. Whether they
+travel to the model is the provider's answer, not the tool's: on an endpoint
+that accepts images the screenshot rides along with the tool result and the
+model simply looks at it; on one that does not, the result says so in text and
+the picture stays reachable through [`visionModel`](#visionmodel) and
+`image_analyze`.
+
+| Preset | Images inline | Why |
+| --- | --- | --- |
+| `anthropic` | **On** | Every current Claude model accepts them |
+| `openai` | **On** | So does every model in the shipped catalog |
+| `openrouter` | **On** | A router: the model id decides, and the refusal is explicit |
+| `ark` | Off | Mixed catalog — doubao-seed is multimodal, kimi and minimax are not |
+| `ollama` | Off | The common pulls (`llama3.1`, `qwen2.5-coder`) are text-only |
+| `deepseek` (default) | Off | DeepSeek has no vision model |
+
+Set `inlineImages` when your model disagrees with the preset's default — a
+`doubao-seed-2.0-pro` on Ark, a pulled `llava` on Ollama, or a text-only model on
+an endpoint whose others have eyes:
+
+```json
+{ "provider": "ark", "model": "doubao-seed-2.0-pro", "inlineImages": true }
+```
+
+Turning it on for a model that cannot read an image makes the request **fail**,
+not degrade — that is why the presets answer conservatively for a mixed catalog
+instead of guessing per model id. Turning it off is always safe: the image
+becomes a note naming `image_analyze`.
+
+User-owned: it describes your endpoint and account, so a repository config
+cannot set it (the same reasoning as `modelPricing`).
 
 Settable via `config set`? **No** — edit the file directly.
 
@@ -931,18 +980,25 @@ Settable via `config set`? **No** — edit the file directly.
 
 ### `webSearch`
 
-**Default off.** Where `web_search` sends its query. With a SearXNG base URL
-set, that instance is asked first and DuckDuckGo becomes the fallback:
+**Default off.** Where `web_search` sends its query. Backends are tried most
+authoritative first, and each one you configure moves ahead of the ones you did
+not:
+
+| Backend | Configured with | Notes |
+| --- | --- | --- |
+| Brave Search API | `braveApiKey` | A real search API: JSON, one key, a free tier. Tried first — someone who set up a key meant it to answer |
+| SearXNG | `searxngUrl` | JSON, no key, self-hostable |
+| DuckDuckGo | — | Always present, always last. An HTML page, scraped |
 
 ```json
-{ "webSearch": { "searxngUrl": "http://localhost:8888" } }
+{ "webSearch": { "braveApiKey": "BSA…", "searxngUrl": "http://localhost:8888" } }
 ```
 
-Until this existed `web_search` had exactly one provider — DuckDuckGo's HTML
-page, scraped — and no way around it. When DuckDuckGo changes its markup or
-answers with a block page, every search in every workspace comes back empty,
-and no setting helps. SearXNG is the second leg because it fits the rest of the
-tool: a JSON API, no API key, and self-hostable.
+Until any of this existed `web_search` had exactly one provider — DuckDuckGo's
+HTML page, scraped — and no way around it. When DuckDuckGo changes its markup or
+answers with a block page, every search in every workspace comes back empty, and
+no setting helps. The other two legs are the ways out: one you can host, one you
+can buy.
 
 **Only a backend that did not run hands over.** A search that ran and matched
 nothing is an answer, and asking a second provider to disagree with it would
@@ -1147,7 +1203,7 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 | `reasoningEffort` | enum | `high` / `max` |
 
 The remaining keys — `planModel`, `escalateOnFailure`, `maxCostUsd`,
-`modelPricing`, `verifyCommand`, `autoVerify`, `lintCommand`, `autoLint`,
+`modelPricing`, `inlineImages`, `verifyCommand`, `autoVerify`, `lintCommand`, `autoLint`,
 `editFormat`, `finalizeReview`, `guardNoProgress`,
 `memoryAutoApproveConfidence`, `memoryMaintenance`, `permissionRules`,
 `mcpServers`, `hooks` — are **not settable** via `config set`. They must be

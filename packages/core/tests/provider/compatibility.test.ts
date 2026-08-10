@@ -75,13 +75,12 @@ describe("provider compatibility matrix", () => {
       model,
       preset.capabilities,
     );
-    if (name === "deepseek") {
-      expect(usage.cacheHitTokens).toBe(6);
-      expect(usage.costUsd).toBeGreaterThan(0);
-    } else {
-      expect(usage.cacheHitTokens).toBe(0);
-      expect(usage.costUsd).toBe(0);
-    }
+    // Read off the preset rather than off its name: these are per-endpoint
+    // answers, and a matrix that hardcodes "only deepseek" stops describing the
+    // presets the moment one of them gains a price list or a cache report.
+    expect(usage.cacheHitTokens).toBe(preset.capabilities.cacheHitTokens ? 6 : 0);
+    if (preset.capabilities.costAccounting) expect(usage.costUsd).toBeGreaterThan(0);
+    else expect(usage.costUsd).toBe(0);
   });
 
   it.each(OPENAI_PRESETS)("maps OpenAI-compatible tool calls for %s", (_name, preset) => {
@@ -127,7 +126,7 @@ describe("provider compatibility matrix", () => {
     expect(result.finishReason).toBe("stop");
     expect(result.usage.promptTokens).toBe(5);
     expect(result.usage.completionTokens).toBe(2);
-    expect(result.usage.cacheHitTokens).toBe(name === "deepseek" ? 3 : 0);
+    expect(result.usage.cacheHitTokens).toBe(preset.capabilities.cacheHitTokens ? 3 : 0);
 
     const request = recorded.at(-1)!;
     expect(request.path).toBe("/v1/chat/completions");

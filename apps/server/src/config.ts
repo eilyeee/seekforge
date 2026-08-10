@@ -70,6 +70,12 @@ export type ServerConfig = {
    * it cost stays 0 there. Edit the file directly; not settable via `config set`.
    */
   modelPricing?: Record<string, ModelPricing>;
+  /**
+   * Whether images travel inline to the model (a screenshot attached to the tool
+   * result that produced it). Unset follows the provider preset. Edit the file
+   * directly; not settable via `config set`.
+   */
+  inlineImages?: boolean;
   /** OS-level command sandbox (off when unset). */
   sandbox?: "off" | "read-only" | "workspace-write" | "restricted";
   /** Context compaction strategy: "llm" summarizes via the model (default mechanical). */
@@ -130,7 +136,12 @@ export type ServerConfig = {
    * backend with DuckDuckGo as the fallback. User config only — see
    * PROJECT_PREFERENCE_KEYS.
    */
-  webSearch?: { searxngUrl?: string };
+  /**
+   * web_search's backends, most authoritative first: a Brave Search API key,
+   * then a SearXNG base URL, then the DuckDuckGo scrape that is always there.
+   * User config only — see PROJECT_PREFERENCE_KEYS.
+   */
+  webSearch?: { searxngUrl?: string; braveApiKey?: string };
   /** User-owned shell hooks fired around tool calls / lifecycle. */
   hooks?: HookConfig;
   /** MCP servers (Claude Code-compatible). Edit the file directly; not settable via `config set`. */

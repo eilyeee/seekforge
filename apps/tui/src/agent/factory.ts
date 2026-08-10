@@ -15,6 +15,7 @@ import {
   type AgentCore,
   type AgentCoreDeps,
   type AgentDefinition,
+  type ChatProvider,
   type BackgroundTasks,
   type DispatchManager,
   type McpClientEntry,
@@ -53,6 +54,12 @@ export type TuiAgentOptions = {
   dispatchManager?: DispatchManager;
   /** Session usage bus: tokens an MCP server spent through sampling. */
   usageBus?: UsageBus;
+  /**
+   * Fired once when no price is known for the model, so cost reports 0 for
+   * every request. The TUI shows a running cost and a `costBudgetUsd` warning
+   * threshold, both of which are meaningless then; absent, nothing is said.
+   */
+  onPricingUnavailable?: (info: { provider?: string; model: string }) => void;
 };
 
 export type TuiAgent = {
@@ -96,6 +103,7 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
         thinking: config.thinking,
         reasoningEffort: config.reasoningEffort,
         modelPricing: config.modelPricing,
+        inlineImages: config.inlineImages,
         commandAllowlist: config.commandAllowlist,
         sandbox: config.sandbox,
         compaction: config.compaction,
@@ -106,12 +114,16 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
         autoLint: config.autoLint,
         editFormat: config.editFormat,
       },
-      // Opt-in disk cache for identical non-streaming calls (evals, subagents).
-      config.llmCache
-        ? {
-            wrapProvider: (provider) => wrapProviderWithCache(provider, join(homedir(), ".seekforge", "llm-cache")),
-          }
-        : {},
+      {
+        // Opt-in disk cache for identical non-streaming calls (evals, subagents).
+        ...(config.llmCache
+          ? {
+              wrapProvider: (provider: ChatProvider) =>
+                wrapProviderWithCache(provider, join(homedir(), ".seekforge", "llm-cache")),
+            }
+          : {}),
+        ...(opts.onPricingUnavailable ? { onPricingUnavailable: opts.onPricingUnavailable } : {}),
+      },
     ),
     dispatcher: createDefaultDispatcher(opts.mcpToolSpecs ?? []),
     confirm: opts.confirm,

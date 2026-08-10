@@ -5,6 +5,7 @@
 
 import type {
   ChatFinishReason,
+  ChatImage,
   ChatMessage,
   ChatResponse,
   ProviderToolCall,
@@ -32,9 +33,16 @@ export type WireToolCall = {
   function?: { name?: string; arguments?: string };
 };
 
+/**
+ * A content part, used only when this protocol is carrying images. A message
+ * with no image keeps its plain-string content, so the request body a text-only
+ * conversation produces is byte-for-byte what it produced before parts existed.
+ */
+export type WireContentPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
+
 export type WireMessage = {
   role: string;
-  content: string;
+  content: string | WireContentPart[];
   tool_call_id?: string;
   tool_calls?: Array<{
     id: string;
@@ -49,7 +57,9 @@ export type WireUsage = {
   prompt_cache_hit_tokens?: number;
   prompt_cache_miss_tokens?: number;
   /** OpenAI-compatible spelling of the cache-hit count (`prompt_cache_hit_tokens` on DeepSeek). */
-  prompt_tokens_details?: { cached_tokens?: number };
+  prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+  /** USD the endpoint says it charged for this request (OpenRouter). */
+  cost?: number;
 };
 
 export type WireChatCompletion = {
@@ -90,29 +100,87 @@ export function supportsThinking(model: string): boolean {
 // --- request mapping --------------------------------------------------------
 
 /**
- * An image cannot travel on this protocol as SeekForge models it, and a model
- * asked about a screenshot it never received answers confidently about nothing.
- * Saying so in the text is the smallest honest substitute.
+ * An image cannot travel to a model that has no eyes, and a model asked about a
+ * screenshot it never received answers confidently about nothing. Saying so in
+ * the text is the smallest honest substitute.
  */
 function noteOmittedImages(content: string, images: ChatMessage["images"]): string {
   if (images === undefined || images.length === 0) return content;
   const what = images.length === 1 ? "1 image" : `${images.length} images`;
-  const note = `[${what} omitted: this provider cannot receive images]`;
+  const note = `[${what} omitted: this model does not accept images — read it with image_analyze instead]`;
   return content
     ? `${content}
 ${note}`
     : note;
 }
 
-export function toWireMessages(messages: ChatMessage[]): WireMessage[] {
+function imagePart(image: ChatImage): WireContentPart {
+  return { type: "image_url", image_url: { url: `data:${image.mediaType};base64,${image.dataBase64}` } };
+}
+
+/** What the images that follow a tool block came from, so the model can tell them apart. */
+function toolImageIntro(images: ChatImage[]): string {
+  const labels = images.map((i) => i.label).filter((l): l is string => l !== undefined && l.length > 0);
+  const what = images.length === 1 ? "Image" : `${images.length} images`;
+  return labels.length > 0
+    ? `${what} produced by the tool call(s) above: ${labels.join(", ")}.`
+    : `${what} produced by the tool call(s) above.`;
+}
+
+/**
+ * Content for a user message that carries images: the text first (a model reads
+ * the instruction before the picture), then one part per image.
+ *
+ * Only the user role. This protocol takes image parts on a user message alone —
+ * an assistant or system turn carrying one is rejected, so those keep the note
+ * they would get from a provider with no eyes at all rather than failing the
+ * request. Nothing in SeekForge produces such a message today; this is what
+ * keeps a future one from being a 400 in the middle of a run.
+ */
+function contentWithImages(m: ChatMessage): string | WireContentPart[] {
+  if (m.images === undefined || m.images.length === 0) return m.content;
+  if (m.role !== "user") return noteOmittedImages(m.content, m.images);
+  const parts: WireContentPart[] = m.content ? [{ type: "text", text: m.content }] : [];
+  parts.push(...m.images.map(imagePart));
+  return parts;
+}
+
+export function toWireMessages(messages: ChatMessage[], capabilities?: ProviderCapabilities): WireMessage[] {
   // Unanswered tool calls and orphan results are dropped first (see
   // tool-pairing.ts) — the OpenAI-compatible API rejects either.
-  return withPairedToolCalls(messages).flatMap((m) => {
-    const content = noteOmittedImages(m.content, m.images);
+  const paired = withPairedToolCalls(messages);
+  const carriesImages = capabilities?.images === true;
+  const out: WireMessage[] = [];
+  // Images from a run of tool results, held until the run ends.
+  //
+  // This protocol accepts image parts on a user message and NOT on a tool
+  // message, so a screenshot answering a tool call has to be handed over as a
+  // separate user turn. It cannot be interleaved: a tool message must follow
+  // the assistant turn that called it with nothing in between, so parallel tool
+  // calls contribute their images to one user message after the whole block.
+  let pendingToolImages: ChatImage[] = [];
+  const flushToolImages = (): void => {
+    if (pendingToolImages.length === 0) return;
+    out.push({
+      role: "user",
+      content: [{ type: "text", text: toolImageIntro(pendingToolImages) }, ...pendingToolImages.map(imagePart)],
+    });
+    pendingToolImages = [];
+  };
+
+  for (const m of paired) {
     if (m.role === "tool") {
-      return m.toolCallId === undefined ? [] : [{ role: m.role, content, tool_call_id: m.toolCallId }];
+      if (m.toolCallId === undefined) continue;
+      const content = carriesImages ? m.content : noteOmittedImages(m.content, m.images);
+      out.push({ role: m.role, content, tool_call_id: m.toolCallId });
+      if (carriesImages && m.images && m.images.length > 0) pendingToolImages.push(...m.images);
+      continue;
     }
-    const wire: WireMessage = { role: m.role, content };
+    flushToolImages();
+    const wire: WireMessage = {
+      role: m.role,
+      content: carriesImages ? contentWithImages(m) : noteOmittedImages(m.content, m.images),
+    };
     if (m.toolCalls && m.toolCalls.length > 0) {
       wire.tool_calls = m.toolCalls.map((c) => ({
         id: c.id,
@@ -120,8 +188,10 @@ export function toWireMessages(messages: ChatMessage[]): WireMessage[] {
         function: { name: c.name, arguments: c.argumentsJson },
       }));
     }
-    return [wire];
-  });
+    out.push(wire);
+  }
+  flushToolImages();
+  return out;
 }
 
 export function toWireTools(
@@ -142,7 +212,7 @@ export function buildRequestBody(
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model,
-    messages: toWireMessages(req.messages),
+    messages: toWireMessages(req.messages, capabilities),
     stream,
   };
   if (req.tools && req.tools.length > 0) body.tools = toWireTools(req.tools);
@@ -213,14 +283,35 @@ export function priceUsage(
   model: string,
   capabilities?: ProviderCapabilities,
   modelPricing?: Record<string, ModelPricing>,
+  reportedCostUsd?: number,
 ): TokenUsage {
   const costUsd =
     modelPricing?.[model] !== undefined
       ? estimateCostUsd(tokens, model, modelPricing)
-      : (capabilities?.costAccounting ?? true)
-        ? estimateCostUsd(tokens, model)
-        : 0;
+      : reportedCostUsd !== undefined
+        ? reportedCostUsd
+        : (capabilities?.costAccounting ?? true)
+          ? estimateCostUsd(tokens, model)
+          : 0;
   return { ...tokens, costUsd };
+}
+
+/**
+ * A cost the endpoint reported, if it is one we can put in a budget.
+ *
+ * Unlike a token count this is a real number, so it gets its own validation
+ * rather than validUsageCount's integer rule. Anything outside the sane range —
+ * negative, NaN, or a figure no request could plausibly cost — is treated as
+ * not reported at all, which falls back to the table. A budget must not be
+ * moved by a number the provider fumbled.
+ */
+const MAX_REPORTED_COST_USD = 10_000;
+
+function reportedCost(raw: WireUsage | null | undefined, capabilities?: ProviderCapabilities): number | undefined {
+  if (capabilities?.usageCost !== true) return undefined;
+  const cost = raw?.cost;
+  if (typeof cost !== "number" || !Number.isFinite(cost) || cost < 0 || cost > MAX_REPORTED_COST_USD) return undefined;
+  return cost;
 }
 
 export function mapUsage(
@@ -238,17 +329,26 @@ export function mapUsage(
     raw?.prompt_tokens_details?.cached_tokens,
     "prompt_tokens_details.cached_tokens",
   );
+  const detailsWritten = validUsageCount(
+    raw?.prompt_tokens_details?.cache_write_tokens,
+    "prompt_tokens_details.cache_write_tokens",
+  );
   // OpenAI-compatible endpoints report cache hits under prompt_tokens_details;
   // DeepSeek's own field wins when both are present.
   const cacheHitTokens =
     raw?.prompt_cache_hit_tokens !== undefined ? tokenCount("prompt_cache_hit_tokens") : detailsCached;
-  const tokens = {
+  const tokens: UsageTokens = {
     promptTokens: tokenCount("prompt_tokens"),
     completionTokens: tokenCount("completion_tokens"),
     cacheHitTokens: 0,
   };
-  tokens.cacheHitTokens = (capabilities?.cacheHitTokens ?? true) ? Math.min(cacheHitTokens, tokens.promptTokens) : 0;
-  return priceUsage(tokens, model, capabilities, modelPricing);
+  const reads = (capabilities?.cacheHitTokens ?? true) ? Math.min(cacheHitTokens, tokens.promptTokens) : 0;
+  tokens.cacheHitTokens = reads;
+  // A write is a subset of the prompt that is not also a read, and it is only
+  // meaningful where reads are read at all.
+  const writes = reads > 0 || detailsWritten > 0 ? Math.min(detailsWritten, tokens.promptTokens - reads) : 0;
+  if ((capabilities?.cacheHitTokens ?? true) && writes > 0) tokens.cacheWriteTokens = writes;
+  return priceUsage(tokens, model, capabilities, modelPricing, reportedCost(raw, capabilities));
 }
 
 export function mapWireToolCalls(raw: WireToolCall[] | undefined): ProviderToolCall[] {

@@ -34,7 +34,7 @@ export const browserScreenshot = defineTool({
   name: "browser_screenshot",
   description:
     "Capture a full-page PNG of the currently loaded browser page and save it under the workspace (default .seekforge/uploads/, or a given path); returns the saved path. " +
-    "Read-only on the page — call browser_navigate first. On a provider that accepts images the screenshot is attached to this result and you can simply look at it; otherwise pass the path to image_analyze.",
+    "Read-only on the page — call browser_navigate first. On a model that accepts images the screenshot is handed to you with this result and you can simply look at it; otherwise the result says so and you pass the path to image_analyze.",
   schema: screenshotSchema,
   // Writes a PNG artifact into the workspace but takes no new outward action;
   // classify as "execute" (the page was already loaded via a confirmed navigate).

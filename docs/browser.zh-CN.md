@@ -134,8 +134,10 @@ profile 是在一次运行**正常结束**时写入的。取消运行（Ctrl+C�
 5. 把你真正改动的流程跑一遍：`browser_fill({selector:"#user", text:"ada"})` →
    `browser_select({selector:"#team", label:"Tools team"})` →
    `browser_click({selector:"#submit"})` → `browser_wait_for({text:"Welcome"})`。
-6. `browser_screenshot()` — 截取一张 PNG 留档，或交给
-   `image_analyze` 做视觉检查（「布局是不是坏了？」）。
+6. `browser_screenshot()` — 截取一张 PNG 留档。模型能收图时，截图会直接递到它
+   面前，它自己看这一页；不能收时，结果里会说明这一点，再把路径交给
+   `image_analyze` 做视觉检查（「布局是不是坏了？」）。二者取其一，取决于你的
+   provider 的 [`inlineImages`](configuration.zh-CN.md#inlineimages) 答案。
 
 如此迭代：编辑 → 重新 `browser_navigate`（或刷新）→ 交互 → `browser_console`，直到页面干净为止。
 

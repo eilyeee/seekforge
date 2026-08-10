@@ -19,12 +19,16 @@ import { OUTLINE_PREFIX, symbolBackends, type SymbolBackend } from "./repo-map.j
 // node types are known and tested (see repo-map-ast.test.ts). Deliberately NOT
 // mapped, with reasons, so nobody re-derives them:
 //
-//   elixir  — defmodule/def are macros, so the whole file parses to nested
-//             `call` nodes. The AST knows no more than the regex floor does.
-//   vue     — the <script> body arrives as one `raw_text` token; extracting
-//             symbols needs a second parse with the JS grammar.
-//   dart, elm, ql — the shipped .wasm fails to load (ABI mismatch), measured.
+//   vue     — the <script> body arrives as one `raw_text` token. Handled
+//             WITHOUT this grammar instead: see EMBEDDED_SCRIPT_EXTS below,
+//             which lifts the script out and parses it as JS/TS.
+//   dart, elm, ql — the shipped .wasm fails to load. Re-measured against
+//             tree-sitter-wasms 0.1.13: the runtime accepts language versions
+//             13-14 and these are built at 15, 12 and 10. Nothing here can fix
+//             that; it needs different grammar builds upstream.
 //   objc (23MB), ocaml (15MB), tlaplus (15MB) — heavy for their likelihood.
+//   elixir IS mapped now: everything parses to `call`, so it needs its own name
+//             rule rather than a node-type match — see elixirDefinitionName.
 //   json/yaml/toml/html/css — no declarations to outline.
 const GRAMMARS: Record<string, string> = {
   js: "javascript",
@@ -61,6 +65,8 @@ const GRAMMARS: Record<string, string> = {
   lua: "lua",
   zig: "zig",
   sol: "solidity",
+  ex: "elixir",
+  exs: "elixir",
 };
 
 /**
@@ -229,46 +235,261 @@ function nameOf(node: TsNode): string | undefined {
   return undefined;
 }
 
+/** Elixir needs its own name rule everywhere a declaration is looked for. */
+function isElixir(rel: string): boolean {
+  return GRAMMARS[extOf(rel)] === "elixir";
+}
+
 function parserFor(rel: string): TsParser | undefined {
   const g = GRAMMARS[extOf(rel)];
   return g ? parsers.get(g) : undefined;
 }
 
+// ---------------------------------------------------------------------------
+// Single-file components: the code lives in a <script> block inside markup.
+// ---------------------------------------------------------------------------
+
+/**
+ * Extensions whose file is markup wrapping one or more script blocks.
+ *
+ * The vue grammar was deliberately unmapped because it hands the whole script
+ * body over as one `raw_text` token — an AST that knows less than the regex
+ * floor. Rather than parse the markup at all, these files are handled by
+ * lifting the script out and parsing THAT with the JS/TS grammar it declares,
+ * which is the grammar that actually understands the code. Svelte comes along
+ * for free: no svelte grammar is involved either.
+ */
+const EMBEDDED_SCRIPT_EXTS = new Set(["vue", "svelte"]);
+
+type EmbeddedScript = { code: string; grammar: string; lineOffset: number };
+
+/**
+ * `lang="…"` on the tag decides the grammar; unset means JavaScript.
+ *
+ * Only two grammars are named, so only two are ever loaded for a component
+ * repository. A `lang="tsx"` — which Vue and Svelte both allow and almost
+ * nobody writes — reads as TypeScript: its declarations parse, and the JSX it
+ * may contain degrades to a partial outline rather than to nothing.
+ */
+function scriptGrammar(attributes: string): string {
+  const lang = /\blang\s*=\s*["']?([\w-]+)/i.exec(attributes)?.[1]?.toLowerCase();
+  return lang === "ts" || lang === "typescript" || lang === "tsx" ? "typescript" : "javascript";
+}
+
+/**
+ * Every `<script>` block in a single-file component, with the line it starts on.
+ *
+ * A Vue file routinely has two (`<script setup>` beside a plain `<script>`), and
+ * both hold declarations worth outlining. The offset is what keeps
+ * find_definition honest: the parse is of the script alone, but every line
+ * number it reports has to point into the real file.
+ */
+export function embeddedScripts(content: string): EmbeddedScript[] {
+  const out: EmbeddedScript[] = [];
+  const re = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi;
+  for (let m = re.exec(content); m !== null; m = re.exec(content)) {
+    const attributes = m[1] ?? "";
+    const code = m[2] ?? "";
+    // The body starts right after the opening tag. Measured from the tag's own
+    // parts rather than by subtracting the closing tag's length, which would be
+    // wrong the moment someone writes `</script >`.
+    const bodyStart = m.index + "<script".length + attributes.length + 1;
+    const lineOffset = content.slice(0, bodyStart).split("\n").length - 1;
+    out.push({ code, grammar: scriptGrammar(attributes), lineOffset });
+  }
+  return out;
+}
+
+/** The parsed script blocks of a single-file component, or undefined if it is not one. */
+function embeddedTrees(rel: string, content: string): { script: EmbeddedScript; parser: TsParser }[] | undefined {
+  if (!EMBEDDED_SCRIPT_EXTS.has(extOf(rel))) return undefined;
+  const out: { script: EmbeddedScript; parser: TsParser }[] = [];
+  for (const script of embeddedScripts(content)) {
+    // A grammar that was never loaded (nothing hinted at this file) leaves the
+    // block to the regex floor rather than reporting an empty component.
+    const parser = parsers.get(script.grammar);
+    if (parser) out.push({ script, parser });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Elixir: declarations are macro calls, not declaration nodes.
+// ---------------------------------------------------------------------------
+
+/**
+ * The macros that introduce a name. Everything in an Elixir file parses to
+ * `call`, so there is no node type to match on — the target identifier is what
+ * says whether a call declares something. Measured against the shipped grammar:
+ * `call(identifier "def", arguments(call(identifier "name", …)), do_block)`.
+ */
+const ELIXIR_DEFINERS = new Set([
+  "defmodule",
+  "defprotocol",
+  "defimpl",
+  "defstruct",
+  "defexception",
+  "def",
+  "defp",
+  "defmacro",
+  "defmacrop",
+  "defguard",
+  "defguardp",
+  "defdelegate",
+]);
+
+/** The name a `defmodule`/`def`/… call introduces, or undefined if it is not one. */
+function elixirDefinitionName(node: TsNode): string | undefined {
+  if (node.type !== "call" || node.namedChildCount < 2) return undefined;
+  const target = node.namedChild(0);
+  if (target.type !== "identifier" || !ELIXIR_DEFINERS.has(target.text)) return undefined;
+  const args = node.namedChild(1);
+  if (args.type !== "arguments" || args.namedChildCount === 0) {
+    // `defstruct` with no arguments still declares the struct; name it after
+    // nothing rather than inventing one.
+    return undefined;
+  }
+  let head: TsNode = args.namedChild(0);
+  // `def foo(x) when is_integer(x)` wraps the head in the `when` operator.
+  for (let guard = 0; head.type === "binary_operator" && head.namedChildCount > 0 && guard < 4; guard++) {
+    head = head.namedChild(0);
+  }
+  // `defmodule Foo` / `def foo` name themselves; `def foo(x)` puts the name in
+  // the target of an inner call.
+  if (head.type === "alias" || head.type === "identifier") return head.text;
+  if (head.type === "call" && head.namedChildCount > 0) {
+    const inner = head.namedChild(0);
+    if (inner.type === "identifier" || inner.type === "alias") return inner.text;
+  }
+  return undefined;
+}
+
+/**
+ * Every name an Elixir file declares, module and functions alike.
+ *
+ * Unlike the other grammars this descends: a module's functions live inside its
+ * `do_block`, so a top-level-only scan would outline every file as its one
+ * module name. The depth bound keeps a deeply nested macro from walking the
+ * whole tree for a listing that shows eight names.
+ */
+function elixirNames(root: TsNode, depth = 0): string[] {
+  if (depth > 4) return [];
+  const names: string[] = [];
+  for (let i = 0; i < root.namedChildCount; i++) {
+    const child = root.namedChild(i);
+    const name = elixirDefinitionName(child);
+    if (name !== undefined) names.push(name);
+    names.push(...elixirNames(child, depth + 1));
+  }
+  return names;
+}
+
+/** Top-level declared names in one parsed tree, in source order. */
+function outlineNames(root: TsNode): string[] {
+  const names: string[] = [];
+  for (let i = 0; i < root.namedChildCount; i++) {
+    let n: TsNode = root.namedChild(i);
+    if (n.type === "export_statement" && n.namedChildCount > 0) n = n.namedChild(0); // unwrap `export ...`
+    if (DEFINITION_TYPES.has(n.type)) {
+      const nm = nameOf(n);
+      if (nm) names.push(nm);
+    } else if (n.type === "lexical_declaration" || n.type === "variable_declaration") {
+      for (let j = 0; j < n.namedChildCount; j++) {
+        const d: TsNode = n.namedChild(j);
+        if (d.type === "variable_declarator") {
+          const nm = nameOf(d);
+          if (nm) names.push(nm);
+        }
+      }
+    } else if (n.type === "export_clause") {
+      // Barrel re-exports: `export { a, b as c }` -> list the exported names.
+      for (let j = 0; j < n.namedChildCount; j++) {
+        const spec: TsNode = n.namedChild(j);
+        if (spec.type === "export_specifier") {
+          const nm = nameOf(spec);
+          if (nm) names.push(nm);
+        }
+      }
+    }
+  }
+  return names;
+}
+
+/** Whether a node declares `symbol` under the ordinary type-driven rule. */
+function declaresSymbol(node: TsNode, symbol: string): boolean {
+  return DEFINITION_TYPES.has(node.type) && nameOf(node) === symbol;
+}
+
+/**
+ * Whether an Elixir macro call declares `symbol`.
+ *
+ * A module's real name is dotted (`MyApp.Accounts`) and the outline says so,
+ * but find_definition only accepts identifier-shaped symbols — by design, so a
+ * lookup cannot smuggle in whitespace or punctuation. Matching the last segment
+ * as well is what lets someone search for `Accounts` and find the module the
+ * outline named, without widening that gate.
+ */
+function elixirDeclaresSymbol(node: TsNode, symbol: string): boolean {
+  const name = elixirDefinitionName(node);
+  if (name === undefined) return false;
+  return name === symbol || name.slice(name.lastIndexOf(".") + 1) === symbol;
+}
+
+/**
+ * Every node named `symbol`, anywhere in one tree, as file rows via `rowOffset`.
+ *
+ * `declares` is what a grammar's declarations look like. All but one answer by
+ * node type; Elixir has no declaration node types at all and answers by which
+ * macro is being called.
+ */
+function definitionRows(
+  root: TsNode,
+  symbol: string,
+  lines: string[],
+  rowOffset: number,
+  declares: (node: TsNode, symbol: string) => boolean = declaresSymbol,
+): DefinitionRow[] {
+  const out: DefinitionRow[] = [];
+  const visit = (node: TsNode): void => {
+    if (declares(node, symbol)) {
+      const row = (node.startPosition.row as number) + rowOffset;
+      out.push({ line: row + 1, text: (lines[row] ?? "").trim().slice(0, 200) });
+    }
+    for (let i = 0; i < node.namedChildCount; i++) visit(node.namedChild(i));
+  };
+  visit(root);
+  return out;
+}
+
+type DefinitionRow = { line: number; text: string };
+
 const astBackend: SymbolBackend = {
   name: "tree-sitter",
   outline(rel, content) {
+    const embedded = embeddedTrees(rel, content);
+    if (embedded) {
+      if (embedded.length === 0) return undefined; // no parseable script -> regex floor
+      const names: string[] = [];
+      for (const { script, parser } of embedded) {
+        let tree: TsTree | undefined;
+        try {
+          tree = parser.parse(script.code);
+          names.push(...outlineNames(tree.rootNode));
+        } catch {
+          return undefined;
+        } finally {
+          tree?.delete();
+        }
+      }
+      const uniq = [...new Set(names)].slice(0, 8);
+      return uniq.length > 0 ? `${OUTLINE_PREFIX} ${uniq.join(", ")}` : "";
+    }
     const parser = parserFor(rel);
     if (!parser) return undefined; // unsupported ext / not loaded -> defer to regex
     let tree: TsTree | undefined;
     try {
       tree = parser.parse(content);
-      const root = tree.rootNode;
-      const names: string[] = [];
-      for (let i = 0; i < root.namedChildCount; i++) {
-        let n: TsNode = root.namedChild(i);
-        if (n.type === "export_statement" && n.namedChildCount > 0) n = n.namedChild(0); // unwrap `export ...`
-        if (DEFINITION_TYPES.has(n.type)) {
-          const nm = nameOf(n);
-          if (nm) names.push(nm);
-        } else if (n.type === "lexical_declaration" || n.type === "variable_declaration") {
-          for (let j = 0; j < n.namedChildCount; j++) {
-            const d: TsNode = n.namedChild(j);
-            if (d.type === "variable_declarator") {
-              const nm = nameOf(d);
-              if (nm) names.push(nm);
-            }
-          }
-        } else if (n.type === "export_clause") {
-          // Barrel re-exports: `export { a, b as c }` -> list the exported names.
-          for (let j = 0; j < n.namedChildCount; j++) {
-            const spec: TsNode = n.namedChild(j);
-            if (spec.type === "export_specifier") {
-              const nm = nameOf(spec);
-              if (nm) names.push(nm);
-            }
-          }
-        }
-      }
+      const names = isElixir(rel) ? elixirNames(tree.rootNode) : outlineNames(tree.rootNode);
       const uniq = [...new Set(names)].slice(0, 8);
       return uniq.length > 0 ? `${OUTLINE_PREFIX} ${uniq.join(", ")}` : "";
     } catch {
@@ -278,22 +499,32 @@ const astBackend: SymbolBackend = {
     }
   },
   definitions(rel, content, symbol) {
+    const lines = content.split("\n");
+    const embedded = embeddedTrees(rel, content);
+    if (embedded) {
+      if (embedded.length === 0) return undefined;
+      const out: DefinitionRow[] = [];
+      for (const { script, parser } of embedded) {
+        let tree: TsTree | undefined;
+        try {
+          tree = parser.parse(script.code);
+          // Rows come from the script's own parse; the offset and the text both
+          // come from the real file, so a hit points where a reader can go.
+          out.push(...definitionRows(tree.rootNode, symbol, lines, script.lineOffset));
+        } catch {
+          return undefined;
+        } finally {
+          tree?.delete();
+        }
+      }
+      return out;
+    }
     const parser = parserFor(rel);
     if (!parser) return undefined;
     let tree: TsTree | undefined;
     try {
       tree = parser.parse(content);
-      const lines = content.split("\n");
-      const out: { line: number; text: string }[] = [];
-      const visit = (node: TsNode): void => {
-        if (DEFINITION_TYPES.has(node.type) && nameOf(node) === symbol) {
-          const row = node.startPosition.row as number;
-          out.push({ line: row + 1, text: (lines[row] ?? "").trim().slice(0, 200) });
-        }
-        for (let i = 0; i < node.namedChildCount; i++) visit(node.namedChild(i));
-      };
-      visit(tree.rootNode);
-      return out;
+      return definitionRows(tree.rootNode, symbol, lines, 0, isElixir(rel) ? elixirDeclaresSymbol : declaresSymbol);
     } catch {
       return undefined; // any parse/extraction failure -> defer to the regex floor
     } finally {
@@ -301,6 +532,11 @@ const astBackend: SymbolBackend = {
     }
   },
   ranges(rel, content) {
+    // Deliberately not answered for a single-file component: these are byte
+    // offsets used to cut a file without splitting a construct, and the script's
+    // offsets are into the script, not the file. Returning them shifted would be
+    // worse than leaving the caller its own bounds.
+    if (EMBEDDED_SCRIPT_EXTS.has(extOf(rel))) return undefined;
     const parser = parserFor(rel);
     if (!parser) return undefined;
     let tree: TsTree | undefined;
@@ -401,8 +637,17 @@ export async function ensureAstBackend(hints?: Iterable<string>): Promise<boolea
 
   const wanted = new Set<string>();
   for (const hint of hints ?? DEFAULT_EXTENSIONS) {
-    const grammar = GRAMMARS[extOf(hint)];
+    const ext = extOf(hint);
+    const grammar = GRAMMARS[ext];
     if (grammar !== undefined) wanted.add(grammar);
+    // A single-file component needs the grammars its <script> might declare,
+    // not one for its own extension — and which one it declares is inside the
+    // file, which is not open yet. Both are small next to the markup grammar
+    // this replaces.
+    if (EMBEDDED_SCRIPT_EXTS.has(ext)) {
+      wanted.add("javascript");
+      wanted.add("typescript");
+    }
   }
   await Promise.all([...wanted].map((grammar) => loadGrammar(rt, grammar)));
 

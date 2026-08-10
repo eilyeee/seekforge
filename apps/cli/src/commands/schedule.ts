@@ -15,9 +15,10 @@
  * `seekforge audit`).
  */
 
-import { listSessions } from "@seekforge/core";
+import { listSessions, resolvedPricingSource } from "@seekforge/core";
 import { RunManager, readRunLedger } from "@seekforge/server";
 import { authorizeDir } from "../authorized-dirs.js";
+import { loadConfig } from "../config.js";
 import { dim, fail, green, red } from "../colors.js";
 import {
   addJob,
@@ -95,6 +96,26 @@ export function scheduleAddCommand(opts: ScheduleAddOptions, projectPath: string
 
     console.log(green(`added scheduled job "${result.job.id}"`));
     console.log(dim(`  ${describeJob(result.job)}`));
+    // maxCostUsd is required here precisely because a scheduled run is
+    // unattended. On a provider with no known price that requirement is
+    // satisfied on paper and enforced by nothing — every request reports 0, so
+    // the budget never trips and the job is unbounded. Said at creation, where
+    // it can still be fixed, rather than at 3am on the first tick.
+    const scheduleConfig = loadConfig(projectPath);
+    if (
+      resolvedPricingSource({
+        provider: scheduleConfig.provider,
+        ...(scheduleConfig.model ? { model: scheduleConfig.model } : {}),
+        ...(scheduleConfig.modelPricing ? { modelPricing: scheduleConfig.modelPricing } : {}),
+      }) === "unavailable"
+    ) {
+      console.error(
+        `warning: no price is known for ${scheduleConfig.model ?? "the default model"}${
+          scheduleConfig.provider ? ` on provider "${scheduleConfig.provider}"` : ""
+        } — this job's $${result.job.maxCostUsd.toFixed(2)} budget cannot be enforced ` +
+          "(cost reports 0); set modelPricing in config before letting it run unattended",
+      );
+    }
     console.log(
       dim("  run due jobs with: seekforge schedule run  (wire this into cron/launchd — see docs/scheduling.md)"),
     );

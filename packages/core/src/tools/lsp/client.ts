@@ -15,7 +15,9 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
+import { homedir } from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ToolError } from "../errors.js";
@@ -23,9 +25,16 @@ import { abortablePromise, onAbortOnce } from "../../util/abort.js";
 import { installProcessTeardown } from "../../util/process-teardown.js";
 import { isRecord } from "../../util/guards.js";
 import { compareByCodePoints } from "@seekforge/shared";
+import { clipLine } from "@seekforge/shared/format";
 import { readUtf8FileBoundedSync } from "../../util/fs.js";
 
 const MAX_LSP_DOCUMENT_BYTES = 5 * 1024 * 1024;
+
+/** How much of a server's stderr to keep for explaining an exit. */
+const MAX_STDERR_TAIL_CHARS = 4000;
+/** How many of its last lines to quote, and how long the quote may get. */
+const STDERR_REASON_LINES = 3;
+const MAX_STDERR_REASON_CHARS = 400;
 
 // ---------------------------------------------------------------------------
 // Pure JSON-RPC framing (Content-Length header + JSON body). No IO here.
@@ -101,7 +110,19 @@ export function parseLspMessages(buffer: Buffer): ParseResult {
 // Language → server-command mapping and PATH detection.
 // ---------------------------------------------------------------------------
 
-type Candidate = { command: string; args: string[] };
+type Candidate = {
+  command: string;
+  args: string[];
+  /**
+   * Extra arguments that can only be written once the workspace is known.
+   *
+   * One server needs this: jdtls keeps a per-project workspace of indexes and
+   * must be told where. That was the reason Java was left out — the table had
+   * nowhere to put a directory. It has one now, under the SeekForge home, which
+   * is ours to create rather than a guess about someone's build.
+   */
+  workspaceArgs?: (workspace: string) => string[];
+};
 type LangEntry = {
   /** LSP languageId sent in textDocument/didOpen. */
   languageId: string;
@@ -143,11 +164,10 @@ const EXT_TO_LANG: Record<string, LangEntry> = {
   // not have its references found, and not be jumped through — in a repository
   // that is itself part Rust.
   //
-  // Each entry names servers that speak LSP over stdio with no extra setup.
-  // Deliberately absent: Java's jdtls, which needs a `-data <dir>` workspace
-  // handed to it and a per-project layout this seam has nowhere to put, and
-  // C#'s OmniSharp, which needs `-lsp` plus a solution/project probe. Both
-  // would be a guess about someone's build rather than a language server.
+  // Each entry names servers that speak LSP over stdio with no extra setup —
+  // except Java, whose entry supplies the one thing jdtls needs (see
+  // `workspaceArgs`), and C#, which is served by a server that finds the
+  // solution itself with OmniSharp behind it.
   ".rs": {
     languageId: "rust",
     servers: [{ command: "rust-analyzer", args: [] }],
@@ -202,10 +222,56 @@ const EXT_TO_LANG: Record<string, LangEntry> = {
     servers: [{ command: "zls", args: [] }],
     install: "Install the Zig language server: `brew install zls`, or see zigtools/zls.",
   },
+  ".java": {
+    languageId: "java",
+    servers: [
+      {
+        command: "jdtls",
+        args: [],
+        // jdtls indexes a project into a data directory and will not start
+        // without one it can own. Keyed by workspace so two projects never
+        // share an index, and rooted in the SeekForge home so nothing is
+        // written into the user's repository.
+        workspaceArgs: (workspace) => ["-data", jdtlsDataDir(workspace)],
+      },
+    ],
+    // The Java version is in the hint because jdtls enforces it before it does
+    // anything else, and a user on the LTS their project targets can easily be
+    // below it: measured on a machine with Java 17, jdtls exits immediately
+    // with "jdtls requires at least Java 21". It may still COMPILE an older
+    // project — the version below is the one that runs the server.
+    install:
+      "Install the Java language server: `brew install jdtls`, or download eclipse.jdt.ls and put its `jdtls` launcher on PATH. " +
+      "jdtls itself needs Java 21+ to run (set JAVA_HOME to a 21+ JDK); the project it analyzes may target an older one.",
+  },
+  ".cs": {
+    languageId: "csharp",
+    servers: [
+      // csharp-ls discovers the .sln/.csproj itself, which is what makes it
+      // usable without asking anyone about their build. OmniSharp stays behind
+      // it for the machines that already have it.
+      { command: "csharp-ls", args: [] },
+      { command: "OmniSharp", args: ["-lsp"] },
+      { command: "omnisharp", args: ["-lsp"] },
+    ],
+    install: "Install a C# language server: `dotnet tool install --global csharp-ls`, or install OmniSharp.",
+  },
   ".sh": bashEntry(),
   ".bash": bashEntry(),
   ".zsh": bashEntry(),
 };
+
+/**
+ * jdtls's per-project data directory: `~/.seekforge/lsp/jdtls/<hash>`.
+ *
+ * The hash is of the workspace path, so the same project reuses its index
+ * across runs and two projects never collide. Not created here —
+ * resolveServerCommand stays side-effect-free, and jdtls creates it on start.
+ */
+export function jdtlsDataDir(workspace: string): string {
+  const key = createHash("sha256").update(workspace).digest("hex").slice(0, 16);
+  return path.join(homedir(), ".seekforge", "lsp", "jdtls", key);
+}
 
 /** clangd serves C and C++ from one binary; only the languageId differs. */
 function clangdEntry(languageId: string): LangEntry {
@@ -284,7 +350,7 @@ type Resolved = { languageId: string; candidate: Candidate };
  *     known but none of its binaries are found on PATH.
  * This is where graceful degradation happens — no process is spawned here.
  */
-export function resolveServerCommand(filePath: string): Resolved {
+export function resolveServerCommand(filePath: string, workspace?: string): Resolved {
   const ext = path.extname(filePath).toLowerCase();
   const entry = EXT_TO_LANG[ext];
   if (!entry) {
@@ -299,6 +365,17 @@ export function resolveServerCommand(filePath: string): Resolved {
   const candidate = entry.servers.find((s) => commandExistsOnPath(s.command));
   if (!candidate) {
     throw new ToolError("lsp_unavailable", entry.install);
+  }
+  // Workspace-dependent arguments are appended here rather than baked into the
+  // table, so the table stays a pure description of what each language needs
+  // and a caller with no workspace still gets a runnable base command. (The one
+  // caller that has one is getSession; `seekforge doctor` never comes through
+  // here at all — it asks lspServerCommands() which binaries exist.)
+  if (candidate.workspaceArgs !== undefined && workspace !== undefined) {
+    return {
+      languageId: entry.languageId,
+      candidate: { ...candidate, args: [...candidate.args, ...candidate.workspaceArgs(workspace)] },
+    };
   }
   return { languageId: entry.languageId, candidate };
 }
@@ -556,6 +633,18 @@ function normalizeTypeRelatives(result: unknown): LspTypeRelative[] {
 // ---------------------------------------------------------------------------
 
 const REQUEST_TIMEOUT_MS = 15_000;
+/**
+ * Budget for the FIRST answer a freshly started server gives.
+ *
+ * A server accepts `initialize` long before it can answer a question about the
+ * code: it still has to read the project and build an index, and on a cold
+ * workspace that is the slowest thing it will ever do. Measured with jdtls on
+ * an empty `-data` directory, the first `textDocument/documentSymbol` did not
+ * return inside 15s — which made Java look broken on first use and fine
+ * afterwards, the worst shape a timeout can have. Only the first request pays
+ * this; once one has come back, the ordinary budget applies.
+ */
+const FIRST_REQUEST_TIMEOUT_MS = 120_000;
 const HANDSHAKE_TIMEOUT_MS = 20_000;
 const DIAGNOSTICS_WAIT_MS = 4_000;
 // After SIGTERM on dispose, escalate to SIGKILL if the server has not exited
@@ -596,11 +685,41 @@ class LspSession {
   // never serve another request, so the registry must discard it (not reuse
   // the cached-but-dead process, which would hang every call until timeout).
   private ended = false;
+  /**
+   * The tail of what the server wrote to stderr.
+   *
+   * This used to be drained into nothing, so a server that refused to start
+   * reported `jdtls exited` and kept its reason to itself — while having
+   * printed the exact, actionable one ("jdtls requires at least Java 21").
+   * Bounded because the original reason for draining stands: a chatty server
+   * must not be able to fill the pipe or this buffer.
+   */
+  private stderrTail = "";
+  /** Whether `initialize` has been answered — see the note where it is set. */
+  private handshakeDone = false;
+  /** Whether a post-handshake request has been answered. See FIRST_REQUEST_TIMEOUT_MS. */
+  private answered = false;
 
   constructor(workspace: string, languageId: string, candidate: Candidate) {
     this.workspace = workspace;
     this.languageId = languageId;
     this.candidate = candidate;
+  }
+
+  /**
+   * The last few lines the server printed, as a clause to append to an error.
+   *
+   * Last lines rather than first: a JVM stack trace ends with the message that
+   * explains it, and a server that logged progress before failing put the
+   * reason at the bottom.
+   */
+  private stderrReason(): string {
+    const lines = this.stderrTail
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    const tail = lines.slice(-STDERR_REASON_LINES).join("; ");
+    return tail ? `: ${clipLine(tail, MAX_STDERR_REASON_CHARS)}` : "";
   }
 
   /** False once the underlying server has exited/errored or been disposed. */
@@ -628,11 +747,14 @@ class LspSession {
     });
     child.on("exit", () => {
       this.ended = true;
-      this.fail(new ToolError("lsp_exited", `${this.candidate.command} exited`));
+      this.fail(new ToolError("lsp_exited", `${this.candidate.command} exited${this.stderrReason()}`));
     });
     child.stdout?.on("data", (chunk: Buffer) => this.onData(chunk));
-    // Drain stderr so a chatty server cannot block on a full pipe.
-    child.stderr?.on("data", () => {});
+    // Drained so a chatty server cannot block on a full pipe, but kept: what it
+    // wrote here is usually the only explanation of why it is about to exit.
+    child.stderr?.on("data", (chunk: Buffer) => {
+      this.stderrTail = (this.stderrTail + chunk.toString("utf8")).slice(-MAX_STDERR_TAIL_CHARS);
+    });
 
     const rootUri = pathToFileURL(this.workspace).toString();
     await this.request(
@@ -676,6 +798,11 @@ class LspSession {
       HANDSHAKE_TIMEOUT_MS,
     );
     this.notify("initialized", {});
+    // From here the server is talking to us but may not yet know the project:
+    // the next request is the one that waits for its index. `initialize` came
+    // back long before that, which is why it does not count as the first
+    // answer.
+    this.handshakeDone = true;
   }
 
   private onData(chunk: Buffer): void {
@@ -699,6 +826,10 @@ class LspSession {
     if (typeof msg.id === "number" && ("result" in msg || "error" in msg)) {
       const p = this.takePending(msg.id);
       if (!p) return;
+      // Answered at all — including with an error — means indexing is behind
+      // us and later requests get the ordinary budget. Responses to the
+      // handshake itself arrive before any of that and do not count.
+      if (this.handshakeDone) this.answered = true;
       if (msg.error) {
         const e = msg.error as { message?: string };
         p.reject(new ToolError("lsp_error", e.message ?? "language server error"));
@@ -759,6 +890,10 @@ class LspSession {
     if (this.disposed || this.ended)
       return Promise.reject(new ToolError("lsp_exited", "language server session ended"));
     if (signal?.aborted) return Promise.reject(cancelledError());
+    // The first answer includes however long this server needs to index the
+    // project; every one after it does not. A caller that asked for a longer
+    // budget keeps it — this only raises a floor, never lowers a ceiling.
+    if (!this.answered) timeoutMs = Math.max(timeoutMs, FIRST_REQUEST_TIMEOUT_MS);
     const id = this.nextId++;
     return new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -1120,7 +1255,7 @@ let exitHookInstalled = false;
 async function getSession(workspace: string, absPath: string, signal?: AbortSignal): Promise<{ session: LspSession }> {
   if (signal?.aborted) throw cancelledError();
   workspace = workspaceIdentity(workspace);
-  const { languageId, candidate } = resolveServerCommand(absPath); // throws when unavailable
+  const { languageId, candidate } = resolveServerCommand(absPath, workspace); // throws when unavailable
   const key = `${workspace}\0${languageId}`;
   const starting = startingSessions.get(key);
   if (starting) {

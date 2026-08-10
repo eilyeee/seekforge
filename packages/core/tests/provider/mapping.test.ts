@@ -15,6 +15,7 @@ import {
   MAX_SSE_TOOL_ARGUMENT_CHARS,
   MAX_SSE_TOOL_CALLS,
 } from "../../src/provider/protocol-limits.js";
+import type { ProviderCapabilities } from "../../src/provider/types.js";
 
 describe("toWireMessages", () => {
   it("maps assistant toolCalls to OpenAI-style tool_calls", () => {
@@ -468,6 +469,59 @@ describe("user-supplied modelPricing (cost on non-DeepSeek providers)", () => {
   });
 });
 
+describe("a cost the endpoint reported itself", () => {
+  const routerCaps: ProviderCapabilities = {
+    thinking: false,
+    cacheHitTokens: true,
+    costAccounting: false,
+    balance: false,
+    usageCost: true,
+  };
+
+  it("uses the charge the response states, where no table could apply", () => {
+    // 400 models from a dozen vendors, repriced continuously: this endpoint is
+    // the only thing that knows, and it says so on every request.
+    const usage = mapUsage({ prompt_tokens: 1000, completion_tokens: 500, cost: 0.0123 }, "any/model", routerCaps);
+    expect(usage.costUsd).toBe(0.0123);
+  });
+
+  it("reads cache reads and writes reported beside it", () => {
+    const usage = mapUsage(
+      {
+        prompt_tokens: 1000,
+        completion_tokens: 500,
+        prompt_tokens_details: { cached_tokens: 600, cache_write_tokens: 100 },
+        cost: 0.5,
+      },
+      "any/model",
+      routerCaps,
+    );
+    expect(usage.cacheHitTokens).toBe(600);
+    expect(usage.cacheWriteTokens).toBe(100);
+  });
+
+  it("falls back to the table rather than trusting a fumbled number", () => {
+    for (const cost of [-1, Number.NaN, Number.POSITIVE_INFINITY, 1e9, "0.5" as unknown as number]) {
+      const usage = mapUsage({ prompt_tokens: 1000, completion_tokens: 500, cost }, "any/model", routerCaps);
+      expect(usage.costUsd).toBe(0);
+    }
+  });
+
+  it("still lets a user's own modelPricing override the bill", () => {
+    const usage = mapUsage({ prompt_tokens: 1000, completion_tokens: 500, cost: 99 }, "any/model", routerCaps, {
+      "any/model": { inputCacheMissPer1M: 2, inputCacheHitPer1M: 0.5, outputPer1M: 6 },
+    });
+    expect(usage.costUsd).toBeCloseTo((1000 * 2 + 500 * 6) / 1_000_000, 12);
+  });
+
+  it("is ignored by a provider that does not report one", () => {
+    // The same field arriving from an endpoint that never promised it must not
+    // silently become the cost.
+    const usage = mapUsage({ prompt_tokens: 1000, completion_tokens: 500, cost: 99 }, "deepseek-v4-flash", undefined);
+    expect(usage.costUsd).toBeLessThan(1);
+  });
+});
+
 describe("images on a protocol that cannot carry them", () => {
   it("says the image was omitted instead of dropping it silently", () => {
     // A model asked about a screenshot it never received answers confidently
@@ -489,5 +543,101 @@ describe("images on a protocol that cannot carry them", () => {
   it("leaves a message without images byte-for-byte unchanged", () => {
     const [wire] = toWireMessages([{ role: "user", content: "plain" }]);
     expect(wire).toEqual({ role: "user", content: "plain" });
+  });
+});
+
+describe("images on a protocol that can carry them", () => {
+  const seeing: ProviderCapabilities = {
+    thinking: false,
+    cacheHitTokens: false,
+    costAccounting: false,
+    balance: false,
+    images: true,
+  };
+
+  it("hands a tool result's image over as a user turn after the tool block", () => {
+    // This protocol takes image parts on a user message and not on a tool
+    // message, so the screenshot cannot ride inside the result it answers.
+    const wire = toWireMessages(
+      [
+        { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "browser_screenshot", argumentsJson: "{}" }] },
+        {
+          role: "tool",
+          content: '{"path":"shot.png"}',
+          toolCallId: "c1",
+          images: [{ mediaType: "image/png", dataBase64: "AAAA", label: "browser screenshot" }],
+        },
+      ],
+      seeing,
+    );
+    expect(wire.map((m) => m.role)).toEqual(["assistant", "tool", "user"]);
+    // The tool result keeps its own text and gains no note about an omission.
+    expect(wire[1]?.content).toBe('{"path":"shot.png"}');
+    expect(wire[2]?.content).toEqual([
+      { type: "text", text: "Image produced by the tool call(s) above: browser screenshot." },
+      { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+    ]);
+  });
+
+  it("keeps a run of parallel tool results contiguous, with one user turn after it", () => {
+    // A tool message must follow the assistant turn that called it with nothing
+    // in between, so two results cannot each be followed by their own image.
+    const wire = toWireMessages(
+      [
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            { id: "c1", name: "browser_screenshot", argumentsJson: "{}" },
+            { id: "c2", name: "browser_screenshot", argumentsJson: "{}" },
+          ],
+        },
+        { role: "tool", content: "a", toolCallId: "c1", images: [{ mediaType: "image/png", dataBase64: "AAAA" }] },
+        { role: "tool", content: "b", toolCallId: "c2", images: [{ mediaType: "image/png", dataBase64: "BBBB" }] },
+      ],
+      seeing,
+    );
+    expect(wire.map((m) => m.role)).toEqual(["assistant", "tool", "tool", "user"]);
+    expect(wire[3]?.content).toEqual([
+      { type: "text", text: "2 images produced by the tool call(s) above." },
+      { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+      { type: "image_url", image_url: { url: "data:image/png;base64,BBBB" } },
+    ]);
+  });
+
+  it("puts a user's own image in that user message, text first", () => {
+    const wire = toWireMessages(
+      [{ role: "user", content: "what is wrong here", images: [{ mediaType: "image/jpeg", dataBase64: "BBBB" }] }],
+      seeing,
+    );
+    expect(wire).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "what is wrong here" },
+          { type: "image_url", image_url: { url: "data:image/jpeg;base64,BBBB" } },
+        ],
+      },
+    ]);
+  });
+
+  it("still notes an omission for a role this protocol cannot attach to", () => {
+    // Nothing produces such a message today; this is what keeps a future one
+    // from being a 400 in the middle of a run.
+    const [wire] = toWireMessages(
+      [{ role: "assistant", content: "here", images: [{ mediaType: "image/png", dataBase64: "AAAA" }] }],
+      seeing,
+    );
+    expect(wire?.content).toContain("1 image omitted");
+  });
+
+  it("leaves an image-free conversation byte-for-byte unchanged", () => {
+    const messages: ChatMessage[] = [
+      { role: "system", content: "sys" },
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "t", argumentsJson: "{}" }] },
+      { role: "tool", content: "r", toolCallId: "c1" },
+    ];
+    expect(toWireMessages(messages, seeing)).toEqual(toWireMessages(messages));
   });
 });

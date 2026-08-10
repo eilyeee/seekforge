@@ -76,6 +76,8 @@ const CODE_EXTS = new Set([
   "lua",
   "zig",
   "sol",
+  "ex",
+  "exs",
 ]);
 /**
  * The prefix every symbol outline starts with, and the contract between the

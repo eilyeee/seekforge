@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDefaultDispatcher, disposeLspServers } from "../../src/tools/index.js";
 import { lspTools } from "../../src/tools/builtins/lsp.js";
@@ -6,6 +8,8 @@ import {
   parseLspMessages,
   MAX_CONTENT_LENGTH,
   commandExistsOnPath,
+  jdtlsDataDir,
+  lspServerCommands,
   resolveServerCommand,
   supportedLspExtensions,
   severityLabel,
@@ -196,14 +200,35 @@ describe("lsp language → server resolution", () => {
       ".lua",
       ".zig",
       ".sh",
+      // Java and C# were the two the repo map outlined and this did not serve.
+      // jdtls is now given a data directory of SeekForge's own (see
+      // `workspaceArgs`), and C# is served by csharp-ls, which finds the
+      // solution itself, with OmniSharp behind it — so neither is a guess about
+      // anyone's build any more.
+      ".java",
+      ".cs",
     ];
     const served = new Set(supportedLspExtensions());
     expect(mapped.filter((ext) => !served.has(ext))).toEqual([]);
-    // Java and C# are outlined but not served: jdtls wants a `-data <dir>`
-    // workspace and OmniSharp wants a solution probe, neither of which this
-    // seam can guess. Pinned so the omission stays a decision.
-    expect(served.has(".java")).toBe(false);
-    expect(served.has(".cs")).toBe(false);
+  });
+
+  it("gives jdtls a per-workspace data directory under the SeekForge home", () => {
+    // The reason Java was left out: jdtls will not start without a directory to
+    // index into, and the table had nowhere to put one. Two workspaces must not
+    // share it, the same workspace must get the same one back so its index
+    // survives between runs, and nothing may be written into the repository.
+    const a = jdtlsDataDir("/repo-a");
+    expect(a).toBe(jdtlsDataDir("/repo-a"));
+    expect(a).not.toBe(jdtlsDataDir("/repo-b"));
+    expect(a.startsWith(join(homedir(), ".seekforge"))).toBe(true);
+  });
+
+  it("names both new servers so `doctor` reports them without its own list", () => {
+    const commands = lspServerCommands();
+    expect(commands).toContain("jdtls");
+    expect(commands).toContain("csharp-ls");
+    // OmniSharp stays behind csharp-ls rather than replacing it.
+    expect(commands).toContain("OmniSharp");
   });
 
   it("labels diagnostic severities", () => {

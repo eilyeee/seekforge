@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PROVIDER_PRESETS, resolveProviderPreset, resolveProviderConfig } from "../../src/provider/presets.js";
 import { DEEPSEEK_CAPABILITIES } from "../../src/provider/types.js";
-import { DEFAULT_BASE_URL } from "../../src/provider/constants.js";
+import { DEFAULT_BASE_URL, MODEL_PRICING } from "../../src/provider/constants.js";
 
 describe("resolveProviderPreset", () => {
   it("returns the Ark preset (thinking disabled) for 'ark', case-insensitively", () => {
@@ -44,31 +44,66 @@ describe("resolveProviderPreset", () => {
   });
 
   it.each([
-    ["openai", "https://api.openai.com/v1", ["gpt-4o", "gpt-4o-mini", "o3-mini"]],
-    ["ollama", "http://localhost:11434/v1", ["llama3.1", "qwen2.5-coder", "deepseek-r1"]],
+    // These presets share the DeepSeek-only exclusions (no thinking body, no
+    // /user/balance) and differ where the endpoint itself differs: whether it
+    // takes an image, whether it reports cached input, and who can answer what
+    // a request cost.
+    [
+      "openai",
+      "https://api.openai.com/v1",
+      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"],
+      // Its own published price list ships with SeekForge, and it reports
+      // cached input under prompt_tokens_details.
+      { thinking: false, cacheHitTokens: true, costAccounting: true, balance: false, images: true },
+    ],
+    [
+      "ollama",
+      "http://localhost:11434/v1",
+      ["llama3.1", "qwen2.5-coder", "deepseek-r1"],
+      // Local models: no price to know, no cache to report, no eyes by default.
+      { thinking: false, cacheHitTokens: false, costAccounting: false, balance: false },
+    ],
     [
       "openrouter",
       "https://openrouter.ai/api/v1",
-      ["anthropic/claude-3.5-sonnet", "openai/gpt-4o", "deepseek/deepseek-chat"],
-    ],
-  ] as const)(
-    "returns the %s OpenAI-compatible preset (all capabilities disabled), case-insensitively",
-    (name, baseUrl, models) => {
-      const preset = resolveProviderPreset(name);
-      expect(preset).toBeDefined();
-      expect(preset?.baseUrl).toBe(baseUrl);
-      expect(preset?.capabilities).toEqual({
+      ["anthropic/claude-opus-5", "openai/gpt-5.6-sol", "deepseek/deepseek-v4-pro"],
+      // No table could track its catalog; it states the charge per request.
+      {
         thinking: false,
-        cacheHitTokens: false,
+        cacheHitTokens: true,
         costAccounting: false,
         balance: false,
-      });
-      expect(preset?.models).toEqual(models);
-      expect(preset?.models.length).toBeGreaterThan(0);
-      // Case-insensitive lookup returns the same object.
-      expect(resolveProviderPreset(name.toUpperCase())).toBe(preset);
-    },
-  );
+        images: true,
+        usageCost: true,
+      },
+    ],
+  ] as const)("returns the %s OpenAI-compatible preset, case-insensitively", (name, baseUrl, models, capabilities) => {
+    const preset = resolveProviderPreset(name);
+    expect(preset).toBeDefined();
+    expect(preset?.baseUrl).toBe(baseUrl);
+    expect(preset?.capabilities).toEqual(capabilities);
+    expect(preset?.models).toEqual(models);
+    expect(preset?.models.length).toBeGreaterThan(0);
+    // Case-insensitive lookup returns the same object.
+    expect(resolveProviderPreset(name.toUpperCase())).toBe(preset);
+  });
+
+  it("prices every model it offers, or offers none it cannot price", () => {
+    // A catalog entry with no built-in rate on a costAccounting preset reports
+    // "unknown" — correct, but a picker should not lead with such a model.
+    for (const model of resolveProviderPreset("openai")?.models ?? []) {
+      expect(MODEL_PRICING[model], model).toBeDefined();
+    }
+  });
+
+  it("leaves images off where the catalog is mixed or has no vision model", () => {
+    // Turning this on for a model that cannot read an image fails the request
+    // rather than degrading, so a mixed catalog answers no and defers to the
+    // user's `inlineImages`.
+    expect(resolveProviderPreset("ark")?.capabilities.images).toBeUndefined();
+    expect(resolveProviderPreset("ollama")?.capabilities.images).toBeUndefined();
+    expect(resolveProviderPreset("deepseek")?.capabilities.images).toBeUndefined();
+  });
 
   it("returns undefined for an unknown or missing preset name", () => {
     expect(resolveProviderPreset("nope")).toBeUndefined();
@@ -105,7 +140,6 @@ describe("resolveProviderPreset", () => {
       cacheHitTokens: true,
       costAccounting: true,
       balance: false,
-      // The only preset whose protocol can carry an image today.
       images: true,
     });
     expect(preset?.models).toContain("claude-opus-5");
@@ -151,6 +185,40 @@ describe("resolveProviderConfig", () => {
     expect(bare.baseUrl).toBeUndefined();
     // Only apiKey survives — nothing else was provided.
     expect(Object.keys(bare)).toEqual(["apiKey"]);
+  });
+
+  describe("inlineImages", () => {
+    it("turns a preset's answer on for a multimodal model on a mixed catalog", () => {
+      const config = resolveProviderConfig({
+        provider: "ark",
+        apiKey: "k",
+        model: "doubao-seed-2.0-pro",
+        inlineImages: true,
+      });
+      expect(config.capabilities?.images).toBe(true);
+      // Only that one answer changes; the rest of the preset is untouched.
+      expect(config.capabilities?.thinking).toBe(false);
+      expect(config.capabilities?.costAccounting).toBe(false);
+    });
+
+    it("turns a preset's answer off for a text-only model on a seeing endpoint", () => {
+      const config = resolveProviderConfig({ provider: "openai", apiKey: "k", inlineImages: false });
+      expect(config.capabilities?.images).toBe(false);
+    });
+
+    it("materializes the DeepSeek defaults when there is no preset to override", () => {
+      // Without the setting this path leaves capabilities undefined on purpose,
+      // so the provider keeps its own defaults; asking for images has to
+      // produce those same defaults plus the one answer.
+      const config = resolveProviderConfig({ apiKey: "k", baseUrl: "https://custom/v1", inlineImages: true });
+      expect(config.capabilities).toEqual({ ...DEEPSEEK_CAPABILITIES, images: true });
+    });
+
+    it("leaves capabilities exactly as the preset had them when unset", () => {
+      const config = resolveProviderConfig({ provider: "ark", apiKey: "k" });
+      expect(config.capabilities?.images).toBeUndefined();
+      expect(resolveProviderConfig({ apiKey: "k" }).capabilities).toBeUndefined();
+    });
   });
 
   it("passes optional fields through only when defined", () => {

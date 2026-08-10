@@ -3,7 +3,11 @@ import {
   classifySearchPage,
   decodeDdgUrl,
   parseDdgResults,
+  braveOutcome,
+  parseBraveResults,
   parseSearxngResults,
+  resolveWebSearchConfig,
+  searxngOutcome,
 } from "../../src/tools/builtins/web.js";
 
 /**
@@ -207,5 +211,116 @@ describe("parseSearxngResults", () => {
     expect(
       parseSearxngResults(JSON.stringify({ results: [{ url: "https://e.com" }, { title: "no url" }] }), 5),
     ).toEqual([]);
+  });
+});
+
+describe("parseBraveResults", () => {
+  const body = (results: unknown): string => JSON.stringify({ web: { results } });
+
+  it("reads title, url and description out of a Brave response", () => {
+    expect(
+      parseBraveResults(body([{ title: "First", url: "https://example.com/a", description: "a snippet" }]), 10),
+    ).toEqual([{ title: "First", url: "https://example.com/a", snippet: "a snippet" }]);
+  });
+
+  it("strips the <strong> markup Brave puts around query terms", () => {
+    const rows = [
+      {
+        title: "Vitest <strong>mock</strong> timers",
+        url: "https://e.com/1",
+        description: "use <strong>vi</strong>&nbsp;fake timers",
+      },
+    ];
+    expect(parseBraveResults(body(rows), 10)).toEqual([
+      { title: "Vitest mock timers", url: "https://e.com/1", snippet: "use vi fake timers" },
+    ]);
+  });
+
+  it("applies the same http(s)-only filter every other backend does", () => {
+    // A paid API is still handing back URLs chosen by someone else.
+    const rows = [
+      { title: "Hostile", url: "javascript:alert(1)" },
+      { title: "Good", url: "https://example.com/good" },
+    ];
+    expect(parseBraveResults(body(rows), 10).map((r) => r.url)).toEqual(["https://example.com/good"]);
+  });
+
+  it("honors the limit and keeps one row per url", () => {
+    const rows = Array.from({ length: 20 }, (_, i) => ({ title: `R${i}`, url: `https://example.com/${i}` }));
+    expect(parseBraveResults(body(rows), 3)).toHaveLength(3);
+    const dupes = [
+      { title: "One", url: "https://example.com/same" },
+      { title: "Two", url: "https://example.com/same" },
+    ];
+    expect(parseBraveResults(body(dupes), 10)).toHaveLength(1);
+  });
+
+  it("returns [] rather than throwing on anything unexpected", () => {
+    for (const junk of ["", "not json", "null", "[]", '{"web":null}', '{"web":{"results":[1,"x"]}}', '{"other":1}']) {
+      expect(() => parseBraveResults(junk, 5), junk).not.toThrow();
+      expect(parseBraveResults(junk, 5), junk).toEqual([]);
+    }
+    // A title that is nothing but markup leaves nothing to show.
+    expect(parseBraveResults(body([{ title: "<b></b>", url: "https://e.com" }]), 5)).toEqual([]);
+  });
+});
+
+describe("resolveWebSearchConfig", () => {
+  it("is undefined when nothing is configured, so no backend is added", () => {
+    expect(resolveWebSearchConfig(undefined)).toBeUndefined();
+    expect(resolveWebSearchConfig({})).toBeUndefined();
+    // Whitespace is not configuration.
+    expect(resolveWebSearchConfig({ searxngUrl: "  ", braveApiKey: "" })).toBeUndefined();
+  });
+
+  it("carries each configured key through, trimmed", () => {
+    expect(resolveWebSearchConfig({ braveApiKey: " tok " })).toEqual({ braveApiKey: "tok" });
+    expect(resolveWebSearchConfig({ searxngUrl: "https://s.example/" })).toEqual({
+      searxngUrl: "https://s.example/",
+    });
+    expect(resolveWebSearchConfig({ searxngUrl: "https://s.example/", braveApiKey: "tok" })).toEqual({
+      searxngUrl: "https://s.example/",
+      braveApiKey: "tok",
+    });
+  });
+});
+
+describe("empty vs drift: an answer of none, or no answer at all", () => {
+  // The two call for opposite actions — "believe it" and "do not read this as
+  // 'no such thing exists'" — so a backend whose field got renamed must not be
+  // reported as a search that ran and matched nothing.
+  it("calls an empty results array an empty search, on both JSON backends", () => {
+    expect(braveOutcome(JSON.stringify({ web: { results: [] } }), 5)).toEqual({ kind: "empty", results: [] });
+    expect(searxngOutcome(JSON.stringify({ results: [] }), 5)).toEqual({ kind: "empty", results: [] });
+  });
+
+  it("calls a missing results array drift, not an empty search", () => {
+    for (const body of [
+      JSON.stringify({ web: {} }),
+      JSON.stringify({ web: { results: null } }),
+      JSON.stringify({ webPages: { value: [] } }), // a renamed envelope
+      JSON.stringify({ detail: "rate limited" }), // an error envelope that is still JSON
+    ]) {
+      expect(braveOutcome(body, 5).kind, body).toBe("drift");
+    }
+    for (const body of [JSON.stringify({}), JSON.stringify({ results: null }), JSON.stringify({ detail: "nope" })]) {
+      expect(searxngOutcome(body, 5).kind, body).toBe("drift");
+    }
+  });
+
+  it("calls a non-JSON body drift on both", () => {
+    for (const body of ["", "not json", "<html>blocked</html>"]) {
+      expect(braveOutcome(body, 5).kind, body).toBe("drift");
+      expect(searxngOutcome(body, 5).kind, body).toBe("drift");
+    }
+  });
+
+  it("reports rows it did parse as results", () => {
+    const brave = braveOutcome(JSON.stringify({ web: { results: [{ title: "T", url: "https://e.com" }] } }), 5);
+    expect(brave.kind).toBe("results");
+    expect(brave.results).toHaveLength(1);
+    const searxng = searxngOutcome(JSON.stringify({ results: [{ title: "T", url: "https://e.com" }] }), 5);
+    expect(searxng.kind).toBe("results");
+    expect(searxng.results).toHaveLength(1);
   });
 });

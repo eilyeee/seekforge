@@ -42,6 +42,30 @@ the one for your language:
 | TypeScript / JavaScript | `.ts .tsx .mts .cts .js .jsx .mjs .cjs` | `npm i -g typescript-language-server typescript` | `typescript-language-server` |
 | Python | `.py` | `pip install pyright` **or** `pip install python-lsp-server` | `pyright-langserver`, else `pylsp` |
 | Go | `.go` | `go install golang.org/x/tools/gopls@latest` | `gopls` |
+| Rust | `.rs` | `rustup component add rust-analyzer` | `rust-analyzer` |
+| C / C++ | `.c .h .cc .cpp .cxx .hpp .hh .hxx` | `brew install llvm`, or your distribution's clangd | `clangd` |
+| Java | `.java` | `brew install jdtls`, or unpack eclipse.jdt.ls | `jdtls` — **needs Java 21+ to run** (see below) |
+| C# | `.cs` | `dotnet tool install --global csharp-ls` | `csharp-ls`, else `OmniSharp` |
+| Ruby | `.rb` | `gem install ruby-lsp` **or** `gem install solargraph` | `ruby-lsp`, else `solargraph` |
+| PHP | `.php` | `npm i -g intelephense`, or install phpactor | `intelephense`, else `phpactor` |
+| Kotlin | `.kt .kts` | see fwcd/kotlin-language-server | `kotlin-language-server` |
+| Swift | `.swift` | ships with the Swift toolchain / Xcode | `sourcekit-lsp` |
+| Scala | `.scala .sc` | `brew install coursier` then `cs install metals` | `metals` |
+| Lua | `.lua` | `brew install lua-language-server` | `lua-language-server` |
+| Zig | `.zig` | `brew install zls` | `zls` |
+| Bash | `.sh .bash .zsh` | `npm i -g bash-language-server` | `bash-language-server` |
+
+> **jdtls runs on Java 21 or newer**, whatever version the project it analyzes
+> targets. On an older JDK it exits immediately with `jdtls requires at least
+> Java 21`; set `JAVA_HOME` to a 21+ JDK. (SeekForge surfaces whatever the
+> server printed as it exited, so you see that sentence rather than a bare
+> "jdtls exited".)
+>
+> Java's project-wide search (`lsp_symbols`) needs an **imported build** — a
+> `pom.xml`, a Gradle script, an Eclipse `.project`. In a directory of loose
+> `.java` files everything scoped to an open document still works (outline,
+> definition, references), and project-wide search comes back empty. That is
+> jdtls's behavior, measured.
 
 Until a server is found, every LSP tool returns a single actionable error naming
 the servers to install, for example:

@@ -183,7 +183,11 @@ describe("tree-sitter AST backend (optional)", () => {
     }
   });
 
-  it("loads only the grammars it was asked for", async () => {
+  // 60s, not the suite's 30s: this is the one test that RESETS the WASM runtime
+  // and reloads grammars from disk, which is ~10s of real work on its own. Under
+  // a full-suite run the machine is saturated and it crossed the default — a
+  // durable test, not a flaky one.
+  it("loads only the grammars it was asked for", { timeout: 60_000 }, async () => {
     resetAstBackendForTests();
     try {
       // The point of the hint. Loading all 36 shipped grammars costs 454MB of
@@ -249,6 +253,118 @@ describe("tree-sitter AST backend (optional)", () => {
       // Newly reachable.
       expect(findDefinitions(d, "Named")).toHaveLength(1);
       expect(findDefinitions(d, "Count")).toHaveLength(1);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("single-file components and Elixir", () => {
+  const VUE = `<template>
+  <button @click="submit">go</button>
+</template>
+
+<script setup lang="ts">
+interface Props { id: string }
+function submit(): void {}
+const label = "go";
+</script>
+`;
+
+  it("outlines a Vue component's script and points at its real line", async () => {
+    // No vue grammar is involved: it hands the script over as one raw_text
+    // token, so the script is lifted out and parsed as the TypeScript it says
+    // it is. The line number has to survive that detour.
+    const ready = await ensureAstBackend(["App.vue"]);
+    if (!ready) return;
+    expect(extractSymbols("App.vue", VUE)).toBe(`${OUTLINE_PREFIX} Props, submit, label`);
+
+    const d = mkdtempSync(join(tmpdir(), "ast-vue-"));
+    try {
+      writeFileSync(join(d, "App.vue"), VUE);
+      const hits = findDefinitions(d, "submit");
+      expect(hits).toHaveLength(1);
+      // `function submit` is on line 7 of the FILE, not line 3 of the script.
+      expect(hits[0]?.line).toBe(7);
+      expect(hits[0]?.text).toContain("function submit");
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it("reads both script blocks of a Vue component", async () => {
+    const ready = await ensureAstBackend(["App.vue"]);
+    if (!ready) return;
+    const two = `<script>
+export const legacy = 1;
+</script>
+
+<script setup lang="ts">
+function fresh() {}
+</script>
+`;
+    expect(extractSymbols("App.vue", two)).toBe(`${OUTLINE_PREFIX} legacy, fresh`);
+  });
+
+  it("outlines a Svelte component through the same path", async () => {
+    const ready = await ensureAstBackend(["Card.svelte"]);
+    if (!ready) return;
+    const svelte = `<script lang="ts">
+  export let title: string;
+  function toggle() {}
+</script>
+
+<h1>{title}</h1>
+`;
+    expect(extractSymbols("Card.svelte", svelte)).toContain("toggle");
+  });
+
+  it("leaves a component with no script to the regex floor", async () => {
+    const ready = await ensureAstBackend(["App.vue"]);
+    if (!ready) return;
+    // undefined from this backend means "defer"; a template-only component
+    // must not be reported as a file that defines nothing.
+    expect(extractSymbols("App.vue", "<template><p>hi</p></template>\n")).not.toContain(OUTLINE_PREFIX);
+  });
+
+  const ELIXIR = `defmodule MyApp.Accounts do
+  @moduledoc "docs"
+
+  def create_user(attrs) do
+    :ok
+  end
+
+  defp normalize(x) when is_binary(x), do: x
+
+  defmacro when_ready(do: block), do: block
+end
+`;
+
+  it("outlines an Elixir module and the functions inside it", async () => {
+    // Every Elixir declaration is a macro CALL, so there is no declaration node
+    // type to match: the target identifier is what makes a call a definition,
+    // and the functions live one level down inside the module's do_block.
+    const ready = await ensureAstBackend(["accounts.ex"]);
+    if (!ready) return;
+    expect(extractSymbols("accounts.ex", ELIXIR)).toBe(
+      `${OUTLINE_PREFIX} MyApp.Accounts, create_user, normalize, when_ready`,
+    );
+  });
+
+  it("finds an Elixir function past its guard clause", async () => {
+    const ready = await ensureAstBackend(["accounts.ex"]);
+    if (!ready) return;
+    const d = mkdtempSync(join(tmpdir(), "ast-ex-"));
+    try {
+      writeFileSync(join(d, "accounts.ex"), ELIXIR);
+      // `defp normalize(x) when is_binary(x)` wraps the head in a `when`
+      // operator; the name is still normalize.
+      expect(findDefinitions(d, "normalize")).toHaveLength(1);
+      // The outline names the module `MyApp.Accounts`, but find_definition only
+      // accepts identifier-shaped symbols — so the last segment is what finds
+      // it, and the dotted form is correctly refused rather than half-matched.
+      expect(findDefinitions(d, "Accounts")).toHaveLength(1);
+      expect(findDefinitions(d, "MyApp.Accounts")).toHaveLength(0);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
