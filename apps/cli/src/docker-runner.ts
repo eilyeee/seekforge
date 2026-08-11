@@ -33,7 +33,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import type { GraphRemoteRunnerRequest, GraphRemoteRunnerTransport } from "@seekforge/core";
 import { formatCommandLine } from "./runner.js";
-import type { AgentRunner, RunnerOptions, RunnerResult } from "./runner.js";
+import type { RunnerOptions, RunnerResult } from "./runner.js";
 
 /** Default runner image tag (built from the repo `Dockerfile`). */
 export const DEFAULT_RUNNER_IMAGE = "seekforge-runner";
@@ -173,14 +173,6 @@ export function spawnDockerRun(opts: DockerRunnerOptions): Promise<RunnerResult>
       resolve({ exitCode: code ?? 1, runner: "docker" });
     });
   });
-}
-
-/** The Docker backend as an {@link AgentRunner} (contract-level entry point). */
-export function createDockerRunner(): AgentRunner {
-  return {
-    name: "docker",
-    run: (o: RunnerOptions) => spawnDockerRun(o as DockerRunnerOptions),
-  };
 }
 
 /** Docker's own container-name grammar; anything else is rejected before the argv is built. */

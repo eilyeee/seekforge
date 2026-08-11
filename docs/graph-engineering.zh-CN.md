@@ -78,7 +78,7 @@ flowchart LR
 节点类型：
 
 - `agent`：单次 Agent 任务；`mode` 与 `approvalMode` 继续使用常规权限策略。
-- `loop`：完整的自主 Loop，拥有验证器，并获得剩余图预算的一部分。
+- `loop`：完整的自主 Loop，拥有验证器，并获得剩余图预算的一部分。它可以声明什么见[Loop 节点配置](#loop-节点配置)。
 - `function`：命名处理器，可以由嵌入方提供，也可以是八个确定性内建之一——`noop`、`collect`、`pick`、`project`、`merge`、`assert`、`count`、`summarize`。所有处理器会在副作用前解析完成。处理器只按名称选择，永远不会被转换成 shell 命令。可重试处理器必须具备幂等性。处理器 id 会进入恢复指纹，因此行为变化时也必须更换 id。
 - `map`：通过有界 JSON Pointer 读取已声明依赖的输出，最多对 `maxItems` 个值调用注册处理器（默认 32，硬上限 64）；每个元素都有稳定幂等键并获得节点剩余预算的份额，失败批次发布前会等待同批所有已启动元素结算。
 - `join`：依赖全部结算后，只要至少 `quorum` 个依赖通过就成功，用于有界 quorum/reduce 流程。
@@ -104,6 +104,58 @@ flowchart LR
 当 `maxConcurrency > 1` 时，实际可能重叠执行的有副作用节点必须解析到图工作区之内互不重叠的物理目录；由依赖关系确定先后顺序的节点可以安全复用同一工作区。祖先目录与其子目录不能作为两个独立并行分支运行。路由器与审批门不需要独立工作区。
 
 `managedWorktrees` 会在仓库级共享资源锁下，为每个有副作用节点创建确定性、可保留的 Git worktree，并支持嵌套 Graph；托管作用域内禁止显式节点工作区。启用 `integrateDependencies: true` 后，节点首次尝试前会合并已通过的依赖分支。`limit` 在创建前统计仓库内全部现有 `seekforge/` worktree。父图的资源检查、归档和清理会递归包含子图分支。可选 `fanIn` 继续执行有界集成验证。
+
+## Loop 节点配置
+
+`loop` 节点过去只向子 Loop 转发 7 个字段，因此它是一个**严格更弱的 Loop**——这正是
+Loop DAG 无法退役的原因。现在它能声明 DAG 所能声明的调参。
+
+`loopOptions` 接受 24 个键，类型上以 `LoopOptions` 的 `Pick<>` 定义，因此两者无法分叉：
+`maxIterations`（1–1000）、`verificationPlan`（1–16 个阶段）、`autoVerificationPlan`、
+`stablePasses`（1–5）、`flakyRetries`（0–5）、`maxNoProgressRecoveries`（0–5）、
+`rollbackOnRegression`、`adaptiveBudget`、`maxVerifyRuns`、`verifyTimeoutMs` /
+`agentTimeoutMs` / `maxDurationMs`（1 毫秒–24 小时）、`maxAgentRetries`（0–5）、
+`costBudgetUsd`、`tokenBudget`、`model` / `planModel`（≤256 字符）、
+`modelByFailureCategory`、`modelRoutesByFailureCategory`、
+`modelEscalationThreshold`（1–8）、`codeReview`、`escalateOnFailure`、
+`requirementMode`、`approveRequirements`。
+
+**节点不能声明什么，以及为什么**：`workspace`、`signal`、`onEvent`、`control`、
+`loopId`、`persist`、`resumeState`、`parentGraph`、`abortStatus`、`workspaceGuard`、
+`recoveryAttemptId`、`verify` 属于图运行时——它拥有子 Loop 的持久身份与检查点。
+`persist: false` 是最尖锐的例子：它会让子 Loop 不可恢复，而图的检查点仍然声称它可以恢复。
+`task`、`verifyCommand`、`approvalMode`、`priority` 本来就是节点字段；一个字段一个 owner。
+
+**预算优先级**：先应用 `loopOptions`，再由图按次尝试算出的份额覆盖它，因此节点声明的预算
+只在图没有声明时才生效。这与 Loop DAG 自己的规则一致。
+
+**恢复**时只重新提供 `resumeAutoLoop` 仍然接受的那部分——模型路由相关键、`codeReview`、
+`escalateOnFailure`、`approveRequirements`。其余都冻结在持久化的 Loop 状态里。
+
+`verifierId` 绑定 `RunEngineeringGraphOptions.verifiers` 中的具名验证器，与 `handler`、
+`executor` 同构：**id 是持久的，函数不是**，因此同一个 id 必须在每次运行和每次恢复时都注册。
+未注册的 id 会在获取会话租约、开 worktree、写任何检查点**之前**失败——否则该节点会静默退回到
+定义从未要求过的 shell 验证器。
+
+`inputs` 现在在 `agent` 与 `loop` 节点上也会解析，并作为**显式标记为不可信**的区块追加到
+任务文本，独立限长 32 KiB。map 的 item 每个节点只解析一次而非逐 item 解析，因此 schema
+违规会让整个节点失败，而不是只失败一个批次条目。反过来，`gate`、`join`、`router`、`wait`、
+`subgraph` 这些从不读取 `inputs` 的类型上声明它，现在会被**拒绝**，而不是解析后忽略。在该
+规则之前写下的检查点仍能照常加载且字段保留：它在那张图的指纹里，读取时拒绝会让一张在途的图
+变得无法加载——为了一个从来没起过作用的字段。
+
+`outputPaths` 声明 `agent` 或 `loop` 节点产出的至多 32 个工作区相对普通文件。它们走既有的
+产物通道并开启校验：打开时不跟随符号链接、在散列前后按设备号与 inode 复核、按 SHA-256 存储。
+这比 Loop DAG 更严——DAG 只断言文件存在，而超出产物大小上限的文件会让节点失败。
+
+`budgetWeight`（0 < w ≤ 1000）把剩余成本与 token 预算按权重分给**同时启动**的节点，而不是均分；
+所有节点都用默认权重 1 时，算术结果与此前完全一致。定义级的 `predictiveBudget` 会依据
+`.seekforge/loop-budget-history.json` 重新加权——与 Loop DAG 相同的存储和相同的键派生，因此
+一张由 DAG 转换而来的图与原 DAG 共享同一份历史。预测是建议性的：读取失败绝不会成为正确性门禁，
+关闭持久化时直接跳过。
+
+节点可以固定自己的 `failurePolicy` 来覆盖图级默认值，因此一张图可以在某个节点失败时停止，
+同时让独立分支跑完。
 
 ## 持久化与恢复
 

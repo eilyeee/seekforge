@@ -91,7 +91,13 @@ import {
   type SlashCommand,
 } from "./commands.js";
 import { argCandidates, type ArgContext } from "./arg-values.js";
-import { parseWorktreeCommand, pickFreeSlug, resolveWorktreeTarget, seekforgeWorktrees } from "./worktree-cmd.js";
+import {
+  isRetainedWorktreeWorkspace,
+  parseWorktreeCommand,
+  pickFreeSlug,
+  resolveWorktreeTarget,
+  seekforgeWorktrees,
+} from "./worktree-cmd.js";
 import { bumpUsage, didYouMean, rankCommands, type CommandUsage } from "./command-rank.js";
 import { helpRows, selectableIndices } from "./command-meta.js";
 import {
@@ -1257,6 +1263,18 @@ export function App({
             notice(`invalid /loop options: ${command.error}`, "error");
             break;
           }
+          // Regression rollback rewinds files, so CORE only allows it in a
+          // retained .seekforge/worktrees checkout. This tab's workspace is
+          // fixed for its lifetime, so reject here instead of spending an
+          // agent turn on a run that cannot start.
+          if (command.rollbackOnRegression && !isRetainedWorktreeWorkspace(projectPath)) {
+            notice(
+              "--rollback-regressions needs an isolated .seekforge/worktrees checkout — this tab runs in the main workspace",
+              "error",
+            );
+            notice("  create one with /worktree new, start the TUI inside it, or run `seekforge loop --worktree`");
+            break;
+          }
           let verifyCommand = command.verify?.trim();
           const task = command.task?.trim();
           let verificationPlan:
@@ -1395,7 +1413,10 @@ export function App({
             break;
           }
           active.control.pause();
-          notice("loop will pause at the next safe boundary");
+          // The transcript prints "loop paused at the iteration N boundary"
+          // (loop.paused) once it actually takes effect — say so, so waiting is
+          // not mistaken for a lost request.
+          notice("pause requested — the loop confirms here when it reaches the next safe boundary");
           break;
         }
         case "loop-continue": {
@@ -1405,7 +1426,7 @@ export function App({
             break;
           }
           active.control.resume();
-          notice("loop continuation requested");
+          notice("continue requested — the loop confirms here when it resumes");
           break;
         }
         case "loop-steer": {
@@ -1420,7 +1441,7 @@ export function App({
             break;
           }
           active.control.steer(guidance);
-          notice("loop guidance queued for the next safe boundary");
+          notice("guidance queued — the loop confirms here when it applies at the next safe boundary");
           break;
         }
         case "graph-list": {

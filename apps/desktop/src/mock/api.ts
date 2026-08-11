@@ -18,6 +18,7 @@ import {
 } from "./fixtures";
 import type {
   EvolutionProposal,
+  LoopEvidenceReport,
   LoopHealthReport,
   LoopStateSummary,
   McpServer,
@@ -451,8 +452,95 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   }
   if (method === "POST" && path === "/api/loops/recover") return [];
   if (method === "POST" && path === "/api/loops/prune") return { candidates: [], removed: [], skipped: [] };
+  const loopEvidence = /^\/api\/loops\/([^/]+)\/evidence$/.exec(path);
+  if (method === "GET" && loopEvidence) {
+    const loop = mockLoops.find((item) => item.loopId === loopEvidence[1]);
+    if (!loop) throw mockError(404, "not_found", "unknown loop");
+    // Inspect fetches evidence and history together: without this route the
+    // whole detail panel (history included) stayed empty in mock mode.
+    return {
+      schemaVersion: 1,
+      loopId: loop.loopId,
+      generatedAt: new Date().toISOString(),
+      status: loop.status,
+      workspace: loop.workspace,
+      task: loop.task,
+      usage: { costUsd: loop.costUsd, tokensUsed: 18_400, iterations: loop.iterations },
+      criteria: [
+        {
+          id: "AC-1",
+          text: "The suite stays green",
+          requirementIds: ["REQ-1"],
+          status: "met",
+          evidence: ["pnpm test"],
+        },
+      ],
+      verification: [
+        { id: "lint", command: "pnpm lint", required: true, code: 0, attempts: 1, durationMs: 940, selection: "full" },
+        {
+          id: "verify",
+          command: "pnpm test",
+          required: true,
+          code: 0,
+          attempts: 2,
+          durationMs: 4_780,
+          flaky: true,
+          selection: "direct",
+        },
+      ],
+      iterations: [
+        {
+          iteration: 1,
+          ts: "2026-01-01T00:00:00.000Z",
+          failedTests: 1,
+          durationMs: 6_200,
+          costUsd: 0.0042,
+          rolledBack: true,
+        },
+        { iteration: 2, ts: "2026-01-01T00:01:00.000Z", failedTests: 0, durationMs: 5_900, costUsd: 0.0051 },
+      ],
+      integrity: { algorithm: "sha256", digest: "0".repeat(64) },
+    } satisfies LoopEvidenceReport;
+  }
   const loopHistory = /^\/api\/loops\/([^/]+)\/history$/.exec(path);
-  if (method === "GET" && loopHistory) return [];
+  if (method === "GET" && loopHistory) {
+    // A few retained rows so the history renderer (which must show more than
+    // the bare event type) is exercisable in mock mode.
+    const ts = "2026-01-01T00:00:00.000Z";
+    return [
+      { seq: 1, ts, event: { type: "iteration.start", iteration: 1 } },
+      { seq: 2, ts, event: { type: "run.completed", iteration: 1, costUsd: 0.0042 } },
+      {
+        seq: 3,
+        ts,
+        event: {
+          type: "verify.stage.completed",
+          iteration: 1,
+          result: {
+            id: "test",
+            command: "pnpm test",
+            code: 1,
+            output: "Test Files  1 failed (1)",
+            attempts: 1,
+            flaky: false,
+            durationMs: 5_100,
+          },
+        },
+      },
+      {
+        seq: 4,
+        ts,
+        event: { type: "verify", iteration: 1, code: 1, passed: false, output: "Test Files 1 failed (1)" },
+      },
+      { seq: 5, ts, event: { type: "verify.flaky", iteration: 2, stageId: "test", attempts: 2 } },
+      { seq: 6, ts, event: { type: "loop.rollback", iteration: 2, restored: ["src/a.ts"], deleted: [] } },
+      {
+        seq: 7,
+        ts,
+        event: { type: "loop.warning", warning: "persistence", message: "loop state could not be persisted" },
+      },
+    ];
+  }
   const loopHealth = /^\/api\/loops\/([^/]+)\/health$/.exec(path);
   if (method === "GET" && loopHealth) {
     const loop = mockLoops.find((item) => item.loopId === loopHealth[1]);

@@ -1,8 +1,13 @@
 import { createHash } from "node:crypto";
 import {
   type EngineeringGraphDefinition,
+  GRAPH_LOOP_OPTION_KEYS,
   type GraphCondition,
+  type GraphInputBinding,
+  type GraphLoopOptions,
   type GraphNode,
+  MAX_GRAPH_NODE_BUDGET_WEIGHT,
+  MAX_GRAPH_NODE_OUTPUT_PATHS,
   parseEngineeringGraphDefinition,
 } from "./graph-contract.js";
 import type { LoopDagCondition, LoopDagOptions } from "./loop-dag.js";
@@ -37,10 +42,7 @@ export type LoopDagGraphIssueCode =
   | "node_options_unsupported"
   | "consume_dependency_outputs"
   | "output_paths"
-  | "verifier_id"
   | "budget_weight"
-  | "predictive_budget"
-  | "mixed_failure_policy"
   | "condition_too_wide"
   | "approval_gate_id"
   | "max_duration_range"
@@ -54,8 +56,10 @@ export type LoopDagGraphIssueCode =
   | "approval_pause_scope"
   | "run_option"
   | "graph_identity"
-  | "inert_budget_weight"
-  | "inert_predictive_budget";
+  | "inert_node_option"
+  | "verifier_binding"
+  | "output_path_attestation"
+  | "dependency_output_shape";
 
 export type LoopDagGraphIssue = {
   code: LoopDagGraphIssueCode;
@@ -109,11 +113,21 @@ export type LoopDagGraphConversionOptions = {
  */
 const IMMEDIATE_RETRY_POLICY = { initialDelayMs: 1, maxDelayMs: 1, multiplier: 1, jitterRatio: 0 } as const;
 
-/** Loop options a Graph `loop` node forwards to its child Loop. */
-const SUPPORTED_NODE_OPTION_KEYS = new Set(["approvalMode"]);
+/** Loop options the Graph node itself owns rather than carrying in loopOptions. */
+const NODE_OWNED_OPTION_KEYS = new Set<string>(["approvalMode"]);
+/** Loop options a Graph `loop` node declares and forwards to its child Loop. */
+const DECLARABLE_NODE_OPTION_KEYS = new Set<string>(GRAPH_LOOP_OPTION_KEYS);
+/**
+ * The Loop DAG spreads `node.options` first and then overwrites `priority` from
+ * the node itself, so a priority declared inside options never reaches the
+ * child Loop. It is reported as inert instead of silently re-enabled.
+ */
+const INERT_NODE_OPTION_KEYS = new Set<string>(["priority"]);
 
 const MAX_GRAPH_CONDITION_CHILDREN = 32;
 const MAX_LOOP_DAG_ID_LENGTH = 64;
+const MAX_GRAPH_NODE_INPUTS = 32;
+const GRAPH_INPUT_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 
 function graphCondition(condition: LoopDagCondition): GraphCondition {
   if ("nodeId" in condition) return { nodeId: condition.nodeId, status: condition.status };
@@ -204,51 +218,19 @@ export function engineeringGraphFromLoopDag(
     });
   }
 
-  // --- Failure policy: per node in the Loop DAG, per graph in the Graph. ---
-  const stopNodes = source.nodes.filter((node) => node.failurePolicy === "stop").map((node) => node.id);
-  if (stopNodes.length > 0 && stopNodes.length !== source.nodes.length) {
-    block({
-      code: "mixed_failure_policy",
-      field: "nodes[].failurePolicy",
-      message: `The Graph owns one failurePolicy for the whole run, so "stop" cannot apply to a subset. Nodes declaring "stop": ${stopNodes.join(", ")}. Give every node "stop", or none.`,
-    });
-  }
-  const failurePolicy: NonNullable<EngineeringGraphDefinition["failurePolicy"]> =
-    stopNodes.length === source.nodes.length ? "stop" : "continue";
+  // --- Failure policy. The Loop DAG's default (skip_dependents) is the
+  // Graph's "continue"; only "stop" needs a per-node override. ---
+  const failurePolicy: NonNullable<EngineeringGraphDefinition["failurePolicy"]> = "continue";
 
-  // --- Shared budgets: the Loop DAG weights node shares, the Graph splits evenly. ---
-  const hasSharedBudget = source.costBudgetUsd !== undefined || source.tokenBudget !== undefined;
-  const weights = source.nodes.map((node) => node.budgetWeight ?? 1);
-  const unevenWeights = weights.some((weight) => weight !== weights[0]);
-  if (unevenWeights && hasSharedBudget) {
-    block({
-      code: "budget_weight",
-      field: "nodes[].budgetWeight",
-      message:
-        "The Graph splits the remaining shared budget evenly across the nodes it launches together and has no per-node weight. Remove budgetWeight, or give every node the same weight.",
-    });
-  } else if (unevenWeights) {
-    warn({
-      code: "inert_budget_weight",
-      field: "nodes[].budgetWeight",
-      message:
-        "budgetWeight only reweights a shared cost/token budget, and this DAG declares none, so the differing weights are inert and are not encoded in the Graph.",
-    });
-  }
-  if (source.predictiveBudget === true) {
-    if (hasSharedBudget) {
+  // --- Shared budgets: both runtimes weight the shares of the nodes they
+  // launch together, and both may reweight them from bounded history. ---
+  for (const node of source.nodes) {
+    if (node.budgetWeight !== undefined && node.budgetWeight > MAX_GRAPH_NODE_BUDGET_WEIGHT) {
       block({
-        code: "predictive_budget",
-        field: "predictiveBudget",
-        message:
-          "The Graph has no historical budget reweighting. Its adaptiveScheduling learns scheduling order, not budget shares, so it is not an equivalent substitute.",
-      });
-    } else {
-      warn({
-        code: "inert_predictive_budget",
-        field: "predictiveBudget",
-        message:
-          "predictiveBudget only reweights a shared cost/token budget, and this DAG declares none, so it is inert and is not encoded in the Graph.",
+        code: "budget_weight",
+        field: "nodes[].budgetWeight",
+        nodeId: node.id,
+        message: `The Graph bounds a node budgetWeight at ${MAX_GRAPH_NODE_BUDGET_WEIGHT}; the Loop DAG requests ${node.budgetWeight}.`,
       });
     }
   }
@@ -337,42 +319,63 @@ export function engineeringGraphFromLoopDag(
   const graphNodes: GraphNode[] = [];
   const mapping: Record<string, LoopDagGraphNodeMapping> = {};
   let anyRetries = false;
+  let anyVerifierId = false;
+  let anyOutputPaths = false;
+  let anyDependencyOutputs = false;
   for (const node of source.nodes) {
-    const unsupportedOptions = Object.keys(node.options ?? {}).filter((key) => !SUPPORTED_NODE_OPTION_KEYS.has(key));
+    const declaredOptions = Object.keys(node.options ?? {});
+    const unsupportedOptions = declaredOptions.filter(
+      (key) =>
+        !DECLARABLE_NODE_OPTION_KEYS.has(key) && !NODE_OWNED_OPTION_KEYS.has(key) && !INERT_NODE_OPTION_KEYS.has(key),
+    );
     if (unsupportedOptions.length > 0) {
       block({
         code: "node_options_unsupported",
         field: "nodes[].options",
         nodeId: node.id,
-        message: `A Graph loop node forwards only ${[...SUPPORTED_NODE_OPTION_KEYS].join(", ")} to its child Loop. These options have no Graph equivalent and would silently stop applying: ${unsupportedOptions.join(", ")}.`,
+        message: `A Graph loop node declares Loop options through loopOptions, and the Graph runtime owns the rest. These options have no Graph equivalent and would silently stop applying: ${unsupportedOptions.join(", ")}.`,
       });
     }
-    if (node.verifierId !== undefined) {
-      block({
-        code: "verifier_id",
-        field: "nodes[].verifierId",
+    const inertOptions = declaredOptions.filter((key) => INERT_NODE_OPTION_KEYS.has(key));
+    if (inertOptions.length > 0) {
+      warn({
+        code: "inert_node_option",
+        field: "nodes[].options",
         nodeId: node.id,
-        message:
-          "verifierId binds a caller-supplied verify implementation across resumes. A Graph loop node always runs the declared verifyCommand through the real verifier.",
+        message: `The Loop DAG overwrites these options from the node itself, so they never reach the child Loop and are not encoded in the Graph: ${inertOptions.join(", ")}.`,
       });
     }
-    if (node.consumeDependencyOutputs === true) {
-      block({
-        code: "consume_dependency_outputs",
-        field: "nodes[].consumeDependencyOutputs",
-        nodeId: node.id,
-        message:
-          "The Loop DAG appends structured dependency outputs to the node's task at run time. The Graph resolves `inputs` only for function/map/remote handlers; a loop node's task is used verbatim, so the dependency context would disappear.",
-      });
+    if (node.verifierId !== undefined) anyVerifierId = true;
+    if (node.consumeDependencyOutputs === true && (node.dependsOn?.length ?? 0) > 0) {
+      anyDependencyOutputs = true;
+      if ((node.dependsOn?.length ?? 0) > MAX_GRAPH_NODE_INPUTS) {
+        block({
+          code: "consume_dependency_outputs",
+          field: "nodes[].consumeDependencyOutputs",
+          nodeId: node.id,
+          message: `A Graph node binds at most ${MAX_GRAPH_NODE_INPUTS} inputs; this node consumes ${node.dependsOn?.length} dependency outputs.`,
+        });
+      }
+      const unnameable = (node.dependsOn ?? []).filter((dependency) => !GRAPH_INPUT_NAME_RE.test(dependency));
+      if (unnameable.length > 0) {
+        block({
+          code: "consume_dependency_outputs",
+          field: "nodes[].consumeDependencyOutputs",
+          nodeId: node.id,
+          message: `A Graph input name must start with a letter, so these dependency ids cannot become input names: ${unnameable.join(", ")}.`,
+        });
+      }
     }
     if (node.outputPaths !== undefined) {
-      block({
-        code: "output_paths",
-        field: "nodes[].outputPaths",
-        nodeId: node.id,
-        message:
-          "outputPaths asserts declared files exist after a node passes and records them as artifacts. The Graph captures artifacts only from what a function/map/remote handler returns, so a loop node cannot promise or verify them.",
-      });
+      anyOutputPaths = true;
+      if (node.outputPaths.length > MAX_GRAPH_NODE_OUTPUT_PATHS) {
+        block({
+          code: "output_paths",
+          field: "nodes[].outputPaths",
+          nodeId: node.id,
+          message: `The Graph artifact channel accepts at most ${MAX_GRAPH_NODE_OUTPUT_PATHS} artifacts per node; this node declares ${node.outputPaths.length} output paths.`,
+        });
+      }
     }
     if ((node.maxRetries ?? 0) > 0) anyRetries = true;
 
@@ -424,6 +427,15 @@ export function engineeringGraphFromLoopDag(
     }
 
     const workspace = workspaceForNode[node.id];
+    const loopOptions: GraphLoopOptions = {};
+    for (const key of GRAPH_LOOP_OPTION_KEYS) {
+      const value = node.options?.[key];
+      if (value !== undefined) (loopOptions as Record<string, unknown>)[key] = value;
+    }
+    const inputs: Record<string, GraphInputBinding> = {};
+    if (node.consumeDependencyOutputs === true) {
+      for (const dependency of node.dependsOn ?? []) inputs[dependency] = { nodeId: dependency };
+    }
     graphNodes.push({
       id: node.id,
       kind: "loop",
@@ -433,13 +445,43 @@ export function engineeringGraphFromLoopDag(
       verifyCommand: node.verifyCommand,
       ...(workspace !== undefined ? { workspace } : {}),
       ...(node.options?.approvalMode !== undefined ? { approvalMode: node.options.approvalMode } : {}),
+      ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
       ...(node.priority !== undefined ? { priority: node.priority } : {}),
       ...(node.resources !== undefined ? { resources: [...node.resources] } : {}),
       ...((node.maxRetries ?? 0) > 0
         ? { maxRetries: node.maxRetries!, retryPolicy: { ...IMMEDIATE_RETRY_POLICY } }
         : {}),
+      ...(Object.keys(loopOptions).length > 0 ? { loopOptions } : {}),
+      ...(node.verifierId !== undefined ? { verifierId: node.verifierId } : {}),
+      ...(node.outputPaths !== undefined ? { outputPaths: [...node.outputPaths] } : {}),
+      ...(node.budgetWeight !== undefined ? { budgetWeight: node.budgetWeight } : {}),
+      ...(node.failurePolicy === "stop" ? { failurePolicy: "stop" as const } : {}),
     });
     mapping[node.id] = { loopNodeId: node.id, ...(gateId ? { approvalGateId: gateId } : {}) };
+  }
+  if (anyVerifierId) {
+    warn({
+      code: "verifier_binding",
+      field: "nodes[].verifierId",
+      message:
+        "The Loop DAG binds the verifier through LoopDagOptions.nodes[].options.verify; the Graph resolves the same id from RunEngineeringGraphOptions.verifiers. Register the implementation under that id on every run and resume.",
+    });
+  }
+  if (anyDependencyOutputs) {
+    warn({
+      code: "dependency_output_shape",
+      field: "nodes[].consumeDependencyOutputs",
+      message:
+        "Dependency outcomes become declared Graph inputs, so the block appended to the task is a JSON object keyed by dependency id rather than the Loop DAG's array of { id, output } entries, and it is bounded independently of the node task.",
+    });
+  }
+  if (anyOutputPaths) {
+    warn({
+      code: "output_path_attestation",
+      field: "nodes[].outputPaths",
+      message:
+        "The Loop DAG only asserts a declared file exists. The Graph additionally hashes it and stores it in the content-addressed artifact store, so an output larger than the artifact limit fails a node the Loop DAG would pass.",
+    });
   }
   if (anyRetries) {
     warn({
@@ -464,6 +506,7 @@ export function engineeringGraphFromLoopDag(
     nodes: graphNodes,
     maxConcurrency: concurrency,
     failurePolicy,
+    ...(source.predictiveBudget === true ? { predictiveBudget: true } : {}),
     ...(source.costBudgetUsd !== undefined ? { costBudgetUsd: source.costBudgetUsd } : {}),
     ...(source.tokenBudget !== undefined ? { tokenBudget: source.tokenBudget } : {}),
     ...(source.maxDurationMs !== undefined ? { maxDurationMs: source.maxDurationMs } : {}),

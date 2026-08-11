@@ -504,14 +504,22 @@ Engineering Graph. The Loop DAG receives correctness and security fixes only; it
 will not grow new fields. Existing `.seekforge/loop-dags/` checkpoints keep
 resuming unchanged.
 
-**It is not yet a subset, either.** A Graph `loop` node forwards only `task`,
-`workspace`, `verifyCommand`, `approvalMode`, the budgets, and `timeoutMs` to its
-child Loop, so the per-Loop tuning a DAG node can carry in `options`
-(`maxIterations`, verification plans, model routing, `codeReview`, …),
-`consumeDependencyOutputs`, declared `outputPaths`, `budgetWeight`,
-`predictiveBudget`, `verifierId`, and a per-node `failurePolicy` have no Graph
-equivalent today. A migration that needs any of them must stay on the Loop DAG
-until the Graph grows them.
+**The subset gap is closed.** A Graph `loop` node is no longer a strictly weaker
+Loop: `loopOptions`, `verifierId`, dependency-output injection, declared
+`outputPaths`, `budgetWeight`, `predictiveBudget` and a per-node `failurePolicy`
+all exist there now — see
+[Loop node configuration](graph-engineering.md#loop-node-configuration). What a
+migrating user still has to know is a short list of *differences*, not gaps:
+
+- Approval becomes a separate `<node>-approval` gate node, so it is that node's
+  id an operator approves, not the loop node's.
+- Retries wait a pinned minimum delay and record a durable `waiting_retry`
+  phase; the DAG retried immediately.
+- Equal-priority ties break by dependency criticality rather than by id.
+- Dependency outputs arrive as a JSON object keyed by dependency id, not as an
+  `[{id, output}]` array.
+- Declared outputs are additionally hashed and size-capped, so a file the DAG
+  would have accepted can fail the node.
 
 **Migrating:**
 
@@ -664,6 +672,15 @@ All options are optional. `--requirements` accepts `quick|analyze|confirm`;
 be a finite positive USD value and overrides `costBudgetUsd` from config. Without
 an explicit budget, the TUI inherits the configured value. The default iteration
 limit is 8.
+
+`/loop` also accepts `--verify-stage`, `--stable-passes`, `--flaky-retries`,
+`--stuck-recoveries`, `--rollback-regressions`, `--priority` and the budget
+flags, with the same ranges the CLI enforces. One of them is workspace-dependent:
+`--rollback-regressions` needs a retained `.seekforge/worktrees` checkout,
+because rewinding a regression outside one would rewind the user's own working
+tree. The TUI runs in the workspace it was started in and `/worktree new` does
+not rebind the tab, so it refuses the flag up front unless the TUI itself was
+started inside a worktree — use `seekforge loop --worktree` otherwise.
 
 Resume from the TUI with `/loop-resume [--approve-requirements] [--add-iterations N] [--add-budget USD]
 <loop-id>`. Desktop exposes the same additive controls beside a completed Loop.

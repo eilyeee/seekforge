@@ -1,4 +1,5 @@
 import { isRecord } from "../util/guards.js";
+import type { LoopOptions } from "./auto-loop.js";
 import type { GraphNode } from "./graph-contract.js";
 import type { GraphEvent, GraphNodeResult } from "./graph-state.js";
 import type { SessionLease } from "./session-lease.js";
@@ -34,6 +35,9 @@ export type GraphFunctionResult = {
 export type GraphFunctionHandler = (
   context: GraphFunctionContext,
 ) => GraphFunctionResult | Promise<GraphFunctionResult>;
+
+/** The Loop verify implementation a `loop` node binds by id. */
+export type GraphLoopVerifier = NonNullable<LoopOptions["verify"]>;
 
 export type GraphExecutionAdapter = {
   /** Untrusted adapters are rejected during preflight, before any node starts. */
@@ -165,6 +169,13 @@ export type RunEngineeringGraphOptions = {
     | Promise<{ decision: "approve" | "reject" | "request_changes"; reason?: string; data?: unknown }>;
   handlers?: Readonly<Record<string, GraphFunctionHandler>>;
   executors?: Readonly<Record<string, GraphExecutionAdapter>>;
+  /**
+   * Verify implementations a `loop` node may bind through `verifierId`. The id
+   * lives in the durable definition and the function stays in the caller, so a
+   * resumed Graph re-binds the same verifier instead of silently falling back
+   * to the shell verifier the definition never asked for.
+   */
+  verifiers?: Readonly<Record<string, GraphLoopVerifier>>;
   signal?: AbortSignal;
   onEvent?: (event: GraphEvent) => void;
   /** Internal owner guard used by idle maintenance. */
@@ -186,5 +197,13 @@ export function graphExecutor(options: RunEngineeringGraphOptions, id: string): 
   const descriptor = options.executors ? Object.getOwnPropertyDescriptor(options.executors, id) : undefined;
   return descriptor && "value" in descriptor && isRecord(descriptor.value)
     ? (descriptor.value as unknown as GraphExecutionAdapter)
+    : undefined;
+}
+
+/** Reads a verifier without inheriting anything from Object.prototype. */
+export function graphVerifier(options: RunEngineeringGraphOptions, id: string): GraphLoopVerifier | undefined {
+  const descriptor = options.verifiers ? Object.getOwnPropertyDescriptor(options.verifiers, id) : undefined;
+  return descriptor && "value" in descriptor && typeof descriptor.value === "function"
+    ? (descriptor.value as GraphLoopVerifier)
     : undefined;
 }

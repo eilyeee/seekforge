@@ -5,6 +5,7 @@ import {
   graphDefinitionFingerprint,
   graphDefinitionFingerprintMatches,
   parseEngineeringGraphDefinition,
+  parseGraphLoopOptions,
 } from "../../src/agent/graph-contract.js";
 import { planEngineeringGraph } from "../../src/agent/graph-plan.js";
 
@@ -334,6 +335,260 @@ describe("parseEngineeringGraphDefinition", () => {
     expect(
       graphDefinitionFingerprintMatches(graphDefinitionFingerprint(graph, new Map()), tampered, graph, new Map()),
     ).toBe(false);
+  });
+
+  it("parses the bounded Loop options a loop node may declare", () => {
+    const graph = parseEngineeringGraphDefinition({
+      graphId: "loop-options",
+      nodes: [
+        {
+          id: "repair",
+          kind: "loop",
+          task: "fix it",
+          verifyCommand: "pnpm test",
+          verifierId: "custom",
+          outputPaths: ["dist/report.json"],
+          budgetWeight: 2.5,
+          failurePolicy: "stop",
+          loopOptions: {
+            maxIterations: 12,
+            stablePasses: 2,
+            flakyRetries: 1,
+            codeReview: true,
+            requirementMode: "analyze",
+            model: "deepseek-chat",
+            modelByFailureCategory: { test: "deepseek-reasoner" },
+            modelRoutesByFailureCategory: { compile: ["deepseek-chat", "deepseek-reasoner"] },
+            modelEscalationThreshold: 2,
+            verificationPlan: [
+              { id: "unit", command: "pnpm test", paths: ["packages/core"], dependencyPaths: ["packages/core"] },
+              { id: "lint", command: "pnpm lint", dependsOn: ["unit"], parallel: true, resources: ["cpu"] },
+            ],
+          },
+        },
+      ],
+    });
+    expect(graph.nodes[0]?.loopOptions?.maxIterations).toBe(12);
+    expect(graph.nodes[0]?.loopOptions?.verificationPlan?.[1]).toEqual({
+      id: "lint",
+      command: "pnpm lint",
+      dependsOn: ["unit"],
+      parallel: true,
+      resources: ["cpu"],
+    });
+    expect(graph.nodes[0]?.budgetWeight).toBe(2.5);
+    expect(graph.nodes[0]?.failurePolicy).toBe("stop");
+    expect(graph.nodes[0]?.outputPaths).toEqual(["dist/report.json"]);
+
+    const loopNode = (extra: Record<string, unknown>): unknown => ({
+      graphId: "loop-bounds",
+      nodes: [{ id: "repair", kind: "loop", task: "fix it", verifyCommand: "pnpm test", ...extra }],
+    });
+    expect(() => parseEngineeringGraphDefinition(loopNode({ loopOptions: { workspace: "/tmp" } }))).toThrow(
+      /unsupported option/,
+    );
+    expect(() => parseEngineeringGraphDefinition(loopNode({ loopOptions: { persist: false } }))).toThrow(
+      /unsupported option/,
+    );
+    expect(() => parseEngineeringGraphDefinition(loopNode({ loopOptions: { maxIterations: 0 } }))).toThrow(
+      /maxIterations/,
+    );
+    expect(() => parseEngineeringGraphDefinition(loopNode({ loopOptions: { stablePasses: 6 } }))).toThrow(
+      /stablePasses/,
+    );
+    expect(() =>
+      parseEngineeringGraphDefinition(
+        loopNode({ loopOptions: { autoVerificationPlan: true, verificationPlan: [{ id: "a", command: "true" }] } }),
+      ),
+    ).toThrow(/autoVerificationPlan/);
+    expect(() =>
+      parseEngineeringGraphDefinition(
+        loopNode({
+          loopOptions: {
+            verificationPlan: [
+              { id: "a", command: "true", dependsOn: ["b"] },
+              { id: "b", command: "true", dependsOn: ["a"] },
+            ],
+          },
+        }),
+      ),
+    ).toThrow(/cycle/);
+    expect(() =>
+      parseEngineeringGraphDefinition(
+        loopNode({ loopOptions: { verificationPlan: [{ id: "a", command: "true", parallel: true }] } }),
+      ),
+    ).toThrow(/parallel requires resources/);
+    expect(() =>
+      parseEngineeringGraphDefinition(
+        loopNode({
+          loopOptions: { verificationPlan: [{ id: "a", command: "true", dependencyPaths: ["packages/core"] }] },
+        }),
+      ),
+    ).toThrow(/subset of paths/);
+    expect(() =>
+      parseEngineeringGraphDefinition(
+        loopNode({ loopOptions: { verificationPlan: [{ id: "a", command: "true", unknown: 1 }] } }),
+      ),
+    ).toThrow(/unsupported field/);
+    expect(() => parseEngineeringGraphDefinition(loopNode({ loopOptions: { modelEscalationThreshold: 2 } }))).toThrow(
+      /requires modelRoutesByFailureCategory/,
+    );
+    expect(() => parseEngineeringGraphDefinition(loopNode({ budgetWeight: 0 }))).toThrow(/budgetWeight/);
+    expect(() => parseEngineeringGraphDefinition(loopNode({ budgetWeight: 1_001 }))).toThrow(/budgetWeight/);
+    expect(() => parseEngineeringGraphDefinition(loopNode({ verifierId: "not safe" }))).toThrow(/verifierId/);
+    expect(() => parseEngineeringGraphDefinition(loopNode({ outputPaths: ["../escape"] }))).toThrow(/outputPaths/);
+    expect(() => parseEngineeringGraphDefinition(loopNode({ outputPaths: [] }))).toThrow(/outputPaths/);
+    expect(() => parseEngineeringGraphDefinition(loopNode({ failurePolicy: "skip" }))).toThrow(/failurePolicy/);
+    expect(() =>
+      parseEngineeringGraphDefinition({
+        graphId: "wrong-kind",
+        nodes: [{ id: "run", kind: "function", handler: "run", loopOptions: { maxIterations: 2 } }],
+      }),
+    ).toThrow(/loopOptions require a loop node/);
+    expect(() =>
+      parseEngineeringGraphDefinition({
+        graphId: "wrong-kind",
+        nodes: [{ id: "run", kind: "function", handler: "run", outputPaths: ["dist/a.json"] }],
+      }),
+    ).toThrow(/outputPaths/);
+    expect(() =>
+      parseEngineeringGraphDefinition({
+        graphId: "wrong-kind",
+        nodes: [{ id: "run", kind: "function", handler: "run", verifierId: "custom" }],
+      }),
+    ).toThrow(/verifierId/);
+    expect(() =>
+      parseEngineeringGraphDefinition({ graphId: "flag", nodes: [{ id: "a", kind: "gate" }], predictiveBudget: 1 }),
+    ).toThrow(/predictiveBudget/);
+  });
+
+  it("rejects every out-of-bounds Loop option a definition could declare", () => {
+    const reject = (loopOptions: unknown, pattern: RegExp): void => {
+      expect(() => parseGraphLoopOptions(loopOptions)).toThrow(pattern);
+    };
+    reject("not an object", /must be an object/);
+    reject({ verificationPlan: [] }, /1 to 16 stages/);
+    reject({ verificationPlan: [{ id: "a b", command: "true" }] }, /unique safe stage id/);
+    reject(
+      {
+        verificationPlan: [
+          { id: "a", command: "true" },
+          { id: "a", command: "true" },
+        ],
+      },
+      /unique safe stage id/,
+    );
+    reject({ verificationPlan: [{ id: "a", command: "  " }] }, /bounded command/);
+    reject({ verificationPlan: [{ id: "a", command: "true", cacheable: "yes" }] }, /cacheable must be boolean/);
+    reject({ verificationPlan: [{ id: "a", command: "true", paths: [] }] }, /1 to 64 unique prefixes/);
+    reject({ verificationPlan: [{ id: "a", command: "true", paths: ["/abs"] }] }, /invalid relative prefix/);
+    reject({ verificationPlan: [{ id: "a", command: "true", dependsOn: ["a b"] }] }, /unique safe stage ids/);
+    reject({ verificationPlan: [{ id: "a", command: "true", resources: ["not ok"] }] }, /unique safe names/);
+    reject({ verificationPlan: [{ id: "a", command: "true", dependsOn: ["missing"] }] }, /unknown stage/);
+    reject({ verificationPlan: [{ id: "a", command: "true", timeoutMs: 0 }] }, /timeoutMs/);
+    reject({ model: "" }, /bounded non-empty string/);
+    reject({ requirementMode: "eventually" }, /requirementMode/);
+    reject({ costBudgetUsd: 0 }, /costBudgetUsd/);
+    reject({ modelByFailureCategory: { nonsense: "m" } }, /invalid category or model/);
+    reject({ modelByFailureCategory: "x" }, /bounded object/);
+    reject({ codeReview: "yes" }, /codeReview must be boolean/);
+    // The full accepted surface round-trips unchanged.
+    const parsed = parseGraphLoopOptions({
+      autoVerificationPlan: true,
+      maxNoProgressRecoveries: 0,
+      rollbackOnRegression: true,
+      adaptiveBudget: true,
+      maxVerifyRuns: 20,
+      verifyTimeoutMs: 1_000,
+      agentTimeoutMs: 2_000,
+      maxAgentRetries: 0,
+      costBudgetUsd: 1.5,
+      tokenBudget: 100,
+      maxDurationMs: 3_000,
+      planModel: "deepseek-reasoner",
+      escalateOnFailure: true,
+      approveRequirements: true,
+    });
+    expect(parsed).toEqual({
+      autoVerificationPlan: true,
+      maxNoProgressRecoveries: 0,
+      rollbackOnRegression: true,
+      adaptiveBudget: true,
+      maxVerifyRuns: 20,
+      verifyTimeoutMs: 1_000,
+      agentTimeoutMs: 2_000,
+      maxAgentRetries: 0,
+      costBudgetUsd: 1.5,
+      tokenBudget: 100,
+      maxDurationMs: 3_000,
+      planModel: "deepseek-reasoner",
+      escalateOnFailure: true,
+      approveRequirements: true,
+    });
+  });
+
+  it("refuses inputs on a kind that never reads them", () => {
+    for (const node of [
+      { id: "gate", kind: "gate" },
+      { id: "gate", kind: "join" },
+      { id: "gate", kind: "wait", waitFor: { signal: "go" } },
+    ]) {
+      expect(() =>
+        parseEngineeringGraphDefinition({
+          graphId: "silent-inputs",
+          nodes: [
+            { id: "source", kind: "function", handler: "source" },
+            { ...node, dependsOn: ["source"], inputs: { value: { nodeId: "source" } } },
+          ],
+        }),
+      ).toThrow(/inputs require a kind that consumes them/);
+    }
+    // A loop node now consumes them, so the same declaration is accepted.
+    const accepted = parseEngineeringGraphDefinition({
+      graphId: "loop-inputs",
+      nodes: [
+        { id: "source", kind: "function", handler: "source" },
+        {
+          id: "repair",
+          kind: "loop",
+          task: "fix",
+          verifyCommand: "true",
+          dependsOn: ["source"],
+          inputs: { value: { nodeId: "source" } },
+        },
+      ],
+    });
+    expect(accepted.nodes[1]?.inputs?.value).toEqual({ nodeId: "source" });
+  });
+
+  it("keeps a definition without the new node fields byte-identical for fingerprints", () => {
+    // The durable fingerprint is JSON.stringify of the parsed definition, so a
+    // definition that predates loopOptions/verifierId/outputPaths/budgetWeight/
+    // per-node failurePolicy must still serialize exactly as it did before.
+    const legacy = {
+      graphId: "legacy",
+      nodes: [
+        { id: "build", kind: "function", handler: "build", priority: 3 },
+        { id: "repair", kind: "loop", task: "fix", verifyCommand: "true", dependsOn: ["build"], timeoutMs: 1_000 },
+      ],
+      maxConcurrency: 1,
+      failurePolicy: "continue",
+    };
+    const parsed = parseEngineeringGraphDefinition(legacy);
+    expect(JSON.stringify(parsed)).toBe(
+      JSON.stringify({
+        graphId: "legacy",
+        nodes: [
+          { id: "build", kind: "function", handler: "build", priority: 3 },
+          { id: "repair", kind: "loop", dependsOn: ["build"], task: "fix", verifyCommand: "true", timeoutMs: 1_000 },
+        ],
+        maxConcurrency: 1,
+        failurePolicy: "continue",
+      }),
+    );
+    expect(
+      graphDefinitionFingerprintMatches(graphDefinitionFingerprint(parsed, new Map()), parsed, parsed, new Map()),
+    ).toBe(true);
   });
 
   it("rejects sparse arrays and timer-overflow timeouts", () => {

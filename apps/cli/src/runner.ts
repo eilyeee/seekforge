@@ -8,8 +8,16 @@
  *   - inside a Docker container (the reference runner in `docker-runner.ts`),
  *   - on a remote workstation, or
  *   - in a VM,
- * behind one small, stable interface. Callers depend on {@link AgentRunner};
- * each backend maps {@link RunnerOptions} onto its own launch mechanism.
+ * behind one shared option and result shape. What the backends share is
+ * {@link RunnerOptions}, {@link RunnerResult} and the shell quoting below; each
+ * maps those onto its own launch mechanism.
+ *
+ * There used to be an `AgentRunner` interface here too, implemented twice and
+ * called never — `sandbox-run` and `remote-run` invoke `spawnDockerRun` and
+ * `spawnSshRun` directly. When a real need for a runner seam did arrive, Graph
+ * `remote` nodes got their own purpose-built `GraphExecutionAdapter` rather than
+ * this one. An interface with no caller is a shape, not a contract, so it is
+ * gone; the parts the backends actually share stayed.
  *
  * The contract is intentionally minimal — the shared inputs every backend needs
  * (what task, in which workspace, which model/provider/mode, and the cost cap)
@@ -80,16 +88,4 @@ export interface RunnerResult {
   exitCode: number;
   /** Which backend produced this result (e.g. `docker`, `local`). */
   runner: string;
-}
-
-/**
- * A runner backend: something that can execute one task against a workspace.
- * Implementations are thin — they translate {@link RunnerOptions} into their
- * own launch mechanism and stream the child's output through.
- */
-export interface AgentRunner {
-  /** Stable backend name, surfaced in {@link RunnerResult.runner}. */
-  readonly name: string;
-  /** Execute the task and resolve once the underlying process exits. */
-  run(opts: RunnerOptions): Promise<RunnerResult>;
 }

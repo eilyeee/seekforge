@@ -58,7 +58,7 @@ docker run --rm --network <net> \
   seekforge run "<task>" -y [--max-cost <n>] [-m <model>] [--permission-mode <mode>]
 ```
 
-一个轻薄的非纯包装（`spawnDockerRun`）用这些参数启动 `docker` 并透传 stdio。`createDockerRunner()` 将该后端以 `AgentRunner` 形式暴露。
+一个轻薄的非纯包装（`spawnDockerRun`）用这些参数启动 `docker` 并透传 stdio——`sandbox-run` 调用的就是它，ssh 后端对应的是 `spawnSshRun`。两者共享 `runner.ts` 里的 `RunnerOptions`/`RunnerResult` 与 shell 引号处理；不存在单独的 runner 对象工厂。
 
 ## SSH runner
 

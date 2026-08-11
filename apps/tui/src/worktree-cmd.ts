@@ -7,6 +7,7 @@
  */
 
 import { worktreeSlug, type GitWorktreeEntry } from "@seekforge/core";
+import { resolve, sep } from "node:path";
 
 /** Parsed `/worktree` subcommand. `usage` covers bare + unknown subcommands. */
 export type WorktreeSub =
@@ -33,6 +34,20 @@ export function parseWorktreeCommand(arg: string | undefined): WorktreeSub {
   if (sub === "new" || sub === "add") return { kind: "new", ...(restText ? { name: restText } : {}) };
   if (sub === "remove" || sub === "rm") return { kind: "remove", ...(rest[0] ? { target: rest[0] } : {}) };
   return { kind: "usage" };
+}
+
+/**
+ * Whether `workspace` is a retained `.seekforge/worktrees/<slug>` checkout.
+ * Mirrors the isolation predicate `runAutoLoop` enforces for
+ * `rollbackOnRegression` (packages/core/src/agent/auto-loop.ts) so the TUI can
+ * refuse `--rollback-regressions` before starting a run instead of letting the
+ * engine throw several seconds in. Core owns the invariant and stays
+ * authoritative; this is only a pre-flight mirror — if core ever exports the
+ * predicate, delete this and call it instead.
+ */
+export function isRetainedWorktreeWorkspace(workspace: string): boolean {
+  const parts = resolve(workspace).split(sep);
+  return parts.some((part, index) => part === ".seekforge" && parts[index + 1] === "worktrees");
 }
 
 /** The `<slug>` portion of a `seekforge/<slug>` branch (or "" if not managed). */

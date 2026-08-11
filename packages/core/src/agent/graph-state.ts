@@ -345,7 +345,9 @@ function parseState(raw: string, expectedId?: string): EngineeringGraphState | n
   }
   let definition: EngineeringGraphDefinition;
   try {
-    definition = parseEngineeringGraphDefinition(value.definition);
+    // Persisted: this codec wrote it, so a rule added after it was written must
+    // not make the graph unloadable. See parseEngineeringGraphDefinition.
+    definition = parseEngineeringGraphDefinition(value.definition, 0, true);
   } catch {
     return null;
   }

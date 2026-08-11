@@ -71,6 +71,70 @@ export function formatLoopEvent(event: LoopEvent): LoopNotice[] {
       const tail = loopOutputTail(event.output);
       return tail ? [head, { text: `    ${tail}`, tone: "dim" }] : [head];
     }
+    case "verify.stage.completed": {
+      const result = event.result;
+      return [
+        {
+          text: `  ${result.code === 0 ? "✓" : "✗"} loop · verifier ${result.id} · ${result.durationMs}ms${
+            result.flaky ? " · flaky" : ""
+          }`,
+          tone: result.code === 0 ? "dim" : "error",
+        },
+      ];
+    }
+    case "verify.flaky":
+      // A stage that only went green on a retry must not read like a clean pass.
+      return [
+        {
+          text: `  ! loop · verifier ${event.stageId} passed after ${event.attempts} attempts (flaky)`,
+          tone: "error",
+        },
+      ];
+    case "verify.impact": {
+      // Only worth a line when the pass is partial: every stage having run is
+      // what the plain verify line already implies.
+      const counts = { run: 0, reuse: 0, skip: 0, blocked: 0 };
+      for (const decision of event.decisions) counts[decision.action]++;
+      if (counts.reuse === 0 && counts.skip === 0 && counts.blocked === 0) return [];
+      return [
+        {
+          text: `  loop · verification impact · ${counts.run} run, ${counts.reuse} reused, ${counts.skip} skipped, ${counts.blocked} blocked${
+            event.fullFallback ? " · full" : ""
+          }`,
+          tone: "dim",
+        },
+      ];
+    }
+    case "loop.paused":
+      // Confirms the boundary the /loop-pause notice only promised.
+      return [{ text: `  ⏸ loop paused at the iteration ${event.iteration} boundary (/loop-continue)`, tone: "dim" }];
+    case "loop.resumed":
+      return [{ text: `  ▶ loop resumed at iteration ${event.iteration}`, tone: "dim" }];
+    case "loop.steered":
+      return [
+        {
+          text: `  ➤ loop applied ${event.count} guidance message${event.count === 1 ? "" : "s"} at iteration ${event.iteration}`,
+          tone: "dim",
+        },
+      ];
+    case "loop.recovery":
+      return [
+        {
+          text: `  ↻ loop · recovery ${event.attempt} after ${event.reason}${
+            event.strategy ? ` · ${event.category ?? "unknown"}/${event.strategy}` : ""
+          }`,
+          tone: "dim",
+        },
+      ];
+    case "loop.rollback":
+      // Rollback rewrites the user's files. Never let it pass silently — the
+      // re-verify that follows would otherwise look like a duplicate verify.
+      return [
+        {
+          text: `  ↩ loop · iteration ${event.iteration} rolled back — its edits were undone (restored ${event.restored.length}, deleted ${event.deleted.length}); re-verifying`,
+          tone: "error",
+        },
+      ];
     case "loop.model.routed":
       return [
         {
@@ -111,8 +175,13 @@ export function formatLoopEvent(event: LoopEvent): LoopNotice[] {
     case "loop.done":
       return formatLoopSummary(event.result);
     default:
-      // Exhaustiveness guard: a future LoopEvent variant yields no lines rather
-      // than `undefined` (the caller iterates the result).
+      // Deliberately silent, because each would add a line per iteration that
+      // no user decision depends on: `verify.stage.started` (the completion
+      // line carries the outcome, and verify.output already streams progress),
+      // `loop.snapshot` (per-iteration bookkeeping), `loop.memory.updated`
+      // (internal working memory). Also an exhaustiveness guard: a future
+      // LoopEvent variant yields no lines rather than `undefined` (the caller
+      // iterates the result).
       return [];
   }
 }

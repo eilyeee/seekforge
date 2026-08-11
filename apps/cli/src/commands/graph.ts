@@ -55,6 +55,7 @@ import {
   type DurableGraphControlCommand,
   type EngineeringGraphDefinition,
   type EngineeringGraphState,
+  type GraphEvent,
   type EngineeringGraphTemplate,
   type AgentCoreDeps,
 } from "@seekforge/core";
@@ -201,10 +202,7 @@ export async function graphRunCommand(file: string, opts: GraphRunCliOptions): P
       ...(opts.restart ? { restart: true } : {}),
       ...(opts.rerun?.length ? { rerunFrom: opts.rerun } : {}),
       ...(opts.approve?.length ? { approvedNodeIds: opts.approve } : {}),
-      onEvent: (event) =>
-        console.log(
-          `[${event.sequence}] ${event.type}${event.nodeId ? ` ${event.nodeId}` : ""}${event.status ? ` ${event.status}` : ""}`,
-        ),
+      onEvent: (event) => console.log(formatGraphEvent(event)),
     });
     if (state.recovery || state.recoveryAttemptId) {
       state = clearEngineeringGraphRecovery(workspace, state.graphId, state.controlRunId);
@@ -226,6 +224,20 @@ export async function graphRunCommand(file: string, opts: GraphRunCliOptions): P
     fail(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   }
+}
+
+/**
+ * One progress line for a streamed Graph event.
+ *
+ * `message` carries the ENTIRE content of `graph.warning` and the failure detail
+ * of `node.attempt.settled`, so the earlier type-only line told a watching
+ * operator that something had happened and nothing about what.
+ */
+export function formatGraphEvent(event: GraphEvent): string {
+  const node = event.nodeId ? ` ${event.nodeId}` : "";
+  const status = event.status ? ` ${event.status}` : "";
+  const message = event.message ? ` — ${event.message}` : "";
+  return `[${event.sequence}] ${event.type}${node}${status}${message}`;
 }
 
 export function graphListCommand(): void {

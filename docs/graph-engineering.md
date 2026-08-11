@@ -100,7 +100,7 @@ Reusable files may use the versioned template envelope below. Placeholders use `
 Node kinds:
 
 - `agent`: one Agent task; `mode` and `approvalMode` use normal permission policy.
-- `loop`: a full autonomous Loop with its own verifier and a share of remaining graph budgets.
+- `loop`: a full autonomous Loop with its own verifier and a share of remaining graph budgets. See [Loop node configuration](#loop-node-configuration) for what it may declare.
 - `function`: a named handler, either embedding-supplied or one of the eight deterministic built-ins — `noop`, `collect`, `pick`, `project`, `merge`, `assert`, `count`, `summarize`. Every handler is resolved before effects. A handler is selected by name only and is never turned into a shell command. Retried handlers must be idempotent. Handler ids are part of the resume fingerprint, so change the id when its behavior changes.
 - `map`: resolves a declared dependency output through a bounded JSON Pointer and invokes a registered handler for at most `maxItems` values (default 32, hard limit 64). Items run in bounded batches, receive stable per-item idempotency keys and shares of the remaining node budget, and every started peer settles before a failed batch is published.
 - `join`: succeeds after its dependencies settle when at least `quorum` dependencies passed. This supports bounded quorum/reduce workflows without dynamically rewriting the durable definition.
@@ -126,6 +126,73 @@ That makes definition-only judgment possible: `count` returns `{count}` for an a
 For `maxConcurrency > 1`, effectful nodes that can actually overlap must resolve to non-overlapping physical directories under the graph workspace; dependency-ordered nodes may safely reuse one workspace. An ancestor and its descendant cannot run as separate parallel branches. Router and gate nodes do not require separate workspaces.
 
 `managedWorktrees` provisions a deterministic retained Git worktree for every effectful node under one repository-wide resource lock, including nested Graphs. Explicit node workspaces are forbidden within that managed scope. With `integrateDependencies: true`, passed dependency branches are merged into a node before its first attempt. `limit` accounts for all existing `seekforge/` worktrees before provisioning. An optional `fanIn` merges all passed node branches in definition order into a dedicated integration branch, runs a bounded autonomous Loop against `verifyCommand`, checkpoints repairs, and charges every attempt to the graph budget. Parent resource inspection, archival, and pruning include recursively derived child branches.
+
+## Loop node configuration
+
+A `loop` node used to forward seven fields to its child Loop, which made it a
+strictly weaker Loop than the one `loop-dag` could run — the reason the Loop DAG
+could not be retired. It now declares the tuning the DAG did.
+
+`loopOptions` accepts 24 keys, typed as a `Pick<>` of `LoopOptions` so the two
+cannot drift: `maxIterations` (1–1000), `verificationPlan` (1–16 stages),
+`autoVerificationPlan`, `stablePasses` (1–5), `flakyRetries` (0–5),
+`maxNoProgressRecoveries` (0–5), `rollbackOnRegression`, `adaptiveBudget`,
+`maxVerifyRuns`, `verifyTimeoutMs` / `agentTimeoutMs` / `maxDurationMs`
+(1 ms–24 h), `maxAgentRetries` (0–5), `costBudgetUsd`, `tokenBudget`, `model` /
+`planModel` (≤256 chars), `modelByFailureCategory`,
+`modelRoutesByFailureCategory`, `modelEscalationThreshold` (1–8), `codeReview`,
+`escalateOnFailure`, `requirementMode`, and `approveRequirements`.
+
+**What a node may not declare**, and why: `workspace`, `signal`, `onEvent`,
+`control`, `loopId`, `persist`, `resumeState`, `parentGraph`, `abortStatus`,
+`workspaceGuard`, `recoveryAttemptId`, and `verify` belong to the Graph runtime,
+which owns the child Loop's durable identity and checkpoint. `persist: false` is
+the sharpest example — it would make the child unresumable while the Graph
+checkpoint still claims it can be resumed. `task`, `verifyCommand`,
+`approvalMode` and `priority` are node fields already; one owner each.
+
+**Budget precedence.** `loopOptions` is applied first and the Graph's computed
+per-attempt share overwrites it, so a node-declared budget takes effect only
+where the Graph declares none. This is the Loop DAG's own rule.
+
+**Resume** re-supplies only what `resumeAutoLoop` still accepts — the model
+routing keys, `codeReview`, `escalateOnFailure`, `approveRequirements`. The rest
+is frozen inside the persisted Loop state.
+
+`verifierId` binds a named verifier from `RunEngineeringGraphOptions.verifiers`,
+mirroring `handler` and `executor`: the id is durable, the function is not, so
+**the same id must be registered on every run and every resume**. An
+unregistered id fails before the session lease, worktree provisioning, or any
+checkpoint — otherwise the node would silently fall back to the shell verifier
+the definition never asked for.
+
+`inputs` now resolve on `agent` and `loop` nodes too, appended to the task as an
+explicitly untrusted block bounded at 32 KiB. Map items resolve once per node
+rather than per item, so a schema violation fails the node instead of one batch
+item. Conversely, `inputs` on `gate`, `join`, `router`, `wait` and `subgraph` —
+kinds that never read them — is now rejected instead of parsed and ignored. A
+checkpoint written before that rule still loads with the field intact: it is
+inside that graph's fingerprint, and rejecting it on read would make an
+in-flight graph unloadable over a field that never did anything.
+
+`outputPaths` declares up to 32 workspace-relative regular files an `agent` or
+`loop` node produces. They go through the existing artifact channel with
+verification on, so each is opened without following a symlink, re-validated by
+device and inode around hashing, and stored by SHA-256. This is stronger than
+the Loop DAG, which only asserts existence — a file over the artifact size limit
+fails a node the DAG would pass.
+
+`budgetWeight` (0 < w ≤ 1000) divides the remaining cost and token budgets among
+the nodes launched *together* by weight rather than evenly; the default weight
+of 1 everywhere is arithmetically identical to the previous behavior. A
+definition-level `predictiveBudget` reweights from
+`.seekforge/loop-budget-history.json`, the same store and key derivation the Loop
+DAG uses, so a converted DAG and its graph learn from one history. Prediction is
+advisory: a failure to read it never gates correctness, and it is skipped when
+persistence is off.
+
+A node may pin `failurePolicy` to override the graph-wide default, so a graph can
+stop on one node's failure while letting independent branches finish.
 
 ## Persistence and recovery
 

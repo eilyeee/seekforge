@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { GitWorktreeEntry } from "@seekforge/core";
 import {
+  isRetainedWorktreeWorkspace,
   parseWorktreeCommand,
   pickFreeSlug,
   resolveWorktreeTarget,
@@ -97,5 +98,24 @@ describe("resolveWorktreeTarget", () => {
   it("returns undefined when nothing matches", () => {
     expect(resolveWorktreeTarget(entries, "nope")).toBeUndefined();
     expect(resolveWorktreeTarget(entries, "  ")).toBeUndefined();
+  });
+});
+
+describe("isRetainedWorktreeWorkspace", () => {
+  it("accepts a .seekforge/worktrees checkout (the only workspace CORE rolls back in)", () => {
+    expect(isRetainedWorktreeWorkspace("/repo/.seekforge/worktrees/loop-1")).toBe(true);
+    expect(isRetainedWorktreeWorkspace("/repo/.seekforge/worktrees/loop-1/nested")).toBe(true);
+  });
+
+  it("rejects the main checkout and lookalike paths", () => {
+    expect(isRetainedWorktreeWorkspace("/repo")).toBe(false);
+    expect(isRetainedWorktreeWorkspace("/repo/.seekforge")).toBe(false);
+    expect(isRetainedWorktreeWorkspace("/repo/.seekforge/sessions")).toBe(false);
+    expect(isRetainedWorktreeWorkspace("/repo/worktrees/loop-1")).toBe(false);
+    expect(isRetainedWorktreeWorkspace("/repo/seekforge/worktrees/loop-1")).toBe(false);
+  });
+
+  it("normalizes traversal before deciding", () => {
+    expect(isRetainedWorktreeWorkspace("/repo/.seekforge/worktrees/loop-1/../..")).toBe(false);
   });
 });

@@ -3,8 +3,6 @@ import { test } from "vitest";
 import { buildSshRunArgs, formatSshCommand } from "../ssh-runner.js";
 import { shellQuote } from "../runner.js";
 import { buildDockerRunArgs } from "../docker-runner.js";
-import { createSshRunner } from "../ssh-runner.js";
-import { createDockerRunner } from "../docker-runner.js";
 
 /**
  * ssh always runs its command through the remote login shell, so the task text
@@ -96,30 +94,25 @@ test("refuses a workspace path it cannot resolve or verify", () => {
 });
 
 /**
- * The contract had one implementation, which makes it a shape rather than a
- * contract. These are the promises any backend has to keep, asserted against
- * every backend there is.
+ * The promises both backends have to keep, asserted against the argv each one
+ * actually ships. There used to be an `AgentRunner` interface here as well;
+ * asserting its shape only proved the two objects had the same fields, which
+ * nothing consumed — these three assertions are the ones about behavior.
  */
 test("every runner backend keeps the contract's promises", () => {
   const backends = [
-    { runner: createDockerRunner(), argv: () => buildDockerRunArgs({ ...base, workspacePath: "/srv/repo" }) },
-    { runner: createSshRunner(), argv: () => buildSshRunArgs(base) },
+    { name: "docker", argv: () => buildDockerRunArgs({ ...base, workspacePath: "/srv/repo" }) },
+    { name: "ssh", argv: () => buildSshRunArgs(base) },
   ];
 
-  for (const { runner, argv } of backends) {
-    // A stable name: it goes into RunnerResult and therefore into what a user
-    // reads when asking which environment produced a session.
-    assert.equal(typeof runner.name, "string");
-    assert.ok(runner.name.length > 0);
-    assert.equal(typeof runner.run, "function");
-
+  for (const { name: runnerName, argv } of backends) {
     const rendered = argv().join(" ");
     // The task is what the caller asked for, and the workspace is the only
     // directory named — the one isolation promise the contract makes.
-    assert.ok(rendered.includes(base.task), `${runner.name} must run the task it was given`);
-    assert.ok(rendered.includes("/srv/repo"), `${runner.name} must name the workspace`);
+    assert.ok(rendered.includes(base.task), `${runnerName} must run the task it was given`);
+    assert.ok(rendered.includes("/srv/repo"), `${runnerName} must name the workspace`);
     // Headless: a runner that stopped for an interactive prompt would hang.
-    assert.ok(rendered.includes("-y"), `${runner.name} must run headless`);
+    assert.ok(rendered.includes("-y"), `${runnerName} must run headless`);
   }
 });
 

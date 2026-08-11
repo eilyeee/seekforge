@@ -183,8 +183,14 @@ describe("chatReducer context + report", () => {
       verification: "ok",
       usage: { promptTokens: 10, completionTokens: 5, cacheHitTokens: 2, costUsd: 0.01 },
     };
+    // Across two DIFFERENT sessions. Two reports for the SAME session are two
+    // views of one running total — core sends the whole session's usage every
+    // time — so summing those would re-bill the earlier turns; see
+    // usage-window.test.ts.
     let s = base();
+    s = reduce(s, { type: "session.created", sessionId: "s1" } as unknown as AgentEvent);
     s = reduce(s, { type: "session.completed", report });
+    s = reduce(s, { type: "session.created", sessionId: "s2" } as unknown as AgentEvent);
     s = reduce(s, { type: "session.completed", report });
     expect(s.totalUsage.costUsd).toBeCloseTo(0.02);
     expect(s.totalUsage.promptTokens).toBe(20);

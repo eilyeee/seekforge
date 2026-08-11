@@ -18,7 +18,7 @@ SeekForge 已经具备了较为完整的本地优先编码智能体能力面。�
 | --- | --- | --- |
 | 核心智能体循环、CLI、TUI、会话 trace、权限 | 生产就绪的基础 | 持续进行边界回归测试与真实项目实战验证（dogfooding）。 |
 | 自主 Loop 与 Graph 工程 | 已实现，走向成熟 | 安全边界自适应调度、Desktop 创建/模拟、灰度控制、运维诊断、版本化决策证据、消耗率冻结控制、可续租执行器 fencing 和签名 CAS 血缘已交付。持久控制、外部信号、证据、运行对比与模板注册表现已覆盖 CLI 与 TUI，不再只有 REST；确定性处理器目录让「只写定义」的工作流可用。下一步：先补齐下方的工程图 `loop` 节点缺口，再扩大真实 provider 与真实项目覆盖。 |
-| Loop DAG → 工程图收敛 | 迁移路径已交付，引擎未合并 | `seekforge loop-dag export-graph` 可确定性地转换 DAG，并拒绝任何它无法保证行为一致的定义。Loop DAG 契约已冻结：新的编排能力只落在工程图上。合并仍受阻于工程图的 `loop` 节点——它只转发 `task`/`workspace`/`verifyCommand`/`approvalMode`/预算/`timeoutMs`，逐 Loop 的 `options`、`consumeDependencyOutputs`、`outputPaths`、`budgetWeight`、`predictiveBudget`、`verifierId` 与逐节点失败策略在图上尚无等价物。 |
+| Loop DAG → 工程图收敛 | 迁移路径已交付，引擎未合并 | `seekforge loop-dag export-graph` 可确定性地转换 DAG，并拒绝任何它无法保证行为一致的定义。Loop DAG 契约已冻结：新的编排能力只落在工程图上。阻挡合并的 `loop` 节点缺口已补齐：`loopOptions`、`verifierId`、依赖输出注入、`outputPaths`、`budgetWeight`、`predictiveBudget` 与逐节点失败策略现已全部具备。剩下的是退役本身——给 `.seekforge/loop-dags/` 检查点一个弃用窗口，然后移除该引擎。 |
 | 桌面端与本地网页工作台 | 已实现，走向成熟 | macOS、Linux 与 Windows 原生安装包构建已交付；updater/平台签名及干净安装冒烟仍需发布凭据。 |
 | DeepSeek provider 与成本统计 | 生产就绪的基础 | 主调用、压缩调用与记忆提取调用共享统计；保留 provider 特有的 token/缓存语义。 |
 | Provider 预设 / OpenAI 兼容端点 | 已实现，走向成熟 | 各家兼容端点的线上方言差异（`reasoning` 拼写、`function_call`、无 index 的工具分片、`prompt_tokens_details`）已归一化并由 fixture 矩阵锁定；仍不宣称工具/思考行为完全一致。 |
@@ -39,9 +39,9 @@ SeekForge 已经具备了较为完整的本地优先编码智能体能力面。�
    冒烟任务；CI 已能构建各平台原生安装包。
 2. 扩充真实项目生命周期的 eval fixture，并保留足够的 CI 趋势历史，以便发现跨版本的
    缓慢成本/质量漂移；基线已于 2026-08-10 更新（68 任务、三样本、203/204）。
-3. 补齐工程图 `loop` 节点的能力缺口，使 Loop DAG 真正可以退役；随后扩大
-   Loop/Graph 控制面的真实 provider 覆盖；OpenAI 兼容端点的线上方言差异已
-   归一化并有 fixture 锁定。
+3. 退役 Loop DAG：它与工程图的能力差距已补齐，剩下的是给已有检查点一个弃用窗口
+   并移除该引擎。随后扩大 Loop/Graph 控制面的真实 provider 覆盖；OpenAI 兼容端点
+   的线上方言差异已归一化并有 fixture 锁定。
 4. 改进 provider 兼容性 fixture，同时把 DeepSeek 特有的成本与 cache-hit
    报告保持在一等公民地位。
 5. 评估基于同一契约的 JetBrains 客户端；VS Code 客户端现已作为带版本号的 .vsix 发布产物交付。

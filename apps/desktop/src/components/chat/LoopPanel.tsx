@@ -541,6 +541,53 @@ export function LoopPanel({
                   {!row.verify && row.liveTail && (
                     <span className="truncate font-mono text-2xs text-tertiary">{row.liveTail}</span>
                   )}
+                  {row.rollback && (
+                    <Badge tone="warn">
+                      {t("chat.loop.rolledBack", {
+                        restored: row.rollback.restored,
+                        deleted: row.rollback.deleted,
+                      })}
+                    </Badge>
+                  )}
+                  {row.impact && (row.impact.skipped > 0 || row.impact.reused > 0 || row.impact.blocked > 0) && (
+                    <span className="text-2xs text-tertiary">
+                      {t("chat.loop.impact", {
+                        skipped: row.impact.skipped,
+                        reused: row.impact.reused,
+                        blocked: row.impact.blocked,
+                      })}
+                      {row.impact.fullFallback ? ` · ${t("chat.loop.impactFullFallback")}` : ""}
+                    </span>
+                  )}
+                  {/* Stage detail lives on its own line: with a multi-stage plan the
+                      aggregate verify tail almost never contains the failing stage. */}
+                  {(row.stages.length > 0 || row.flaky.length > 0 || row.activeStage) && (
+                    <div className="flex w-full flex-col gap-0.5 pl-2">
+                      {row.stages.map((stage) => (
+                        <div key={stage.id} className="flex flex-wrap items-center gap-1.5">
+                          <Badge tone={stage.passed ? "ok" : "danger"}>{stage.id}</Badge>
+                          <span className="font-mono text-2xs text-tertiary">
+                            {stage.passed
+                              ? t("chat.loop.stagePass", { duration: stage.durationMs })
+                              : t("chat.loop.stageFail", { code: stage.code, duration: stage.durationMs })}
+                          </span>
+                          {!stage.passed && stage.tail && (
+                            <span className="truncate font-mono text-2xs text-tertiary">{stage.tail}</span>
+                          )}
+                        </div>
+                      ))}
+                      {row.flaky.map((entry) => (
+                        <div key={`flaky-${entry.stageId}`} className="text-2xs text-warn">
+                          {t("chat.loop.stageFlaky", { stage: entry.stageId, attempts: entry.attempts })}
+                        </div>
+                      ))}
+                      {row.activeStage && (
+                        <div className="text-2xs text-secondary">
+                          {t("chat.loop.stageRunning", { stage: row.activeStage })}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
 

@@ -90,12 +90,22 @@ backend in `crates/runtime`.
   original error) from a clean non-zero exit.
 - Do not modify `packages/shared/src/index.ts` types without explicit instruction —
   other work streams build against them.
-- A capability is not done when the code works: `scripts/surface-drift.test.mjs`
-  (runs in CI) fails the build when a top-level CLI command is missing from either
-  README command table, a `CliConfig` key is undocumented in either configuration
-  guide, a REST route is absent from `apps/server/SERVER-API.md`, a doc lacks its
-  `.zh-CN.md` counterpart or cross-link, or an i18n table's locales disagree.
-  Run it with `node --test scripts/surface-drift.test.mjs`.
+- A capability is not done when the code works. Two gates run in CI, in opposite
+  directions, and both must stay green:
+  - `scripts/surface-drift.test.mjs` walks **code → docs**: a top-level CLI
+    command or subcommand missing from the documentation, a `CliConfig`/
+    `TuiConfig`/`ServerConfig` key undocumented in either configuration guide, a
+    REST route absent from `apps/server/SERVER-API.md`, a doc lacking its
+    `.zh-CN.md` counterpart or cross-link, or an i18n table whose locales
+    disagree.
+  - `scripts/doc-claim-reachability.test.mjs` walks **docs → code**: a symbol,
+    `seekforge` command, `--flag`, `/slash` command, `SEEKFORGE_*` variable or
+    config key that the documentation presents as usable but that no surface
+    reaches. This is the direction that catches a capability which shipped, was
+    tested, was documented, and had no entry point — the shape behind three
+    incidents here. Its closing note lists what it deliberately cannot catch;
+    read that before assuming green means covered.
+  Run both with `node --test scripts/*.test.mjs`.
 - Run `pnpm typecheck` and `pnpm test` after changes.
 - When Rust code or tests change, also run the relevant Rust tests; prefer
   `cargo test --workspace` before delivery.

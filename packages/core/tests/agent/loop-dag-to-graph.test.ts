@@ -26,10 +26,6 @@ function blockingCodes(source: LoopDagGraphSource): LoopDagGraphIssueCode[] {
   return [];
 }
 
-function warningCodes(source: LoopDagGraphSource): LoopDagGraphIssueCode[] {
-  return convert(source).warnings.map((warning) => warning.code);
-}
-
 /** Loop DAG topological layers, computed exactly like the DAG's own readiness rule. */
 function loopDagWaves(nodes: readonly LoopDagNode[]): string[][] {
   const remaining = new Map(nodes.map((node) => [node.id, new Set(node.dependsOn ?? [])]));
@@ -109,6 +105,84 @@ describe("Loop DAG to Engineering Graph conversion", () => {
     );
   });
 
+  test("converts a Loop DAG that uses every previously blocking field", () => {
+    const source: LoopDagGraphSource = {
+      dagId: "full-coverage",
+      maxConcurrency: 2,
+      costBudgetUsd: 6,
+      tokenBudget: 200_000,
+      predictiveBudget: true,
+      managedWorktrees: true,
+      managedWorktreeLimit: 8,
+      nodes: [
+        {
+          id: "build",
+          ...base,
+          budgetWeight: 3,
+          failurePolicy: "stop",
+          outputPaths: ["dist/report.json", "dist/bundle.js"],
+          verifierId: "release-verifier",
+          options: {
+            maxIterations: 12,
+            stablePasses: 2,
+            flakyRetries: 1,
+            maxNoProgressRecoveries: 2,
+            rollbackOnRegression: true,
+            adaptiveBudget: true,
+            codeReview: true,
+            escalateOnFailure: true,
+            requirementMode: "analyze",
+            approveRequirements: true,
+            model: "deepseek-chat",
+            planModel: "deepseek-reasoner",
+            modelByFailureCategory: { test: "deepseek-reasoner" },
+            modelRoutesByFailureCategory: { compile: ["deepseek-chat", "deepseek-reasoner"] },
+            modelEscalationThreshold: 2,
+            maxVerifyRuns: 40,
+            verifyTimeoutMs: 120_000,
+            agentTimeoutMs: 900_000,
+            maxAgentRetries: 2,
+            maxDurationMs: 1_800_000,
+            costBudgetUsd: 2,
+            tokenBudget: 50_000,
+            approvalMode: "acceptEdits",
+            verificationPlan: [
+              { id: "unit", command: "pnpm test", paths: ["packages/core"], cacheable: true },
+              { id: "lint", command: "pnpm lint", dependsOn: ["unit"] },
+            ],
+          },
+        },
+        {
+          id: "publish",
+          ...base,
+          dependsOn: ["build"],
+          budgetWeight: 1,
+          consumeDependencyOutputs: true,
+        },
+      ],
+    };
+    const { definition, warnings } = convert(source);
+    // No blocking issue survives, and the result is a definition the Graph accepts.
+    assert.deepEqual(parseEngineeringGraphDefinition(JSON.parse(JSON.stringify(definition)) as unknown), definition);
+    assert.equal(definition.predictiveBudget, true);
+    const build = definition.nodes[0]!;
+    assert.equal(build.budgetWeight, 3);
+    assert.equal(build.failurePolicy, "stop");
+    assert.equal(build.verifierId, "release-verifier");
+    assert.deepEqual(build.outputPaths, ["dist/report.json", "dist/bundle.js"]);
+    assert.equal(build.approvalMode, "acceptEdits");
+    assert.equal(build.loopOptions?.maxIterations, 12);
+    assert.equal(build.loopOptions?.codeReview, true);
+    assert.equal(build.loopOptions?.verificationPlan?.length, 2);
+    // approvalMode stays on the node; it is never duplicated into loopOptions.
+    assert.equal("approvalMode" in (build.loopOptions ?? {}), false);
+    assert.deepEqual({ ...definition.nodes[1]!.inputs }, { build: { nodeId: "build" } });
+    assert.deepEqual(
+      warnings.map((warning) => warning.code).sort(),
+      ["dependency_output_shape", "output_path_attestation", "scheduling_tiebreak", "verifier_binding"].sort(),
+    );
+  });
+
   test("the exported definition survives a JSON round trip through the Graph parser", () => {
     const { definition } = convert({
       dagId: "round-trip",
@@ -162,17 +236,24 @@ describe("Loop DAG to Engineering Graph conversion", () => {
         { id: "b", ...base, dependsOn: ["a"], failurePolicy: "stop" },
       ],
     }).definition;
-    assert.equal(stopping.failurePolicy, "stop");
-
+    assert.equal(stopping.failurePolicy, "continue");
     assert.deepEqual(
-      blockingCodes({
-        dagId: "mixed",
-        nodes: [
-          { id: "a", ...base, failurePolicy: "stop" },
-          { id: "b", ...base, dependsOn: ["a"] },
-        ],
-      }),
-      ["mixed_failure_policy"],
+      stopping.nodes.map((node) => node.failurePolicy),
+      ["stop", "stop"],
+    );
+
+    // A subset declaring "stop" is now expressible node by node.
+    const mixed = convert({
+      dagId: "mixed",
+      nodes: [
+        { id: "a", ...base, failurePolicy: "stop" },
+        { id: "b", ...base, dependsOn: ["a"] },
+      ],
+    }).definition;
+    assert.equal(mixed.failurePolicy, "continue");
+    assert.deepEqual(
+      mixed.nodes.map((node) => node.failurePolicy),
+      ["stop", undefined],
     );
   });
 
@@ -248,40 +329,37 @@ describe("Loop DAG to Engineering Graph conversion", () => {
   });
 
   test("refuses every field the Graph cannot represent instead of dropping it", () => {
-    assert.deepEqual(blockingCodes({ dagId: "d", nodes: [{ id: "a", ...base, outputPaths: ["dist/out.json"] }] }), [
-      "output_paths",
+    // Options the Graph runtime owns still have no node-level equivalent.
+    assert.deepEqual(blockingCodes({ dagId: "d", nodes: [{ id: "a", ...base, options: { persist: false } }] }), [
+      "node_options_unsupported",
+    ]);
+    assert.deepEqual(
+      blockingCodes({
+        dagId: "d",
+        nodes: [{ id: "a", ...base, options: { verify: async () => ({ code: 0, output: "" }) } }],
+      }),
+      ["node_options_unsupported"],
+    );
+    // Bounds the Graph enforces on the fields it now accepts.
+    assert.deepEqual(
+      blockingCodes({
+        dagId: "d",
+        nodes: [{ id: "a", ...base, outputPaths: Array.from({ length: 33 }, (_, index) => `dist/out-${index}.json`) }],
+      }),
+      ["output_paths"],
+    );
+    assert.deepEqual(blockingCodes({ dagId: "d", nodes: [{ id: "a", ...base, budgetWeight: 1_001 }] }), [
+      "budget_weight",
     ]);
     assert.deepEqual(
       blockingCodes({
         dagId: "d",
         nodes: [
-          { id: "a", ...base },
-          { id: "b", ...base, dependsOn: ["a"], consumeDependencyOutputs: true },
+          { id: "1st", ...base },
+          { id: "b", ...base, dependsOn: ["1st"], consumeDependencyOutputs: true },
         ],
       }),
       ["consume_dependency_outputs"],
-    );
-    assert.deepEqual(blockingCodes({ dagId: "d", nodes: [{ id: "a", ...base, verifierId: "custom" }] }), [
-      "verifier_id",
-    ]);
-    assert.deepEqual(
-      blockingCodes({ dagId: "d", nodes: [{ id: "a", ...base, options: { maxIterations: 3, codeReview: true } }] }),
-      ["node_options_unsupported"],
-    );
-    assert.deepEqual(
-      blockingCodes({
-        dagId: "d",
-        costBudgetUsd: 2,
-        nodes: [
-          { id: "a", ...base, budgetWeight: 3 },
-          { id: "b", ...base, budgetWeight: 1 },
-        ],
-      }),
-      ["budget_weight"],
-    );
-    assert.deepEqual(
-      blockingCodes({ dagId: "d", tokenBudget: 100, predictiveBudget: true, nodes: [{ id: "a", ...base }] }),
-      ["predictive_budget"],
     );
     assert.deepEqual(blockingCodes({ dagId: "d", maxDurationMs: 25 * 60 * 60 * 1000, nodes: [{ id: "a", ...base }] }), [
       "max_duration_range",
@@ -315,39 +393,36 @@ describe("Loop DAG to Engineering Graph conversion", () => {
             id: "b",
             ...base,
             dependsOn: ["a"],
-            outputPaths: ["dist/out.json"],
-            consumeDependencyOutputs: true,
-            verifierId: "custom",
+            outputPaths: Array.from({ length: 33 }, (_, index) => `dist/out-${index}.json`),
+            budgetWeight: 5_000,
+            options: { persist: false },
           },
         ],
       }),
-      ["verifier_id", "consume_dependency_outputs", "output_paths"],
+      ["budget_weight", "node_options_unsupported", "output_paths"],
     );
   });
 
-  test("reports inert weighting instead of failing when no shared budget exists", () => {
+  test("encodes weighting and predictive reweighting instead of reporting them inert", () => {
+    const weighted = convert({
+      dagId: "weighted",
+      predictiveBudget: true,
+      costBudgetUsd: 3,
+      nodes: [
+        { id: "a", ...base, budgetWeight: 3 },
+        { id: "b", ...base, budgetWeight: 1 },
+      ],
+    });
+    assert.equal(weighted.definition.predictiveBudget, true);
     assert.deepEqual(
-      warningCodes({
-        dagId: "inert",
-        predictiveBudget: true,
-        nodes: [
-          { id: "a", ...base, budgetWeight: 3 },
-          { id: "b", ...base, budgetWeight: 1 },
-        ],
-      }).sort(),
-      ["inert_budget_weight", "inert_predictive_budget"],
+      weighted.definition.nodes.map((node) => node.budgetWeight),
+      [3, 1],
     );
-    // Uniform weights carry no information the Graph loses.
+    assert.deepEqual(weighted.warnings, []);
+    // An unweighted DAG stays free of the field entirely.
     assert.deepEqual(
-      warningCodes({
-        dagId: "uniform",
-        costBudgetUsd: 3,
-        nodes: [
-          { id: "a", ...base, budgetWeight: 2 },
-          { id: "b", ...base, budgetWeight: 2 },
-        ],
-      }),
-      [],
+      convert({ dagId: "uniform", costBudgetUsd: 3, nodes: [{ id: "a", ...base }] }).definition.nodes[0]!.budgetWeight,
+      undefined,
     );
   });
 

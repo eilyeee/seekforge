@@ -8,6 +8,7 @@ import {
   graphCompareCommand,
   graphControlCommand,
   graphEvidenceCommand,
+  formatGraphEvent,
   graphIntelligenceCommand,
   graphSignalCommand,
   graphTemplateCompareCommand,
@@ -212,6 +213,29 @@ describe("Engineering Graph CLI control plane", () => {
     graphCompareCommand(graphId);
     expect(error).toHaveBeenCalledWith(expect.stringContaining("baseline not found"));
     expect(process.exitCode).toBe(1);
+  });
+
+  it("prints the event message rather than the bare type", () => {
+    // graph.warning carries its entire content in `message`; a printer that
+    // shows only the type tells a watching operator that something happened
+    // and nothing about what.
+    expect(
+      formatGraphEvent({
+        sequence: 42,
+        type: "graph.warning",
+        timestamp: "2026-08-11T00:00:00.000Z",
+        message: "Graph signal cleanup failed: EACCES",
+      }),
+    ).toBe("[42] graph.warning — Graph signal cleanup failed: EACCES");
+    expect(
+      formatGraphEvent({
+        sequence: 43,
+        type: "node.completed",
+        timestamp: "2026-08-11T00:00:01.000Z",
+        nodeId: "verify",
+        status: "passed",
+      }),
+    ).toBe("[43] node.completed verify passed");
   });
 
   it("completes the template registry lifecycle from the CLI", () => {

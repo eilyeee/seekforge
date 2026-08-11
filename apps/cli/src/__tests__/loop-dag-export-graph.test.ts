@@ -64,8 +64,39 @@ describe("seekforge loop-dag export-graph", () => {
     expect(written.graphId).toBe("written");
   });
 
+  it("exports declared node outputs now that the Graph loop node carries them", () => {
+    workspaceWith({
+      nodes: [
+        { id: "build", ...node, outputPaths: ["dist/out.json"], budgetWeight: 3, failurePolicy: "stop" },
+        { id: "publish", ...node, dependsOn: ["build"], consumeDependencyOutputs: true },
+      ],
+    });
+    const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+    loopDagExportGraphCommand("dag.json", { graphId: "outputs" });
+
+    expect(process.exitCode).toBeUndefined();
+    const printed = stdout.mock.calls.map((call) => String(call[0])).join("");
+    const definition = parseEngineeringGraphDefinition(JSON.parse(printed) as unknown);
+    expect(definition.nodes[0]).toMatchObject({
+      outputPaths: ["dist/out.json"],
+      budgetWeight: 3,
+      failurePolicy: "stop",
+    });
+    expect(definition.nodes[1]?.inputs).toEqual({ build: { nodeId: "build" } });
+  });
+
   it("fails with the structured incompatibility instead of exporting a lookalike", () => {
-    workspaceWith({ nodes: [{ id: "build", ...node, outputPaths: ["dist/out.json"] }] });
+    workspaceWith({
+      nodes: [
+        {
+          id: "build",
+          ...node,
+          outputPaths: Array.from({ length: 33 }, (_, index) => `dist/out-${index}.json`),
+        },
+      ],
+    });
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
 
     loopDagExportGraphCommand("dag.json", {});

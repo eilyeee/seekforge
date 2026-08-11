@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
 import { isRecord } from "../util/guards.js";
-import { isValidLoopDagId } from "./loop-dag-validation.js";
+import { isSafeLoopDagRelativePath, isValidLoopDagId } from "./loop-dag-validation.js";
 import { isDenseArray } from "./orchestration.js";
 import { isValidOrchestrationResourceId } from "./orchestration-scheduler.js";
 import type { GraphRetryPolicy } from "./graph-retry-policy.js";
+import type { LoopOptions, LoopVerificationStage } from "./auto-loop.js";
+import { isLoopFailureCategory, validateLoopModelRoutes } from "./loop-model-routing.js";
+import { isVerificationPathPrefix } from "./loop-verification-selection.js";
 import { compareByCodePoints } from "@seekforge/shared";
 
 export const MAX_GRAPH_NODES = 128;
@@ -15,6 +18,10 @@ export const MAX_GRAPH_DEFINITION_BYTES = 256 * 1024;
 export const MAX_GRAPH_NODE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 export const MAX_GRAPH_HISTORY_SEGMENTS = 3;
 export const ENGINEERING_GRAPH_FAN_IN_WORKTREE_ID = "@fan-in";
+export const MAX_GRAPH_LOOP_VERIFICATION_STAGES = 16;
+export const MAX_GRAPH_LOOP_ITERATIONS = 1_000;
+export const MAX_GRAPH_NODE_OUTPUT_PATHS = 32;
+export const MAX_GRAPH_NODE_BUDGET_WEIGHT = 1_000;
 
 export type GraphNodeKind =
   | "agent"
@@ -49,6 +56,52 @@ export type GraphValueSchema = {
   additionalProperties?: boolean;
 };
 export type GraphInputBinding = { nodeId: string; pointer?: string; schema?: GraphValueSchema };
+
+/**
+ * The Loop options a Graph `loop` node may declare, chosen so a node can shape
+ * how its child Loop works without taking anything the Graph runtime owns.
+ *
+ * Deliberately absent: `task`, `workspace`, `verifyCommand`, `approvalMode`
+ * and `priority` (the node already owns them), and `signal`, `onEvent`,
+ * `control`, `loopId`, `persist`, `resumeState`, `parentGraph`, `abortStatus`,
+ * `workspaceGuard`, `recoveryAttemptId` and `verify` (the Graph owns them). A
+ * node able to override those would detach its child Loop from the durable
+ * identity and checkpoint the Graph promises across resumes; `verifierId`
+ * covers the injectable verifier through a registry instead.
+ *
+ * `runAutoLoop` stays the owner of Loop runtime semantics. This contract owns
+ * only what a durable definition may declare and how far each value may go, so
+ * an unrunnable definition fails before any lease, provider, or checkpoint.
+ */
+export const GRAPH_LOOP_OPTION_KEYS = [
+  "maxIterations",
+  "verificationPlan",
+  "autoVerificationPlan",
+  "stablePasses",
+  "flakyRetries",
+  "maxNoProgressRecoveries",
+  "rollbackOnRegression",
+  "adaptiveBudget",
+  "maxVerifyRuns",
+  "verifyTimeoutMs",
+  "agentTimeoutMs",
+  "maxAgentRetries",
+  "costBudgetUsd",
+  "tokenBudget",
+  "maxDurationMs",
+  "model",
+  "planModel",
+  "modelByFailureCategory",
+  "modelRoutesByFailureCategory",
+  "modelEscalationThreshold",
+  "codeReview",
+  "escalateOnFailure",
+  "requirementMode",
+  "approveRequirements",
+] as const;
+
+export type GraphLoopOptions = Pick<LoopOptions, (typeof GRAPH_LOOP_OPTION_KEYS)[number]>;
+
 export type GraphNode = {
   id: string;
   kind: GraphNodeKind;
@@ -89,6 +142,16 @@ export type GraphNode = {
   timeoutMs?: number;
   /** Absolute start deadline; a node that has not started by then fails closed. */
   deadlineAt?: string;
+  /** Bounded Loop configuration forwarded to this node's child Loop. */
+  loopOptions?: GraphLoopOptions;
+  /** Registered verifier that replaces the shell verifier for this node's Loop. */
+  verifierId?: string;
+  /** Relative regular files a passing node promises to produce, captured as artifacts. */
+  outputPaths?: string[];
+  /** Relative share of the remaining cost/token budget. Default 1. */
+  budgetWeight?: number;
+  /** Overrides the graph-wide policy when this node ultimately fails. */
+  failurePolicy?: "stop" | "continue";
 };
 
 export type EngineeringGraphDefinition = {
@@ -102,6 +165,8 @@ export type EngineeringGraphDefinition = {
   maxDurationMs?: number;
   resourceCapacities?: Record<string, number>;
   adaptiveScheduling?: boolean;
+  /** Reweight ready-node budget shares from bounded historical observations. */
+  predictiveBudget?: boolean;
   /** Waiting ready nodes gain one priority point per interval, capped at 20. */
   priorityAgingMs?: number;
   managedWorktrees?: { integrateDependencies: boolean; limit: number };
@@ -248,6 +313,256 @@ export function parseGraphValueSchema(value: unknown, label = "Graph value schem
   };
 }
 
+const GRAPH_LOOP_STAGE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+
+function boundedInteger(value: unknown, label: string, min: number, max: number): number {
+  if (!Number.isSafeInteger(value) || (value as number) < min || (value as number) > max) {
+    throw new Error(`${label} must be an integer from ${min} to ${max}`);
+  }
+  return value as number;
+}
+
+function boundedPathPrefixes(value: unknown, label: string): string[] {
+  if (!isDenseArray(value) || value.length === 0 || value.length > 64 || new Set(value).size !== value.length) {
+    throw new Error(`${label} must contain 1 to 64 unique prefixes`);
+  }
+  if (!value.every(isVerificationPathPrefix)) throw new Error(`${label} contains an invalid relative prefix`);
+  return [...value] as string[];
+}
+
+/**
+ * Parses the declared verification pipeline. `runAutoLoop` re-validates it, but
+ * a Graph must reject an unrunnable plan while the parse is still pure, so the
+ * bounds and the definition-local stage graph are checked here too.
+ */
+function parseGraphLoopVerificationPlan(value: unknown, label: string): LoopVerificationStage[] {
+  if (!isDenseArray(value) || value.length === 0 || value.length > MAX_GRAPH_LOOP_VERIFICATION_STAGES) {
+    throw new Error(`${label} must contain 1 to ${MAX_GRAPH_LOOP_VERIFICATION_STAGES} stages`);
+  }
+  const ids = new Set<string>();
+  const stages = value.map((raw): LoopVerificationStage => {
+    if (!isRecord(raw) || typeof raw.id !== "string" || !GRAPH_LOOP_STAGE_ID_RE.test(raw.id) || ids.has(raw.id)) {
+      throw new Error(`${label} requires a unique safe stage id`);
+    }
+    ids.add(raw.id);
+    for (const key of Object.keys(raw)) {
+      if (
+        ![
+          "id",
+          "command",
+          "required",
+          "timeoutMs",
+          "paths",
+          "dependencyPaths",
+          "cacheable",
+          "dependsOn",
+          "parallel",
+          "resources",
+        ].includes(key)
+      ) {
+        throw new Error(`${label} stage ${raw.id} declares an unsupported field: ${key}`);
+      }
+    }
+    if (typeof raw.command !== "string" || !raw.command.trim() || raw.command.length > 8_192) {
+      throw new Error(`${label} stage ${raw.id} requires a bounded command`);
+    }
+    for (const key of ["required", "cacheable", "parallel"] as const) {
+      if (raw[key] !== undefined && typeof raw[key] !== "boolean") {
+        throw new Error(`${label} stage ${raw.id} ${key} must be boolean`);
+      }
+    }
+    const paths =
+      raw.paths === undefined ? undefined : boundedPathPrefixes(raw.paths, `${label} stage ${raw.id} paths`);
+    const dependencyPaths =
+      raw.dependencyPaths === undefined
+        ? undefined
+        : boundedPathPrefixes(raw.dependencyPaths, `${label} stage ${raw.id} dependencyPaths`);
+    if (dependencyPaths?.some((path) => !paths?.includes(path))) {
+      throw new Error(`${label} stage ${raw.id} dependencyPaths must be a subset of paths`);
+    }
+    let dependsOn: string[] | undefined;
+    if (raw.dependsOn !== undefined) {
+      if (
+        !isDenseArray(raw.dependsOn) ||
+        raw.dependsOn.length === 0 ||
+        raw.dependsOn.length >= MAX_GRAPH_LOOP_VERIFICATION_STAGES ||
+        new Set(raw.dependsOn).size !== raw.dependsOn.length ||
+        !raw.dependsOn.every((id) => typeof id === "string" && GRAPH_LOOP_STAGE_ID_RE.test(id))
+      ) {
+        throw new Error(`${label} stage ${raw.id} dependsOn must contain unique safe stage ids`);
+      }
+      dependsOn = [...raw.dependsOn] as string[];
+    }
+    let resources: string[] | undefined;
+    if (raw.resources !== undefined) {
+      if (
+        !isDenseArray(raw.resources) ||
+        raw.resources.length === 0 ||
+        raw.resources.length > 16 ||
+        new Set(raw.resources).size !== raw.resources.length ||
+        !raw.resources.every(isValidOrchestrationResourceId)
+      ) {
+        throw new Error(`${label} stage ${raw.id} resources must be unique safe names`);
+      }
+      resources = [...raw.resources] as string[];
+    }
+    if (raw.parallel === true && !resources?.length) {
+      throw new Error(`${label} stage ${raw.id} parallel requires resources`);
+    }
+    return {
+      id: raw.id,
+      command: raw.command,
+      ...(typeof raw.required === "boolean" ? { required: raw.required } : {}),
+      ...(raw.timeoutMs !== undefined
+        ? {
+            timeoutMs: boundedInteger(
+              raw.timeoutMs,
+              `${label} stage ${raw.id} timeoutMs`,
+              1,
+              MAX_GRAPH_NODE_TIMEOUT_MS,
+            ),
+          }
+        : {}),
+      ...(paths ? { paths } : {}),
+      ...(dependencyPaths ? { dependencyPaths } : {}),
+      ...(typeof raw.cacheable === "boolean" ? { cacheable: raw.cacheable } : {}),
+      ...(dependsOn ? { dependsOn } : {}),
+      ...(typeof raw.parallel === "boolean" ? { parallel: raw.parallel } : {}),
+      ...(resources ? { resources } : {}),
+    };
+  });
+  const remaining = new Map(stages.map((stage) => [stage.id, new Set(stage.dependsOn ?? [])]));
+  for (const stage of stages) {
+    if (stage.dependsOn?.some((id) => id === stage.id || !ids.has(id))) {
+      throw new Error(`${label} stage ${stage.id} depends on an unknown stage`);
+    }
+  }
+  const ready = [...remaining].filter(([, dependencies]) => dependencies.size === 0).map(([id]) => id);
+  let visited = 0;
+  while (ready.length > 0) {
+    const id = ready.shift()!;
+    remaining.delete(id);
+    visited++;
+    for (const [candidate, dependencies] of remaining) {
+      if (dependencies.delete(id) && dependencies.size === 0) ready.push(candidate);
+    }
+  }
+  if (visited !== stages.length) throw new Error(`${label} contains a stage dependency cycle`);
+  return stages;
+}
+
+/** Parses the bounded Loop configuration a `loop` node may declare. */
+export function parseGraphLoopOptions(value: unknown, label = "Graph loop options"): GraphLoopOptions {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  const allowed = new Set<string>(GRAPH_LOOP_OPTION_KEYS);
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) throw new Error(`${label} declares an unsupported option: ${key}`);
+  }
+  if (value.autoVerificationPlan === true && value.verificationPlan !== undefined) {
+    throw new Error(`${label} cannot combine autoVerificationPlan with verificationPlan`);
+  }
+  for (const key of [
+    "autoVerificationPlan",
+    "rollbackOnRegression",
+    "adaptiveBudget",
+    "codeReview",
+    "escalateOnFailure",
+    "approveRequirements",
+  ] as const) {
+    if (value[key] !== undefined && typeof value[key] !== "boolean") throw new Error(`${label} ${key} must be boolean`);
+  }
+  for (const key of ["model", "planModel"] as const) {
+    const model = value[key];
+    if (model !== undefined && (typeof model !== "string" || !model.trim() || model.length > 256)) {
+      throw new Error(`${label} ${key} must be a bounded non-empty string`);
+    }
+  }
+  if (
+    value.requirementMode !== undefined &&
+    value.requirementMode !== "quick" &&
+    value.requirementMode !== "analyze" &&
+    value.requirementMode !== "confirm"
+  ) {
+    throw new Error(`${label} requirementMode is invalid`);
+  }
+  if (
+    value.costBudgetUsd !== undefined &&
+    (typeof value.costBudgetUsd !== "number" || !Number.isFinite(value.costBudgetUsd) || value.costBudgetUsd <= 0)
+  ) {
+    throw new Error(`${label} costBudgetUsd must be positive and finite`);
+  }
+  let modelByFailureCategory: Record<string, string> | undefined;
+  if (value.modelByFailureCategory !== undefined) {
+    if (!isRecord(value.modelByFailureCategory) || Object.keys(value.modelByFailureCategory).length > 16) {
+      throw new Error(`${label} modelByFailureCategory must be a bounded object`);
+    }
+    modelByFailureCategory = Object.create(null) as Record<string, string>;
+    for (const [category, model] of Object.entries(value.modelByFailureCategory)) {
+      if (!isLoopFailureCategory(category) || typeof model !== "string" || !model.trim() || model.length > 256) {
+        throw new Error(`${label} modelByFailureCategory contains an invalid category or model`);
+      }
+      modelByFailureCategory[category] = model;
+    }
+  }
+  if (value.modelRoutesByFailureCategory !== undefined) validateLoopModelRoutes(value.modelRoutesByFailureCategory);
+  if (value.modelEscalationThreshold !== undefined && value.modelRoutesByFailureCategory === undefined) {
+    throw new Error(`${label} modelEscalationThreshold requires modelRoutesByFailureCategory`);
+  }
+  const integer = (key: (typeof GRAPH_LOOP_OPTION_KEYS)[number], min: number, max: number): number | undefined =>
+    value[key] === undefined ? undefined : boundedInteger(value[key], `${label} ${key}`, min, max);
+  return {
+    ...(value.maxIterations !== undefined
+      ? { maxIterations: integer("maxIterations", 1, MAX_GRAPH_LOOP_ITERATIONS) }
+      : {}),
+    ...(value.verificationPlan !== undefined
+      ? { verificationPlan: parseGraphLoopVerificationPlan(value.verificationPlan, `${label} verificationPlan`) }
+      : {}),
+    ...(typeof value.autoVerificationPlan === "boolean" ? { autoVerificationPlan: value.autoVerificationPlan } : {}),
+    ...(value.stablePasses !== undefined ? { stablePasses: integer("stablePasses", 1, 5) } : {}),
+    ...(value.flakyRetries !== undefined ? { flakyRetries: integer("flakyRetries", 0, 5) } : {}),
+    ...(value.maxNoProgressRecoveries !== undefined
+      ? { maxNoProgressRecoveries: integer("maxNoProgressRecoveries", 0, 5) }
+      : {}),
+    ...(typeof value.rollbackOnRegression === "boolean" ? { rollbackOnRegression: value.rollbackOnRegression } : {}),
+    ...(typeof value.adaptiveBudget === "boolean" ? { adaptiveBudget: value.adaptiveBudget } : {}),
+    ...(value.maxVerifyRuns !== undefined ? { maxVerifyRuns: integer("maxVerifyRuns", 1, 10_000) } : {}),
+    ...(value.verifyTimeoutMs !== undefined
+      ? { verifyTimeoutMs: integer("verifyTimeoutMs", 1, MAX_GRAPH_NODE_TIMEOUT_MS) }
+      : {}),
+    ...(value.agentTimeoutMs !== undefined
+      ? { agentTimeoutMs: integer("agentTimeoutMs", 1, MAX_GRAPH_NODE_TIMEOUT_MS) }
+      : {}),
+    ...(value.maxAgentRetries !== undefined ? { maxAgentRetries: integer("maxAgentRetries", 0, 5) } : {}),
+    ...(typeof value.costBudgetUsd === "number" ? { costBudgetUsd: value.costBudgetUsd } : {}),
+    ...(value.tokenBudget !== undefined ? { tokenBudget: integer("tokenBudget", 1, Number.MAX_SAFE_INTEGER) } : {}),
+    ...(value.maxDurationMs !== undefined
+      ? { maxDurationMs: integer("maxDurationMs", 1, MAX_GRAPH_NODE_TIMEOUT_MS) }
+      : {}),
+    ...(typeof value.model === "string" ? { model: value.model } : {}),
+    ...(typeof value.planModel === "string" ? { planModel: value.planModel } : {}),
+    ...(modelByFailureCategory ? { modelByFailureCategory } : {}),
+    ...(value.modelRoutesByFailureCategory !== undefined
+      ? {
+          modelRoutesByFailureCategory: Object.fromEntries(
+            Object.entries(value.modelRoutesByFailureCategory as Record<string, string[]>).map(([category, chain]) => [
+              category,
+              [...chain],
+            ]),
+          ),
+        }
+      : {}),
+    ...(value.modelEscalationThreshold !== undefined
+      ? { modelEscalationThreshold: integer("modelEscalationThreshold", 1, 8) }
+      : {}),
+    ...(typeof value.codeReview === "boolean" ? { codeReview: value.codeReview } : {}),
+    ...(typeof value.escalateOnFailure === "boolean" ? { escalateOnFailure: value.escalateOnFailure } : {}),
+    ...(typeof value.requirementMode === "string"
+      ? { requirementMode: value.requirementMode as GraphLoopOptions["requirementMode"] }
+      : {}),
+    ...(typeof value.approveRequirements === "boolean" ? { approveRequirements: value.approveRequirements } : {}),
+  };
+}
+
 export function graphConditionReferences(condition: GraphCondition, refs: string[] = [], depth = 0): string[] {
   if (depth > 8 || refs.length > MAX_GRAPH_NODES || !isRecord(condition)) throw new Error("Graph condition is invalid");
   if ("nodeId" in condition) {
@@ -273,7 +588,17 @@ export function graphConditionMatches(
   return condition.any.some((child) => graphConditionMatches(child, results));
 }
 
-function parseNode(value: unknown, depth: number): GraphNode {
+/** Kinds whose execution actually reads `inputs`; the rest must not declare them. */
+const GRAPH_INPUT_CONSUMING_KINDS = new Set<GraphNodeKind>([
+  "agent",
+  "loop",
+  "function",
+  "map",
+  "compensation",
+  "remote",
+]);
+
+function parseNode(value: unknown, depth: number, persisted: boolean): GraphNode {
   if (!isRecord(value) || !isValidLoopDagId(value.id)) throw new Error("Every Graph node requires a safe id");
   const kinds: GraphNodeKind[] = [
     "agent",
@@ -429,6 +754,15 @@ function parseNode(value: unknown, depth: number): GraphNode {
   };
   let inputs: Record<string, GraphInputBinding> | undefined;
   if (value.inputs !== undefined) {
+    // A kind that cannot read inputs used to parse and keep them while the
+    // executor ignored them, so the field is inside the fingerprint of every
+    // checkpoint that has one. Rejecting it when READING persisted state would
+    // make those graphs unloadable — invisible to `graph list`, unresumable —
+    // for a field that never did anything. New definitions are rejected; the
+    // ones already on disk keep loading exactly as they were written.
+    if (!persisted && !GRAPH_INPUT_CONSUMING_KINDS.has(kind)) {
+      throw new Error(`Graph node ${value.id} inputs require a kind that consumes them`);
+    }
     if (!isRecord(value.inputs) || Object.keys(value.inputs).length > 32) {
       throw new Error(`Graph node ${value.id} inputs are invalid`);
     }
@@ -573,6 +907,45 @@ function parseNode(value: unknown, depth: number): GraphNode {
   if (value.verifyArtifacts !== undefined && typeof value.verifyArtifacts !== "boolean") {
     throw new Error(`Graph node ${value.id} verifyArtifacts must be boolean`);
   }
+  const runsLoop = kind === "loop" || (kind === "map" && mapKind === "loop");
+  let loopOptions: GraphLoopOptions | undefined;
+  if (value.loopOptions !== undefined) {
+    if (!runsLoop) throw new Error(`Graph node ${value.id} loopOptions require a loop node`);
+    loopOptions = parseGraphLoopOptions(value.loopOptions, `Graph node ${value.id} loopOptions`);
+  }
+  if (value.verifierId !== undefined && (!runsLoop || !isValidLoopDagId(value.verifierId))) {
+    throw new Error(`Graph node ${value.id} verifierId requires a loop node and a safe id`);
+  }
+  let outputPaths: string[] | undefined;
+  if (value.outputPaths !== undefined) {
+    if (
+      (kind !== "loop" && kind !== "agent") ||
+      !isDenseArray(value.outputPaths) ||
+      value.outputPaths.length === 0 ||
+      value.outputPaths.length > MAX_GRAPH_NODE_OUTPUT_PATHS ||
+      new Set(value.outputPaths).size !== value.outputPaths.length ||
+      !value.outputPaths.every(isSafeLoopDagRelativePath)
+    ) {
+      throw new Error(
+        `Graph node ${value.id} outputPaths must be 1 to ${MAX_GRAPH_NODE_OUTPUT_PATHS} unique safe relative paths on an agent or loop node`,
+      );
+    }
+    outputPaths = [...value.outputPaths] as string[];
+  }
+  if (
+    value.budgetWeight !== undefined &&
+    (typeof value.budgetWeight !== "number" ||
+      !Number.isFinite(value.budgetWeight) ||
+      value.budgetWeight <= 0 ||
+      value.budgetWeight > MAX_GRAPH_NODE_BUDGET_WEIGHT)
+  ) {
+    throw new Error(
+      `Graph node ${value.id} budgetWeight must be greater than 0 and at most ${MAX_GRAPH_NODE_BUDGET_WEIGHT}`,
+    );
+  }
+  if (value.failurePolicy !== undefined && value.failurePolicy !== "stop" && value.failurePolicy !== "continue") {
+    throw new Error(`Graph node ${value.id} failurePolicy is invalid`);
+  }
   return {
     id: value.id,
     kind,
@@ -607,15 +980,31 @@ function parseNode(value: unknown, depth: number): GraphNode {
     ...(waitFor ? { waitFor } : {}),
     ...(typeof value.verifyArtifacts === "boolean" ? { verifyArtifacts: value.verifyArtifacts } : {}),
     ...(routes ? { routes } : {}),
-    ...(kind === "subgraph" ? { graph: parseEngineeringGraphDefinition(value.graph, depth + 1) } : {}),
+    ...(kind === "subgraph" ? { graph: parseEngineeringGraphDefinition(value.graph, depth + 1, persisted) } : {}),
     ...(typeof value.maxRetries === "number" ? { maxRetries: value.maxRetries } : {}),
     ...(retryPolicy ? { retryPolicy } : {}),
     ...(typeof value.timeoutMs === "number" ? { timeoutMs: value.timeoutMs } : {}),
     ...(typeof value.deadlineAt === "string" ? { deadlineAt: value.deadlineAt } : {}),
+    ...(loopOptions ? { loopOptions } : {}),
+    ...(typeof value.verifierId === "string" ? { verifierId: value.verifierId } : {}),
+    ...(outputPaths ? { outputPaths } : {}),
+    ...(typeof value.budgetWeight === "number" ? { budgetWeight: value.budgetWeight } : {}),
+    ...(value.failurePolicy === "stop" || value.failurePolicy === "continue"
+      ? { failurePolicy: value.failurePolicy }
+      : {}),
   };
 }
 
-export function parseEngineeringGraphDefinition(value: unknown, depth = 0): EngineeringGraphDefinition {
+/**
+ * `persisted` relaxes checks that would reject a definition this codec itself
+ * once produced. Pass it ONLY when decoding a stored checkpoint; a definition
+ * arriving from a user, a file or the wire must face the current rules.
+ */
+export function parseEngineeringGraphDefinition(
+  value: unknown,
+  depth = 0,
+  persisted = false,
+): EngineeringGraphDefinition {
   if (depth > MAX_GRAPH_DEPTH) throw new Error(`Graph nesting exceeds ${MAX_GRAPH_DEPTH}`);
   if (!isRecord(value) || !isValidLoopDagId(value.graphId) || !isDenseArray(value.nodes)) {
     throw new Error("Graph definition requires graphId and nodes");
@@ -623,7 +1012,7 @@ export function parseEngineeringGraphDefinition(value: unknown, depth = 0): Engi
   if (value.nodes.length === 0 || value.nodes.length > MAX_GRAPH_NODES) {
     throw new Error(`Graph must contain 1 to ${MAX_GRAPH_NODES} nodes`);
   }
-  const nodes = value.nodes.map((node) => parseNode(node, depth));
+  const nodes = value.nodes.map((node) => parseNode(node, depth, persisted));
   const ids = new Set<string>();
   for (const node of nodes) {
     if (ids.has(node.id)) throw new Error(`Duplicate Graph node id: ${node.id}`);
@@ -723,6 +1112,9 @@ export function parseEngineeringGraphDefinition(value: unknown, depth = 0): Engi
   if (value.adaptiveScheduling !== undefined && typeof value.adaptiveScheduling !== "boolean") {
     throw new Error("Graph adaptiveScheduling must be boolean");
   }
+  if (value.predictiveBudget !== undefined && typeof value.predictiveBudget !== "boolean") {
+    throw new Error("Graph predictiveBudget must be boolean");
+  }
   if (
     value.priorityAgingMs !== undefined &&
     (!Number.isSafeInteger(value.priorityAgingMs) ||
@@ -808,6 +1200,7 @@ export function parseEngineeringGraphDefinition(value: unknown, depth = 0): Engi
     ...(typeof value.maxDurationMs === "number" ? { maxDurationMs: value.maxDurationMs } : {}),
     ...(resourceCapacities ? { resourceCapacities } : {}),
     ...(typeof value.adaptiveScheduling === "boolean" ? { adaptiveScheduling: value.adaptiveScheduling } : {}),
+    ...(typeof value.predictiveBudget === "boolean" ? { predictiveBudget: value.predictiveBudget } : {}),
     ...(typeof value.priorityAgingMs === "number" ? { priorityAgingMs: value.priorityAgingMs } : {}),
     ...(managedWorktrees ? { managedWorktrees } : {}),
     ...(fanIn ? { fanIn } : {}),

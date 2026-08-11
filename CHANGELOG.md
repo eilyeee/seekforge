@@ -2,6 +2,77 @@
 
 ## Unreleased
 
+### The Loop DAG can be retired, and a gate that walks docs → code
+
+**The Graph `loop` node was a strictly weaker Loop, and that is why two
+orchestration engines were still alive.** It forwarded seven fields to its child.
+Everything else a `loop-dag` node could carry — the whole `options` surface,
+`verifierId`, `consumeDependencyOutputs`, `outputPaths`, `budgetWeight`,
+`predictiveBudget`, a per-node `failurePolicy` — had no Graph equivalent, so the
+roadmap listed closing that gap as the precondition for retiring the DAG.
+
+The specification was already executable: `loop-dag export-graph` refuses, by
+name, every field it cannot convert faithfully, so its blocking-code list was
+both the todo list and the acceptance test. It now converts a DAG that uses all
+of them with zero blocking issues.
+
+`loopOptions` is typed as a `Pick<>` of `LoopOptions`, so the two cannot drift.
+What a node may **not** declare is enumerated with reasons: `workspace`,
+`signal`, `loopId`, `persist`, `resumeState`, `verify` and the rest belong to the
+Graph runtime, which owns the child's durable identity. `persist: false` is the
+sharpest — it would make the child unresumable while the Graph checkpoint still
+claims otherwise. Opening the whole option type would have been less code and
+would have broken exactly that.
+
+One strictness increase needed walking back partway: `inputs` on a kind that
+never reads it (`gate`, `join`, `router`, `wait`, `subgraph`) is now rejected —
+but the old parser *kept* that field, so it is inside the fingerprint of every
+checkpoint written with one. Rejecting it while decoding stored state would have
+made those graphs unloadable, invisible to `graph list` and unresumable, over a
+field that never did anything. New definitions are rejected; persisted ones
+decode exactly as written, field intact, because the fingerprint is computed over
+the parsed definition and stripping it would look like a changed definition.
+
+**`scripts/doc-claim-reachability.test.mjs` walks docs → code**, the direction
+`surface-drift` does not. A documented symbol, `seekforge` command, `--flag`,
+`/slash` command, `SEEKFORGE_*` variable or config key that no surface reaches
+now fails the build. Getting it trustworthy took six tightening rounds on one
+check alone (6 → 11 → 4 → 2 → 1 findings), each removing a class of false
+positive rather than adding an exemption, plus four measured variants rejected
+outright — a gate people learn to ignore is worse than no gate.
+
+It found one: `createDockerRunner` is documented as how the Docker backend is
+exposed and is called by nothing; the shipping path uses `spawnDockerRun`
+directly. `createSshRunner` was equally dead, silent only because no page named
+it. Both are gone along with the `AgentRunner` interface they implemented —
+implemented twice, consumed zero times, its own comment claiming "callers depend
+on AgentRunner". When a real need for a runner seam did arrive, Graph `remote`
+nodes got a purpose-built adapter instead. The shared option/result types and
+shell quoting stayed; those two backends really do share them.
+
+The gate's own closing note says what it cannot catch, including an honest
+calibration: it would not have caught the three incidents that motivated it
+unless the page had named the symbol or the flag.
+
+**Information the surfaces were dropping.** `verify.flaky` was invisible on
+Desktop and the TUI — the two surfaces that offer the flaky-retry control — so a
+green that only went green on a retry looked identical to a clean pass. A
+multi-stage verification plan collapsed to one line whose visible tail almost
+never contained the failing stage. `loop.rollback` was silent while it restored
+and deleted files in the user's workspace. `/loop-pause` and `/loop-steer`
+printed that the request was queued and never that the boundary was reached.
+`graph run` printed `[42] graph.warning` and dropped the message that was the
+warning's entire content.
+
+**A cost bug found while wiring the Desktop footer.** `usage.updated` carries the
+current run's total; `session.completed` carries the whole session's, including
+turns a resume inherited. Both are cumulative, over different windows — and
+Desktop and the TUI were adding the report to a running total, re-billing every
+earlier turn. In the TUI that total drives `costBudgetUsd`, so the budget stopped
+runs early. Each surface now replaces per slot instead of summing. Two existing
+tests encoded the double-count by sending two completions with no session in
+between; they now span two genuinely different sessions.
+
 ### Eight security promises the code did not keep
 
 An audit checked ~575 capability statements across fourteen documents against

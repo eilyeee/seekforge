@@ -1,4 +1,5 @@
 import { useT } from "../../lib/i18n";
+import { loopHistoryDetail } from "../../lib/loop";
 import type { LoopEvidenceReport, LoopHealthReport, LoopHistoryEntry } from "../../types";
 import { Badge, Button } from "../ui";
 
@@ -88,11 +89,18 @@ export function LoopDetailsSection(props: {
       <div className="mt-1 max-h-48 overflow-auto font-mono text-2xs">
         {props.history.length === 0
           ? t("chat.loop.manager.noHistory")
-          : props.history.map((entry) => (
-              <div key={entry.seq}>
-                {entry.seq} · {entry.ts} · {entry.event.type}
-              </div>
-            ))}
+          : props.history.map((entry) => {
+              // The type alone reads as five words for an event that carries a
+              // message, an exit code or a stage id; the detail is clipped, so
+              // the log stays bounded while still saying what happened.
+              const detail = loopHistoryDetail(entry.event);
+              return (
+                <div key={entry.seq} className="truncate">
+                  {entry.seq} · {entry.ts} · {entry.event.type}
+                  {detail ? ` · ${detail}` : ""}
+                </div>
+              );
+            })}
         {props.history.length > 0 && props.history.length % 100 === 0 && (
           <Button size="sm" variant="ghost" onClick={props.onLoadMore}>
             {t("chat.loop.manager.loadMore")}

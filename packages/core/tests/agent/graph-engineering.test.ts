@@ -43,7 +43,8 @@ import {
   setEngineeringGraphPriority,
 } from "../../src/agent/graph-state.js";
 import type { AgentCoreDeps } from "../../src/agent/loop.js";
-import { listLoopStates, removeLoopState } from "../../src/agent/loop-state.js";
+import { listLoopStates, loadLoopState, removeLoopState } from "../../src/agent/loop-state.js";
+import { readLoopBudgetHistory } from "../../src/agent/loop-budget-history.js";
 import { resumeAutoLoop } from "../../src/agent/auto-loop.js";
 import { acquireWorkspaceSessionGuard } from "../../src/agent/session-lease.js";
 import { listGitWorktrees } from "../../src/worktree.js";
@@ -2442,5 +2443,209 @@ describe("runEngineeringGraph", () => {
     const waits = new Map(readGraphSchedulingObservations(root).map((item) => [item.nodeId, item.resourceWaitMs]));
     expect(waits.get("b-queued")!).toBeGreaterThan(waits.get("a-slow")!);
     expect(waits.get("c-dependent")!).toBeLessThan(waits.get("b-queued")!);
+  });
+
+  it("carries declared Loop options, a registered verifier, inputs, and outputs into the child Loop", async () => {
+    const root = workspace();
+    writeFileSync(join(root, "report.json"), '{"ok":true}\n');
+    const verifyCommands: string[] = [];
+    const state = await runEngineeringGraph(
+      deps,
+      {
+        graphId: "loop-node-contract",
+        nodes: [
+          { id: "plan", kind: "function", handler: "plan" },
+          {
+            id: "repair",
+            kind: "loop",
+            task: "Repair safely",
+            verifyCommand: "true",
+            dependsOn: ["plan"],
+            priority: 4,
+            inputs: { plan: { nodeId: "plan", pointer: "/target" } },
+            outputPaths: ["report.json"],
+            verifierId: "recording",
+            loopOptions: {
+              maxIterations: 3,
+              stablePasses: 2,
+              flakyRetries: 1,
+              verificationPlan: [{ id: "unit", command: "pnpm test" }],
+            },
+          },
+        ],
+      },
+      {
+        workspace: root,
+        handlers: { plan: () => ({ output: { target: "packages/core" } }) },
+        verifiers: {
+          recording: async (_workspace, command) => {
+            verifyCommands.push(command);
+            return { code: 0, output: "" };
+          },
+        },
+      },
+    );
+    expect(state.status).toBe("passed");
+    // The registered verifier replaced the shell verifier, and the declared
+    // two stable passes ran the declared stage twice.
+    expect(verifyCommands).toEqual(["pnpm test", "pnpm test"]);
+    const artifacts = state.results.find((result) => result.id === "repair")?.artifacts;
+    expect(artifacts).toEqual([
+      expect.objectContaining({
+        name: "report.json",
+        path: "report.json",
+        producerNodeId: "repair",
+        verified: true,
+        sha256: createHash("sha256").update('{"ok":true}\n').digest("hex"),
+      }),
+    ]);
+    const childLoop = listLoopStates(root).find((loop) => loop.loopId.startsWith("graph-loop-"))!;
+    const persisted = loadLoopState(root, childLoop.loopId)!;
+    expect(persisted.maxIterations).toBe(3);
+    expect(persisted.stablePasses).toBe(2);
+    expect(persisted.flakyRetries).toBe(1);
+    expect(persisted.priority).toBe(4);
+    expect(persisted.verificationPlan).toEqual([{ id: "unit", command: "pnpm test" }]);
+    // Declared inputs reach the task as explicitly untrusted data.
+    expect(persisted.task).toContain("Repair safely");
+    expect(persisted.task).toContain("untrusted orchestration data");
+    expect(persisted.task).toContain('{"plan":"packages/core"}');
+  });
+
+  it("fails a loop node whose promised output is missing without losing its usage", async () => {
+    const root = workspace();
+    const state = await runEngineeringGraph(
+      deps,
+      {
+        graphId: "missing-output",
+        failurePolicy: "continue",
+        nodes: [
+          { id: "repair", kind: "loop", task: "Repair safely", verifyCommand: "true", outputPaths: ["absent.json"] },
+        ],
+      },
+      { workspace: root },
+    );
+    expect(state.status).toBe("failed");
+    expect(state.results[0]).toMatchObject({ id: "repair", status: "failed" });
+    expect(state.results[0]?.artifacts).toBeUndefined();
+  });
+
+  it("refuses a declared verifier that is not registered before anything is leased", async () => {
+    const root = workspace();
+    await expect(
+      runEngineeringGraph(
+        deps,
+        {
+          graphId: "unregistered-verifier",
+          nodes: [{ id: "repair", kind: "loop", task: "fix", verifyCommand: "true", verifierId: "absent" }],
+        },
+        { workspace: root },
+      ),
+    ).rejects.toThrow(/verifier is not registered: absent/);
+    expect(listEngineeringGraphStates(root)).toEqual([]);
+  });
+
+  it("splits a shared budget by declared node weight and records predictive observations", async () => {
+    const root = workspace();
+    mkdirSync(join(root, "first"));
+    mkdirSync(join(root, "second"));
+    const shares: Array<number | undefined> = [];
+    const state = await runEngineeringGraph(
+      deps,
+      {
+        graphId: "weighted-shares",
+        maxConcurrency: 2,
+        costBudgetUsd: 8,
+        tokenBudget: 4_000,
+        predictiveBudget: true,
+        nodes: [
+          { id: "first", kind: "function", handler: "run", workspace: "first", budgetWeight: 3 },
+          { id: "second", kind: "function", handler: "run", workspace: "second", budgetWeight: 1 },
+        ],
+      },
+      {
+        workspace: root,
+        handlers: {
+          run: ({ costBudgetUsd }) => {
+            shares.push(costBudgetUsd);
+            return { costUsd: 1 };
+          },
+        },
+      },
+    );
+    expect(state.status).toBe("passed");
+    expect(shares.sort((left, right) => left! - right!)).toEqual([2, 6]);
+    expect(readLoopBudgetHistory(root).map((item) => item.passed)).toEqual([true, true]);
+  });
+
+  it("stops only when a node that pinned the stop policy fails", async () => {
+    const root = workspace();
+    const state = await runEngineeringGraph(
+      deps,
+      {
+        graphId: "mixed-failure-policy",
+        failurePolicy: "continue",
+        nodes: [
+          { id: "soft", kind: "function", handler: "fail" },
+          { id: "after-soft", kind: "function", handler: "ok" },
+          { id: "hard", kind: "function", handler: "fail", failurePolicy: "stop", dependsOn: ["after-soft"] },
+          { id: "never", kind: "function", handler: "ok", dependsOn: ["after-soft"] },
+        ],
+      },
+      {
+        workspace: root,
+        handlers: {
+          ok: () => ({}),
+          fail: () => {
+            throw new Error("boom");
+          },
+        },
+      },
+    );
+    const byId = new Map(state.results.map((result) => [result.id, result]));
+    // The first failure kept scheduling; the "stop" node ended the run.
+    expect(byId.get("after-soft")?.status).toBe("passed");
+    expect(byId.get("hard")?.status).toBe("failed");
+    expect(byId.get("never")).toMatchObject({ status: "skipped", error: "Graph stopped after a node failure" });
+  });
+
+  it("resumes a checkpoint written before the new node fields existed", async () => {
+    const root = workspace();
+    const definition = {
+      graphId: "legacy-resume",
+      failurePolicy: "continue" as const,
+      nodes: [
+        { id: "first", kind: "function" as const, handler: "run" },
+        { id: "second", kind: "function" as const, handler: "run", dependsOn: ["first"] },
+      ],
+    };
+    const first = await runEngineeringGraph(deps, definition, { workspace: root, handlers: { run: () => ({}) } });
+    // A checkpoint recorded by an older release: same definition, and its
+    // fingerprint computed the way that release computed it.
+    const legacyFingerprint = createHash("sha256")
+      .update(
+        JSON.stringify({
+          definition: first.definition,
+          workspaces: [
+            ["first", realpathSync.native(root)],
+            ["second", realpathSync.native(root)],
+          ],
+        }),
+      )
+      .digest("hex");
+    saveEngineeringGraphState(root, {
+      ...first,
+      status: "running",
+      completedAt: undefined,
+      fingerprint: legacyFingerprint,
+      results: first.results.filter((result) => result.id === "first"),
+    });
+    const resumed = await runEngineeringGraph(deps, definition, {
+      workspace: root,
+      resume: true,
+      handlers: { run: () => ({}) },
+    });
+    expect(resumed.status).toBe("passed");
+    expect(resumed.results.map((result) => result.id)).toEqual(["first", "second"]);
   });
 });

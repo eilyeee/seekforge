@@ -69,8 +69,10 @@ docker run --rm --network <net> \
 ```
 
 A thin impure wrapper (`spawnDockerRun`) spawns `docker` with those args and
-streams stdio through. `createDockerRunner()` exposes the backend as an
-`AgentRunner`.
+streams stdio through, and that is the entry point `sandbox-run` calls — the ssh
+backend mirrors it with `spawnSshRun`. Both share `RunnerOptions`/`RunnerResult`
+and the shell quoting in `runner.ts`; there is no separate runner-object
+factory.
 
 ## The SSH runner
 

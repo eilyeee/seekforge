@@ -159,6 +159,16 @@ export {
   type GraphRunStatus,
 } from "./graph-contract.js";
 export {
+  parseGraphLoopOptions,
+  GRAPH_LOOP_OPTION_KEYS,
+  MAX_GRAPH_LOOP_ITERATIONS,
+  MAX_GRAPH_LOOP_VERIFICATION_STAGES,
+  MAX_GRAPH_NODE_BUDGET_WEIGHT,
+  MAX_GRAPH_NODE_OUTPUT_PATHS,
+  type GraphLoopOptions,
+} from "./graph-contract.js";
+export { graphVerifier, type GraphLoopVerifier } from "./graph-execution-contract.js";
+export {
   runEngineeringGraph,
   resolveEngineeringGraphWorkspaces,
   validateEngineeringGraphRunOptions,

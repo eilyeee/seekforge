@@ -1,8 +1,8 @@
 /**
  * SSH runner backend (Track E: remote / isolated execution).
  *
- * The second implementation of the {@link AgentRunner} contract, and the one it
- * was written for: run the same task on a machine you own — the workstation
+ * The second backend sharing {@link RunnerOptions}, and the one that shape was
+ * written for: run the same task on a machine you own — the workstation
  * with the big CPU, the box that can reach the staging database — and get back
  * a normal, auditable session. No service, no scheduler, no account: one host,
  * your own SSH key, a workspace that already exists there.
@@ -28,7 +28,7 @@
 import { spawn } from "node:child_process";
 import type { GraphRemoteRunnerTransport } from "@seekforge/core";
 import { formatCommandLine, shellQuote } from "./runner.js";
-import type { AgentRunner, RunnerOptions, RunnerResult } from "./runner.js";
+import type { RunnerOptions, RunnerResult } from "./runner.js";
 
 /** Remote SeekForge binary, assumed on the remote PATH unless overridden. */
 export const DEFAULT_REMOTE_BINARY = "seekforge";
@@ -125,14 +125,6 @@ export function spawnSshRun(opts: SshRunnerOptions): Promise<RunnerResult> {
       resolve({ exitCode: code ?? 1, runner: "ssh" });
     });
   });
-}
-
-/** The SSH backend as an {@link AgentRunner} (contract-level entry point). */
-export function createSshRunner(): AgentRunner {
-  return {
-    name: "ssh",
-    run: (o: RunnerOptions) => spawnSshRun(o as SshRunnerOptions),
-  };
 }
 
 /** Connection knobs an operator pins for the Graph executor; nothing here is task-derived. */

@@ -122,8 +122,21 @@ export type ChatState = {
   model: string;
   /** Latest context-window occupancy from context.usage events. */
   context?: ContextUsage;
-  /** Cumulative usage across all turns this session (cost + tokens). */
+  /**
+   * Cumulative usage across every session this tab has run.
+   *
+   * `session.completed` reports the WHOLE session's usage — core builds it as
+   * `addUsage(priorUsage, …)` where `priorUsage` is what the persisted session
+   * already spent — while turns 2+ resume that same session. Adding the report
+   * to a running total therefore re-billed every earlier turn, which the cost
+   * budget below reads, so `costBudgetUsd` tripped early. The session's share is
+   * REPLACED, and only a different session id settles into the carry.
+   */
   totalUsage: TokenUsage;
+  /** Usage of sessions this tab has finished with, excluding `sessionUsage`. */
+  priorSessionsUsage: TokenUsage;
+  /** Whole-session usage last reported for `sessionId`. */
+  sessionUsage: TokenUsage;
   /** Active session id (resume chaining like the REPL). */
   sessionId?: string;
   /** Pending permission request awaiting a y/a/n keypress, if any. */
@@ -226,6 +239,8 @@ export function initialState(model: string): ChatState {
     running: false,
     model,
     totalUsage: emptyUsage(),
+    priorSessionsUsage: emptyUsage(),
+    sessionUsage: emptyUsage(),
     overlay: null,
     scrollOffset: 0,
     approval: "confirm",
@@ -516,8 +531,17 @@ function innerReducer(state: ChatState, action: ChatAction): ChatState {
 /** The event→item mapping (mirrors renderEvent in apps/cli/src/render.ts). */
 function applyEvent(state: ChatState, e: AgentEvent): ChatState {
   switch (e.type) {
-    case "session.created":
-      return { ...state, sessionId: e.sessionId };
+    case "session.created": {
+      // Fires on resume too, with the same id — only a genuinely different
+      // session moves the finished one into the carry.
+      if (state.sessionId === e.sessionId) return { ...state, sessionId: e.sessionId };
+      return {
+        ...state,
+        sessionId: e.sessionId,
+        priorSessionsUsage: addUsage(state.priorSessionsUsage, state.sessionUsage),
+        sessionUsage: emptyUsage(),
+      };
+    }
 
     case "step.started": {
       // Nested subagent activity is forwarded as "[agentId] tool" titles.
@@ -736,7 +760,8 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
     case "session.completed":
       return {
         ...state,
-        totalUsage: addUsage(state.totalUsage, e.report.usage),
+        sessionUsage: e.report.usage,
+        totalUsage: addUsage(state.priorSessionsUsage, e.report.usage),
         items: [...state.items, { kind: "report", id: nextId("r"), report: e.report }],
       };
 

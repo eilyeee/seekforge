@@ -157,14 +157,94 @@ describe("reduceEvent", () => {
     expect(s.items[1]).toMatchObject({ kind: "compacted", droppedTurns: 3, summaryTokens: 200 });
   });
 
-  it("accumulates usage across session.completed reports and stops running", () => {
+  it("accumulates usage across sessions and stops running", () => {
+    // Each session reports its own cumulative total, so two DIFFERENT sessions
+    // in one tab add up.
     let s = { ...initialChatState(), running: true };
-    s = play([{ type: "session.completed", report }], s);
+    s = play(
+      [
+        { type: "session.created", sessionId: "s-1" },
+        { type: "session.completed", report },
+      ],
+      s,
+    );
     s = { ...s, running: true };
-    s = play([{ type: "session.completed", report }], s);
+    s = play(
+      [
+        { type: "session.created", sessionId: "s-2" },
+        { type: "session.completed", report },
+      ],
+      s,
+    );
     expect(s.running).toBe(false);
     expect(s.usage).toEqual({ promptTokens: 200, completionTokens: 20, cacheHitTokens: 120, costUsd: 0.01 });
     expect(s.items.filter((i) => i.kind === "report")).toHaveLength(2);
+  });
+
+  it("bills a resumed session's earlier turns once", () => {
+    // A report is the SESSION's cumulative usage: turn 2 of the same session
+    // already contains turn 1, so adding the reports would double-count it.
+    const secondReport = {
+      ...report,
+      usage: { promptTokens: 250, completionTokens: 25, cacheHitTokens: 150, costUsd: 0.012 },
+    };
+    let s = play([
+      { type: "session.created", sessionId: "s-1" },
+      { type: "session.completed", report },
+    ]);
+    s = play(
+      [
+        { type: "session.created", sessionId: "s-1" },
+        { type: "session.completed", report: secondReport },
+      ],
+      s,
+    );
+    expect(s.usage).toEqual(secondReport.usage);
+  });
+
+  it("advances the usage footer live, without double-counting the settled turn", () => {
+    // usage.updated carries the RUN's running total (it excludes what a resumed
+    // session already spent), so the live value replaces the in-flight part.
+    let s = play([
+      { type: "session.created", sessionId: "s-1" },
+      { type: "session.completed", report },
+    ]);
+    s = play(
+      [{ type: "usage.updated", usage: { promptTokens: 40, completionTokens: 4, cacheHitTokens: 20, costUsd: 0.002 } }],
+      s,
+    );
+    expect(s.usage).toMatchObject({ promptTokens: 140, completionTokens: 14, cacheHitTokens: 80 });
+    expect(s.usage.costUsd).toBeCloseTo(0.007, 10);
+    // A second update of the same run is cumulative too — not an increment.
+    s = play(
+      [{ type: "usage.updated", usage: { promptTokens: 90, completionTokens: 9, cacheHitTokens: 50, costUsd: 0.004 } }],
+      s,
+    );
+    expect(s.usage).toMatchObject({ promptTokens: 190, completionTokens: 19, cacheHitTokens: 110 });
+    expect(s.usage.costUsd).toBeCloseTo(0.009, 10);
+    // …and the report that closes the run supersedes the live value.
+    const finalReport = {
+      ...report,
+      usage: { promptTokens: 200, completionTokens: 20, cacheHitTokens: 120, costUsd: 0.01 },
+    };
+    s = play([{ type: "session.completed", report: finalReport }], s);
+    expect(s.usage).toEqual(finalReport.usage);
+  });
+
+  it("keeps a failed run's spend in the footer", () => {
+    // The run was billed even though it failed; the next run's first cumulative
+    // update must not erase it.
+    let s = play([
+      { type: "session.created", sessionId: "s-1" },
+      { type: "usage.updated", usage: { promptTokens: 30, completionTokens: 3, cacheHitTokens: 10, costUsd: 0.001 } },
+      { type: "session.failed", error: { code: "network", message: "down" } },
+    ]);
+    expect(s.usage).toEqual({ promptTokens: 30, completionTokens: 3, cacheHitTokens: 10, costUsd: 0.001 });
+    s = play(
+      [{ type: "usage.updated", usage: { promptTokens: 10, completionTokens: 1, cacheHitTokens: 5, costUsd: 0.001 } }],
+      s,
+    );
+    expect(s.usage).toMatchObject({ promptTokens: 40, completionTokens: 4, cacheHitTokens: 15 });
   });
 
   it("stores the latest context.usage on the state without adding a row", () => {

@@ -122,6 +122,12 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
       ev({ type: "tool.started", toolName: "update_plan", args: {} });
       plan("in_progress", "pending", "pending");
       if (!(await step(400))) return;
+      // usage.updated is the RUN's running total (not a delta): the footer
+      // should follow it instead of freezing until the report arrives.
+      ev({
+        type: "usage.updated",
+        usage: { promptTokens: 2100, completionTokens: 260, cacheHitTokens: 1600, costUsd: 0.0013 },
+      });
 
       ev({ type: "tool.started", toolName: "read_file", args: { path: "apps/cli/src/index.ts" } });
       if (!(await step(500))) return;
@@ -132,6 +138,10 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
       });
 
       plan("done", "in_progress", "pending");
+      ev({
+        type: "usage.updated",
+        usage: { promptTokens: 4800, completionTokens: 610, cacheHitTokens: 3700, costUsd: 0.0031 },
+      });
       if (!(await step(400))) return;
 
       ev({ type: "tool.started", toolName: "apply_patch", args: { path: "apps/cli/src/index.ts" } });
@@ -194,6 +204,10 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
       }
 
       ev({ type: "context.compacted", droppedTurns: 2, summaryTokens: 412 });
+      ev({
+        type: "usage.updated",
+        usage: { promptTokens: 7300, completionTokens: 940, cacheHitTokens: 5600, costUsd: 0.0047 },
+      });
       plan("done", "done", "done");
       if (!(await step(300))) return;
 
@@ -322,19 +336,94 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
       const firstCost = persistedLoopCostUsd + 0.0042;
       const finalCost = persistedLoopCostUsd + 0.0093;
 
-      // First iteration: run, then verify fails.
+      // First iteration: run, then a two-stage verification where the second
+      // stage fails, then a rollback of the regression.
       loop({ type: "iteration.start", iteration: firstIteration });
       if (!(await stepLoop(400))) return;
       loop({ type: "run.completed", iteration: firstIteration, costUsd: firstCost });
       if (!(await stepLoop(300))) return;
+      loop({
+        type: "verify.impact",
+        iteration: firstIteration,
+        changedPaths: ["src/mock.ts"],
+        decisions: [
+          { stageId: "lint", action: "run", reason: "direct", matchedPaths: ["src/mock.ts"] },
+          { stageId: "verify", action: "run", reason: "full", matchedPaths: [] },
+          { stageId: "e2e", action: "skip", reason: "unaffected", matchedPaths: [] },
+        ],
+        fullFallback: false,
+      });
+      loop({ type: "verify.stage.started", iteration: firstIteration, stageId: "lint", attempt: 1 });
+      if (!(await stepLoop(250))) return;
+      loop({
+        type: "verify.stage.completed",
+        iteration: firstIteration,
+        result: {
+          id: "lint",
+          command: "pnpm lint",
+          code: 0,
+          output: "Checked 812 files. No fixes applied.",
+          attempts: 1,
+          flaky: false,
+          durationMs: 940,
+        },
+      });
+      loop({ type: "verify.stage.started", iteration: firstIteration, stageId: "verify", attempt: 1 });
+      if (!(await stepLoop(300))) return;
+      loop({
+        type: "verify.stage.completed",
+        iteration: firstIteration,
+        result: {
+          id: "verify",
+          command: verifyCommand,
+          code: 1,
+          output: `${out(false)}\n  × src/mock.test.ts > renders the panel`,
+          attempts: 1,
+          flaky: false,
+          durationMs: 5_240,
+        },
+      });
       loop({ type: "verify", iteration: firstIteration, code: 1, passed: false, output: out(false) });
+      if (!(await stepLoop(300))) return;
+      loop({ type: "loop.rollback", iteration: firstIteration, restored: ["src/mock.ts"], deleted: ["src/tmp.ts"] });
       if (!(await stepLoop(400))) return;
 
-      // Second iteration: run again, then verify passes.
+      // Second iteration: run again; the verifier only passes on its second
+      // attempt (flaky), which the panel must not present as a clean pass.
       loop({ type: "iteration.start", iteration: secondIteration });
       if (!(await stepLoop(400))) return;
       loop({ type: "run.completed", iteration: secondIteration, costUsd: finalCost });
       if (!(await stepLoop(300))) return;
+      loop({ type: "verify.stage.started", iteration: secondIteration, stageId: "lint", attempt: 1 });
+      loop({
+        type: "verify.stage.completed",
+        iteration: secondIteration,
+        result: {
+          id: "lint",
+          command: "pnpm lint",
+          code: 0,
+          output: "Checked 812 files. No fixes applied.",
+          attempts: 1,
+          flaky: false,
+          durationMs: 910,
+        },
+      });
+      loop({ type: "verify.stage.started", iteration: secondIteration, stageId: "verify", attempt: 2 });
+      if (!(await stepLoop(300))) return;
+      loop({ type: "verify.flaky", iteration: secondIteration, stageId: "verify", attempts: 2 });
+      loop({
+        type: "verify.stage.completed",
+        iteration: secondIteration,
+        result: {
+          id: "verify",
+          command: verifyCommand,
+          code: 0,
+          output: out(true),
+          attempts: 2,
+          flaky: true,
+          durationMs: 4_780,
+        },
+      });
       loop({ type: "verify", iteration: secondIteration, code: 0, passed: true, output: out(true) });
       if (requirementMode !== "quick") {
         loop({ type: "requirements.started", phase: "review" });

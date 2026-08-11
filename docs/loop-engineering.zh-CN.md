@@ -392,12 +392,18 @@ worktree 被有意保留以供检查。若原始 loop 使用了 `--worktree`，
 **Loop DAG 的契约已冻结。** 新的编排能力只落在工程图上。Loop DAG 只接受正确性与
 安全性修复，不再增加字段。已有的 `.seekforge/loop-dags/` 检查点照常可恢复。
 
-**但它目前也不是工程图的子集。** 工程图的 `loop` 节点只把 `task`、`workspace`、
-`verifyCommand`、`approvalMode`、各项预算与 `timeoutMs` 传给子 Loop，因此 DAG 节点
-可以通过 `options` 携带的逐 Loop 调参（`maxIterations`、验证计划、模型路由、
-`codeReview` 等）、`consumeDependencyOutputs`、声明式 `outputPaths`、`budgetWeight`、
-`predictiveBudget`、`verifierId`，以及逐节点的 `failurePolicy`，在工程图里今天都没有
-等价物。任何需要这些能力的迁移，都必须留在 Loop DAG 上，直到工程图补齐它们。
+**子集缺口已补齐。** 工程图的 `loop` 节点不再是严格更弱的 Loop：`loopOptions`、
+`verifierId`、依赖输出注入、声明式 `outputPaths`、`budgetWeight`、`predictiveBudget`
+以及逐节点 `failurePolicy` 现在都已具备——见
+[Loop 节点配置](graph-engineering.zh-CN.md#loop-节点配置)。迁移者仍需知道的是一小串
+**差异**，而不是缺口：
+
+- 审批会变成独立的 `<node>-approval` 审批门节点，操作者批准的是那个节点的 id，
+  而不是 loop 节点的。
+- 重试会等待一个固定的最小延迟并记录持久的 `waiting_retry` 阶段；DAG 是立即重试。
+- 同优先级的平局按依赖关键路径长度打破，而不是按 id。
+- 依赖输出以「依赖 id 为键的 JSON 对象」到达，而不是 `[{id, output}]` 数组。
+- 声明的产物会额外做散列与大小上限校验，因此 DAG 会接受的文件可能让节点失败。
 
 **迁移方式：**
 
@@ -539,6 +545,14 @@ Fix the failing parser tests without weakening assertions.
 `--max-iterations` 接受 `1-100`；`--budget` 必须是有限的
 正 USD 值，并覆盖配置中的 `costBudgetUsd`。未显式指定预算时，
 TUI 继承配置值。默认迭代上限为 8。
+
+`/loop` 同样接受 `--verify-stage`、`--stable-passes`、`--flaky-retries`、
+`--stuck-recoveries`、`--rollback-regressions`、`--priority` 以及各项预算参数，
+取值范围与 CLI 一致。其中有一个取决于工作区：`--rollback-regressions` 需要一个
+保留的 `.seekforge/worktrees` 检出——在它之外回滚回归，回滚掉的会是用户自己的
+工作树。TUI 运行在它启动时所在的工作区，`/worktree new` 并不会重新绑定标签页，
+因此除非 TUI 本身就是在 worktree 里启动的，否则该参数会被提前拒绝；其它情况请用
+`seekforge loop --worktree`。
 
 在 TUI 中用 `/loop-resume [--approve-requirements] [--add-iterations N] [--add-budget USD] <loop-id>`
 继续。桌面端在已完成的 Loop 旁提供同样的追加控件。

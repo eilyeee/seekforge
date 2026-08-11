@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { LoopEvent, LoopResult } from "@seekforge/core";
+import type { LoopEvent, LoopResult, LoopStageResult } from "@seekforge/core";
 import {
   formatLoopEvent,
   formatLoopSummary,
@@ -82,6 +82,138 @@ describe("formatLoopEvent exhaustiveness", () => {
   it("returns [] for an unknown/future event variant (never undefined)", () => {
     const unknown = { type: "future.variant" } as unknown as LoopEvent;
     expect(formatLoopEvent(unknown)).toEqual([]);
+  });
+
+  it("stays silent for the per-iteration bookkeeping events", () => {
+    const silent: LoopEvent[] = [
+      { type: "verify.stage.started", iteration: 1, stageId: "unit", attempt: 1 },
+      {
+        type: "loop.snapshot",
+        snapshot: {
+          iteration: 1,
+          ts: "2026-01-01T00:00:00.000Z",
+          diagnosticsFingerprint: "fp",
+          workspaceFingerprint: null,
+          failedTests: 2,
+          stageResults: [],
+        },
+      },
+      {
+        type: "loop.memory.updated",
+        memory: {
+          iteration: 1,
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          workspaceFingerprint: null,
+          failureCategory: "test",
+          failedTests: 2,
+          changedPaths: [],
+          acceptanceGaps: [],
+          reviewFindings: [],
+        },
+      },
+    ];
+    for (const event of silent) expect(formatLoopEvent(event)).toEqual([]);
+  });
+});
+
+describe("formatLoopEvent workspace mutations", () => {
+  it("reports a regression rollback as an error line naming the undone edits", () => {
+    expect(
+      formatLoopEvent({ type: "loop.rollback", iteration: 3, restored: ["a.ts", "b.ts"], deleted: ["c.ts"] }),
+    ).toEqual([
+      {
+        text: "  ↩ loop · iteration 3 rolled back — its edits were undone (restored 2, deleted 1); re-verifying",
+        tone: "error",
+      },
+    ]);
+  });
+});
+
+describe("formatLoopEvent control acknowledgements", () => {
+  it("confirms the pause once the safe boundary is reached", () => {
+    expect(formatLoopEvent({ type: "loop.paused", iteration: 4 })).toEqual([
+      { text: "  ⏸ loop paused at the iteration 4 boundary (/loop-continue)", tone: "dim" },
+    ]);
+  });
+
+  it("confirms the resume", () => {
+    expect(formatLoopEvent({ type: "loop.resumed", iteration: 4 })).toEqual([
+      { text: "  ▶ loop resumed at iteration 4", tone: "dim" },
+    ]);
+  });
+
+  it("confirms applied guidance and singularizes one message", () => {
+    expect(formatLoopEvent({ type: "loop.steered", iteration: 2, count: 1 })).toEqual([
+      { text: "  ➤ loop applied 1 guidance message at iteration 2", tone: "dim" },
+    ]);
+    expect(formatLoopEvent({ type: "loop.steered", iteration: 2, count: 3 })[0]?.text).toContain(
+      "applied 3 guidance messages",
+    );
+  });
+});
+
+describe("formatLoopEvent verification detail", () => {
+  const stage = (overrides: Partial<LoopStageResult> = {}): LoopStageResult => ({
+    id: "unit",
+    command: "pnpm test",
+    code: 0,
+    output: "",
+    attempts: 1,
+    flaky: false,
+    durationMs: 120,
+    ...overrides,
+  });
+
+  it("marks a retry-only pass as flaky", () => {
+    expect(formatLoopEvent({ type: "verify.flaky", iteration: 1, stageId: "unit", attempts: 3 })).toEqual([
+      { text: "  ! loop · verifier unit passed after 3 attempts (flaky)", tone: "error" },
+    ]);
+  });
+
+  it("renders a passing stage dim and a failing stage as an error", () => {
+    expect(formatLoopEvent({ type: "verify.stage.completed", iteration: 1, result: stage() })).toEqual([
+      { text: "  ✓ loop · verifier unit · 120ms", tone: "dim" },
+    ]);
+    expect(
+      formatLoopEvent({ type: "verify.stage.completed", iteration: 1, result: stage({ code: 2, flaky: true }) }),
+    ).toEqual([{ text: "  ✗ loop · verifier unit · 120ms · flaky", tone: "error" }]);
+  });
+
+  it("reports verification impact only when the pass is partial", () => {
+    const allRun: LoopEvent = {
+      type: "verify.impact",
+      iteration: 1,
+      changedPaths: [],
+      decisions: [{ stageId: "unit", action: "run", reason: "full", matchedPaths: [] }],
+      fullFallback: true,
+    };
+    expect(formatLoopEvent(allRun)).toEqual([]);
+    const partial: LoopEvent = {
+      type: "verify.impact",
+      iteration: 1,
+      changedPaths: ["src/a.ts"],
+      decisions: [
+        { stageId: "unit", action: "run", reason: "direct", matchedPaths: ["src/a.ts"] },
+        { stageId: "e2e", action: "skip", reason: "unaffected", matchedPaths: [] },
+      ],
+      fullFallback: false,
+    };
+    expect(formatLoopEvent(partial)).toEqual([
+      { text: "  loop · verification impact · 1 run, 0 reused, 1 skipped, 0 blocked", tone: "dim" },
+    ]);
+  });
+
+  it("reports a stuck-loop recovery attempt", () => {
+    expect(
+      formatLoopEvent({
+        type: "loop.recovery",
+        iteration: 5,
+        attempt: 2,
+        reason: "cycle",
+        category: "test",
+        strategy: "reduce_scope",
+      }),
+    ).toEqual([{ text: "  ↻ loop · recovery 2 after cycle · test/reduce_scope", tone: "dim" }]);
   });
 });
 
