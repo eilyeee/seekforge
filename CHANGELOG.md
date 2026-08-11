@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Baseline re-recorded on the commit it measures
+
+68 tasks at three samples against `deepseek-v4-flash`: 203/204, $0.628,
+$0.0031 and 105,310 tokens per success, 1.54% tool failures, no session errors.
+Every suite gate passed, including all four baseline-comparison gates — cost per
+success and tokens per success both moved down. The run still exits non-zero,
+because a single failed sample is enough when `--fail-on-regression` is off.
+
+`gitSha` is the commit above and the tree was clean at start, so unlike the
+previous baseline the numbers need no paragraph reconciling the recorded sha
+with the core that actually ran. The `datasetHash` is unchanged, so the two
+baselines compare like for like.
+
+The single failure moved tasks — `foreach-await-bug` went 3/3 and
+`pagination-window-fix` went 2/3, its failing sample simply leaving the buggy
+line in place. Two runs that each lose one sample in 204, on different tasks,
+are the same measurement.
+
 ### What the review of the above found
 
 An adversarial pass over the whole change set produced fourteen findings; the

@@ -154,25 +154,34 @@ is only updated from an actual eval run, never by hand. Newly added tasks do not
 count as pass→fail regressions. Copy a reviewed, representative report over
 `baseline.json` only when intentionally refreshing the comparison point.
 
-**Current baseline: 2026-08-10, all 68 tasks at three samples** — 203/204
-(99.5%), $0.640 total, $0.0032 per success, 106,920 tokens per success, 1.5%
-tool failures, 0 session errors, 90.7 minutes, deepseek-v4-flash.
-`foreach-await-bug` passed 2/3; every other task, including all five new
-`graph-*` control-plane tasks, passed 3/3.
+**Current baseline: 2026-08-11, all 68 tasks at three samples** — 203/204
+(99.5%), $0.628 total, $0.0031 per success, 105,310 tokens per success, 1.54%
+tool failures, 0 session errors, deepseek-v4-flash. `pagination-window-fix`
+passed 2/3; every other task, including all five `graph-*` control-plane tasks,
+passed 3/3. Every suite gate passed, including all four baseline-comparison
+gates; the run still exits non-zero, because without `--fail-on-regression` a
+single failed sample is enough.
 
-> The recorded `gitSha` is `27d181f`, stamped when the report was written rather
-> than when the run started. The core the run actually exercised is `9d7f780`;
-> the delta between them is `apps/desktop/**` only, which the harness never
-> loads, and the changes uncommitted at write time were under `apps/cli/**` and
-> `docs/**` — also unused here. So the numbers are attributable to that core.
-> The `datasetHash` is exact.
+> `gitSha` is `9891cd0` and the working tree was clean when the run started, so
+> the numbers are attributable to exactly that commit — the previous baseline
+> needed a paragraph reconciling a stamped sha with the core it exercised. The
+> `datasetHash` is unchanged from the 2026-08-10 baseline, so this is a
+> like-for-like comparison on the same 68 tasks.
 
-**`foreach-await-bug` went 1/3 → 2/3, and that is not a measurement.** The
-edit-mode prompt gained a diff-hygiene rule between the two baselines, which is
-the change that would plausibly move this task. But distinguishing one success
-from two across three samples is well inside noise — the same argument this file
-makes about single samples applies here with barely more force. Treat it as
-suggestive and nothing more; a real answer needs a paired A/B on this task.
+**The one failure moved tasks, and that is not a measurement.** The previous
+baseline's 203/204 came from `foreach-await-bug` at 2/3; this one's comes from
+`pagination-window-fix` at 2/3, while `foreach-await-bug` went 3/3. The failing
+sample left the buggy line in place (`file_not_contains` on
+`const end = page * perPage;`) — an ordinary miss, not a new failure mode. Two
+runs that each lose one sample out of 204, on different tasks, are the same
+measurement; distinguishing two successes from three across three samples is
+well inside noise. Treat any single task's 2/3 ↔ 3/3 movement as suggestive and
+nothing more; a real answer needs a paired A/B on that task.
+
+**Wall-clock is not comparable across runs.** This one took 112.3 minutes
+against the previous baseline's 90.7, on a machine that was also running the
+test suite. Duration p95 per task (84.6 s) is the number to watch; the total is
+a property of the machine, not the model.
 
 **Sample it three times.** Recorded at ONE sample the previous day, the same
 suite reported 60/63 with `foreach-await-bug`, `go-pagination-window` and
