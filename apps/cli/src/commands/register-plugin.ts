@@ -5,7 +5,9 @@ import {
   pluginInstallCommand,
   pluginListCommand,
   pluginRemoveCommand,
+  pluginRollbackCommand,
   pluginSetEnabledCommand,
+  pluginSupplyChainCommand,
   pluginValidateCommand,
 } from "./plugin.js";
 
@@ -43,6 +45,16 @@ export function registerPluginCommands(program: Command): void {
     .argument("<path>", "updated local plugin directory")
     .description("update an installed plugin and require approval again")
     .action((path: string) => pluginInstallCommand(path, true));
+  plugin
+    .command("rollback")
+    .argument("<id>")
+    .description("restore the previous installed version of a plugin; leaves it disabled")
+    .action(pluginRollbackCommand);
+  plugin
+    .command("supply-chain")
+    .option("--json", "print the machine-readable supply-chain report")
+    .description("report plugin integrity, compatibility and rollback availability")
+    .action((opts: { json?: boolean }) => pluginSupplyChainCommand(opts.json === true));
   plugin
     .command("enable")
     .argument("<id>")

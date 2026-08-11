@@ -110,6 +110,49 @@ describe("dispatch_agent (loop-level)", () => {
     ).toThrow(/invalid subagent maxTurns/);
   });
 
+  it("re-emits a subagent's usage in both windows when the parent session was resumed", async () => {
+    // dispatch-tools pushes its own usage.updated for the parent after merging
+    // a child's spend. That event has to carry the same session window the loop
+    // publishes, or a resumed parent would report its run total as the session
+    // total for exactly the updates that a background child triggers.
+    const seed = createAgentCore({
+      provider: fakeProvider([response({ content: "seeded" })]),
+      dispatcher: fakeDispatcher(),
+      confirm: async () => true,
+    });
+    const seeded = await collect(seed.runTask({ ...baseInput, projectPath: workspace, task: "seed" }));
+    const created = seeded.find((e) => e.type === "session.created");
+    const sessionId = created?.type === "session.created" ? created.sessionId : "";
+
+    const agent = createAgentCore({
+      // parent turn 1 dispatches, child answers, parent turn 2 finishes
+      provider: fakeProvider([
+        dispatchCall("reviewer", "look"),
+        response({ content: "child" }),
+        response({ content: "done" }),
+      ]),
+      dispatcher: fakeDispatcher(),
+      confirm: async () => true,
+      subagents: [reviewer],
+    });
+    const events = await collect(
+      agent.runTask({ ...baseInput, projectPath: workspace, task: "continue", resumeSessionId: sessionId }),
+    );
+
+    const updates = events.filter((e) => e.type === "usage.updated");
+    expect(updates.length).toBeGreaterThan(1);
+    for (const event of updates) {
+      if (event.type !== "usage.updated") continue;
+      // The seeded run cost exactly one provider call; every snapshot of this
+      // run must sit that much above its own run total.
+      expect(event.sessionUsage?.costUsd).toBeCloseTo(event.usage.costUsd + USAGE.costUsd);
+      expect(event.sessionUsage?.promptTokens).toBe(event.usage.promptTokens + USAGE.promptTokens);
+    }
+    const done = events.find((e) => e.type === "session.completed");
+    if (done?.type !== "session.completed") throw new Error("expected session.completed");
+    expect(done.report.sessionUsage?.costUsd).toBeCloseTo(done.report.usage.costUsd + USAGE.costUsd);
+  });
+
   it("advertises dispatch_agent and the roster only when subagents exist", async () => {
     const provider = fakeProvider([response({ content: "done" })]);
     const agent = createAgentCore({

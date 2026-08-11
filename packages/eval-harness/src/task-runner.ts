@@ -147,7 +147,10 @@ type RunObservation = {
   status: "completed" | "failed" | "incomplete";
   summary: string;
   sessionId?: string;
+  /** Cumulative usage of this run only (a resumed run restarts it at zero). */
   usage: TokenUsage;
+  /** Cumulative usage of the whole session, including the runs a resume continued. */
+  sessionUsage: TokenUsage;
   toolCalls: number;
   failedToolCalls: number;
   error?: string;
@@ -480,6 +483,7 @@ async function observeAgent(agent: AgentCore, input: RunAgentTaskInput): Promise
   let summary = "";
   let sessionId: string | undefined;
   let usage = ZERO_USAGE;
+  let sessionUsage = ZERO_USAGE;
   let toolCalls = 0;
   let failedToolCalls = 0;
   let error: string | undefined;
@@ -497,11 +501,13 @@ async function observeAgent(agent: AgentCore, input: RunAgentTaskInput): Promise
           break;
         case "usage.updated":
           usage = event.usage;
+          sessionUsage = event.sessionUsage ?? event.usage;
           break;
         case "session.completed":
           status = "completed";
           summary = event.report.summary;
           usage = event.report.usage;
+          sessionUsage = event.report.sessionUsage ?? event.report.usage;
           break;
         case "session.failed":
           status = "failed";
@@ -520,6 +526,7 @@ async function observeAgent(agent: AgentCore, input: RunAgentTaskInput): Promise
     status,
     summary,
     usage,
+    sessionUsage,
     toolCalls,
     failedToolCalls,
     ...(sessionId ? { sessionId } : {}),
@@ -529,11 +536,12 @@ async function observeAgent(agent: AgentCore, input: RunAgentTaskInput): Promise
 
 function mergeObservation(metrics: MutableMetrics, observation: RunObservation): void {
   if (observation.sessionId) {
-    // Core reports cumulative session usage on resume. Replace the prior value
-    // for that session instead of double-counting every resumed turn.
-    metrics.usageBySession.set(observation.sessionId, observation.usage);
+    // Keyed by session and REPLACED, never added: the session window already
+    // covers every earlier run of that session, so a scenario that resumes is
+    // counted once. `usage` (this run alone) would drop the earlier steps.
+    metrics.usageBySession.set(observation.sessionId, observation.sessionUsage);
   } else {
-    metrics.unboundUsage = addUsage(metrics.unboundUsage, observation.usage);
+    metrics.unboundUsage = addUsage(metrics.unboundUsage, observation.sessionUsage);
   }
   metrics.usage = [...metrics.usageBySession.values()].reduce(addUsage, metrics.unboundUsage);
   metrics.toolCalls += observation.toolCalls;

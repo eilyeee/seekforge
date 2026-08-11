@@ -283,7 +283,10 @@ export const chat = {
     "chat.loop.health.budget.verify_runs": "verifier runs",
     "chat.loop.health.budget.iterations": "iterations",
     "chat.loop.orchestration.title": "Orchestration intelligence",
-    "chat.loop.orchestration.refresh": "Refresh proposals",
+    // This button runs the maintenance tick — it records proposals, reconciles
+    // rollouts and re-evaluates the controller freeze. It sat next to the
+    // read-only reload labelled "Refresh", both reading as reloads.
+    "chat.loop.orchestration.refresh": "Run maintenance",
     "chat.loop.orchestration.empty": "Refresh to build the portfolio, replay, and optimization report.",
     "chat.loop.orchestration.routes": "Learned routes",
     "chat.loop.orchestration.frontier": "Pareto frontier",
@@ -295,6 +298,7 @@ export const chat = {
     "chat.loop.orchestration.observe": "Observe outcome",
     "chat.loop.orchestration.evidence": "Evidence and exact action",
     "chat.loop.orchestration.slo": "SLO window",
+    "chat.loop.orchestration.policy": "SLO policy",
     "chat.loop.orchestration.evaluations": "evaluations",
     "chat.loop.orchestration.uncertainty": "Monte Carlo forecast",
     "chat.loop.orchestration.control": "Global burn rate",
@@ -667,7 +671,7 @@ export const chat = {
     "chat.loop.health.budget.verify_runs": "验证运行次数",
     "chat.loop.health.budget.iterations": "迭代次数",
     "chat.loop.orchestration.title": "编排决策智能",
-    "chat.loop.orchestration.refresh": "刷新提案",
+    "chat.loop.orchestration.refresh": "执行维护",
     "chat.loop.orchestration.empty": "刷新后生成组合预算、重放和优化报告。",
     "chat.loop.orchestration.routes": "学习到的路由",
     "chat.loop.orchestration.frontier": "帕累托前沿",
@@ -679,6 +683,7 @@ export const chat = {
     "chat.loop.orchestration.observe": "观察效果",
     "chat.loop.orchestration.evidence": "证据与精确动作",
     "chat.loop.orchestration.slo": "SLO 窗口",
+    "chat.loop.orchestration.policy": "SLO 策略",
     "chat.loop.orchestration.evaluations": "项评估",
     "chat.loop.orchestration.uncertainty": "蒙特卡洛预测",
     "chat.loop.orchestration.control": "全局消耗率",

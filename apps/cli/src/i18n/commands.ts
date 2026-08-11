@@ -210,6 +210,16 @@ export const commands = {
     "cmd.loop.summaryCost": "cost:       ${cost}",
     "cmd.loop.summarySession": "session:    {id}",
     "cmd.loop.summaryHint": "resume: seekforge resume {id}  |  rewind: seekforge rewind {id}",
+
+    // ── cmd.loopDag.* ───────────────────────────────────────────────────
+    // Deprecation-window notice. Printed on stderr only: `loop-dag` and
+    // `loop-dag-resources` both write machine-readable stdout.
+    "cmd.loopDag.deprecated":
+      "deprecated: the Loop DAG engine is in its deprecation window — it receives correctness and security fixes only, and will gain no new capabilities.",
+    "cmd.loopDag.deprecatedCheckpoints":
+      "  In-flight runs keep working: existing .seekforge/loop-dags/ checkpoints stay resumable for the whole window. The next major release removes the engine.",
+    "cmd.loopDag.deprecatedMigrate":
+      "  Migrate: seekforge loop-dag export-graph <file> -o graph.json  →  seekforge graph run graph.json",
   },
   zh: {
     // ── cmd.models.* ────────────────────────────────────────────────────
@@ -416,5 +426,12 @@ export const commands = {
     "cmd.loop.summaryCost": "费用：    ${cost}",
     "cmd.loop.summarySession": "会话：    {id}",
     "cmd.loop.summaryHint": "恢复：seekforge resume {id}  |  回退：seekforge rewind {id}",
+
+    // ── cmd.loopDag.* ───────────────────────────────────────────────────
+    "cmd.loopDag.deprecated": "弃用提示：Loop DAG 引擎已进入弃用窗口 —— 它只接受正确性与安全性修复，不再获得新能力。",
+    "cmd.loopDag.deprecatedCheckpoints":
+      "  在途运行不受影响：已有的 .seekforge/loop-dags/ 检查点在整个窗口内照常可恢复。下一个大版本将移除该引擎。",
+    "cmd.loopDag.deprecatedMigrate":
+      "  迁移：seekforge loop-dag export-graph <file> -o graph.json  →  seekforge graph run graph.json",
   },
 };

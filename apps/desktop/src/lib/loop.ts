@@ -337,6 +337,14 @@ export function loopHistoryDetail(event: { type: string; [key: string]: unknown 
     }
     case "verify.flaky":
       return joinParts([at, readString(event.stageId), `${readNumber(event.attempts) ?? "?"} attempts`]);
+    case "loop.model.routed":
+      return joinParts([
+        at,
+        readString(event.category),
+        readString(event.model) === undefined ? undefined : `→ ${readString(event.model)}`,
+        `streak ${readNumber(event.consecutiveFailures) ?? "?"}`,
+        event.reason === "escalated_category" ? "escalated" : undefined,
+      ]);
     case "verify.impact":
       return joinParts([
         at,

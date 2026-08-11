@@ -18,10 +18,13 @@ tool permissions, and contributed hooks activate only after explicit approval.
   disables all contributions until the new digest is explicitly approved.
 - `disable` keeps the installation but removes all contributions; `remove`
   uninstalls it and deletes its approval record.
-- A forced update retains one previous installation. The supply-chain report
-  shows lock/current digests, integrity, API compatibility, capabilities, and
-  rollback availability. Rollback is atomic and restores the prior version
-  disabled so its content must be reviewed again.
+- A forced update retains one previous installation. `seekforge plugin
+  supply-chain` (and `GET /api/plugins/supply-chain`) shows lock/current digests,
+  integrity, API compatibility, capabilities, and rollback availability.
+  `seekforge plugin rollback <id>` is atomic and restores the prior version
+  disabled so its content must be reviewed again. `plugin update` is the only
+  producer of a rollback version, and it is a CLI command — until now rollback
+  itself was reachable only from the desktop, which this bullet did not say.
 
 The Desktop has a top-level **Plugins** page for the same review/install/enable
 flow. The TUI `/plugins` command is a read-only status view.

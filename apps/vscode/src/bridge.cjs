@@ -276,6 +276,10 @@ function formatLoopEvent(event) {
       }`;
     case "verify.flaky":
       return `iteration ${event.iteration} stage ${event.stageId} flaky after ${event.attempts} attempts`;
+    case "loop.model.routed":
+      return `iteration ${event.iteration} routed ${event.category} to ${event.model} after ${event.consecutiveFailures} failures${
+        event.reason === "escalated_category" ? " (escalated)" : ""
+      }`;
     case "verify.impact":
       return `iteration ${event.iteration} impact selection${event.fullFallback ? " (full fallback)" : ""}`;
     case "loop.paused":

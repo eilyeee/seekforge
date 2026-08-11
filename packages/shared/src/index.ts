@@ -454,7 +454,30 @@ export type FinalReport = {
   changedFiles: string[];
   commandsRun: string[];
   verification: string;
+  /**
+   * Cumulative usage of THIS run. A resumed session restarts it at zero, so it
+   * excludes everything the session spent before the resume.
+   */
   usage: TokenUsage;
+  /**
+   * Cumulative usage of the WHOLE session: every earlier run plus this one.
+   * Equal to `usage` when the run was not a resume. It is a snapshot taken as
+   * the report is built, so it matches the persisted `SessionMeta.usage` unless
+   * usage lands on the bus (MCP sampling, say) between the two — the persisted
+   * value is the one that never trails.
+   *
+   * Both numbers are cumulative snapshots, never deltas. Pick ONE window and
+   * replace that slot as snapshots arrive; adding the two together, or adding
+   * successive snapshots of the same window, bills the same tokens twice.
+   * (Run windows of DIFFERENT runs are disjoint and may be summed — that is
+   * the only sum that is ever correct.) Cost budgets and "total spent"
+   * readouts want this field: measured in `usage`, a resumed session is handed
+   * the whole budget again on every turn.
+   *
+   * Always populated by the core agent loop; optional so that producers
+   * predating the field still typecheck. Additive (round 9).
+   */
+  sessionUsage?: TokenUsage;
 };
 
 export type SubagentStatus = "running" | "done" | "failed" | "cancelled";
@@ -529,7 +552,13 @@ export type AgentEvent =
    * right before the backoff sleep.
    */
   | { type: "provider.retry"; attempt: number; maxAttempts: number; delayMs: number; reason: string }
-  | { type: "usage.updated"; usage: TokenUsage }
+  /**
+   * A cumulative usage snapshot, in both windows — see `FinalReport.usage` /
+   * `FinalReport.sessionUsage` for what each one covers. `session.completed`
+   * carries exactly the same pair on its report, so the two events never need
+   * to be added together; a consumer picks a window and replaces its slot.
+   */
+  | { type: "usage.updated"; usage: TokenUsage; sessionUsage?: TokenUsage }
   | { type: "file.changed"; path: string }
   | { type: "command.output"; stream: "stdout" | "stderr"; chunk: string }
   /** A user-facing message from a hook (its JSON `systemMessage`); not model output. */

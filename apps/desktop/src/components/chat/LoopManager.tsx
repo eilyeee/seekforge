@@ -482,7 +482,27 @@ export function LoopManager({ running, onResume }: Props) {
     }
   };
 
+  // Reading the orchestration report must not mutate the workspace. The
+  // maintenance tick that records proposals, reconciles rollouts and re-evaluates
+  // the controller freeze is a separate, explicit action.
   const refreshOrchestration = async () => {
+    const request = orchestrationRequests.beginLatest(workspaceId);
+    if (!request) return;
+    setOrchestrationBusy(true);
+    try {
+      const report = await api.orchestrationReport(workspaceId);
+      if (orchestrationRequests.isCurrent(request)) {
+        setOrchestration(report);
+        setError("");
+      }
+    } catch (caught) {
+      if (orchestrationRequests.isCurrent(request)) setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      if (orchestrationRequests.isCurrent(request)) setOrchestrationBusy(false);
+    }
+  };
+
+  const maintainOrchestration = async () => {
     const request = orchestrationRequests.beginLatest(workspaceId);
     if (!request) return;
     setOrchestrationBusy(true);
@@ -639,6 +659,7 @@ export function LoopManager({ running, onResume }: Props) {
         report={orchestration}
         busy={resourceBusy || orchestrationBusy}
         onRefresh={() => void refreshOrchestration()}
+        onMaintain={() => void maintainOrchestration()}
         onProposalReview={(proposal, decision) => void reviewOrchestrationProposal(proposal, decision)}
         onProposalApply={(proposal) => void deployOrchestrationProposal(proposal, "apply")}
         onProposalRollback={(proposal) => void deployOrchestrationProposal(proposal, "rollback")}

@@ -93,21 +93,27 @@ export type ChatState = {
    */
   usage: TokenUsage;
   /**
-   * Split of `usage` that makes the live update safe to compute. Both event
-   * sources report CUMULATIVE totals, not deltas, so each is substituted into
-   * its own slot, never added to a running sum:
-   *   - usage.updated carries the current RUN's running total (it excludes the
-   *     usage a resumed session already spent in earlier runs) → usageRun;
-   *   - session.completed's report carries the whole SESSION's total (it
-   *     includes those earlier runs) → usageSession.
-   * `usage` is always usagePriorSessions + usageSession + usageRun, so
-   * resuming a session cannot bill its earlier turns twice.
+   * Split of `usage` that makes the live update safe to compute. Every event
+   * carries CUMULATIVE totals over two windows, never deltas:
+   *   - `usage` / `report.usage` is the current RUN only;
+   *   - `sessionUsage` is the whole SESSION, earlier resumed runs included.
+   * Desktop turns 2+ resume the same session, so only the session window can
+   * be tracked: take it from the wire and REPLACE, never add. `usage` is
+   * always usagePriorSessions + usageSession, and no third slot is needed —
+   * the running run is already inside the session window as it spends.
    */
   usagePriorSessions: TokenUsage;
-  /** Current session's cumulative usage as of its last settled run. */
+  /** Current session's cumulative usage, including the run in flight. */
   usageSession: TokenUsage;
-  /** Current run's cumulative usage, from usage.updated; settled when it ends. */
-  usageRun: TokenUsage;
+  /**
+   * The session window as of the current run's start.
+   *
+   * Only used when a server omits `sessionUsage` — then the run window is all
+   * there is, and this is what it must be added to. Without it a failed or
+   * cancelled run's spend vanishes from the footer, because nothing else
+   * tracks the run in flight.
+   */
+  usageRunBase: TokenUsage;
   /** Latest context.usage event; null until the first turn reports it. */
   contextUsage: ContextUsage | null;
   /**
@@ -128,7 +134,7 @@ export function initialChatState(): ChatState {
     usage: emptyUsage(),
     usagePriorSessions: emptyUsage(),
     usageSession: emptyUsage(),
-    usageRun: emptyUsage(),
+    usageRunBase: emptyUsage(),
     contextUsage: null,
     retry: null,
     nextId: 1,
@@ -277,15 +283,15 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
       // Emitted on resume too, with the same id — only a genuinely different
       // session settles the previous one into the prior-sessions total.
       if (state.sessionId === null || ev.sessionId === state.sessionId) {
-        return { ...state, sessionId: ev.sessionId };
+        return { ...state, sessionId: ev.sessionId, usageRunBase: state.usageSession };
       }
-      const usagePriorSessions = addUsage(state.usagePriorSessions, addUsage(state.usageSession, state.usageRun));
+      const usagePriorSessions = addUsage(state.usagePriorSessions, state.usageSession);
       return {
         ...state,
         sessionId: ev.sessionId,
         usagePriorSessions,
         usageSession: emptyUsage(),
-        usageRun: emptyUsage(),
+        usageRunBase: emptyUsage(),
         usage: usagePriorSessions,
       };
     }
@@ -520,29 +526,30 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
         },
       };
 
-    case "usage.updated":
+    case "usage.updated": {
       // The footer is the only always-on cost readout in the app: move it on
       // every provider response instead of freezing it for the whole run. The
       // event's usage is the run's running total, so it REPLACES the live part
       // rather than being added to it. A successful provider response also
       // clears any pending retry indicator.
+      const usageSession = ev.sessionUsage ?? addUsage(state.usageRunBase, ev.usage);
       return {
         ...state,
-        usageRun: ev.usage,
-        usage: addUsage(addUsage(state.usagePriorSessions, state.usageSession), ev.usage),
+        usageSession,
+        usage: addUsage(state.usagePriorSessions, usageSession),
         retry: null,
       };
+    }
 
     case "session.completed": {
       const next = push(state, { kind: "report", report: ev.report });
-      // The report is the whole session's total (including the turns this
-      // session already settled), so it replaces usageSession instead of
-      // adding to it, and the run's live total is folded away with it.
+      // `report.usage` is this RUN only; `report.sessionUsage` is the window
+      // the footer shows. Replace, never add.
+      const usageSession = ev.report.sessionUsage ?? addUsage(state.usageRunBase, ev.report.usage);
       return {
         ...next,
-        usageSession: ev.report.usage,
-        usageRun: emptyUsage(),
-        usage: addUsage(state.usagePriorSessions, ev.report.usage),
+        usageSession,
+        usage: addUsage(state.usagePriorSessions, usageSession),
         running: false,
         retry: null,
       };
@@ -550,13 +557,10 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
 
     case "session.failed": {
       const next = push(state, { kind: "failed", error: ev.error });
-      // A failed run still spent what it spent (and the session's persisted
-      // total already counts it), so settle it instead of letting the next
-      // run's first update erase it from the footer.
+      // Nothing to settle: usage.updated already moved the session window
+      // forward as the failed run spent, so the footer is already correct.
       return {
         ...next,
-        usageSession: addUsage(state.usageSession, state.usageRun),
-        usageRun: emptyUsage(),
         running: false,
         retry: null,
       };

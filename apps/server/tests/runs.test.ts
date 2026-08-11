@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type WebSocket from "ws";
 import * as config from "../src/config.js";
 import { ServerCoordinator } from "../src/coordinator.js";
@@ -54,6 +54,12 @@ describe("append-only run ledger", () => {
         stdio: ["ignore", "pipe", "pipe"],
       });
       return { child, readyPath };
+    });
+    // Kill the workers on any failure path: without this, a timeout waiting for
+    // "ready" leaves four processes polling for a go-file that will never be
+    // written, in a temp directory that is about to be removed.
+    onTestFinished(() => {
+      for (const { child } of children) if (child.exitCode === null) child.kill("SIGKILL");
     });
     await waitUntil(() => children.every(({ readyPath }) => existsSync(readyPath)), 30_000);
     writeFileSync(goPath, "go");

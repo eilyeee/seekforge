@@ -885,6 +885,17 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           if (external) usage = addUsage(usage, external);
           return usage;
         };
+        /**
+         * The one place that turns the run total into the session total. Every
+         * usage number that leaves this loop — both events and the persisted
+         * meta — is produced here, so a consumer never has to know that a
+         * resumed run starts counting from zero while the session does not.
+         */
+        const usageWindows = (): { usage: TokenUsage; sessionUsage: TokenUsage } => {
+          const run = withExternalUsage();
+          return { usage: run, sessionUsage: addUsage(priorUsage, run) };
+        };
+        const toSessionUsage = (run: TokenUsage): TokenUsage => addUsage(priorUsage, run);
         let sessionEndStatus: "completed" | "failed" | "cancelled" | undefined;
         let toolCallCount = 0;
         let turnsUsed = 0;
@@ -946,6 +957,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 setUsage: (next) => {
                   usage = next;
                 },
+                toSessionUsage,
                 trackOperation,
                 createCore: createAgentCore,
               })
@@ -1077,7 +1089,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                   : null) ?? compactMessages(messages, messageBudgetTokens);
               if (compacted?.usage) {
                 usage = addUsage(usage, compacted.usage);
-                yield emit({ type: "usage.updated", usage: withExternalUsage() });
+                yield emit({ type: "usage.updated", ...usageWindows() });
                 throwIfCancelled();
               }
               // Last resort: shrink oversized tool payloads in place so the
@@ -1168,7 +1180,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               () => new AgentLimitError("cancelled", "cancelled by user"),
             );
             usage = addUsage(usage, res.usage);
-            yield emit({ type: "usage.updated", usage: withExternalUsage() });
+            yield emit({ type: "usage.updated", ...usageWindows() });
             throwIfCancelled();
 
             // Window occupancy after each provider response (cheap estimate).
@@ -1500,7 +1512,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                     ...meta,
                     status: "running",
                     updatedAt: new Date().toISOString(),
-                    usage: addUsage(priorUsage, withExternalUsage()),
+                    usage: usageWindows().sessionUsage,
                     plan: items,
                   });
                 }
@@ -1639,7 +1651,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             changedFiles: [...changedFiles],
             commandsRun,
             verification: commandsRun.length > 0 ? `commands run: ${commandsRun.join("; ")}` : "no commands were run",
-            usage,
+            ...usageWindows(),
           };
 
           if (deps.extractMemory && input.mode === "edit") {
@@ -1658,8 +1670,9 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               });
               if (extraction.usage) {
                 usage = addUsage(usage, extraction.usage);
-                report = { ...report, usage: withExternalUsage() };
-                yield emit({ type: "usage.updated", usage });
+                const windows = usageWindows();
+                report = { ...report, ...windows };
+                yield emit({ type: "usage.updated", ...windows });
                 throwIfCancelled();
               }
               if (
@@ -1683,7 +1696,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             ...meta,
             status: "completed",
             updatedAt: new Date().toISOString(),
-            usage: addUsage(priorUsage, withExternalUsage()),
+            usage: usageWindows().sessionUsage,
             ...(lastPlanItems ? { plan: lastPlanItems } : {}),
           });
 
@@ -1729,7 +1742,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             ...meta,
             status: code === "cancelled" ? "cancelled" : "failed",
             updatedAt: new Date().toISOString(),
-            usage: addUsage(priorUsage, withExternalUsage()),
+            usage: usageWindows().sessionUsage,
             ...(lastPlanItems ? { plan: lastPlanItems } : {}),
           });
           const cancelled = code === "cancelled";

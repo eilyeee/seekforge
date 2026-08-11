@@ -97,6 +97,23 @@ for await (const event of agent.runTask({
 `file.changed`, `session.completed`, `session.failed`, and more (see the
 `AgentEvent` union in `packages/shared/src/index.ts`).
 
+### Two usage windows
+
+`usage.updated` and `session.completed` each carry usage over two windows, and
+both are **cumulative snapshots, not deltas**:
+
+- `usage` (and `report.usage`) is the **current run** — what this `runTask` call
+  has spent, excluding anything a resumed session spent before it.
+- `sessionUsage` (and `report.sessionUsage`) is the **whole session**, including
+  the runs a `resumeSessionId` inherited.
+
+Pick the window you mean and **replace** your stored value with it; never add a
+snapshot to a running total. The only valid sum is over run windows of
+*different* runs. Budget checks want `sessionUsage`: passing `resumeSessionId`
+and comparing the run window hands out the full budget again on every turn.
+`sessionUsage >= usage` always, so a guard on the session window trips at the
+same point or earlier.
+
 Skills and project memory are discovered automatically from the workspace's
 `.seekforge/` during the run. Surfaces that assemble plugin MCP/hooks/agents
 should load one `PluginContributions` snapshot and pass it as

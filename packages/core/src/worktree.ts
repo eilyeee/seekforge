@@ -94,6 +94,23 @@ export function worktreeSlug(name?: string, now: Date = new Date()): string {
   return now.toISOString().slice(0, 19).replace(/[-:]/g, "").replace("T", "-");
 }
 
+/**
+ * Whether `workspace` sits inside a `.seekforge/worktrees/<slug>` checkout —
+ * the retained, disposable layout {@link createWorktree} provisions. Path shape
+ * only (no git, no fs), so a surface can pre-flight a request with exactly the
+ * rule the engine enforces: `runAutoLoop` refuses `rollbackOnRegression`
+ * outside such a workspace, and the TUI refuses `--rollback-regressions`
+ * before starting a run rather than letting the engine throw seconds in.
+ *
+ * This is NOT "does this checkout belong to THIS base repository" — that
+ * question needs the base path and a branch check, and stays with the caller
+ * that has both (`isRetainedLoopWorktree` in apps/cli).
+ */
+export function isRetainedWorktreeWorkspace(workspace: string): boolean {
+  const parts = resolve(workspace).split(sep);
+  return parts.some((part, index) => part === ".seekforge" && parts[index + 1] === "worktrees");
+}
+
 /** Appends `.seekforge/worktrees/` to `<git-common-dir>/info/exclude` (idempotent). */
 async function ensureExcluded(basePath: string): Promise<void> {
   const commonDir = await git(basePath, ["rev-parse", "--git-common-dir"]);

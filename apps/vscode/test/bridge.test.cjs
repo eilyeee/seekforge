@@ -525,3 +525,65 @@ test("a truncated history says so instead of reading as the whole log", () => {
   // A complete log claims nothing about omissions.
   assert.doesNotMatch(formatLoopReport({ loopId: "l" }, entries), /most recent of/);
 });
+
+/**
+ * `formatLoopEvent` here and `loopHistoryDetail` in apps/desktop are two
+ * renderings of one event vocabulary, and they stay two on purpose: this
+ * extension is plain CommonJS with no build step, and `@seekforge/shared`
+ * publishes TypeScript sources, which no shipping VS Code runtime can
+ * `require()`. What must NOT drift is the vocabulary — a LoopEvent type that
+ * one surface names and the other silently drops misrepresents the Loop. This
+ * walks the sources so adding a LoopEvent forces a decision on both sides.
+ */
+function loopEventTypesOf(source, functionName) {
+  const start = source.indexOf(`function ${functionName}(`);
+  assert.ok(start >= 0, `${functionName} not found`);
+  const body = source.slice(start, source.indexOf("\n}\n", start));
+  return new Set([...body.matchAll(/case "([a-z_][a-z_.]*)":/gi)].map((match) => match[1]));
+}
+
+test("the Loop event vocabulary does not drift between this extension and the desktop history", () => {
+  const path = require("node:path");
+  const fs = require("node:fs");
+  const repo = path.resolve(__dirname, "..", "..", "..");
+  // Core's union, not the copy in @seekforge/shared: shared declares a narrower
+  // 22-member mirror, and the events a surface actually receives are the ones
+  // core emits. Reading the mirror let `loop.model.routed` — emitted, persisted
+  // into loop history, rendered by the TUI — reach neither renderer unnoticed.
+  const coreSource = fs.readFileSync(path.join(repo, "packages", "core", "src", "agent", "auto-loop.ts"), "utf8");
+  const union = coreSource.slice(
+    coreSource.indexOf("export type LoopEvent ="),
+    coreSource.indexOf('| { type: "loop.done"; result: LoopResult };'),
+  );
+  const declared = new Set([...union.matchAll(/type: "([a-z_][a-z_.]*)"/gi)].map((match) => match[1]));
+  declared.add("loop.done");
+  assert.ok(declared.size > 15, "failed to read the LoopEvent union");
+
+  const bridge = loopEventTypesOf(
+    fs.readFileSync(path.join(__dirname, "..", "src", "bridge.cjs"), "utf8"),
+    "formatLoopEvent",
+  );
+  const desktop = loopEventTypesOf(
+    fs.readFileSync(path.join(repo, "apps", "desktop", "src", "lib", "loop.ts"), "utf8"),
+    "loopHistoryDetail",
+  );
+
+  // Rows this extension's report deliberately leaves to the live desktop feed:
+  // streamed output chunks, and the per-iteration bookkeeping events whose
+  // content the report already summarises elsewhere.
+  const notInReport = new Set([
+    "verify.output",
+    "loop.snapshot",
+    "loop.memory.updated",
+    "requirements.started",
+    "code_review.started",
+  ]);
+
+  const missingFromDesktop = [...declared].filter((type) => !desktop.has(type));
+  const missingFromBridge = [...declared].filter((type) => !bridge.has(type) && !notInReport.has(type));
+  assert.deepEqual(missingFromDesktop, [], "apps/desktop loopHistoryDetail is missing LoopEvent types");
+  assert.deepEqual(missingFromBridge, [], "formatLoopEvent is missing LoopEvent types");
+
+  const stale = [...notInReport].filter((type) => !declared.has(type));
+  assert.deepEqual(stale, [], "the deliberate-omission list names LoopEvent types that no longer exist");
+});

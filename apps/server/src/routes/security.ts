@@ -17,6 +17,7 @@ import {
   type FindingSeverity,
   type SecurityExportFormat,
 } from "@seekforge/core";
+import type { TokenUsage } from "@seekforge/shared";
 import { readJsonBody, sendApiError, sendJson } from "../http.js";
 import type { RouteCtx } from "./context.js";
 
@@ -30,6 +31,15 @@ const SEVERITY_RANK: Record<FindingSeverity, number> = {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Every usage snapshot the agent publishes carries both a run-scoped and a
+ * session-scoped total; a cost budget is only correct against the session one,
+ * because a resumed session's run total restarts at zero.
+ */
+function spendReachesBudget(snapshot: { usage: TokenUsage; sessionUsage?: TokenUsage }, maxCostUsd: number): boolean {
+  return (snapshot.sessionUsage ?? snapshot.usage).costUsd >= maxCostUsd;
 }
 
 function agentOptions(workspace: string) {
@@ -176,11 +186,21 @@ async function routes(ctx: RouteCtx): Promise<void> {
               approvalMode: "acceptEdits",
               signal: controller.signal,
             })) {
-              if (event.type === "usage.updated" && event.usage.costUsd >= maxCostUsd) {
-                budgetExceeded = true;
-                controller.abort();
+              // Measure the SESSION window: the run this route starts is always
+              // fresh today, so it equals the run window, but reading the run
+              // total would silently under-bill the moment this route learns to
+              // resume. session.completed is the backstop for a provider that
+              // only reports usage at the end.
+              if (event.type === "usage.updated") {
+                if (spendReachesBudget(event, maxCostUsd)) {
+                  budgetExceeded = true;
+                  controller.abort();
+                }
               }
-              if (event.type === "session.completed") agentCompleted = !budgetExceeded;
+              if (event.type === "session.completed") {
+                if (spendReachesBudget(event.report, maxCostUsd)) budgetExceeded = true;
+                agentCompleted = !budgetExceeded;
+              }
             }
           } finally {
             handle.dispose();

@@ -126,15 +126,19 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
           // event at/over a ceiling, so the in-flight model turn that crossed it
           // can overshoot by one call. The token ceiling is independent of cost
           // so a provider with no price table (costUsd stays 0) is still bounded.
-          const totalTokens = event.usage.promptTokens + event.usage.completionTokens;
-          if (event.usage.costUsd >= input.maxCostUsd || totalTokens >= maxTotalTokens) controller.abort();
+          // Budgets read the SESSION window, the ledger the run it records.
+          // Identical today (this route never resumes), but the run window is
+          // what silently re-grants the whole budget the moment one does.
+          const spent = event.sessionUsage ?? event.usage;
+          const totalTokens = spent.promptTokens + spent.completionTokens;
+          if (spent.costUsd >= input.maxCostUsd || totalTokens >= maxTotalTokens) controller.abort();
         } else if (event.type === "session.completed") {
           terminalStatus = "succeeded";
           input.runManager?.update(ledgerWorkspace, input.runId ?? "", {
             status: terminalStatus,
             costUsd: event.report.usage.costUsd,
           });
-          if (event.report.usage.costUsd >= input.maxCostUsd) controller.abort();
+          if ((event.report.sessionUsage ?? event.report.usage).costUsd >= input.maxCostUsd) controller.abort();
         } else if (event.type === "session.failed") {
           terminalStatus = event.error.code === "cancelled" ? "cancelled" : "failed";
           input.runManager?.update(ledgerWorkspace, input.runId ?? "", {

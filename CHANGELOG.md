@@ -2,6 +2,175 @@
 
 ## Unreleased
 
+### What the review of the above found
+
+An adversarial pass over the whole change set produced fourteen findings; the
+ones that were defects rather than wording are fixed here.
+
+**The TUI's tab total could not express its own history.** `/resume`, `/fork`
+and the session picker all switch session through a `set-session` action, and
+the `session.created` that follows carries the same id, so it short-circuits.
+A single running carry then either drops the outgoing session's spend or, once
+you come back to a session the carry already absorbed, bills its earlier turns
+twice — and that total feeds `costBudgetUsd`. Usage is now keyed by session id
+and the total is their sum, so re-entering a session overwrites its entry and
+`set-session` has nothing to settle.
+
+**Desktop lost a failed run's spend when a server sends no `sessionUsage`.**
+Deleting the run slot left the fallback with nothing tracking the run in
+flight. It now adds the run window to the session window as it stood when the
+run began, which `session.created` records.
+
+**A resumed Loop could be rejected by rules that did not exist when it was
+written.** Extracting the verification-plan validator tightened two value-level
+rules on the engine path — duplicate path prefixes, and non-boolean
+`required`/`cacheable`/`parallel`. `runAutoLoop` validates
+`resumeState.verificationPlan` with the same parser, so a checkpoint written by
+an earlier build would throw on resume. Authored plans stay strict; a replayed
+one is repaired the way the builder already repairs it.
+
+**The LoopEvent gate read the wrong union.** It checked the 22-member mirror in
+`@seekforge/shared`, not the union core actually emits — which is how
+`loop.model.routed` came to be emitted, persisted into loop history and
+rendered by the TUI while neither the Desktop history nor the VS Code report
+handled it. The gate now reads core's union, and both surfaces render the
+event.
+
+**`trigger-run.ts` still compared the run window** against `maxCostUsd`, the
+one guard of that shape the sweep missed. **Both READMEs named a command that
+does not exist** — `seekforge export-graph` is `seekforge loop-dag
+export-graph`. Two counts were wrong (22 flat `loop-*` commands, not 23 or 24;
+five validator divergences, not four), `--max-total-tokens` was cited as a CLI
+flag when it is an internal option only scheduled jobs set, and the entry-421
+note still described the *old* failure direction. The table-integrity check
+only looked below the first command row, so a paragraph spliced above it would
+have gone unseen. And Desktop's maintenance tick — which records proposals,
+reconciles rollouts and re-evaluates the controller freeze — was labelled
+"Refresh proposals" next to a read-only button labelled "Refresh"; it now says
+"Run maintenance".
+
+### A test fixture that outlived its test by a week
+
+Four `run-ledger-race-worker` processes were found still running on the
+development machine, spawned on 3 August and each having burned 92 minutes of
+CPU by 11 August. The fixture busy-polls for a go-file with `existsSync` on a
+5 ms `Atomics.wait` and no deadline; the test writes that file only after all
+four report ready. Anything that stops the parent in between — a timeout, a
+crash, Ctrl-C — orphans the children, and the temp directory holding the file
+they are waiting for is then removed, so they can never exit. The wait is now
+bounded at 60 s, and the test SIGKILLs any surviving child on every exit path
+rather than only the happy one.
+
+### The budget was reading the wrong window, and so was last round's fix
+
+**`--max-cost` was per-turn, not per-session.** Core tracked usage over two
+windows — the current run, and the whole session a resume inherits — but only
+ever emitted the run. The session window lived inside `writeSessionMeta` and was
+reachable only by reading the trace off disk, so every consumer that wanted a
+session total rebuilt it, and they disagreed. `apps/cli/src/commands/run.ts`
+compared its budgets against the run window: `--input-format stream-json` handed
+out the full `--max-cost` again on every turn, `plan → execute` handed it out
+twice, and `--resume` ignored everything the session had already spent.
+
+**Last round's TUI and Desktop fix made it worse in the quieter direction.** Both
+were patched on the belief that `report.usage` is the session total; it never
+was. Replacing the session total with the run total turned a visible
+double-count into a silent undercount — and the TUI's total is what
+`costBudgetUsd` reads, so the budget became too permissive. A probe run settled
+the question in a minute: start a session, resume it, print what each channel
+reports. The eval harness carried the same false comment and dropped every
+earlier step's cost from resumed scenarios.
+
+Core now publishes **both** windows on both events, named after what they mean,
+computed in one place (`usageWindows()`): `usage` is this run, `sessionUsage` is
+the session. Nothing has to be reconstructed and nothing has to be added.
+`sessionUsage >= usage` always, so every budget guard now trips at the same
+point or earlier — never later. The report also drains the usage bus, which it
+previously did not, so MCP-sampling tokens stop going unbilled. `security.ts`
+gained the backstop it was missing: it checked `usage.updated` but never the
+final report, so a provider that only reports at the end could bill past
+`maxCostUsd` and still be recorded as a verified fix.
+
+Not flipping `usage` to the session window was deliberate: `auto-loop.ts` does
+`costUsd += runCost` across iterations that resume each other, and
+`dispatch-tools.ts` and the REPL are correct today *because* the window is
+per-run. Every new test is a verified negative control — reverting the window
+selection makes it fail.
+
+### Three implementations that should have been one, and one that should not
+
+A sweep for duplicated invariants found three candidates and merged two.
+
+The `.seekforge/worktrees/<slug>` path shape was byte-identical in
+`auto-loop.ts` and the TUI, whose copy carried a comment asking for exactly this
+("if core ever exports the predicate, delete this and call it instead"). Both
+now call `isRetainedWorktreeWorkspace()`. The CLI's `isRetainedLoopWorktree` was
+left alone on purpose — same regex, different question: it asks whether a path
+belongs to *this base repo's* worktrees, not whether it has the worktree shape.
+
+Verification-plan validation existed twice and the copies had **diverged in
+five ways**, with the Graph side strictly stricter. Three differences were
+unified on the strict side; two were kept as parameters because they are
+layering, not drift — a graph definition is authored text where a typo should be
+fatal, while the engine also replays plans from persisted resume state that a
+newer version may have written with fields this build does not know.
+
+The third — Loop event formatting shared between Desktop and VS Code — **was not
+merged, and should not be.** `apps/vscode` is CommonJS with no build step and no
+bundler, and `@seekforge/shared` is private with an exports map pointing at raw
+`.ts`. Requiring it works only on Node ≥ 22.18; every shipping VS Code is on
+Electron with Node 20.x–22.16. It would have passed locally and broken in the
+editor. A gate now reads the 22-member `LoopEvent` union out of shared and
+asserts Desktop covers all of them and VS Code covers all but a named,
+justified omission list — so adding an event forces a decision on both surfaces
+without forcing a dependency that cannot exist.
+
+Three findings recorded but not acted on: the verification-plan rules are
+re-rolled in three *more* places (one of them in `packages/shared`, which cannot
+depend on core, so those rules need pushing down rather than up);
+`LoopVerificationStage` is itself mirrored in shared as a narrower copy; and a
+stage `timeoutMs` above 2^31−1 fires `setTimeout` immediately on the engine path,
+which the Graph layer caps at 24h and the programmatic API does not.
+
+### Fourteen commands that rendered as raw text, and an A/B with no ties
+
+**The command table promise held in the source and broke in the browser.** A
+VS Code paragraph sat between the `evolve` row and the `security` row of both
+READMEs. A blank line ends a GFM table, so every row below that paragraph —
+`security`, `init`, `mcp`, `mcp-serve`, `skill`, `plugin`, `agent`, the four
+`memory` rows, `config`, fourteen in all — rendered on GitHub and npm as literal
+pipe-separated text. The drift gate greps raw Markdown, so it had been reporting
+no drift the whole time. The paragraph now follows the table, and a new check
+asserts that nothing interrupts a command table between its first and last row.
+
+**The same gate was scanning the wrong half of the CLI.** `cliCommands()` read
+`apps/cli/src/index.ts` and `apps/cli/src/commands/*.ts`, but `register-loop.ts`,
+`register-graph.ts` and `register-orchestration.ts` live one directory above
+`commands/`. Every command they register was exempt from a check whose name
+promises *every top-level command* — which is how `seekforge loop`, the 22 flat
+`loop-*` commands and `orchestration` stayed out of both READMEs while the gate
+stayed green. This is the third blind spot of the same shape in this one gate,
+after the segment-dispatch routes and the Server/Tui config keys. All 24 now have
+rows, grouped by family the way `graph` already was.
+
+**A paired A/B that reported zero ties across forty-five pairs.** The comparator
+falls through to `costUsd` at full float precision, so `tie` was structurally
+unreachable: the skill-brief run called all 45 pairs decisive and printed a
+confidence interval over them, when 13 had identical success, score and turns and
+were separated by cost alone. Seven of those thirteen differed by 0.08%–0.26% —
+noise a $0.0025 task cannot resolve. Cheaper is still better, but only above a 1%
+relative threshold; below it the pair is a tie, and the report now says how many
+decisions rested on cost alone. Re-scored, that run reads A 23 / B 15 / 7 ties,
+a 60.5% [44.7%–74.4%] win rate for the control — the interval still spans 50%, so
+the wider skill-brief cap is not shipping.
+
+**The roadmap said Phase 2 was deletion.** It is not: `loop-speculate` runs its
+candidate strategies through `runLoopDag`, making it the last non-DAG caller of
+the engine. Retiring the Loop DAG means porting speculation onto a Graph fan-out
+of Loop nodes with a shared weighted budget first, and it takes `loop-dag`,
+`loop-dag-resources` and `export-graph` with it — not the rest of the flat
+`loop-*` family, which manages single Loops and outlives the DAG.
+
 ### The Loop DAG can be retired, and a gate that walks docs → code
 
 **The Graph `loop` node was a strictly weaker Loop, and that is why two

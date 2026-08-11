@@ -38,6 +38,7 @@ function interval(ci: ConfidenceInterval): string {
 
 export type VariantRun = { variant: string; results: TaskResult[] };
 export type AbWinner = "a" | "b" | "tie";
+export type AbDecisionBasis = "success" | "score" | "turns" | "cost";
 
 export type AbTaskComparison = {
   taskId: string;
@@ -46,6 +47,8 @@ export type AbTaskComparison = {
   b?: TaskResult;
   /** Winner by success, score, turns, then cost. */
   winner: AbWinner;
+  /** Which criterion separated the arms; absent on a tie or an unpaired row. */
+  decidedBy?: AbDecisionBasis;
 };
 
 export type AbVariantTotals = {
@@ -67,6 +70,12 @@ export type AbSummary = {
   paired: {
     pairs: number;
     decisivePairs: number;
+    /**
+     * Decisive pairs that reached the cost criterion — success matched, and
+     * score and turns were either equal or not comparable (one arm did not
+     * report the metric).
+     */
+    costOnlyDecisions: number;
     aWinRate: number;
     aWinRateCi95: ConfidenceInterval;
   };
@@ -81,17 +90,31 @@ export function alternatingArmOrder(pairIndex: number): readonly ["a", "b"] | re
   return pairIndex % 2 === 0 ? ["a", "b"] : ["b", "a"];
 }
 
-/** A < B means a is better. */
-function compareResults(a: TaskResult, b: TaskResult): number {
-  if (a.success !== b.success) return a.success ? -1 : 1;
+/**
+ * Cheaper is genuinely better, but a fraction of a cent is not a result. At
+ * roughly $0.0025 a task, comparing cost at full float precision made `tie`
+ * structurally unreachable: a 45-pair run reported zero ties and called every
+ * pair decisive, when 13 of them were separated by a cost gap too small to
+ * print. Costs within this fraction of the larger one rank equal.
+ */
+const COST_TIE_RELATIVE = 0.01;
+
+/** A < B means a is better; `by` names the criterion that separated them. */
+function compareResults(a: TaskResult, b: TaskResult): { order: number; by?: AbDecisionBasis } {
+  if (a.success !== b.success) return { order: a.success ? -1 : 1, by: "success" };
   const as = a.metrics.score;
   const bs = b.metrics.score;
-  if (as !== undefined && bs !== undefined && as !== bs) return as > bs ? -1 : 1;
+  if (as !== undefined && bs !== undefined && as !== bs) return { order: as > bs ? -1 : 1, by: "score" };
   const at = a.metrics.turns;
   const bt = b.metrics.turns;
-  if (at !== undefined && bt !== undefined && at !== bt) return at < bt ? -1 : 1;
-  if (a.metrics.costUsd !== b.metrics.costUsd) return a.metrics.costUsd < b.metrics.costUsd ? -1 : 1;
-  return 0;
+  if (at !== undefined && bt !== undefined && at !== bt) return { order: at < bt ? -1 : 1, by: "turns" };
+  const ac = a.metrics.costUsd;
+  const bc = b.metrics.costUsd;
+  const larger = Math.max(Math.abs(ac), Math.abs(bc));
+  if (larger > 0 && Math.abs(ac - bc) / larger >= COST_TIE_RELATIVE) {
+    return { order: ac < bc ? -1 : 1, by: "cost" };
+  }
+  return { order: 0 };
 }
 
 function pairKey(result: TaskResult): string {
@@ -143,8 +166,9 @@ export function compareVariants(a: VariantRun, b: VariantRun): AbSummary {
   for (const key of order) {
     const row = rows.get(key)!;
     if (row.a && row.b) {
-      const compared = compareResults(row.a, row.b);
+      const { order: compared, by } = compareResults(row.a, row.b);
       row.winner = compared < 0 ? "a" : compared > 0 ? "b" : "tie";
+      if (by) row.decidedBy = by;
     } else if (row.a) {
       row.winner = "a";
     } else if (row.b) {
@@ -158,6 +182,7 @@ export function compareVariants(a: VariantRun, b: VariantRun): AbSummary {
   const pairedAWins = pairedRows.filter((row) => row.winner === "a").length;
   const pairedBWins = pairedRows.filter((row) => row.winner === "b").length;
   const decisivePairs = pairedAWins + pairedBWins;
+  const costOnlyDecisions = pairedRows.filter((row) => row.decidedBy === "cost").length;
   return {
     variantA: a.variant,
     variantB: b.variant,
@@ -168,6 +193,7 @@ export function compareVariants(a: VariantRun, b: VariantRun): AbSummary {
     paired: {
       pairs: pairedRows.length,
       decisivePairs,
+      costOnlyDecisions,
       aWinRate: decisivePairs === 0 ? 0.5 : pairedAWins / decisivePairs,
       aWinRateCi95: proportionCi95(pairedAWins, decisivePairs),
     },
@@ -203,7 +229,10 @@ export function toAbMarkdown(summary: AbSummary): string {
       `B ${percent(b.successRate)} [${interval(b.successRateCi95)}]`,
     `**Paired Win/Loss/Tie (A vs B):** ${summary.aWins} / ${summary.bWins} / ${summary.ties}; ` +
       `A win rate among ${summary.paired.decisivePairs} decisive pairs: ${percent(summary.paired.aWinRate)} ` +
-      `[${interval(summary.paired.aWinRateCi95)}]`,
+      `[${interval(summary.paired.aWinRateCi95)}]` +
+      (summary.paired.costOnlyDecisions > 0
+        ? ` — ${summary.paired.costOnlyDecisions} of them on cost alone, score and turns having failed to separate the arms`
+        : ""),
     `**Cost distribution:** A median ${fmtCost(a.costDistribution.median)}, p95 ${fmtCost(a.costDistribution.p95)}, ` +
       `mean ${fmtCost(a.costDistribution.mean)} [${fmtCost(a.costDistribution.meanCi95.lower)}-${fmtCost(a.costDistribution.meanCi95.upper)}]; ` +
       `B median ${fmtCost(b.costDistribution.median)}, p95 ${fmtCost(b.costDistribution.p95)}, ` +

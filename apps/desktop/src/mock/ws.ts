@@ -67,7 +67,7 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
       ev({ type: "model.message", content: PLAN_TEXT });
 
       const usage = { promptTokens: 3120, completionTokens: 410, cacheHitTokens: 2400, costUsd: 0.0018 };
-      ev({ type: "usage.updated", usage });
+      ev({ type: "usage.updated", usage, sessionUsage: usage });
       ev({
         type: "session.completed",
         report: {
@@ -76,6 +76,7 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
           commandsRun: [],
           verification: "plan only — no changes made",
           usage,
+          sessionUsage: usage,
         },
       });
       emit({ type: "idle" });
@@ -122,11 +123,14 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
       ev({ type: "tool.started", toolName: "update_plan", args: {} });
       plan("in_progress", "pending", "pending");
       if (!(await step(400))) return;
-      // usage.updated is the RUN's running total (not a delta): the footer
-      // should follow it instead of freezing until the report arrives.
+      // Both windows are cumulative totals, not deltas. This mock never
+      // resumes, so the run and session windows coincide; the footer reads
+      // sessionUsage and should follow it instead of freezing until the
+      // report arrives.
       ev({
         type: "usage.updated",
         usage: { promptTokens: 2100, completionTokens: 260, cacheHitTokens: 1600, costUsd: 0.0013 },
+        sessionUsage: { promptTokens: 2100, completionTokens: 260, cacheHitTokens: 1600, costUsd: 0.0013 },
       });
 
       ev({ type: "tool.started", toolName: "read_file", args: { path: "apps/cli/src/index.ts" } });
@@ -141,6 +145,7 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
       ev({
         type: "usage.updated",
         usage: { promptTokens: 4800, completionTokens: 610, cacheHitTokens: 3700, costUsd: 0.0031 },
+        sessionUsage: { promptTokens: 4800, completionTokens: 610, cacheHitTokens: 3700, costUsd: 0.0031 },
       });
       if (!(await step(400))) return;
 
@@ -207,6 +212,7 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
       ev({
         type: "usage.updated",
         usage: { promptTokens: 7300, completionTokens: 940, cacheHitTokens: 5600, costUsd: 0.0047 },
+        sessionUsage: { promptTokens: 7300, completionTokens: 940, cacheHitTokens: 5600, costUsd: 0.0047 },
       });
       plan("done", "done", "done");
       if (!(await step(300))) return;
@@ -219,7 +225,7 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
       ev({ type: "model.message", content: FINAL_TEXT });
 
       const usage = { promptTokens: 9450, completionTokens: 1230, cacheHitTokens: 7300, costUsd: 0.0061 };
-      ev({ type: "usage.updated", usage });
+      ev({ type: "usage.updated", usage, sessionUsage: usage });
       ev({ type: "context.usage", usedTokens: 52_700, budgetTokens: 96_000, percent: 55 });
       ev({
         type: "session.completed",
@@ -229,6 +235,7 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
           commandsRun: approved ? ["pnpm typecheck"] : [],
           verification: approved ? "commands run: pnpm typecheck" : "verification skipped (denied)",
           usage,
+          sessionUsage: usage,
         },
       });
       emit({ type: "idle" });

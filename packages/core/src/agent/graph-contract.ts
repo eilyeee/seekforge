@@ -3,10 +3,10 @@ import { isRecord } from "../util/guards.js";
 import { isSafeLoopDagRelativePath, isValidLoopDagId } from "./loop-dag-validation.js";
 import { isDenseArray } from "./orchestration.js";
 import { isValidOrchestrationResourceId } from "./orchestration-scheduler.js";
+import { MAX_LOOP_VERIFICATION_STAGES, parseLoopVerificationPlan } from "./loop-options-contract.js";
 import type { GraphRetryPolicy } from "./graph-retry-policy.js";
 import type { LoopOptions, LoopVerificationStage } from "./auto-loop.js";
 import { isLoopFailureCategory, validateLoopModelRoutes } from "./loop-model-routing.js";
-import { isVerificationPathPrefix } from "./loop-verification-selection.js";
 import { compareByCodePoints } from "@seekforge/shared";
 
 export const MAX_GRAPH_NODES = 128;
@@ -18,7 +18,7 @@ export const MAX_GRAPH_DEFINITION_BYTES = 256 * 1024;
 export const MAX_GRAPH_NODE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 export const MAX_GRAPH_HISTORY_SEGMENTS = 3;
 export const ENGINEERING_GRAPH_FAN_IN_WORKTREE_ID = "@fan-in";
-export const MAX_GRAPH_LOOP_VERIFICATION_STAGES = 16;
+export const MAX_GRAPH_LOOP_VERIFICATION_STAGES = MAX_LOOP_VERIFICATION_STAGES;
 export const MAX_GRAPH_LOOP_ITERATIONS = 1_000;
 export const MAX_GRAPH_NODE_OUTPUT_PATHS = 32;
 export const MAX_GRAPH_NODE_BUDGET_WEIGHT = 1_000;
@@ -313,8 +313,6 @@ export function parseGraphValueSchema(value: unknown, label = "Graph value schem
   };
 }
 
-const GRAPH_LOOP_STAGE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
-
 function boundedInteger(value: unknown, label: string, min: number, max: number): number {
   if (!Number.isSafeInteger(value) || (value as number) < min || (value as number) > max) {
     throw new Error(`${label} must be an integer from ${min} to ${max}`);
@@ -322,133 +320,21 @@ function boundedInteger(value: unknown, label: string, min: number, max: number)
   return value as number;
 }
 
-function boundedPathPrefixes(value: unknown, label: string): string[] {
-  if (!isDenseArray(value) || value.length === 0 || value.length > 64 || new Set(value).size !== value.length) {
-    throw new Error(`${label} must contain 1 to 64 unique prefixes`);
-  }
-  if (!value.every(isVerificationPathPrefix)) throw new Error(`${label} contains an invalid relative prefix`);
-  return [...value] as string[];
-}
-
 /**
  * Parses the declared verification pipeline. `runAutoLoop` re-validates it, but
  * a Graph must reject an unrunnable plan while the parse is still pure, so the
- * bounds and the definition-local stage graph are checked here too.
+ * bounds and the definition-local stage graph are checked here too — both sides
+ * run the one owner of those rules (`loop-options-contract.ts`), each at the
+ * moment its own contract requires. A graph definition is authored text, so
+ * unknown stage fields are a hard error here and every declared duration is
+ * bounded like the rest of the node.
  */
 function parseGraphLoopVerificationPlan(value: unknown, label: string): LoopVerificationStage[] {
-  if (!isDenseArray(value) || value.length === 0 || value.length > MAX_GRAPH_LOOP_VERIFICATION_STAGES) {
-    throw new Error(`${label} must contain 1 to ${MAX_GRAPH_LOOP_VERIFICATION_STAGES} stages`);
-  }
-  const ids = new Set<string>();
-  const stages = value.map((raw): LoopVerificationStage => {
-    if (!isRecord(raw) || typeof raw.id !== "string" || !GRAPH_LOOP_STAGE_ID_RE.test(raw.id) || ids.has(raw.id)) {
-      throw new Error(`${label} requires a unique safe stage id`);
-    }
-    ids.add(raw.id);
-    for (const key of Object.keys(raw)) {
-      if (
-        ![
-          "id",
-          "command",
-          "required",
-          "timeoutMs",
-          "paths",
-          "dependencyPaths",
-          "cacheable",
-          "dependsOn",
-          "parallel",
-          "resources",
-        ].includes(key)
-      ) {
-        throw new Error(`${label} stage ${raw.id} declares an unsupported field: ${key}`);
-      }
-    }
-    if (typeof raw.command !== "string" || !raw.command.trim() || raw.command.length > 8_192) {
-      throw new Error(`${label} stage ${raw.id} requires a bounded command`);
-    }
-    for (const key of ["required", "cacheable", "parallel"] as const) {
-      if (raw[key] !== undefined && typeof raw[key] !== "boolean") {
-        throw new Error(`${label} stage ${raw.id} ${key} must be boolean`);
-      }
-    }
-    const paths =
-      raw.paths === undefined ? undefined : boundedPathPrefixes(raw.paths, `${label} stage ${raw.id} paths`);
-    const dependencyPaths =
-      raw.dependencyPaths === undefined
-        ? undefined
-        : boundedPathPrefixes(raw.dependencyPaths, `${label} stage ${raw.id} dependencyPaths`);
-    if (dependencyPaths?.some((path) => !paths?.includes(path))) {
-      throw new Error(`${label} stage ${raw.id} dependencyPaths must be a subset of paths`);
-    }
-    let dependsOn: string[] | undefined;
-    if (raw.dependsOn !== undefined) {
-      if (
-        !isDenseArray(raw.dependsOn) ||
-        raw.dependsOn.length === 0 ||
-        raw.dependsOn.length >= MAX_GRAPH_LOOP_VERIFICATION_STAGES ||
-        new Set(raw.dependsOn).size !== raw.dependsOn.length ||
-        !raw.dependsOn.every((id) => typeof id === "string" && GRAPH_LOOP_STAGE_ID_RE.test(id))
-      ) {
-        throw new Error(`${label} stage ${raw.id} dependsOn must contain unique safe stage ids`);
-      }
-      dependsOn = [...raw.dependsOn] as string[];
-    }
-    let resources: string[] | undefined;
-    if (raw.resources !== undefined) {
-      if (
-        !isDenseArray(raw.resources) ||
-        raw.resources.length === 0 ||
-        raw.resources.length > 16 ||
-        new Set(raw.resources).size !== raw.resources.length ||
-        !raw.resources.every(isValidOrchestrationResourceId)
-      ) {
-        throw new Error(`${label} stage ${raw.id} resources must be unique safe names`);
-      }
-      resources = [...raw.resources] as string[];
-    }
-    if (raw.parallel === true && !resources?.length) {
-      throw new Error(`${label} stage ${raw.id} parallel requires resources`);
-    }
-    return {
-      id: raw.id,
-      command: raw.command,
-      ...(typeof raw.required === "boolean" ? { required: raw.required } : {}),
-      ...(raw.timeoutMs !== undefined
-        ? {
-            timeoutMs: boundedInteger(
-              raw.timeoutMs,
-              `${label} stage ${raw.id} timeoutMs`,
-              1,
-              MAX_GRAPH_NODE_TIMEOUT_MS,
-            ),
-          }
-        : {}),
-      ...(paths ? { paths } : {}),
-      ...(dependencyPaths ? { dependencyPaths } : {}),
-      ...(typeof raw.cacheable === "boolean" ? { cacheable: raw.cacheable } : {}),
-      ...(dependsOn ? { dependsOn } : {}),
-      ...(typeof raw.parallel === "boolean" ? { parallel: raw.parallel } : {}),
-      ...(resources ? { resources } : {}),
-    };
+  return parseLoopVerificationPlan(value, {
+    label,
+    rejectUnknownFields: true,
+    maxTimeoutMs: MAX_GRAPH_NODE_TIMEOUT_MS,
   });
-  const remaining = new Map(stages.map((stage) => [stage.id, new Set(stage.dependsOn ?? [])]));
-  for (const stage of stages) {
-    if (stage.dependsOn?.some((id) => id === stage.id || !ids.has(id))) {
-      throw new Error(`${label} stage ${stage.id} depends on an unknown stage`);
-    }
-  }
-  const ready = [...remaining].filter(([, dependencies]) => dependencies.size === 0).map(([id]) => id);
-  let visited = 0;
-  while (ready.length > 0) {
-    const id = ready.shift()!;
-    remaining.delete(id);
-    visited++;
-    for (const [candidate, dependencies] of remaining) {
-      if (dependencies.delete(id) && dependencies.size === 0) ready.push(candidate);
-    }
-  }
-  if (visited !== stages.length) throw new Error(`${label} contains a stage dependency cycle`);
-  return stages;
 }
 
 /** Parses the bounded Loop configuration a `loop` node may declare. */

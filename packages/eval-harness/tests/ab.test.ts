@@ -93,6 +93,54 @@ describe("compareVariants", () => {
     ).toBe("b");
   });
 
+  it("a cost gap under one percent is a tie, not a decisive win", () => {
+    // The real 45-pair skill-brief run printed "0 ties" and called every pair
+    // decisive; 13 of them had identical success, score and turns and were
+    // separated only by a cost gap too small to print at four decimals.
+    const metrics = (costUsd: number) => ({
+      turns: 5,
+      toolCalls: 0,
+      failedToolCalls: 0,
+      costUsd,
+      durationMs: 1,
+      score: 90,
+    });
+    const near = compareVariants(
+      run("a", [res({ taskId: "t", metrics: metrics(0.0025) })]),
+      run("b", [res({ taskId: "t", metrics: metrics(0.002501) })]),
+    );
+    expect(near.tasks[0]?.winner).toBe("tie");
+    expect(near.tasks[0]?.decidedBy).toBeUndefined();
+    expect(near.ties).toBe(1);
+    expect(near.paired.decisivePairs).toBe(0);
+    expect(near.paired.costOnlyDecisions).toBe(0);
+
+    const clear = compareVariants(
+      run("a", [res({ taskId: "t", metrics: metrics(0.0025) })]),
+      run("b", [res({ taskId: "t", metrics: metrics(0.0021) })]),
+    );
+    expect(clear.tasks[0]?.winner).toBe("b");
+    expect(clear.tasks[0]?.decidedBy).toBe("cost");
+    expect(clear.paired.costOnlyDecisions).toBe(1);
+    expect(toAbMarkdown(clear)).toContain("1 of them on cost alone");
+  });
+
+  it("names the criterion that separated the arms", () => {
+    const metrics = (over: { turns?: number; score?: number; costUsd?: number }) => ({
+      turns: over.turns ?? 5,
+      toolCalls: 0,
+      failedToolCalls: 0,
+      costUsd: over.costUsd ?? 0.01,
+      durationMs: 1,
+      score: over.score ?? 90,
+    });
+    const basis = (a: TaskResult, b: TaskResult) => compareVariants(run("a", [a]), run("b", [b])).tasks[0]?.decidedBy;
+    expect(basis(res({ taskId: "t" }), res({ taskId: "t", success: false }))).toBe("success");
+    expect(basis(res({ taskId: "t" }), res({ taskId: "t", metrics: metrics({ score: 70 }) }))).toBe("score");
+    expect(basis(res({ taskId: "t" }), res({ taskId: "t", metrics: metrics({ turns: 9 }) }))).toBe("turns");
+    expect(basis(res({ taskId: "t" }), res({ taskId: "t", metrics: metrics({ costUsd: 0.05 }) }))).toBe("cost");
+  });
+
   it("identical results are a tie", () => {
     const a = run("a", [res({ taskId: "t" })]);
     const b = run("b", [res({ taskId: "t" })]);

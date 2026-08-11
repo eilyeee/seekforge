@@ -46,6 +46,13 @@ export type DispatchRuntime = {
   /** Parent-run cumulative usage; nested usage updates flow through these. */
   getUsage: () => TokenUsage;
   setUsage: (usage: TokenUsage) => void;
+  /**
+   * Widens a parent-RUN total to the parent SESSION total. Usage events
+   * re-emitted from here carry both windows, exactly like the ones the loop
+   * emits, so a resumed parent never publishes a run total as if it were the
+   * session's.
+   */
+  toSessionUsage: (runUsage: TokenUsage) => TokenUsage;
   /** Keeps the parent run alive until a foreground or background dispatch cleans up. */
   trackOperation: <T>(operation: Promise<T>) => Promise<T>;
   /** loop.ts's createAgentCore, injected to avoid a module cycle. */
@@ -226,7 +233,7 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
             const merged = addUsage(rt.getUsage(), subtractUsage(ev.usage, nestedUsage));
             rt.setUsage(merged);
             nestedUsage = ev.usage;
-            pushEvent({ type: "usage.updated", usage: merged });
+            pushEvent({ type: "usage.updated", usage: merged, sessionUsage: rt.toSessionUsage(merged) });
             break;
           }
           case "session.completed":

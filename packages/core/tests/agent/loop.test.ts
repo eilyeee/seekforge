@@ -119,6 +119,58 @@ describe("agent loop", () => {
     expect(listSessions(workspace)[0]!.usage?.costUsd).toBeCloseTo(0.022);
   });
 
+  it("publishes both usage windows on every event so a resumed session is never re-billed", async () => {
+    // The defect this pins: usage.updated and session.completed both report the
+    // CURRENT RUN, which restarts at zero on resume, while the persisted
+    // session total does not. A consumer holding a running total used to have
+    // to know that asymmetry — and got it wrong in both directions (adding the
+    // final report re-billed the whole run; replacing with it dropped every
+    // earlier turn of a resumed session). Both events now carry both windows.
+    const first = createAgentCore({
+      provider: fakeProvider([response({ content: "## Summary\nfirst" })]),
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+    });
+    const firstEvents = await collect(first.runTask({ ...baseInput, projectPath: workspace, task: "first" }));
+    const created = firstEvents.find((e) => e.type === "session.created");
+    const sessionId = created?.type === "session.created" ? created.sessionId : "";
+    const firstDone = firstEvents.find((e) => e.type === "session.completed");
+    // A run that is not a resume: the two windows coincide.
+    expect(firstDone?.type === "session.completed" ? firstDone.report.usage.costUsd : 0).toBeCloseTo(0.001);
+    expect(firstDone?.type === "session.completed" ? firstDone.report.sessionUsage?.costUsd : 0).toBeCloseTo(0.001);
+
+    const second = createAgentCore({
+      provider: fakeProvider([response({ content: "## Summary\nsecond" })]),
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+    });
+    const secondEvents = await collect(
+      second.runTask({ ...baseInput, projectPath: workspace, task: "continue", resumeSessionId: sessionId }),
+    );
+
+    const live = secondEvents.filter((e) => e.type === "usage.updated");
+    expect(live.length).toBeGreaterThan(0);
+    for (const event of live) {
+      if (event.type !== "usage.updated") continue;
+      expect(event.usage.costUsd).toBeCloseTo(0.001);
+      expect(event.sessionUsage?.costUsd).toBeCloseTo(0.002);
+      expect(event.sessionUsage?.promptTokens).toBe(20);
+    }
+
+    const done = secondEvents.find((e) => e.type === "session.completed");
+    if (done?.type !== "session.completed") throw new Error("expected session.completed");
+    expect(done.report.usage.costUsd).toBeCloseTo(0.001);
+    expect(done.report.sessionUsage?.costUsd).toBeCloseTo(0.002);
+    // The session window is exactly what resume reads back, so a consumer that
+    // replaces its total with it stays equal to the persisted truth.
+    expect(readSessionMeta(workspace, sessionId)?.usage?.costUsd).toBeCloseTo(0.002);
+    expect(done.report.sessionUsage).toEqual(readSessionMeta(workspace, sessionId)?.usage);
+    // Both events agree, so adding them is never necessary — and replacing with
+    // the RUN window instead is what left the TUI budget too permissive.
+    const lastLive = live.at(-1);
+    expect(lastLive?.type === "usage.updated" ? lastLive.sessionUsage : undefined).toEqual(done.report.sessionUsage);
+  });
+
   it("leaves the total untouched when nothing spends outside the loop", async () => {
     const usageBus = createUsageBus();
     const agent = createAgentCore({

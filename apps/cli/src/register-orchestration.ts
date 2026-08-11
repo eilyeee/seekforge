@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { InvalidArgumentError } from "commander";
 import {
+  orchestrationControllerCommand,
   orchestrationPolicyCommand,
   orchestrationIndexCommand,
   orchestrationProposalsCommand,
@@ -52,6 +53,15 @@ function rolloutSamples(value: string): number {
   const parsed = boundedInteger(value);
   if (parsed < 1 || parsed > 32) throw new InvalidArgumentError("value must be an integer from 1 to 32");
   return parsed;
+}
+
+/** Mirrors the 1-1024 trimmed bound the core control plane enforces on operator reasons. */
+function reason(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > 1_024) {
+    throw new InvalidArgumentError("reason must be 1 to 1024 characters");
+  }
+  return trimmed;
 }
 
 export function registerOrchestrationCommands(program: Command): void {
@@ -186,32 +196,56 @@ export function registerOrchestrationCommands(program: Command): void {
     });
   orchestration
     .command("rollout")
-    .argument("<operation>", "list, start, advance, resume, or reconcile")
-    .argument("[id]", "proposal id for start, advance, or resume")
+    .argument("<operation>", "list, start, advance, pause, resume, or reconcile")
+    .argument("[id]", "proposal id for start, advance, pause, or resume")
     .option("--expected-updated-at <iso>", "reject a stale proposal when starting")
     .option("--min-samples <n>", "terminal canary samples required before promotion", rolloutSamples)
+    .option("--reason <text>", "reason recorded on the rollout timeline when pausing", reason)
     .option("--auto-rollback", "roll back a regressed canary during reconciliation")
     .action(
       (
         operation: string,
         id: string | undefined,
-        options: { expectedUpdatedAt?: string; minSamples?: number; autoRollback?: boolean },
+        options: { expectedUpdatedAt?: string; minSamples?: number; reason?: string; autoRollback?: boolean },
       ) => {
-        if (!(["list", "start", "advance", "resume", "reconcile"] as const).includes(operation as never)) {
-          throw new InvalidArgumentError("rollout operation must be list, start, advance, resume, or reconcile");
+        if (!(["list", "start", "advance", "pause", "resume", "reconcile"] as const).includes(operation as never)) {
+          throw new InvalidArgumentError("rollout operation must be list, start, advance, pause, resume, or reconcile");
         }
-        if ((operation === "start" || operation === "advance" || operation === "resume") !== (id !== undefined)) {
+        const needsId =
+          operation === "start" || operation === "advance" || operation === "pause" || operation === "resume";
+        if (needsId !== (id !== undefined)) {
           throw new InvalidArgumentError(`${operation} ${id === undefined ? "requires" : "does not accept"} an id`);
         }
         if (operation !== "start" && (options.expectedUpdatedAt !== undefined || options.minSamples !== undefined)) {
           throw new InvalidArgumentError(`start options are not valid for ${operation}`);
         }
+        if (operation !== "pause" && options.reason !== undefined) {
+          throw new InvalidArgumentError("--reason is valid only for pause");
+        }
         if (operation !== "reconcile" && options.autoRollback === true) {
           throw new InvalidArgumentError("--auto-rollback is valid only for reconcile");
         }
-        orchestrationRolloutCommand(operation as "list" | "start" | "advance" | "resume" | "reconcile", id, options);
+        orchestrationRolloutCommand(
+          operation as "list" | "start" | "advance" | "pause" | "resume" | "reconcile",
+          id,
+          options,
+        );
       },
     );
+  orchestration
+    .command("controller")
+    .argument("<operation>", "show or resume")
+    .option("--reason <text>", "reason recorded with the manual resume", reason)
+    .description("inspect or manually resume the adaptive orchestration controller")
+    .action((operation: string, options: { reason?: string }) => {
+      if (operation !== "show" && operation !== "resume") {
+        throw new InvalidArgumentError("controller operation must be show or resume");
+      }
+      if (operation === "show" && options.reason !== undefined) {
+        throw new InvalidArgumentError("--reason is valid only for resume");
+      }
+      orchestrationControllerCommand(operation, options.reason);
+    });
   orchestration
     .command("maintain")
     .option("--auto-rollback", "roll back terminal regressions")

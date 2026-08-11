@@ -125,18 +125,27 @@ export type ChatState = {
   /**
    * Cumulative usage across every session this tab has run.
    *
-   * `session.completed` reports the WHOLE session's usage — core builds it as
-   * `addUsage(priorUsage, …)` where `priorUsage` is what the persisted session
-   * already spent — while turns 2+ resume that same session. Adding the report
-   * to a running total therefore re-billed every earlier turn, which the cost
-   * budget below reads, so `costBudgetUsd` tripped early. The session's share is
-   * REPLACED, and only a different session id settles into the carry.
+   * Both `usage.updated` and `session.completed` carry two windows. `usage` /
+   * `report.usage` is the CURRENT RUN only and must never reach a session
+   * total: turns 2+ resume the same session, so a running total built from it
+   * either re-bills every earlier turn (if added) or forgets them (if
+   * replaced) — and this feeds `costBudgetUsd`, so forgetting them makes the
+   * budget too permissive. `sessionUsage` is the whole session's cumulative
+   * total; it REPLACES that session's entry in `sessionUsages`, and this field
+   * is the sum of them all.
    */
   totalUsage: TokenUsage;
-  /** Usage of sessions this tab has finished with, excluding `sessionUsage`. */
-  priorSessionsUsage: TokenUsage;
-  /** Whole-session usage last reported for `sessionId`. */
-  sessionUsage: TokenUsage;
+  /**
+   * The session window last reported for each session this tab has touched,
+   * keyed by session id — the sum of which is `totalUsage`.
+   *
+   * A single running carry cannot express this tab's history, because a session
+   * can be left and come back to: `/resume`, `/fork` and the session picker all
+   * re-enter a session whose spend the carry already absorbed, so its earlier
+   * turns end up counted both in the carry and in its own window. Keyed by id,
+   * re-entering a session simply overwrites its entry.
+   */
+  sessionUsages: Record<string, TokenUsage>;
   /** Active session id (resume chaining like the REPL). */
   sessionId?: string;
   /** Pending permission request awaiting a y/a/n keypress, if any. */
@@ -233,14 +242,32 @@ export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
   };
 }
 
+/**
+ * The tab's session-window map, with the active session's entry replaced.
+ *
+ * Events that arrive before the first `session.created` are keyed under `""`,
+ * which the first real id then supersedes — the alternative, dropping them,
+ * would lose spend from the tab total and loosen the cost budget.
+ */
+function withSessionUsage(state: ChatState, sessionUsage: TokenUsage): Record<string, TokenUsage> {
+  return { ...state.sessionUsages, [state.sessionId ?? ""]: sessionUsage };
+}
+
+function currentSessionUsage(state: ChatState): TokenUsage {
+  return state.sessionUsages[state.sessionId ?? ""] ?? emptyUsage();
+}
+
+function sumUsage(sessionUsages: Record<string, TokenUsage>): TokenUsage {
+  return Object.values(sessionUsages).reduce(addUsage, emptyUsage());
+}
+
 export function initialState(model: string): ChatState {
   return {
     items: [],
     running: false,
     model,
     totalUsage: emptyUsage(),
-    priorSessionsUsage: emptyUsage(),
-    sessionUsage: emptyUsage(),
+    sessionUsages: {},
     overlay: null,
     scrollOffset: 0,
     approval: "confirm",
@@ -414,6 +441,9 @@ function innerReducer(state: ChatState, action: ChatAction): ChatState {
       };
 
     case "set-session":
+      // Identity only. Nothing to settle: each session's spend lives under its
+      // own key, so switching to one this tab has already visited restores its
+      // entry rather than stacking a second copy on a carry.
       return { ...state, sessionId: action.sessionId };
 
     case "permission":
@@ -531,17 +561,10 @@ function innerReducer(state: ChatState, action: ChatAction): ChatState {
 /** The event→item mapping (mirrors renderEvent in apps/cli/src/render.ts). */
 function applyEvent(state: ChatState, e: AgentEvent): ChatState {
   switch (e.type) {
-    case "session.created": {
-      // Fires on resume too, with the same id — only a genuinely different
-      // session moves the finished one into the carry.
-      if (state.sessionId === e.sessionId) return { ...state, sessionId: e.sessionId };
-      return {
-        ...state,
-        sessionId: e.sessionId,
-        priorSessionsUsage: addUsage(state.priorSessionsUsage, state.sessionUsage),
-        sessionUsage: emptyUsage(),
-      };
-    }
+    case "session.created":
+      // Fires on resume too, with the same id. Either way this is identity
+      // only — usage is keyed by session, so nothing needs settling.
+      return { ...state, sessionId: e.sessionId };
 
     case "step.started": {
       // Nested subagent activity is forwarded as "[agentId] tool" titles.
@@ -747,23 +770,32 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
         },
       };
 
-    case "usage.updated":
-      // Cumulative cost is taken from session.completed (avoid double
-      // counting); the in-turn number drives the live activity counter. A
-      // successful provider response also clears any pending retry indicator.
+    case "usage.updated": {
+      // Settle the session total live, so a cancelled or failed turn still
+      // counts against the cost budget. `turnTokens` stays on the RUN window —
+      // it is the live activity counter for this run, not a total.
+      const sessionUsages = withSessionUsage(state, e.sessionUsage ?? e.usage);
       return {
         ...state,
+        sessionUsages,
+        totalUsage: sumUsage(sessionUsages),
         turnTokens: e.usage.promptTokens + e.usage.completionTokens,
         retryStatus: undefined,
       };
+    }
 
-    case "session.completed":
+    case "session.completed": {
+      const sessionUsages = withSessionUsage(
+        state,
+        e.report.sessionUsage ?? addUsage(currentSessionUsage(state), e.report.usage),
+      );
       return {
         ...state,
-        sessionUsage: e.report.usage,
-        totalUsage: addUsage(state.priorSessionsUsage, e.report.usage),
+        sessionUsages,
+        totalUsage: sumUsage(sessionUsages),
         items: [...state.items, { kind: "report", id: nextId("r"), report: e.report }],
       };
+    }
 
     case "command.output": {
       // Live tail on the most recent running run_command row (cap ~400 chars).

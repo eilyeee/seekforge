@@ -491,25 +491,55 @@ acceptance gaps, and finding ids; resume discards it after a workspace change.
 Worktrees are deliberately retained for inspection. Run `loop-resume` from the
 worktree directory when the original loop used `--worktree`.
 
-### Loop DAG positioning and freeze
+### Loop DAG deprecation window
 
 **The Loop DAG is a shortcut, not a second engine.** A Loop DAG is one isomorphic
-shape of an Engineering Graph — every node is a full run→verify Loop. Reach for it
-when that is all you need; reach for `seekforge graph` when a workflow mixes node
-kinds or needs typed data flow, external signals, compensation, or remote
-execution.
+shape of an Engineering Graph — every node is a full run→verify Loop. Reach for
+`seekforge graph` when a workflow mixes node kinds or needs typed data flow,
+external signals, compensation, or remote execution.
 
-**The Loop DAG contract is frozen.** New orchestration capabilities land in the
-Engineering Graph. The Loop DAG receives correctness and security fixes only; it
-will not grow new fields. Existing `.seekforge/loop-dags/` checkpoints keep
-resuming unchanged.
+**The subset gap is closed, so the Loop DAG is now deprecated.** Retiring it had
+one stated precondition: a Graph `loop` node must stop being a strictly weaker
+Loop. That precondition is met — `loopOptions`, `verifierId`, dependency-output
+injection, declared `outputPaths`, `budgetWeight`, `predictiveBudget` and a
+per-node `failurePolicy` all exist there now, see
+[Loop node configuration](graph-engineering.md#loop-node-configuration). The
+engine has therefore entered a **deprecation window**:
 
-**The subset gap is closed.** A Graph `loop` node is no longer a strictly weaker
-Loop: `loopOptions`, `verifierId`, dependency-output injection, declared
-`outputPaths`, `budgetWeight`, `predictiveBudget` and a per-node `failurePolicy`
-all exist there now — see
-[Loop node configuration](graph-engineering.md#loop-node-configuration). What a
-migrating user still has to know is a short list of *differences*, not gaps:
+- **It gains no new capabilities.** Correctness and security fixes only; it will
+  not grow new fields. All new orchestration work lands in the Engineering Graph.
+- **In-flight DAGs keep running.** No command is removed and no checkpoint is
+  rejected: existing `.seekforge/loop-dags/` state stays resumable — `--resume`,
+  `--rerun`, `--approve`, and `loop-dag-resources` all behave exactly as before —
+  for the whole window.
+- **The next major release removes the engine.** There is no dated cut-off yet.
+  Finish what is in flight, but start new work on the Graph.
+- `loop-dag` and `loop-dag-resources` print that notice on **stderr** when they
+  start. Their stdout — the per-node status table and the resources JSON
+  document — and their exit codes are unchanged, so existing pipelines keep
+  parsing them byte for byte.
+
+**Migrating, in three steps:**
+
+```sh
+# 1. convert: deterministic, one kind:"loop" Graph node per DAG node
+seekforge loop-dag export-graph dag.json -o graph.json
+
+# 2. check the converted definition before spending a run on it
+seekforge graph validate graph.json
+
+# 3. run it
+seekforge graph run graph.json
+```
+
+Step 1 refuses to emit a graph it cannot make behave identically: `outputPaths`,
+`consumeDependencyOutputs`, `verifierId`, per-node `options`, unequal
+`budgetWeight` under a shared budget, `predictiveBudget` under a shared budget,
+and a mixed per-node `failurePolicy` each fail with a named reason rather than
+being silently dropped.
+
+**Differences you still have to know.** These are behavior differences, not
+gaps; the ones the conversion can detect are reported on stderr by step 1:
 
 - Approval becomes a separate `<node>-approval` gate node, so it is that node's
   id an operator approves, not the loop node's.
@@ -521,21 +551,9 @@ migrating user still has to know is a short list of *differences*, not gaps:
 - Declared outputs are additionally hashed and size-capped, so a file the DAG
   would have accepted can fail the node.
 
-**Migrating:**
-
-```sh
-seekforge loop-dag export-graph <file> [-o <out>]
-```
-
-converts a DAG definition into the equivalent Graph definition, one
-`kind: "loop"` node per DAG node. The conversion is deterministic and refuses to
-emit a graph it cannot make behave identically: `outputPaths`,
-`consumeDependencyOutputs`, `verifierId`, per-node `options`, unequal
-`budgetWeight` under a shared budget, `predictiveBudget` under a shared budget,
-and a mixed per-node `failurePolicy` each fail with a named reason rather than
-being silently dropped. Differences that survive — approval becomes a
-`<node>-approval` gate node, retries pin an explicit minimum-delay policy,
-equal-priority ties break by criticality — are reported on stderr.
+A converted Graph starts from a fresh Graph checkpoint. Migration does not carry
+a Loop DAG checkpoint over, which is why an in-flight DAG is best finished on the
+Loop DAG engine rather than switched mid-run.
 
 ## Core API
 

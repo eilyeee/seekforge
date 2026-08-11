@@ -13,6 +13,7 @@ describe("orchestration CLI", () => {
       "policy",
       "index",
       "rollout",
+      "controller",
       "maintain",
     ]);
     expect(
@@ -58,5 +59,40 @@ describe("orchestration CLI", () => {
     expect(() => program.parse(["node", "seekforge", "orchestration", "rollout", "list", "--auto-rollback"])).toThrow(
       /only for reconcile/,
     );
+  });
+
+  /**
+   * `maintain` can freeze the adaptive controller, which disables learned Graph
+   * scheduling and contextual Loop routing. Without a resume subcommand a
+   * CLI-only operator can press that brake but never release it.
+   */
+  it("exposes the controller resume that pairs with maintain's freeze", () => {
+    const program = new Command().exitOverride();
+    registerOrchestrationCommands(program);
+    const controller = program.commands
+      .find((command) => command.name() === "orchestration")
+      ?.commands.find((command) => command.name() === "controller");
+    expect(controller?.options.map((item) => item.long)).toContain("--reason");
+    expect(() => program.parse(["node", "seekforge", "orchestration", "controller", "restart"])).toThrow(
+      /must be show or resume/,
+    );
+    expect(() =>
+      program.parse(["node", "seekforge", "orchestration", "controller", "show", "--reason", "why"]),
+    ).toThrow(/only for resume/);
+    expect(() =>
+      program.parse(["node", "seekforge", "orchestration", "controller", "resume", "--reason", "  "]),
+    ).toThrow(/1 to 1024 characters/);
+  });
+
+  it("accepts the rollout pause that the server has always served", () => {
+    const program = new Command().exitOverride();
+    registerOrchestrationCommands(program);
+    expect(() => program.parse(["node", "seekforge", "orchestration", "rollout", "pause"])).toThrow(/requires an id/);
+    expect(() =>
+      program.parse(["node", "seekforge", "orchestration", "rollout", "resume", "opt-123", "--reason", "bad canary"]),
+    ).toThrow(/only for pause/);
+    expect(() =>
+      program.parse(["node", "seekforge", "orchestration", "rollout", "pause", "opt-123", "--min-samples", "4"]),
+    ).toThrow(/start options are not valid/);
   });
 });

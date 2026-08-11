@@ -6,7 +6,7 @@ import {
   readSessionMeta,
   resolvedPricingSource,
 } from "@seekforge/core";
-import type { AgentEvent, ApprovalMode, FinalReport } from "@seekforge/shared";
+import type { AgentEvent, ApprovalMode, FinalReport, TokenUsage } from "@seekforge/shared";
 import { cliMcpServerRequestHandlers, createCliAgent, prepareMcp } from "../agent-factory.js";
 import { colorIsEnabled, fail } from "../colors.js";
 import { loadConfig } from "../config.js";
@@ -255,9 +255,11 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
   const durationBudgetMs = resolveDurationBudgetMs(opts.maxDurationSeconds, config.maxDurationSeconds);
   // --max-cost (or config.maxCostUsd): stop the run once cumulative cost
   // reaches the budget by aborting the same controller Ctrl+C uses (graceful
-  // cancel, trace kept). Off when unset/non-positive. costUsd reported on
-  // usage.updated/session.completed is cumulative-per-run, so we just compare
-  // the latest value against the budget and abort once on the crossing.
+  // cancel, trace kept). Off when unset/non-positive. We compare the SESSION
+  // window of every usage snapshot (see sessionTotals below): one invocation
+  // can chain several runs over one session (stream-json turns, plan →
+  // execute) and --resume continues a session that already spent, so the
+  // per-run window would hand the same budget out again on every run.
   const costBudgetUsd = opts.maxCostUsd ?? config.maxCostUsd;
   // A budget on a run whose price is unknown is a bound that can never be
   // reached: every request reports 0, so the comparison below never fires. That
@@ -296,6 +298,18 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
     tokenCeilingReached = true;
     console.error(t("render.tokenCeilingReached", { ceiling: String(tokenCeiling) }));
     controller.abort();
+  };
+
+  /**
+   * The window every budget here is measured in. Core publishes each usage
+   * snapshot in two windows and the session one already includes the runs a
+   * resume continues, so the budgets never add anything up themselves.
+   */
+  const sessionTotals = (snapshot: { usage: TokenUsage; sessionUsage?: TokenUsage }): TokenUsage =>
+    snapshot.sessionUsage ?? snapshot.usage;
+  const enforceBudgets = (totals: TokenUsage): void => {
+    enforceCostBudget(totals.costUsd);
+    enforceTokenCeiling(totals.promptTokens, totals.completionTokens);
   };
 
   // Machine formats (json/stream-json): no streaming/colors, and no interactive
@@ -474,17 +488,13 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
       render(event);
       if (event.type === "model.message") numTurns++;
       if (event.type === "session.created") sessionId = event.sessionId;
-      // Prefer aborting mid-run on a usage event; session.completed.report.usage
-      // is the backstop when usage is only reported at the end.
-      if (event.type === "usage.updated") {
-        enforceCostBudget(event.usage.costUsd);
-        enforceTokenCeiling(event.usage.promptTokens, event.usage.completionTokens);
-      }
+      // Prefer aborting mid-run on a usage event; session.completed's report is
+      // the backstop when usage is only reported at the end.
+      if (event.type === "usage.updated") enforceBudgets(sessionTotals(event));
       if (event.type === "session.completed") {
         completed = true;
         finalReport = event.report;
-        enforceCostBudget(event.report.usage.costUsd);
-        enforceTokenCeiling(event.report.usage.promptTokens, event.report.usage.completionTokens);
+        enforceBudgets(sessionTotals(event.report));
       }
       if (event.type === "session.failed") {
         outcome = outcomeFromErrorCode(event.error.code, event.error.message);

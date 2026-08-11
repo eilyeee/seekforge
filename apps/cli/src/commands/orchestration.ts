@@ -17,8 +17,11 @@ import {
   advanceOrchestrationRollout,
   listOrchestrationRollouts,
   maintainWorkspaceOrchestration,
+  pauseOrchestrationRollout,
   planWorkspaceOrchestrationMaintenance,
+  readOrchestrationControllerState,
   reconcileOrchestrationRollouts,
+  resumeOrchestrationController,
   startOrchestrationRollout,
   resumeOrchestrationRollout,
 } from "@seekforge/core";
@@ -170,13 +173,13 @@ export function orchestrationIndexCommand(operation: "show" | "refresh"): void {
 }
 
 export function orchestrationRolloutCommand(
-  operation: "list" | "start" | "advance" | "resume" | "reconcile",
+  operation: "list" | "start" | "advance" | "pause" | "resume" | "reconcile",
   id?: string,
-  options: { expectedUpdatedAt?: string; minSamples?: number; autoRollback?: boolean } = {},
+  options: { expectedUpdatedAt?: string; minSamples?: number; reason?: string; autoRollback?: boolean } = {},
 ): void {
   try {
     const workspace = process.cwd();
-    if ((operation === "start" || operation === "advance" || operation === "resume") && !id) {
+    if ((operation === "start" || operation === "advance" || operation === "pause" || operation === "resume") && !id) {
       throw new Error(`orchestration rollout ${operation} requires a proposal id`);
     }
     const result =
@@ -191,8 +194,28 @@ export function orchestrationRolloutCommand(
               })
             : operation === "advance"
               ? advanceOrchestrationRollout(workspace, id!, { executors: executors(workspace) })
-              : resumeOrchestrationRollout(workspace, id!);
+              : operation === "pause"
+                ? pauseOrchestrationRollout(workspace, id!, options.reason)
+                : resumeOrchestrationRollout(workspace, id!);
     console.log(JSON.stringify(result, null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+export function orchestrationControllerCommand(operation: "show" | "resume", reason?: string): void {
+  try {
+    const workspace = process.cwd();
+    console.log(
+      JSON.stringify(
+        operation === "show"
+          ? readOrchestrationControllerState(workspace)
+          : resumeOrchestrationController(workspace, reason),
+        null,
+        2,
+      ),
+    );
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

@@ -383,20 +383,50 @@ Agent 迭代重复记账。
 worktree 被有意保留以供检查。若原始 loop 使用了 `--worktree`，
 请在该 worktree 目录中运行 `loop-resume`。
 
-### Loop DAG 的定位与冻结
+### Loop DAG 的弃用窗口
 
 **Loop DAG 是一条捷径，不是第二套引擎。** 一个 Loop DAG 就是工程图的一种同构形态
-——每个节点都是完整的 run→verify Loop。只需要这个时就用它；当工作流要混合节点类型，
-或者需要带类型的数据流、外部信号、补偿、远程执行时，请用 `seekforge graph`。
+——每个节点都是完整的 run→verify Loop。当工作流要混合节点类型，或者需要带类型的
+数据流、外部信号、补偿、远程执行时，请用 `seekforge graph`。
 
-**Loop DAG 的契约已冻结。** 新的编排能力只落在工程图上。Loop DAG 只接受正确性与
-安全性修复，不再增加字段。已有的 `.seekforge/loop-dags/` 检查点照常可恢复。
+**子集缺口已补齐，因此 Loop DAG 现已弃用。** 退役它只有一个前置条件：工程图的
+`loop` 节点不能再是严格更弱的 Loop。该条件已经满足——`loopOptions`、`verifierId`、
+依赖输出注入、声明式 `outputPaths`、`budgetWeight`、`predictiveBudget` 以及逐节点
+`failurePolicy` 现在都已具备，见
+[Loop 节点配置](graph-engineering.zh-CN.md#loop-节点配置)。该引擎因此进入
+**弃用窗口**：
 
-**子集缺口已补齐。** 工程图的 `loop` 节点不再是严格更弱的 Loop：`loopOptions`、
-`verifierId`、依赖输出注入、声明式 `outputPaths`、`budgetWeight`、`predictiveBudget`
-以及逐节点 `failurePolicy` 现在都已具备——见
-[Loop 节点配置](graph-engineering.zh-CN.md#loop-节点配置)。迁移者仍需知道的是一小串
-**差异**，而不是缺口：
+- **不再获得新能力。** 只接受正确性与安全性修复，不再增加字段。新的编排能力一律
+  落在工程图上。
+- **在途 DAG 照常可用。** 不移除任何命令，也不拒绝任何检查点：已有的
+  `.seekforge/loop-dags/` 状态在整个窗口内保持可恢复——`--resume`、`--rerun`、
+  `--approve` 以及 `loop-dag-resources` 的行为与此前完全一致。
+- **下一个大版本将移除该引擎。** 目前没有确定的截止日期。把在途的跑完，但新工作请
+  直接从工程图开始。
+- `loop-dag` 与 `loop-dag-resources` 启动时会把上述提示打印到 **stderr**。它们的
+  stdout（逐节点状态表与 resources 的 JSON 文档）和退出码都没有变化，已有的管道
+  可以逐字节照常解析。
+
+**迁移三步：**
+
+```sh
+# 1. 转换：确定性转换，每个 DAG 节点对应一个 kind:"loop" 图节点
+seekforge loop-dag export-graph dag.json -o graph.json
+
+# 2. 在真正花一次运行之前先校验转换结果
+seekforge graph validate graph.json
+
+# 3. 运行
+seekforge graph run graph.json
+```
+
+第 1 步拒绝产出它无法保证行为一致的图：`outputPaths`、
+`consumeDependencyOutputs`、`verifierId`、逐节点 `options`、共享预算下不相等的
+`budgetWeight`、共享预算下的 `predictiveBudget`，以及混用的逐节点 `failurePolicy`，
+都会带着明确原因失败，而不是被静默丢弃。
+
+**仍需知道的差异。** 这些是行为差异而不是缺口；其中转换能检测到的会由第 1 步打印
+到 stderr：
 
 - 审批会变成独立的 `<node>-approval` 审批门节点，操作者批准的是那个节点的 id，
   而不是 loop 节点的。
@@ -405,19 +435,8 @@ worktree 被有意保留以供检查。若原始 loop 使用了 `--worktree`，
 - 依赖输出以「依赖 id 为键的 JSON 对象」到达，而不是 `[{id, output}]` 数组。
 - 声明的产物会额外做散列与大小上限校验，因此 DAG 会接受的文件可能让节点失败。
 
-**迁移方式：**
-
-```sh
-seekforge loop-dag export-graph <file> [-o <out>]
-```
-
-会把 DAG 定义转换成等价的图定义，每个 DAG 节点对应一个 `kind: "loop"` 节点。转换是
-确定性的，并且拒绝产出它无法保证行为一致的图：`outputPaths`、
-`consumeDependencyOutputs`、`verifierId`、逐节点 `options`、共享预算下不相等的
-`budgetWeight`、共享预算下的 `predictiveBudget`，以及混用的逐节点 `failurePolicy`，
-都会带着明确原因失败，而不是被静默丢弃。仍然存在的差异——审批变成
-`<node>-approval` 审批门节点、重试固定为一个最小延迟策略、同优先级按关键路径长度
-打破平局——会打印到 stderr。
+转换出的图从一个全新的图检查点开始。迁移不会把 Loop DAG 的检查点带过去——所以在途的
+DAG 最好在 Loop DAG 引擎上跑完，而不是中途切换。
 
 ## 核心 API
 

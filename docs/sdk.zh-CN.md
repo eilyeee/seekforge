@@ -81,6 +81,21 @@ for await (const event of agent.runTask({
 
 `runTask` 以流的形式产出 `AgentEvent`：`session.created`、`model.message`、`tool.started`/`tool.completed`、`permission.required`、`usage.updated`、`file.changed`、`session.completed`、`session.failed` 等（完整见 `packages/shared/src/index.ts` 中的 `AgentEvent` 联合类型）。
 
+### 两个用量窗口
+
+`usage.updated` 与 `session.completed` 各自携带两个窗口上的用量，而且两者都是
+**累计快照，不是增量**：
+
+- `usage`（以及 `report.usage`）是**这一次运行**——本次 `runTask` 调用花掉的部分，
+  不含被 resume 的会话在此之前花掉的。
+- `sessionUsage`（以及 `report.sessionUsage`）是**整个会话**，包含 `resumeSessionId`
+  继承过来的那些运行。
+
+选定你要的那个窗口，然后用它**替换**你存的值；永远不要把快照加进一个累计总量里。
+唯一合法的求和，是对*不同运行*的运行窗口求和。预算检查要的是 `sessionUsage`：传了
+`resumeSessionId` 却拿运行窗口去比，等于每一轮都把整份预算重新发放一次。
+`sessionUsage >= usage` 恒成立，所以基于会话窗口的护栏只会在同一时刻或更早触发。
+
 Skills 和项目记忆会在运行期间从工作区的 `.seekforge/` 自动发现。若界面层还会组装插件
 MCP/hook/agent，应只加载一份 `PluginContributions` 快照并通过
 `deps.pluginContributions` 传入；core 会用同一快照加载技能。

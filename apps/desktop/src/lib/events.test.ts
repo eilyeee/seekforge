@@ -182,15 +182,17 @@ describe("reduceEvent", () => {
   });
 
   it("bills a resumed session's earlier turns once", () => {
-    // A report is the SESSION's cumulative usage: turn 2 of the same session
-    // already contains turn 1, so adding the reports would double-count it.
+    // Every event carries both windows: `usage` is this RUN, `sessionUsage`
+    // the whole session. Turn 2 of a resumed session already contains turn 1
+    // in its session window, so the footer replaces rather than adds.
     const secondReport = {
       ...report,
-      usage: { promptTokens: 250, completionTokens: 25, cacheHitTokens: 150, costUsd: 0.012 },
+      usage: { promptTokens: 150, completionTokens: 15, cacheHitTokens: 90, costUsd: 0.007 },
+      sessionUsage: { promptTokens: 250, completionTokens: 25, cacheHitTokens: 150, costUsd: 0.012 },
     };
     let s = play([
       { type: "session.created", sessionId: "s-1" },
-      { type: "session.completed", report },
+      { type: "session.completed", report: { ...report, sessionUsage: report.usage } },
     ]);
     s = play(
       [
@@ -199,52 +201,104 @@ describe("reduceEvent", () => {
       ],
       s,
     );
-    expect(s.usage).toEqual(secondReport.usage);
+    expect(s.usage).toEqual(secondReport.sessionUsage);
   });
 
-  it("advances the usage footer live, without double-counting the settled turn", () => {
-    // usage.updated carries the RUN's running total (it excludes what a resumed
-    // session already spent), so the live value replaces the in-flight part.
+  it("advances the usage footer live, on the session window", () => {
+    // The run window would drop everything the resumed session already spent,
+    // so the footer follows `sessionUsage` and replaces on every update.
     let s = play([
       { type: "session.created", sessionId: "s-1" },
-      { type: "session.completed", report },
+      { type: "session.completed", report: { ...report, sessionUsage: report.usage } },
     ]);
     s = play(
-      [{ type: "usage.updated", usage: { promptTokens: 40, completionTokens: 4, cacheHitTokens: 20, costUsd: 0.002 } }],
+      [
+        {
+          type: "usage.updated",
+          usage: { promptTokens: 40, completionTokens: 4, cacheHitTokens: 20, costUsd: 0.002 },
+          sessionUsage: { promptTokens: 140, completionTokens: 14, cacheHitTokens: 80, costUsd: 0.007 },
+        },
+      ],
       s,
     );
     expect(s.usage).toMatchObject({ promptTokens: 140, completionTokens: 14, cacheHitTokens: 80 });
     expect(s.usage.costUsd).toBeCloseTo(0.007, 10);
     // A second update of the same run is cumulative too — not an increment.
     s = play(
-      [{ type: "usage.updated", usage: { promptTokens: 90, completionTokens: 9, cacheHitTokens: 50, costUsd: 0.004 } }],
+      [
+        {
+          type: "usage.updated",
+          usage: { promptTokens: 90, completionTokens: 9, cacheHitTokens: 50, costUsd: 0.004 },
+          sessionUsage: { promptTokens: 190, completionTokens: 19, cacheHitTokens: 110, costUsd: 0.009 },
+        },
+      ],
       s,
     );
     expect(s.usage).toMatchObject({ promptTokens: 190, completionTokens: 19, cacheHitTokens: 110 });
     expect(s.usage.costUsd).toBeCloseTo(0.009, 10);
-    // …and the report that closes the run supersedes the live value.
+    // …and the report that closes the run agrees with the last live value.
     const finalReport = {
       ...report,
-      usage: { promptTokens: 200, completionTokens: 20, cacheHitTokens: 120, costUsd: 0.01 },
+      usage: { promptTokens: 100, completionTokens: 10, cacheHitTokens: 60, costUsd: 0.005 },
+      sessionUsage: { promptTokens: 200, completionTokens: 20, cacheHitTokens: 120, costUsd: 0.01 },
     };
     s = play([{ type: "session.completed", report: finalReport }], s);
-    expect(s.usage).toEqual(finalReport.usage);
+    expect(s.usage).toEqual(finalReport.sessionUsage);
   });
 
   it("keeps a failed run's spend in the footer", () => {
-    // The run was billed even though it failed; the next run's first cumulative
-    // update must not erase it.
+    // The run was billed even though it failed; the next run's first
+    // cumulative update must not erase it.
+    const spent = { promptTokens: 30, completionTokens: 3, cacheHitTokens: 10, costUsd: 0.001 };
     let s = play([
       { type: "session.created", sessionId: "s-1" },
-      { type: "usage.updated", usage: { promptTokens: 30, completionTokens: 3, cacheHitTokens: 10, costUsd: 0.001 } },
+      { type: "usage.updated", usage: spent, sessionUsage: spent },
       { type: "session.failed", error: { code: "network", message: "down" } },
     ]);
-    expect(s.usage).toEqual({ promptTokens: 30, completionTokens: 3, cacheHitTokens: 10, costUsd: 0.001 });
+    expect(s.usage).toEqual(spent);
     s = play(
-      [{ type: "usage.updated", usage: { promptTokens: 10, completionTokens: 1, cacheHitTokens: 5, costUsd: 0.001 } }],
+      [
+        {
+          type: "usage.updated",
+          usage: { promptTokens: 10, completionTokens: 1, cacheHitTokens: 5, costUsd: 0.001 },
+          sessionUsage: { promptTokens: 40, completionTokens: 4, cacheHitTokens: 15, costUsd: 0.002 },
+        },
+      ],
       s,
     );
     expect(s.usage).toMatchObject({ promptTokens: 40, completionTokens: 4, cacheHitTokens: 15 });
+  });
+
+  it("keeps a failed run's spend when a server sends no sessionUsage", () => {
+    // Without a session window on the wire the run window is all there is, so
+    // it must be added to where the session stood when the run began —
+    // otherwise a failed or cancelled run's spend vanishes from the footer.
+    let s = play([
+      { type: "session.created", sessionId: "s-1" },
+      { type: "session.completed", report },
+    ]);
+    s = play(
+      [
+        { type: "session.created", sessionId: "s-1" },
+        { type: "usage.updated", usage: { promptTokens: 30, completionTokens: 3, cacheHitTokens: 10, costUsd: 0.001 } },
+        { type: "session.failed", error: { code: "network", message: "down" } },
+      ],
+      s,
+    );
+    expect(s.usage).toMatchObject({ promptTokens: 130, completionTokens: 13, cacheHitTokens: 70 });
+  });
+
+  it("falls back to the run window when a server sends no sessionUsage", () => {
+    // Older servers emit only `usage`. Every run opens with session.created,
+    // which is where the base for that run's window comes from, so consecutive
+    // runs of one session still accumulate.
+    const s = play([
+      { type: "session.created", sessionId: "s-1" },
+      { type: "session.completed", report },
+      { type: "session.created", sessionId: "s-1" },
+      { type: "session.completed", report },
+    ]);
+    expect(s.usage).toMatchObject({ promptTokens: 200, completionTokens: 20, cacheHitTokens: 120 });
   });
 
   it("stores the latest context.usage on the state without adding a row", () => {

@@ -904,7 +904,7 @@ export const useStore = create<AppStore>()((set, get) => {
             // session slot, so the next report replaces it instead of stacking.
             usagePriorSessions: emptyUsage(),
             usageSession: meta.usage ?? emptyUsage(),
-            usageRun: emptyUsage(),
+            usageRunBase: meta.usage ?? emptyUsage(),
             contextUsage: null,
             retry: null,
             // messagesToItems assigns sequential ids starting at 1.

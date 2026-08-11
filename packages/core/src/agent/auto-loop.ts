@@ -11,7 +11,7 @@
 import type { AgentError, ApprovalMode, LoopVerificationDecision } from "@seekforge/shared";
 export type { LoopVerificationDecision } from "@seekforge/shared";
 import { randomUUID } from "node:crypto";
-import { resolve, sep } from "node:path";
+import { isRetainedWorktreeWorkspace } from "../worktree.js";
 import { ToolError } from "../tools/errors.js";
 import { runShellCommand } from "../tools/run-command.js";
 import {
@@ -49,6 +49,7 @@ import { loadSessionMessages, truncateSessionAtUserTurn } from "./trace.js";
 import { rewindSessionToTurn } from "./session-rewind.js";
 import { logSkillOutcome, selectedSkillIdsForSession } from "../skills/index.js";
 import { discoverLoopVerificationPlan } from "./loop-verification-plan.js";
+import { parseLoopVerificationPlan } from "./loop-options-contract.js";
 import {
   buildAcceptanceReviewPrompt,
   buildRequirementAnalysisPrompt,
@@ -69,8 +70,7 @@ import {
   selectLoopRecoveryStrategy,
 } from "./loop-recovery-policy.js";
 import { currentLoopBudgetReason, forecastLoopBudgetReason } from "./loop-budget-policy.js";
-import { isVerificationPathPrefix, selectLoopVerificationStage } from "./loop-verification-selection.js";
-import { isDenseArray } from "./orchestration.js";
+import { selectLoopVerificationStage } from "./loop-verification-selection.js";
 import { isValidLoopDagId } from "./loop-dag-validation.js";
 import { selectOrchestrationReadyNodes } from "./orchestration-scheduler.js";
 import { readLoopVerificationCache, recordLoopVerificationCache } from "./loop-verification-cache.js";
@@ -670,96 +670,16 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
   }
   const configuredPlan = opts.verificationPlan ?? opts.resumeState?.verificationPlan;
   if (configuredPlan !== undefined) {
-    if (!isDenseArray(configuredPlan) || configuredPlan.length === 0 || configuredPlan.length > 16) {
-      throw new RangeError("Loop verificationPlan must contain 1 to 16 stages");
-    }
-    const ids = new Set<string>();
-    for (const stage of configuredPlan) {
-      if (
-        !isRecord(stage) ||
-        typeof stage.id !== "string" ||
-        typeof stage.command !== "string" ||
-        !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(stage.id)
-      ) {
-        throw new Error("Loop verification stage must have a unique safe id and command");
-      }
-      if (ids.has(stage.id)) {
-        throw new Error(`Loop verification stage id must be unique and safe: ${stage.id}`);
-      }
-      ids.add(stage.id);
-      if (stage.command.trim() === "" || stage.command.length > 8_192) {
-        throw new Error(`Loop verification stage command is invalid: ${stage.id}`);
-      }
-      positiveSafeInteger(`verificationPlan.${stage.id}.timeoutMs`, stage.timeoutMs);
-      if (stage.paths !== undefined) {
-        if (!isDenseArray(stage.paths) || stage.paths.length === 0 || stage.paths.length > 64) {
-          throw new Error(`Loop verification stage paths are invalid: ${stage.id}`);
-        }
-        for (const path of stage.paths) {
-          if (!isVerificationPathPrefix(path)) {
-            throw new Error(`Loop verification stage path is invalid: ${stage.id}/${String(path)}`);
-          }
-        }
-      }
-      if (stage.dependencyPaths !== undefined) {
-        if (
-          !isDenseArray(stage.dependencyPaths) ||
-          stage.dependencyPaths.length === 0 ||
-          stage.dependencyPaths.length > 64 ||
-          stage.dependencyPaths.some((path) => !isVerificationPathPrefix(path)) ||
-          stage.dependencyPaths.some((path) => !stage.paths?.includes(path))
-        ) {
-          throw new Error(`Loop verification stage dependency paths are invalid: ${stage.id}`);
-        }
-      }
-      if (stage.cacheable !== undefined && typeof stage.cacheable !== "boolean") {
-        throw new Error(`Loop verification stage cacheable flag is invalid: ${stage.id}`);
-      }
-      if (
-        stage.dependsOn !== undefined &&
-        (!isDenseArray(stage.dependsOn) ||
-          stage.dependsOn.length === 0 ||
-          stage.dependsOn.length > 15 ||
-          new Set(stage.dependsOn).size !== stage.dependsOn.length ||
-          stage.dependsOn.some((id) => !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id)))
-      ) {
-        throw new Error(`Loop verification stage dependencies are invalid: ${stage.id}`);
-      }
-      if (stage.parallel !== undefined && typeof stage.parallel !== "boolean") {
-        throw new Error(`Loop verification stage parallel flag is invalid: ${stage.id}`);
-      }
-      if (
-        stage.resources !== undefined &&
-        (!isDenseArray(stage.resources) ||
-          stage.resources.length === 0 ||
-          stage.resources.length > 16 ||
-          new Set(stage.resources).size !== stage.resources.length ||
-          stage.resources.some((resource) => !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(resource)))
-      ) {
-        throw new Error(`Loop verification stage resources are invalid: ${stage.id}`);
-      }
-      if (stage.parallel === true && !stage.resources?.length) {
-        throw new Error(`Loop parallel verification stage requires resources: ${stage.id}`);
-      }
-    }
-    const known = new Set(configuredPlan.map((stage) => stage.id));
-    const remaining = new Map(configuredPlan.map((stage) => [stage.id, new Set(stage.dependsOn ?? [])]));
-    for (const stage of configuredPlan) {
-      if (stage.dependsOn?.some((id) => id === stage.id || !known.has(id))) {
-        throw new Error(`Loop verification stage has an unknown dependency: ${stage.id}`);
-      }
-    }
-    const ready = [...remaining].filter(([, dependencies]) => dependencies.size === 0).map(([id]) => id);
-    let visited = 0;
-    while (ready.length > 0) {
-      const id = ready.shift()!;
-      remaining.delete(id);
-      visited++;
-      for (const [candidate, dependencies] of remaining) {
-        if (dependencies.delete(id) && dependencies.size === 0) ready.push(candidate);
-      }
-    }
-    if (visited !== configuredPlan.length) throw new Error("Loop verificationPlan contains a dependency cycle");
+    // Pure: runs here, before the lifecycle lease, provider resolution and any
+    // persistence below. `loop-options-contract.ts` owns the rules; this API
+    // bounds a stage timeout only by "positive safe integer".
+    //
+    // A plan the caller hands us now is authored and checked strictly. One read
+    // back from resume state was written by a build whose rules we do not know,
+    // so it is repaired where it can be — rejecting it would strand a
+    // checkpoint that ran perfectly well under the version that wrote it.
+    const replayed = opts.verificationPlan === undefined;
+    parseLoopVerificationPlan(configuredPlan, { label: "Loop verificationPlan", ...(replayed ? { replayed } : {}) });
   }
   const requirementMode = opts.resumeState?.requirementMode ?? opts.requirementMode ?? "quick";
   if (!isLoopRequirementMode(requirementMode)) {
@@ -781,9 +701,9 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
     throw new Error("A resumed loop cannot change its code review policy");
   }
   if (opts.rollbackOnRegression ?? opts.resumeState?.rollbackOnRegression ?? false) {
-    const parts = resolve(opts.workspace).split(sep);
-    const isolated = parts.some((part, index) => part === ".seekforge" && parts[index + 1] === "worktrees");
-    if (!isolated) throw new Error("rollbackOnRegression requires a retained .seekforge/worktrees workspace");
+    if (!isRetainedWorktreeWorkspace(opts.workspace)) {
+      throw new Error("rollbackOnRegression requires a retained .seekforge/worktrees workspace");
+    }
   }
   if (opts.model !== undefined && (!opts.model.trim() || opts.model.length > 256)) {
     throw new Error("Loop model must be a non-empty bounded string");

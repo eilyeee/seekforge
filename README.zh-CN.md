@@ -86,16 +86,19 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge resolve <issue> --max-cost <usd>` | 在隔离 worktree 中修复一个 GitHub issue 并开草稿 PR；支持 `--wait-ci` 与 `--dry-run`——见 [GitHub 工作流](docs/github.zh-CN.md) |
 | `seekforge resolve-review <pr> --max-cost <usd>` | 处理 PR 评审中可执行的反馈，验证、提交并推送修复 |
 | `seekforge schedule add\|list\|run\|next\|history\|install\|uninstall\|status` | 管理定时任务、历史、重试与 crontab tick——见[定时任务](docs/scheduling.zh-CN.md) |
+| `seekforge loop "<任务>" --verify "<命令>"` | **工程循环**：反复迭代直到验证命令退出码为 0，每轮迭代后落一个持久化检查点；`--auto-verify` 从项目清单中发现并冻结一条验证流水线——见[循环工程](docs/loop-engineering.zh-CN.md) |
+| `seekforge loop-list\|loop-show\|loop-history\|loop-delete\|loop-prune\|loop-cleanup` | 查看持久化的 Loop 与保留的 Loop 工作树，把有界事件历史按 JSONL 回放，并清理已经用不上的记录 |
+| `seekforge loop-resume\|loop-pause\|loop-continue\|loop-steer\|loop-recover\|loop-priority\|loop-deliver` | 从另一个进程操控 Loop：续跑被中断的运行、在下一个安全边界暂停与恢复、排队下达指导、把孤儿运行重新标记为可恢复、投递已通过的结果 |
+| `seekforge loop-diagnose\|loop-health\|loop-intelligence\|loop-evidence` | 用保留的历史校验检查点、预测预算容量与验证器可靠性、审阅跨运行异常，并导出或校验需求/验证/交付证据 |
+| `seekforge loop-speculate\|loop-speculation-list\|loop-speculation-promote` | 并行跑 2–3 条相互隔离的候选修复策略，给通过的排序，并把胜出的工作树合并回当前分支 |
+| `seekforge loop-dag <文件>` / `seekforge loop-dag-resources` | **已弃用**——扁平的 Loop DAG 引擎仍然可以运行、仍然能恢复既有检查点，但新工作应当写在 `seekforge graph` 里；用 `seekforge loop-dag export-graph` 迁移，并见[弃用窗口](docs/loop-engineering.zh-CN.md#loop-dag-的弃用窗口) |
+| `seekforge orchestration report\|proposals\|policy\|index\|rollout\|controller\|maintain` | 查看并显式复核跨 Loop 与 Graph 的决策情报；`maintain` 会冻结控制器，`controller resume` 负责解冻 |
 | `seekforge graph validate\|run\|resume\|list\|show\|history\|delete` | 运行持久化的异构 Agent/Loop/函数/路由/审批门/子图工作流——见[图工程](docs/graph-engineering.zh-CN.md) |
 | `seekforge graph pause\|continue\|steer\|cancel-node\|reprioritize\|signal` | 从另一个进程控制运行中的 Graph：安全边界处暂停/恢复、下达指导、取消或重排尚未开始的节点、投递已声明的外部信号 |
 | `seekforge graph evidence\|compare\|template` | 导出防篡改的 Graph 证据报告、与已归档运行做对比、管理带版本的模板注册表（`template list\|show\|register\|compare\|deprecate`） |
 | `seekforge sandbox-run "<task>"` | 通过 Docker runner 契约执行任务——见[远程执行](docs/remote.zh-CN.md) |
 | `seekforge remote-run "<task>" --host <user@host> --workspace <path>` | 通过 ssh 在你自己的机器上执行同一个任务；该主机使用它自己的 API key——见[远程执行](docs/remote.zh-CN.md) |
 | `seekforge evolve analyze\|list\|show\|accept\|reject\|apply` | 会话打分与自我进化提案审阅（人工把关） |
-
-VS Code 用户可以使用 [`apps/vscode`](apps/vscode/README.md) 中的轻量本地扩展。
-它复用 `seekforge serve`，支持任务、会话续接、权限提示、问题回答、diff 查看与
-当前文件上下文。
 | `seekforge security scan\|list\|show\|status\|fix\|verify\|threat-model\|export` | 深度仓库安全审查、Finding 队列/生命周期、经验证的修复、威胁建模、JSON/Markdown/SARIF 证据导出——见[安全扫描](docs/security-scanning.zh-CN.md) |
 | `seekforge init` | 脚手架生成 `.seekforge/` 与 `AGENTS.md` 模板 |
 | `seekforge mcp add\|list\|remove <name>` | 管理配置中的 MCP server（列出、添加 stdio server、移除）——见 [docs/mcp.zh-CN.md](docs/mcp.zh-CN.md) |
@@ -103,13 +106,17 @@ VS Code 用户可以使用 [`apps/vscode`](apps/vscode/README.md) 中的轻量�
 | `seekforge mcp-serve [--allow-write]` | 把 SeekForge 作为 MCP server 跑在 stdio 上（默认只读工具集）；`--allow-write` 暴露写工具（仅限受信调用方） |
 | `seekforge skill list\|show\|create\|enable\|disable <id>` | 流程技能（项目 > 全局 > 内置）；enable/disable 开关技能 |
 | `seekforge skill import <path> [-g] [-f]` | 导入 Claude 风格的 SKILL.md（YAML frontmatter）为项目或全局技能 |
-| `seekforge plugin list\|create\|install\|update\|enable\|disable\|remove` | 管理一等扩展包；安装后保持禁用，直到用户批准其精确内容摘要——见 [docs/plugins.zh-CN.md](docs/plugins.zh-CN.md) |
+| `seekforge plugin list\|create\|install\|update\|rollback\|supply-chain\|enable\|disable\|remove` | 管理一等扩展包；安装后保持禁用，直到用户批准其精确内容摘要；`rollback` 恢复上一版本，`supply-chain` 报告完整性与可回滚性——见 [docs/plugins.zh-CN.md](docs/plugins.zh-CN.md) |
 | `seekforge agent list\|show <id>\|import <path>` | 管理子代理；主 agent 通过 `dispatch_agent` 委派有边界的子任务 |
 | `seekforge memory list\|approve <id>\|reject <id>` | 审阅提取的事实进入长期项目记忆 |
 | `seekforge memory compact [--dry-run] [--prune-unused <days>]` | 合并 project.md 中的重复/近重复事实（确定性）；`--prune-unused` 需要非负整数，把超过 `<days>` 天未使用的事实归档到 `project-archive.md` |
 | `seekforge memory keywords [--dry-run] [--limit <n>]` | 给还没有检索关键词的事实补上中英双语关键词，让一种语言问出的问题能命中另一种语言写下的答案；这是 memory 组里唯一会调用模型的命令（`--dry-run` 只统计数量） |
 | `seekforge memory stats` | 打印记忆提取质量统计——已批准/待定/已拒绝数量、使用率、拒绝率（只读）；调整 `memoryAutoApproveConfidence` 前先看这个 |
 | `seekforge config show\|set <key> <value> [-g]` | `set` 接受：`apiKey`、`model`、`baseUrl`、`provider`、`runtimeBin`、`commandAllowlist`、`sandbox`、`thinking` / `reasoningEffort`、`compaction`。Server/Desktop 还可管理模型选择列表 `models`。结构化键（`permissionRules`、`hooks`、`mcpServers`、`planModel`）**直接编辑 `.seekforge/config.json`**——不经 CLI `config set`。配置层级：环境变量 > CLI flag > [`--settings <file>`](docs/cli-reference.zh-CN.md#settings-layering) > 个人 `.seekforge/config.local.json` > 项目 `.seekforge/config.json` > 全局 `~/.seekforge/config.json`。完整参考：[docs/configuration.zh-CN.md](docs/configuration.zh-CN.md) |
+
+VS Code 用户可以使用 [`apps/vscode`](apps/vscode/README.md) 中的轻量本地扩展。
+它复用 `seekforge serve`，支持任务、会话续接、权限提示、问题回答、diff 查看与
+当前文件上下文。
 
 无头单次运行 `seekforge -p "<prompt>"` 接受与 `seekforge run` 相同的 flag，
 外加 `--ask`、`--input-format`（text | stream-json），

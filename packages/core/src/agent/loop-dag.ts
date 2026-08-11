@@ -1,3 +1,28 @@
+/**
+ * The Loop DAG engine: a persistent orchestrator whose every node is a full
+ * run→verify Loop.
+ *
+ * @deprecated Superseded by the Engineering Graph (`agent/graph-*.ts`,
+ * `seekforge graph run`). A Graph `loop` node is no longer a weaker Loop —
+ * `loopOptions`, `verifierId`, dependency-output injection, `outputPaths`,
+ * `budgetWeight`, `predictiveBudget`, and a per-node `failurePolicy` all exist
+ * there — which closed the last precondition for retiring this engine.
+ *
+ * Convert a DAG definition with the deterministic transformer in
+ * `agent/loop-dag-to-graph.ts` (`engineeringGraphFromLoopDag`, exposed as
+ * `seekforge loop-dag export-graph <file> -o graph.json`), then run the result
+ * with `seekforge graph run graph.json`. The transformer refuses to emit a
+ * graph it cannot make behave identically rather than dropping fields; the
+ * differences that do survive are listed in `docs/loop-engineering.md`
+ * ("Loop DAG deprecation window").
+ *
+ * This module is in a deprecation window, not removed. It takes correctness
+ * and security fixes only and gains no new fields, `runLoopDag` behavior is
+ * frozen, and every existing `.seekforge/loop-dags/` checkpoint must keep
+ * resuming until the next major release removes the engine. Do not change
+ * checkpoint compatibility here.
+ */
+
 import { createHash } from "node:crypto";
 import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";

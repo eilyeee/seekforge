@@ -19,10 +19,19 @@ const read = (...parts) => readFileSync(join(root, ...parts), "utf8");
 
 /** Top-level CLI commands, i.e. `program.command("name")` anywhere in the CLI. */
 function cliCommands() {
-  const dir = join(root, "apps", "cli", "src", "commands");
-  const sources = [read("apps", "cli", "src", "index.ts")];
-  for (const name of readdirSync(dir)) {
-    if (name.endsWith(".ts") && !name.includes(".test.")) sources.push(readFileSync(join(dir, name), "utf8"));
+  // Both directories. `register-graph.ts`, `register-loop.ts` and
+  // `register-orchestration.ts` live one level above `commands/`, so scanning
+  // only `commands/` exempted `graph`, `orchestration`, `loop` and the 22 flat
+  // `loop-*` commands from a check whose name promises every top-level command
+  // — the third time this gate has been narrower than it reads.
+  const sources = [];
+  for (const dir of [
+    ["apps", "cli", "src"],
+    ["apps", "cli", "src", "commands"],
+  ]) {
+    for (const name of readdirSync(join(root, ...dir))) {
+      if (name.endsWith(".ts") && !name.includes(".test.")) sources.push(read(...dir, name));
+    }
   }
   const names = new Set();
   for (const source of sources) {
@@ -43,6 +52,37 @@ test("every top-level CLI command appears in both README command tables", () => 
       assert.ok(
         new RegExp(`\`seekforge [^\`]*\\b${command}\\b`).test(source),
         `${label} has no row for \`seekforge ${command}\` — document it or the command is undiscoverable`,
+      );
+    }
+  }
+});
+
+/**
+ * The check above greps raw Markdown, so it stays green even when the rows it
+ * finds render as literal pipe-text. A blank line ends a GFM table: a paragraph
+ * spliced into the middle of the command table silently demotes every row below
+ * it, which is how a VS Code note left 14 commands — `security`, `mcp`, `skill`,
+ * `plugin`, `memory`, `config` among them — rendering as raw text on GitHub and
+ * npm while this gate reported no drift.
+ */
+test("each README command table is one uninterrupted table", () => {
+  for (const [file, label] of [
+    ["README.md", "English README"],
+    ["README.zh-CN.md", "Chinese README"],
+  ]) {
+    const lines = read(file).split("\n");
+    let first = lines.findIndex((line) => line.startsWith("| `seekforge"));
+    assert.ok(first > 0, `${label} has no command table`);
+    // Walk back over the header and delimiter rows: a paragraph spliced above
+    // the first command row breaks the table just as completely as one below.
+    while (first > 0 && lines[first - 1].startsWith("|")) first -= 1;
+    let last = first;
+    for (let i = first; i < lines.length; i += 1) if (lines[i].startsWith("| `seekforge")) last = i;
+    for (let i = first; i <= last; i += 1) {
+      assert.ok(
+        lines[i].startsWith("|"),
+        `${label} line ${i + 1} interrupts the command table — ` +
+          `every row after it renders as literal text, not a table:\n  ${lines[i]}`,
       );
     }
   }

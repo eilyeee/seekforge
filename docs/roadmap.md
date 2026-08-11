@@ -21,7 +21,7 @@ not a promise of API stability.
 | --- | --- | --- |
 | Core agent loop, CLI, TUI, session traces, permissions | Production-ready foundation | Continue boundary regression testing and real-project dogfooding. |
 | Autonomous Loop and Graph engineering | Implemented, maturing | Safe-boundary adaptive scheduling, desktop authoring/simulation, gray-release controls, operational diagnostics, versioned decision evidence, burn-rate freeze control, renewable executor fencing, and signed CAS provenance ship. Durable control, external signals, evidence, run comparison, and the template registry now reach the CLI and the TUI, not only REST; the deterministic handler catalogue covers definition-only workflows. Next: close the Graph `loop`-node gap below, then expand real-provider and real-project coverage. |
-| Loop DAG → Engineering Graph convergence | Migration path shipped, engines not merged | `seekforge loop-dag export-graph` converts a DAG deterministically and refuses any definition it cannot make behave identically. The Loop DAG contract is frozen: new orchestration capability lands in the Graph. The `loop`-node gap that blocked merging is closed: `loopOptions`, `verifierId`, dependency-output injection, `outputPaths`, `budgetWeight`, `predictiveBudget` and per-node failure policy all exist on the Graph now. What remains is retirement itself — a deprecation window for `.seekforge/loop-dags/` checkpoints, then removing the engine. |
+| Loop DAG → Engineering Graph convergence | Deprecation window open, engines not merged | `seekforge loop-dag export-graph` converts a DAG deterministically and refuses any definition it cannot make behave identically. The Loop DAG contract is frozen: new orchestration capability lands in the Graph. The `loop`-node gap that blocked merging is closed: `loopOptions`, `verifierId`, dependency-output injection, `outputPaths`, `budgetWeight`, `predictiveBudget` and per-node failure policy all exist on the Graph now. Phase 1 has shipped: `loop-dag` and `loop-dag-resources` announce the deprecation window on stderr and everything keeps working, including resume. Phase 2 removes `loop-dag`, `loop-dag-resources`, `export-graph` and `packages/core/src/agent/loop-dag.ts` in the next major release — not the rest of the flat `loop-*` family, which manages single Loops and outlives the DAG. Two things gate Phase 2: `.seekforge/loop-dags/` checkpoints in the field must no longer be expected to resume, and `loop-speculate` must be ported off `runLoopDag` onto a Graph fan-out of Loop nodes with a shared weighted budget — it is the last non-DAG caller of the engine. |
 | Desktop and local web workbench | Implemented, maturing | Native macOS, Linux, and Windows package builds ship; updater/platform signing and clean-install smoke tests still require release credentials. |
 | DeepSeek provider and cost accounting | Production-ready foundation | Main, compaction, and memory-extraction calls share accounting; preserve provider-specific token/cache semantics. |
 | Provider presets / OpenAI-compatible endpoints | Implemented, maturing | Add compatibility fixtures per provider; do not claim identical tool/thinking behavior. |
@@ -43,9 +43,9 @@ not a promise of API stability.
 2. Expand real-project lifecycle eval fixtures and preserve enough CI trend
    history to detect slow cost/quality drift across releases; the baseline is
    current as of 2026-08-10 (68 tasks, three samples, 203/204).
-3. Retire the Loop DAG: its capability gap against the Graph is closed, so what
-   is left is a deprecation window for existing checkpoints and removing the
-   engine. Then expand real-provider coverage for the Loop/Graph control plane;
+3. Finish retiring the Loop DAG: the capability gap is closed and the
+   deprecation window is open. What is left is porting `loop-speculate` off the
+   DAG engine and deleting it once field checkpoints need not resume. Then expand real-provider coverage for the Loop/Graph control plane;
    the wire dialects of OpenAI-compatible endpoints are normalized and
    fixture-pinned.
 4. Improve provider compatibility fixtures while keeping DeepSeek-specific cost

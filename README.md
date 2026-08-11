@@ -89,16 +89,19 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge resolve <issue> --max-cost <usd>` | fix a GitHub issue in an isolated worktree and open a draft PR; supports `--wait-ci` and `--dry-run` — see [GitHub workflow](docs/github.md) |
 | `seekforge resolve-review <pr> --max-cost <usd>` | address actionable PR review feedback, verify, commit, and push fixes |
 | `seekforge schedule add\|list\|run\|next\|history\|install\|uninstall\|status` | manage scheduled jobs, history, retries, and the crontab tick — see [Scheduling](docs/scheduling.md) |
+| `seekforge loop "<task>" --verify "<cmd>"` | **engineering loop**: iterate until the verify command exits 0, with a durable checkpoint after every iteration; `--auto-verify` freezes a pipeline discovered from the project's manifests — see [Loop Engineering](docs/loop-engineering.md) |
+| `seekforge loop-list\|loop-show\|loop-history\|loop-delete\|loop-prune\|loop-cleanup` | inspect persisted Loops and retained Loop worktrees, replay their bounded event history as JSONL, and retire the ones you are done with |
+| `seekforge loop-resume\|loop-pause\|loop-continue\|loop-steer\|loop-recover\|loop-priority\|loop-deliver` | drive a Loop from another process: continue an interrupted run, pause and resume at the next safe boundary, queue guidance, re-arm orphaned runs for recovery, and deliver a passed result |
+| `seekforge loop-diagnose\|loop-health\|loop-intelligence\|loop-evidence` | check a checkpoint against its retained history, forecast budget and verifier reliability, review cross-run anomalies, and export or verify requirement/verification/delivery evidence |
+| `seekforge loop-speculate\|loop-speculation-list\|loop-speculation-promote` | run 2–3 isolated candidate repair strategies, rank the ones that pass, and merge the winning worktree into the current branch |
+| `seekforge loop-dag <file>` / `seekforge loop-dag-resources` | **deprecated** — the flat Loop DAG engine still runs and still resumes existing checkpoints, but new work belongs in `seekforge graph`; migrate with `seekforge loop-dag export-graph` and see the [deprecation window](docs/loop-engineering.md#loop-dag-deprecation-window) |
+| `seekforge orchestration report\|proposals\|policy\|index\|rollout\|controller\|maintain` | inspect and explicitly review cross-Loop and Graph decision intelligence; `maintain` freezes the controller and `controller resume` releases it |
 | `seekforge graph validate\|run\|resume\|list\|show\|history\|delete` | run durable heterogeneous Agent/Loop/function/router/gate/subgraph workflows — see [Graph Engineering](docs/graph-engineering.md) |
 | `seekforge graph pause\|continue\|steer\|cancel-node\|reprioritize\|signal` | control a live Graph from another process: safe-boundary pause/resume, guidance, pending-node cancel/reorder, and declared external signals |
 | `seekforge graph evidence\|compare\|template` | export a tamper-evident Graph report, diff the current run against an archived one, or manage the versioned template registry (`template list\|show\|register\|compare\|deprecate`) |
 | `seekforge sandbox-run "<task>"` | run a task through the Docker runner contract — see [Remote execution](docs/remote.md) |
 | `seekforge remote-run "<task>" --host <user@host> --workspace <path>` | run the same task on a machine you own over ssh; that host uses its own API key — see [Remote execution](docs/remote.md) |
 | `seekforge evolve analyze\|list\|show\|accept\|reject\|apply` | score sessions and review self-evolution proposals (human-gated) |
-
-VS Code users can run the thin local extension in
-[`apps/vscode`](apps/vscode/README.md). It reuses `seekforge serve` for tasks,
-session resume, permission prompts, questions, diff viewing, and active-file context.
 | `seekforge security scan\|list\|show\|status\|fix\|verify\|threat-model\|export` | deep repository security review, Finding queue/lifecycle, verified remediation, threat modeling, and JSON/Markdown/SARIF evidence export — see [Security scanning](docs/security-scanning.md) |
 | `seekforge init` | scaffold `.seekforge/` and an `AGENTS.md` template |
 | `seekforge mcp add\|list\|remove <name>` | manage MCP servers in config (list, add a stdio server, or remove) — see [docs/mcp.md](docs/mcp.md) |
@@ -106,13 +109,17 @@ session resume, permission prompts, questions, diff viewing, and active-file con
 | `seekforge mcp-serve [--allow-write]` | run SeekForge as an MCP server on stdio (read-only tool set by default); `--allow-write` exposes write tools (TRUSTED callers only) |
 | `seekforge skill list\|show\|create\|enable\|disable <id>` | procedure skills (project > global > builtin); enable/disable toggles a skill |
 | `seekforge skill import <path> [-g] [-f]` | import a Claude-style SKILL.md (YAML frontmatter) as a project or global skill |
-| `seekforge plugin list\|create\|install\|update\|enable\|disable\|remove` | manage first-class extension bundles; installs stay disabled until their exact digest is approved — see [docs/plugins.md](docs/plugins.md) |
+| `seekforge plugin list\|create\|install\|update\|rollback\|supply-chain\|enable\|disable\|remove` | manage first-class extension bundles; installs stay disabled until their exact digest is approved, `rollback` restores the previous version and `supply-chain` reports integrity and rollback availability — see [docs/plugins.md](docs/plugins.md) |
 | `seekforge agent list\|show <id>\|import <path>` | manage subagents; the main agent delegates bounded sub-tasks via `dispatch_agent` |
 | `seekforge memory list\|approve <id>\|reject <id>` | review extracted facts into long-term project memory |
 | `seekforge memory compact [--dry-run] [--prune-unused <days>]` | collapse duplicate and near-duplicate facts in project.md (deterministic); `--prune-unused` requires a non-negative integer and archives never-used facts older than `<days>` to `project-archive.md` |
 | `seekforge memory keywords [--dry-run] [--limit <n>]` | give bilingual retrieval keywords to facts that have none, so a question asked in one language reaches an answer written in the other; the only memory command that calls the model (`--dry-run` just counts) |
 | `seekforge memory stats` | print memory extraction-quality stats — approved/pending/rejected counts, used fraction, rejection rate (read-only); inspect this before tuning `memoryAutoApproveConfidence` |
 | `seekforge config show\|set <key> <value> [-g]` | `set` accepts: `apiKey`, `model`, `baseUrl`, `provider`, `runtimeBin`, `commandAllowlist`, `sandbox`, `thinking` / `reasoningEffort`, `compaction`. Server/Desktop also manage the selectable `models` list. Structured keys (`permissionRules`, `hooks`, `mcpServers`, `planModel`) are **edited directly in `.seekforge/config.json`** — not via CLI `config set`. Config layers: env vars > CLI flags > [`--settings <file>`](docs/cli-reference.md#settings-layering) > personal `.seekforge/config.local.json` > project `.seekforge/config.json` > global `~/.seekforge/config.json`. Full reference: [docs/configuration.md](docs/configuration.md) |
+
+VS Code users can run the thin local extension in
+[`apps/vscode`](apps/vscode/README.md). It reuses `seekforge serve` for tasks,
+session resume, permission prompts, questions, diff viewing, and active-file context.
 
 Headless single-run via `seekforge -p "<prompt>"` accepts the same flags as
 `seekforge run` plus `--ask`, `--input-format` (text | stream-json),

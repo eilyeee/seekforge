@@ -143,7 +143,8 @@ async function runTask(context, output, statusBar, options = {}) {
                 return;
               }
               if (event.type === "usage.updated") {
-                statusBar.reportUsage(event.usage);
+                // Session window, not the run: turns 2+ resume the session.
+                statusBar.reportUsage(event.sessionUsage ?? event.usage);
                 return;
               }
               if (event.type === "step.started") {
@@ -152,7 +153,8 @@ async function runTask(context, output, statusBar, options = {}) {
               }
               const line = formatAgentEvent(event);
               if (line !== null) output.appendLine(line);
-              if (event.type === "session.completed") statusBar.reportUsage(event.report?.usage);
+              if (event.type === "session.completed")
+                statusBar.reportUsage(event.report?.sessionUsage ?? event.report?.usage);
             },
             { signal: controller.signal },
           )

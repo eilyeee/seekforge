@@ -3,8 +3,10 @@ import {
   digestPluginDirectory,
   installPlugin,
   listPlugins,
+  pluginSupplyChainReport,
   readPluginManifest,
   removePlugin,
+  rollbackPlugin,
   setPluginEnabled,
 } from "@seekforge/core";
 
@@ -61,6 +63,46 @@ export function pluginInstallCommand(path: string, force: boolean): void {
     const result = installPlugin(path, { force });
     console.log(`${result.updated ? "updated" : "installed"} plugin ${result.manifest.id}@${result.manifest.version}`);
     console.log(`disabled until reviewed; run: seekforge plugin enable ${result.manifest.id}`);
+  } catch (error) {
+    fail(error);
+  }
+}
+
+export function pluginRollbackCommand(id: string): void {
+  try {
+    const result = rollbackPlugin(id);
+    console.log(`rolled back plugin ${result.manifest.id} to ${result.manifest.version}`);
+    console.log(`disabled until reviewed; run: seekforge plugin enable ${result.manifest.id}`);
+  } catch (error) {
+    fail(error);
+  }
+}
+
+export function pluginSupplyChainCommand(json = false): void {
+  try {
+    const report = pluginSupplyChainReport(process.cwd());
+    if (json) {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+    if (report.entries.length === 0) {
+      console.log("no plugins found");
+      return;
+    }
+    for (const entry of report.entries) {
+      console.log(
+        [
+          entry.id,
+          entry.version ?? "-",
+          entry.scope,
+          entry.status,
+          entry.integrity,
+          entry.rollbackAvailable ? "rollback" : "no-rollback",
+          entry.compatibility.compatible ? "compatible" : "incompatible",
+          entry.capabilities.join(",") || "-",
+        ].join("\t"),
+      );
+    }
   } catch (error) {
     fail(error);
   }

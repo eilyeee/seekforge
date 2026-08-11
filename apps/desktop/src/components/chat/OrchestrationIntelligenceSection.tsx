@@ -7,7 +7,10 @@ import { Badge, Button } from "../ui";
 export function OrchestrationIntelligenceSection(props: {
   report?: WorkspaceOrchestrationReport;
   busy: boolean;
+  /** Read-only reload of the persisted report. */
   onRefresh: () => void;
+  /** Explicit maintenance tick: records proposals, reconciles rollouts, re-evaluates the controller. */
+  onMaintain: () => void;
   onProposalReview: (proposal: OrchestrationProposal, status: "approve" | "dismiss") => void;
   onProposalApply: (proposal: OrchestrationProposal) => void;
   onProposalRollback: (proposal: OrchestrationProposal) => void;
@@ -26,9 +29,14 @@ export function OrchestrationIntelligenceSection(props: {
     <section className="mt-3 rounded border border-subtle p-2 text-xs text-secondary">
       <div className="flex items-center justify-between gap-2">
         <p className="font-medium">{t("chat.loop.orchestration.title")}</p>
-        <Button size="sm" variant="ghost" disabled={props.busy} onClick={props.onRefresh}>
-          {t("chat.loop.orchestration.refresh")}
-        </Button>
+        <div className="flex flex-wrap items-center gap-1">
+          <Button size="sm" variant="ghost" disabled={props.busy} onClick={props.onRefresh}>
+            {t("chat.loop.manager.refresh")}
+          </Button>
+          <Button size="sm" variant="ghost" disabled={props.busy} onClick={props.onMaintain}>
+            {t("chat.loop.orchestration.refresh")}
+          </Button>
+        </div>
       </div>
       {!report ? (
         <p className="mt-1 text-tertiary">{t("chat.loop.orchestration.empty")}</p>
@@ -55,6 +63,30 @@ export function OrchestrationIntelligenceSection(props: {
             {(report.sloSummary.breachRate * 100).toFixed(1)}%
             {` · ${report.sloSummary.evaluations} ${t("chat.loop.orchestration.evaluations")}`}
           </p>
+          {report.policyState && (
+            <p className="mt-1 break-words text-tertiary">
+              {t("chat.loop.orchestration.policy")}:{" "}
+              {[
+                report.policyState.policy.maxP95DurationMs === undefined
+                  ? undefined
+                  : `P95 ≤ ${report.policyState.policy.maxP95DurationMs}ms`,
+                report.policyState.policy.maxCostUsd === undefined
+                  ? undefined
+                  : `≤ ${formatCostUsd(report.policyState.policy.maxCostUsd)}`,
+                report.policyState.policy.maxFailureRate === undefined
+                  ? undefined
+                  : `fail ≤ ${(report.policyState.policy.maxFailureRate * 100).toFixed(1)}%`,
+                report.policyState.policy.minForecastCoverage === undefined
+                  ? undefined
+                  : `coverage ≥ ${(report.policyState.policy.minForecastCoverage * 100).toFixed(1)}%`,
+                `window ${report.policyState.evaluationWindow}`,
+                `breach ≤ ${(report.policyState.maxBreachRate * 100).toFixed(1)}%`,
+                report.policyState.updatedAt,
+              ]
+                .filter((item): item is string => item !== undefined)
+                .join(" · ")}
+            </p>
+          )}
           <p className="mt-1 text-tertiary">
             {t("chat.loop.orchestration.controller")}: {report.controller.mode} · {report.controller.reason}
             {` · ${report.decisions.length} ${t("chat.loop.orchestration.decisions")}`}

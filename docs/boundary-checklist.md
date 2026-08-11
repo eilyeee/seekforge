@@ -4764,3 +4764,93 @@ rather than fixed.
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the
 file — not just the one-off.*
+
+## 421. A second implementation of an invariant is a defect waiting for its inputs to diverge
+
+The repository's rule is one owner per non-trivial invariant, and the rule is not
+the problem — it is written in AGENTS.md and it is still what gets skipped, by
+people and by agents alike, because writing the second copy is always the shorter
+path at the moment you need it. One sweep of this repository turned up seven, and
+two of them had already produced wrong behaviour rather than merely redundant
+code:
+
+- Two orchestration engines (`loop-dag` and the Engineering Graph) with
+  overlapping node semantics.
+- `LoopPhase` declared in Core and in `@seekforge/shared`; the copies had already
+  diverged, and the shared one could not describe `"review"` — a value the REST
+  list returns verbatim.
+- Two runner seams (`AgentRunner`, `GraphExecutionAdapter`) for the same two
+  backends; the older one had zero consumers and a comment claiming otherwise.
+- Usage accumulation re-derived per surface. **Both copies were wrong**, and one
+  drove a cost budget — see #422, where the round that "fixed" this turned the
+  double-count into an undercount and let runs go past the configured cap.
+- The `.seekforge/worktrees` shape test inlined in Core and mirrored in the TUI.
+- Loop-event history formatting written once for Desktop and once for VS Code.
+- Verification-plan bounds checked in `graph-contract.ts` and again in
+  `auto-loop.ts`.
+
+The failure mode is not the duplication itself. It is that the two copies answer
+the same question until one of them is updated, and nothing then reports that the
+other still gives the old answer — no type error, no failing test, because each
+copy is internally consistent.
+
+- **Do:** before writing a parser, validator, formatter, predicate, DTO, or
+  identifier rule, search for the question it answers, not for the name you were
+  about to give it. `LoopPhase` was not found by grepping `LoopPhase`; it was
+  found by asking which phases a Loop persists.
+- **Do:** when the same question genuinely must be answered in two places
+  (validation before a lease and again inside it, say), extract the pure part and
+  let both call it, rather than copying the body.
+- **Do not** merge two things that merely look alike. `isRetainedLoopWorktree`
+  asks whether a path belongs to *this base's* worktrees; the Core predicate asks
+  whether a path has the worktree *shape*. Same regex, different questions,
+  correctly separate.
+- **Caught:** all seven above. The two gates in `scripts/` cannot see this class —
+  both copies are live and reachable, and the defect is that they disagree.
+
+## 422. Two cumulative counters over different windows, only one on the wire
+
+Core tracked usage over two windows: the current **run**, and the whole
+**session** including the runs a resume inherited. Only the run window was ever
+emitted — `usage.updated.usage` and `FinalReport.usage` are both the run — while
+the session window existed solely inside `writeSessionMeta`, reachable only by
+reading the trace off disk. Every consumer that wanted "what has this session
+cost" therefore reconstructed it, and they did not agree.
+
+Three of them were wrong at once, and a fourth was wrong in the other direction:
+
+- `apps/cli/src/commands/run.ts` compared `--max-cost` (and the scheduled-job
+  token ceiling) against the run window, so `--input-format stream-json` handed
+  out the whole budget again on every turn, `plan → execute` handed it out twice, and
+  `--resume` ignored everything the session had already spent.
+- `packages/eval-harness/src/task-runner.ts` carried the comment *"Core reports
+  cumulative session usage on resume"* — it does not — so resumed scenario steps
+  dropped every earlier step's cost from the metrics.
+- The TUI and Desktop reducers had been "fixed" a round earlier on the same false
+  premise: they replaced the session total with the run total, converting a
+  visible double-count into a silent **undercount**, and the TUI's feeds
+  `costBudgetUsd`. The loose direction is the dangerous one; the double-count
+  announced itself, the undercount did not.
+
+The fix is not to pick a window. Both are legitimately wanted — per-iteration
+cost is the run, a budget is the session — and flipping the emitted one would
+have broken `auto-loop.ts`, which does `costUsd += runCost` across iterations
+that resume each other. Core now publishes **both**, named after their windows,
+computed in one place (`usageWindows()`), so no consumer has to reconstruct
+either.
+
+- **Do:** when a value is cumulative, put the window in the name. `usage` versus
+  `sessionUsage` beats a doc comment, because the doc comment is not present at
+  the call site where someone writes `+=`.
+- **Do:** ship every window a consumer needs. A window that exists only on disk
+  will be re-derived, and the derivations will disagree.
+- **Do:** when a counter feeds a budget, write the test in the loose direction —
+  "this must never report less than X". A test that only pins the exact number
+  passes just as happily on an undercount.
+- **Do not** trust a comment that names a window; measure it. Both wrong fixes
+  cited a comment. One probe run — start a session, resume it, print what each
+  channel reports — settled it in a minute.
+- **Caught:** by an agent told to root-cause an asymmetry, which found the
+  premise of its own brief was false. Neither `scripts/` gate can see this class:
+  every value is a real number of the right type, and they simply mean different
+  things.

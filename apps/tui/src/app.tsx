@@ -53,6 +53,7 @@ import {
   loadEngineeringGraphState,
   isWorktreeDirty,
   isValidLoopId,
+  isRetainedWorktreeWorkspace,
   createWorktree,
   worktreeBranchExists,
   removeWorktree,
@@ -91,13 +92,7 @@ import {
   type SlashCommand,
 } from "./commands.js";
 import { argCandidates, type ArgContext } from "./arg-values.js";
-import {
-  isRetainedWorktreeWorkspace,
-  parseWorktreeCommand,
-  pickFreeSlug,
-  resolveWorktreeTarget,
-  seekforgeWorktrees,
-} from "./worktree-cmd.js";
+import { parseWorktreeCommand, pickFreeSlug, resolveWorktreeTarget, seekforgeWorktrees } from "./worktree-cmd.js";
 import { bumpUsage, didYouMean, rankCommands, type CommandUsage } from "./command-rank.js";
 import { helpRows, selectableIndices } from "./command-meta.js";
 import {

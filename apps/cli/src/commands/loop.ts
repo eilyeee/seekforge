@@ -582,11 +582,29 @@ export async function loopEvidenceCommand(
   }
 }
 
+/**
+ * Loop DAG deprecation-window notice.
+ *
+ * Written to STDERR only, and deliberately without touching `process.exitCode`:
+ * `loop-dag` streams a per-node status table on stdout and `loop-dag-resources`
+ * prints a JSON document there, so both streams stay byte-identical to what a
+ * consumer parsed before the notice existed. Callers invoke it first and then
+ * proceed unchanged — this is an announcement, never a gate.
+ */
+export function warnLoopDagDeprecated(): void {
+  process.stderr.write(
+    `${dim(t("cmd.loopDag.deprecated"))}\n` +
+      `${dim(t("cmd.loopDag.deprecatedCheckpoints"))}\n` +
+      `${dim(t("cmd.loopDag.deprecatedMigrate"))}\n`,
+  );
+}
+
 export async function loopDagResourcesCommand(
   dagId: string,
   operation: "inspect" | "archive" | "prune" | "promote",
   opts: { dryRun?: boolean; force?: boolean; target?: string } = {},
 ): Promise<void> {
+  warnLoopDagDeprecated();
   try {
     const workspace = process.cwd();
     const result =
@@ -954,6 +972,7 @@ export async function loopDagCommand(
     rerun?: string[];
   },
 ): Promise<void> {
+  warnLoopDagDeprecated();
   const workspace = process.cwd();
   const raw = readFileIfExists(resolve(workspace, file), 512 * 1024);
   if (raw === undefined) {

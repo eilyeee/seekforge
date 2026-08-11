@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { GitWorktreeEntry } from "@seekforge/core";
+import { isRetainedWorktreeWorkspace, type GitWorktreeEntry } from "@seekforge/core";
 import {
-  isRetainedWorktreeWorkspace,
   parseWorktreeCommand,
   pickFreeSlug,
   resolveWorktreeTarget,
