@@ -1,6 +1,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { createSessionTrace, readSessionMeta, writeSessionMeta } from "@seekforge/core";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type WebSocket from "ws";
 import * as config from "../src/config.js";
@@ -608,6 +609,90 @@ describe("run API and WS replay", () => {
     expect(executionWorkspace).toContain(join(".seekforge", "worktrees"));
   });
 
+  /**
+   * A Loop is isolated exactly like an agent run, and its ledger entry — with
+   * the sessionId — is written here, in the base checkout. The trace it points
+   * at has to outlive the worktree, or discarding the worktree destroys the
+   * audit trail and leaves a run record naming a session nothing here can open.
+   */
+  it("keeps an isolated Loop run's trace in the base checkout after the worktree is discarded", async () => {
+    const workspace = makeWorkspace();
+    execFileSync("git", ["init"], { cwd: workspace });
+    execFileSync("git", ["config", "user.email", "seekforge@example.invalid"], { cwd: workspace });
+    execFileSync("git", ["config", "user.name", "SeekForge Test"], { cwd: workspace });
+    writeFileSync(join(workspace, ".gitignore"), ".seekforge/\n");
+    writeFileSync(join(workspace, "README.md"), "fixture\n");
+    execFileSync("git", ["add", "."], { cwd: workspace });
+    execFileSync("git", ["commit", "-m", "fixture"], { cwd: workspace });
+    let executionWorkspace = "";
+    server = await startServer({
+      workspace,
+      port: 0,
+      token: TOKEN,
+      logger: { log: () => {} },
+      createAgent: fakeAgentFactory(async function* () {}),
+      runLoop: async (_agentOpts, opts) => {
+        // What the engine does inside the worktree it was handed.
+        executionWorkspace = opts.workspace;
+        const now = new Date().toISOString();
+        writeSessionMeta(opts.workspace, {
+          id: "loop-isolated-session",
+          task: opts.task,
+          mode: "edit",
+          status: "completed",
+          createdAt: now,
+          updatedAt: now,
+        });
+        createSessionTrace(opts.workspace, "loop-isolated-session").message({
+          role: "user",
+          content: "loop trace line",
+        });
+        return {
+          status: "passed" as const,
+          iterations: 1,
+          costUsd: 0,
+          sessionId: "loop-isolated-session",
+          loopId: "loop-isolated",
+          finalVerify: { code: 0, output: "ok" },
+        };
+      },
+    });
+    const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
+    const response = await fetch(`http://127.0.0.1:${server.port}/api/runs`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ kind: "loop", task: "loop", verifyCommand: "pnpm test", maxCostUsd: 1 }),
+    });
+    expect(response.status).toBe(202);
+    const accepted = (await response.json()) as { runId: string; labels?: Record<string, string> };
+    expect(accepted.labels).toMatchObject({ isolation: "worktree", worktreeId: expect.stringMatching(/^wt-/) });
+
+    let record: { status: string; sessionId?: string } | undefined;
+    for (let attempt = 0; attempt < 200; attempt++) {
+      const current = await fetch(`http://127.0.0.1:${server?.port}/api/runs/${accepted.runId}`, { headers });
+      record = (await current.json()) as { status: string; sessionId?: string };
+      if (record.status === "succeeded") break;
+      if (attempt === 199) throw new Error(`Loop run did not succeed: ${JSON.stringify(record)}`);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(record?.sessionId).toBe("loop-isolated-session");
+    expect(executionWorkspace).toContain(join(".seekforge", "worktrees"));
+    expect(readSessionMeta(workspace, "loop-isolated-session")?.status).toBe("completed");
+
+    // Discard the worktree the way an operator does, and the trace the base
+    // ledger points at is still here.
+    const removal = await fetch(`http://127.0.0.1:${server.port}/api/worktrees/${accepted.labels?.worktreeId}`, {
+      method: "DELETE",
+      headers,
+    });
+    expect(removal.status).toBe(200);
+    expect(existsSync(executionWorkspace)).toBe(false);
+    expect(readSessionMeta(workspace, "loop-isolated-session")?.status).toBe("completed");
+    expect(
+      readFileSync(join(workspace, ".seekforge", "sessions", "loop-isolated-session", "messages.jsonl"), "utf8"),
+    ).toContain("loop trace line");
+  });
+
   it("prunes run history through the REST retention endpoint", async () => {
     const workspace = makeWorkspace();
     const seekforgeDir = join(workspace, ".seekforge");
@@ -736,7 +821,12 @@ describe("run API and WS replay", () => {
         verifyCommand: "pnpm test",
         maxCostUsd: 1,
         requirementMode: "confirm",
-        verificationPlan: [{ id: "tests", command: "pnpm test" }],
+        // Every field the engine understands, including the four the route
+        // used to drop on the floor while reporting success.
+        verificationPlan: [
+          { id: "tests", command: "pnpm test", paths: ["src/"], dependencyPaths: ["src/"], cacheable: true },
+          { id: "e2e", command: "pnpm e2e", dependsOn: ["tests"], parallel: true, resources: ["browser"] },
+        ],
         stablePasses: 2,
         flakyRetries: 1,
         maxNoProgressRecoveries: 2,
@@ -754,7 +844,10 @@ describe("run API and WS replay", () => {
     }
     expect(extractMemory).toBe(true);
     expect(loopOptions).toMatchObject({
-      verificationPlan: [{ id: "tests", command: "pnpm test" }],
+      verificationPlan: [
+        { id: "tests", command: "pnpm test", paths: ["src/"], dependencyPaths: ["src/"], cacheable: true },
+        { id: "e2e", command: "pnpm e2e", dependsOn: ["tests"], parallel: true, resources: ["browser"] },
+      ],
       stablePasses: 2,
       flakyRetries: 1,
       maxNoProgressRecoveries: 2,
@@ -789,6 +882,37 @@ describe("run API and WS replay", () => {
       }),
     });
     expect(invalidPlan.status).toBe(400);
+
+    // A REST body is authored text: a stage constraint this build cannot honour
+    // is a 400, not a field to drop and start a different run than requested.
+    for (const [plan, message] of [
+      [[{ id: "a", command: "pnpm test", futureField: 1 }], /unsupported field: futureField/],
+      [[{ id: "a", command: "pnpm test", parallel: true }], /parallel requires resources/],
+      [
+        [
+          { id: "a", command: "pnpm test", dependsOn: ["b"] },
+          { id: "b", command: "pnpm test", dependsOn: ["a"] },
+        ],
+        /stage dependency cycle/,
+      ],
+      [[{ id: "a", command: "pnpm test", timeoutMs: 2_147_483_648 }], /timeoutMs must be an integer from 1 to/],
+    ] as const) {
+      const response = await fetch(`http://127.0.0.1:${server.port}/api/runs`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          kind: "loop",
+          task: "loop",
+          verifyCommand: "pnpm test",
+          maxCostUsd: 1,
+          verificationPlan: plan,
+        }),
+      });
+      expect(response.status).toBe(400);
+      expect((await response.json()) as { error: { message: string } }).toMatchObject({
+        error: { code: "bad_request", message: expect.stringMatching(message) },
+      });
+    }
   });
 
   it("advertises capabilities, queries a run, and replays afterSeq", async () => {

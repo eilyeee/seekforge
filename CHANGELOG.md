@@ -2,6 +2,169 @@
 
 ## Unreleased
 
+### `seekforge mcp list` ran whatever a cloned repository told it to
+
+**Listing was never a read.** `mcp list` — the default `mcp` subcommand — spawns
+every configured server to handshake with it, and `mcp add` writes to the
+*project* config by default. So in a checkout you did not write, "list the
+servers" meant "run the commands this repository chose", with no folder-access
+consent anywhere in the command. Reproduced end to end: a repository-supplied
+`sh -c` ran, and its entry then displayed under a name the user trusts. Listing
+now takes the same consent `seekforge run` takes whenever any listed server comes
+from the checkout; `-y` pre-authorizes it for CI, and servers from your own
+config still list without a prompt.
+
+**The proposed fix for the layering would have made it worse.** The brief asked
+for clamp-to-strictest field merging. Splicing a repository layer's `args`,
+`env`, `url` or `oauth` into an entry that still carries the user's
+`trusted: true` converts a fail-closed defect into a fail-open one — and those
+fields are not "security fields" under that taxonomy, so the clamp would never
+have touched them. Two direction-aware rules replace it: a repository layer may
+**add** server names but never repoint one a user-owned layer defines, and its
+own entries may only get stricter (`trusted` stripped, `permission` /
+`toolPermissions` looser than `write` dropped).
+
+The counterintuitive part is which value a repository wants to write. It is not
+`dangerous`, which is absolutely denied — it is **`readonly`**, which
+`permissions.ts` auto-allows with no prompt. `docs/mcp.md` tells users to review
+a project entry and copy it to global with `trusted: true`; a repository-authored
+`readonly` rode along in that copy.
+
+**The rule holds on all four surfaces because forgetting it no longer compiles.**
+It first landed in the CLI only, leaving the TUI, the server and Desktop
+unprotected — the same "one invariant, N implementations" failure this round is
+about. Layer origin is now part of `ConfigLayer<T>`, and `repositoryConfigLayer()`
+bundles the downgrade with the tag, so a layer cannot be tagged `repository`
+while keeping the authority the tag exists to remove. Mistagging only the TUI and
+the server leaves the shared rule test green and fails five per-surface tests —
+which is exactly how three surfaces went unprotected in the first place.
+
+### One verification-plan validator, down from six
+
+The rules for a Loop verification plan were implemented six times. Two were
+merged yesterday; the remaining copies sat in `POST /api/runs`, the WS `loop`
+frame decoder, the eval task loader, and the resume-state decoder — each
+re-rolling the bounds and hard-coding the same `16`.
+
+The direction had to be **down**, not up: `packages/shared` has no dependencies
+and two of the copies live inside it, so hoisting into core was structurally
+impossible. `packages/shared/src/loop-verification-contract.ts` now owns the
+type, the bounds and the parser; core keeps every name as a re-export, so no
+consumer changed. The narrower `LoopVerificationStage` mirror in
+`packages/shared/src/index.ts` is gone with it.
+
+REST had been **dropping** `dependsOn`, `parallel`, `resources`,
+`dependencyPaths` and `cacheable` while returning 202 — starting a run whose plan
+was quietly not the one requested; the eval harness dropped the first three.
+Both now honour them. An
+unknown stage field is a `400` rather than silently discarded, and the two prefix
+spellings the copies rejected but the engine has always accepted (`"src/"` and
+`"./src"`) now parse everywhere.
+
+**A stage timeout could not exceed what a timer can hold.** `stageTimeoutMs`
+bounded by `Number.MAX_SAFE_INTEGER` and the value went to `setTimeout`, whose
+delay is a signed 32-bit field: past 2³¹−1 ms it overflows and fires
+*immediately*. The longest timeout the API accepted produced the shortest one it
+could deliver, and it looked like a flaky verifier. The ceiling is now
+`MAX_LOOP_TIMEOUT_MS`, clamped at the three `setTimeout` sites as well as
+validated at the door — because the engine validates the plan and then executes
+the raw stages, so a replayed `timeoutMs` never met the parser at all.
+
+### A drift gate that hard-codes where to look
+
+Three known blind spots of one shape had already been patched by widening a list.
+Treating the shape instead turned up **two more**: `GET /api/models` is registered
+one directory above the only scanned route directory and was undocumented, and
+`schedule`'s `install`/`uninstall`/`status` come from
+`for (const action of [...]) schedule.command(action)` — a name no regex can read,
+which is why no amount of widening would ever have found it.
+
+The gate now derives its inputs, asserts its own coverage with a workspace-wide
+sweep for each registration idiom, and cross-checks against **independently
+derived** oracles: commander's own command tree, obtained by running the real
+CLI, and the config-key manifest the running program already depends on.
+Comparing a scan against a second scan of the same shape would have been the
+vacuous test wearing a disguise — a registrar neither reads is absent from both
+sides. Five mutations were each verified to pass the *old* gate and fail the new
+one. The probe is started at module scope and the CLI checks run last, so it
+boots while the file-reading checks work: both gates together take about 10 s on
+a warm cache, against 14 checks where there were 10.
+
+### `loop-speculate` is off the Loop DAG engine
+
+The last non-DAG caller of `runLoopDag` is gone: candidates now run as a Graph
+fan-out of `loop` nodes with no dependencies, launched in one wave under one
+shared `costBudgetUsd`, so each reserves an equal weighted share rather than the
+whole cap. The persisted document is unchanged, so a speculation recorded by the
+old engine still lists and still promotes — one that was *mid-run* on it cannot
+resume, and now says so by name instead of failing as "Persisted Graph not
+found". `parseLoopDagInput` also stopped silently discarding a node's `options`.
+
+What still stands between the repo and deleting `loop-dag.ts` is now enumerated
+in the roadmap from a search rather than from memory: the `loop-dag` command
+itself, `loop-dag-resources`, `GET /api/loop-dags`, the CLI file parser, a
+type-only import cycle through `loop-dag-validation.ts`, sixteen re-exports and
+three test files.
+
+### An isolated run's audit trail no longer dies with its worktree
+
+A trigger or background run isolated in a git worktree wrote its session trace
+*inside* that worktree, while recording the `sessionId` in the base checkout's
+run ledger — so `git worktree remove` deleted the audit trail and left the ledger
+naming a session nothing could open. Traces are now mirrored into the base
+workspace when the run ends, for agent runs and Loops alike.
+
+The copy is narrow on purpose: known trace files only, by name, only for sessions
+absent when the run started, never over an id the base already holds, and
+performed by the server after the fact so the run gains no access to the base
+checkout. It does not prove a mirrored session came from the agent loop — a
+fresh worktree has no `.seekforge/`, and there is nothing unforgeable to filter
+on, since the trace is authored by the agent process either way. Two
+defects found in review of that mirror are worth recording — one notice per
+failure invalidated the run-ledger sequence cache and reinstated the stall the
+caps exist to prevent, and when a cap bit, the ledger's own session was the first
+thing dropped, because `listSessions` is newest-first and a run's primary session
+is created before everything it dispatches.
+
+Desktop also gained an editor for the SLO policy it had only been able to read,
+and `GET /api/mcp` stopped reporting the ignored repository entry as the winner.
+
+### The CLI's tests ran on a five-second budget
+
+The third package to hit this, for the same reason as `packages/core` and
+`apps/server` before it: `apps/cli` had neither a Vitest config nor a
+`--testTimeout` flag, so every suite ran on the 5s default. The `resolve` tests
+`git init` a repository, add a worktree and spawn `git check-ignore` per seeded
+path — a dozen forks, fine on an idle machine and not fine with six other
+packages running beside them. A starved test reports itself as a broken command,
+which is the worst way to learn about load.
+
+### Stricter doors, named on purpose
+
+Three inputs that used to be accepted and quietly discarded are now rejected by
+name. Each is a compatibility break worth knowing about before upgrading:
+
+- A **Loop DAG file** with a per-node `options` object used to have it dropped
+  silently; the parser now applies it, and an unsupported key is a hard error.
+  A file that ran yesterday can fail today — which is the point, since the
+  option it declared never took effect.
+- A **WS `loop` frame** whose stage carries an unknown field, duplicate `paths`,
+  a `dependsOn` cycle, `parallel` without `resources`, or a `timeoutMs` past the
+  timer ceiling is now `bad_frame` where it previously connected and ran a
+  weaker plan than the one requested.
+- **`POST /api/runs`** rejects the same shapes with `400` instead of returning
+  `202` for a plan it had partly discarded.
+
+### A containment rule checked twice, two different ways
+
+`resolveEngineeringGraphWorkspaces` compared a realpath'd graph root against an
+un-realpath'd node workspace, then realpathed and compared again two lines later.
+Any workspace reached through a symlinked ancestor — every macOS `/var/folders`
+temp directory — was refused as an escape that the second check would have
+allowed. There is now one containment rule, evaluated once, against the resolved
+truth, with `lstat` still refusing a symlinked leaf before its target is
+consulted.
+
 ### Baseline re-recorded on the commit it measures
 
 68 tasks at three samples against `deepseek-v4-flash`: 203/204, $0.628,

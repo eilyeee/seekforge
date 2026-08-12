@@ -1,8 +1,10 @@
 import { formatCostUsd } from "@seekforge/shared/format";
 import { useState } from "react";
 import { useT } from "../../lib/i18n";
+import type { OrchestrationPolicyDraft } from "../../lib/orchestration-policy-input";
 import type { OrchestrationProposal, WorkspaceOrchestrationReport } from "../../types";
 import { Badge, Button } from "../ui";
+import { OrchestrationPolicyEditor } from "./OrchestrationPolicyEditor";
 
 export function OrchestrationIntelligenceSection(props: {
   report?: WorkspaceOrchestrationReport;
@@ -11,6 +13,11 @@ export function OrchestrationIntelligenceSection(props: {
   onRefresh: () => void;
   /** Explicit maintenance tick: records proposals, reconciles rollouts, re-evaluates the controller. */
   onMaintain: () => void;
+  /** SLO threshold draft, owned by the container so a background reload cannot retype it. */
+  policyDraft: OrchestrationPolicyDraft;
+  onPolicyDraftChange: (draft: OrchestrationPolicyDraft) => void;
+  /** Writes the thresholds the breach verdict above is computed against. */
+  onPolicySave: () => void;
   onProposalReview: (proposal: OrchestrationProposal, status: "approve" | "dismiss") => void;
   onProposalApply: (proposal: OrchestrationProposal) => void;
   onProposalRollback: (proposal: OrchestrationProposal) => void;
@@ -87,6 +94,13 @@ export function OrchestrationIntelligenceSection(props: {
                 .join(" · ")}
             </p>
           )}
+          <OrchestrationPolicyEditor
+            draft={props.policyDraft}
+            state={report.policyState}
+            busy={props.busy}
+            onDraftChange={props.onPolicyDraftChange}
+            onSave={props.onPolicySave}
+          />
           <p className="mt-1 text-tertiary">
             {t("chat.loop.orchestration.controller")}: {report.controller.mode} · {report.controller.reason}
             {` · ${report.decisions.length} ${t("chat.loop.orchestration.decisions")}`}

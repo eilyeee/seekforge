@@ -46,9 +46,11 @@ seekforge resolve <issue-number-or-url> --max-cost <n> [--base <branch>] [--mode
 
    该运行为 `edit` 模式并启用 `acceptEdits`（文件编辑自动应用），
    并受**必填的** `--max-cost` 预算约束。
-4. **验证**：如果 `.seekforge/config.json` 中配置了 `verifyCommand`
-   （和/或 `lintCommand`），则会运行它。**若失败，不会打开 PR**——
-   修复留在分支上，并报告失败。
+4. **验证**：如果**你的用户配置**（`~/.seekforge/config.json` 或 `--settings`
+   文件）中配置了 `verifyCommand`（和/或 `lintCommand`），则会运行它。
+   **若失败，不会打开 PR**——修复留在分支上，并报告失败。这两项是用户级设置：
+   仓库 `.seekforge/config.json` 中的取值会作为仓库输入被剥离，因此克隆下来的
+   仓库无法让 `resolve` 运行它自选的命令。
 5. **提交 + push + 打开 PR**（由命令直接完成）：
    `git add -A` → `git commit -m "Resolve #<n>: <title>"` →
    `git push -u origin seekforge/issue-<n>` →
@@ -62,6 +64,20 @@ seekforge resolve <issue-number-or-url> --max-cost <n> [--base <branch>] [--mode
    （见下文）。
 
 如果智能体没有做出任何改动，`resolve` 会在提交之前停止（没有可 PR 的内容）。
+
+### 隔离 worktree 里能看到什么
+
+`.seekforge/` 通常被 gitignore，所以新建的 worktree 里不会有它，运行就只能退回到
+你的全局配置。因此 `resolve` 会把仓库的项目层带进去：项目的偏好（模型、编辑格式
+等）、它的 `deny` 权限规则，以及 `.seekforge/skills`、`agents`、`commands`、
+`output-styles` 与 `memory/project.md`。
+
+带进去的恰好只有这些。配置会经过与基检出对仓库层完全相同的那道降权，因此凭据、
+`baseUrl`、`verifyCommand` 和 hook 都到不了临时目录。`mcpServers` 被排除——仓库
+条目永远不受信任，在无头运行中根本无法连接，而它们的 `env`/`headers` 恰恰可能装着
+密钥。`.seekforge/plugins` 也被排除，因为插件可以授予受信任的 MCP 服务器和 hook。
+除非 git 确认目标被忽略，否则不写入任何文件，所以带进去的文件绝不会出现在 PR 里。
+`resolve-review` 的行为相同。
 
 ## Flag
 

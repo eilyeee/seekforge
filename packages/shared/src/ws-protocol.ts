@@ -1,4 +1,6 @@
+import { isRecord } from "./guards.js";
 import type { ClientFrame, RunOverrides } from "./index.js";
+import { parseLoopVerificationPlan } from "./loop-verification-contract.js";
 
 export type ClientFrameLimits = {
   maxLoopIterations: number;
@@ -14,10 +16,6 @@ type RecordValue = Record<string, unknown>;
 const LOOP_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const RUN_ID_RE = /^run-[A-Za-z0-9-]+$/;
 const DISPATCH_ID_RE = /^ag-[1-9]\d*$/;
-
-function isRecord(value: unknown): value is RecordValue {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function bad(error: string, permissionRequestId?: string): ClientFrameDecodeResult {
   return permissionRequestId === undefined ? { ok: false, error } : { ok: false, error, permissionRequestId };
@@ -197,53 +195,19 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
       return bad("loop.priority must be an integer from -10 to 10");
     }
     if (verificationPlan !== undefined) {
-      if (!Array.isArray(verificationPlan) || verificationPlan.length === 0 || verificationPlan.length > 16) {
-        return bad("loop.verificationPlan must contain 1-16 stages");
-      }
-      const ids = new Set<string>();
-      for (const stage of verificationPlan) {
-        if (
-          !isRecord(stage) ||
-          typeof stage.id !== "string" ||
-          !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(stage.id) ||
-          ids.has(stage.id)
-        ) {
-          return bad("loop.verificationPlan stage ids must be unique and safe");
-        }
-        ids.add(stage.id);
-        if (typeof stage.command !== "string" || stage.command.trim() === "" || stage.command.length > 8_192) {
-          return bad(`loop.verificationPlan.${stage.id}.command must be a bounded non-empty string`);
-        }
-        if (stage.required !== undefined && typeof stage.required !== "boolean") {
-          return bad(`loop.verificationPlan.${stage.id}.required must be boolean`);
-        }
-        if (
-          stage.timeoutMs !== undefined &&
-          (!Number.isSafeInteger(stage.timeoutMs) || (stage.timeoutMs as number) <= 0)
-        ) {
-          return bad(`loop.verificationPlan.${stage.id}.timeoutMs must be a positive safe integer`);
-        }
-        if (
-          stage.paths !== undefined &&
-          (!Array.isArray(stage.paths) ||
-            stage.paths.length === 0 ||
-            stage.paths.length > 64 ||
-            !stage.paths.every(
-              (path) =>
-                typeof path === "string" &&
-                path.length > 0 &&
-                path.length <= 512 &&
-                !path.includes("\0") &&
-                !path.startsWith("/") &&
-                !/^[A-Za-z]:[\\/]/.test(path) &&
-                !path
-                  .replaceAll("\\", "/")
-                  .split("/")
-                  .some((part) => part === "" || part === "." || part === ".."),
-            ))
-        ) {
-          return bad(`loop.verificationPlan.${stage.id}.paths must contain safe relative prefixes`);
-        }
+      // A frame is authored text a client just wrote, not a plan replayed from
+      // persisted state: an unknown stage field is a typo or a constraint this
+      // build cannot honour, and silently dropping it would run a different
+      // plan than the client asked for. The engine owns the rules; the decoder
+      // only runs them early, and keeps the frame verbatim rather than the
+      // normalized stages so the accepted frame is exactly what was sent.
+      try {
+        parseLoopVerificationPlan(verificationPlan, {
+          label: "loop.verificationPlan",
+          rejectUnknownFields: true,
+        });
+      } catch (error) {
+        return bad(error instanceof Error ? error.message : "loop.verificationPlan is invalid");
       }
     }
     if (

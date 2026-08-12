@@ -317,6 +317,52 @@ describe("task validation", () => {
     ).toThrow(/unknown memory alias/);
   });
 
+  it("delegates verification-plan rules to the shared contract", () => {
+    const loopTask = (verificationPlan: unknown) => () =>
+      validateTask(
+        {
+          ...valid,
+          runner: "loop",
+          loop: { verifyCommand: "npm test", maxIterations: 2, expectedStatus: "passed", verificationPlan },
+        },
+        "loop-v2",
+      );
+    // A task file is authored text, so a misspelled field is a fixture bug.
+    expect(loopTask([{ id: "a", command: "npm test", futureField: 1 }])).toThrow(/unsupported field: futureField/);
+    // Rules the hand-rolled copy never had: a cycle, a bad resource name, a
+    // parallel stage with nothing to reserve, and a timeout no timer can hold.
+    expect(
+      loopTask([
+        { id: "a", command: "npm test", dependsOn: ["b"] },
+        { id: "b", command: "npm test", dependsOn: ["a"] },
+      ]),
+    ).toThrow(/stage dependency cycle/);
+    expect(loopTask([{ id: "a", command: "npm test", resources: ["not a name"] }])).toThrow(/unique safe names/);
+    expect(loopTask([{ id: "a", command: "npm test", parallel: true }])).toThrow(/parallel requires resources/);
+    expect(loopTask([{ id: "a", command: "npm test", timeoutMs: 2_147_483_648 }])).toThrow(/timeoutMs/);
+    // …and the four fields the copy silently dropped now survive the parse.
+    const task = validateTask(
+      {
+        ...valid,
+        runner: "loop",
+        loop: {
+          verifyCommand: "npm test",
+          maxIterations: 2,
+          expectedStatus: "passed",
+          verificationPlan: [
+            { id: "unit", command: "npm test", paths: ["src"], dependencyPaths: ["src"], cacheable: true },
+            { id: "e2e", command: "npm run e2e", dependsOn: ["unit"], parallel: true, resources: ["browser"] },
+          ],
+        },
+      },
+      "loop-v2",
+    );
+    expect(task.loop?.verificationPlan).toEqual([
+      { id: "unit", command: "npm test", paths: ["src"], dependencyPaths: ["src"], cacheable: true },
+      { id: "e2e", command: "npm run e2e", dependsOn: ["unit"], parallel: true, resources: ["browser"] },
+    ]);
+  });
+
   it("delegates graph rules to core instead of re-implementing them", () => {
     const graphTask = (graph: unknown) => () => validateTask({ ...valid, runner: "graph", graph }, "g");
     const nodes = [{ id: "only", kind: "function", handler: "collect" }];

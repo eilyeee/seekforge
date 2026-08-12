@@ -92,20 +92,44 @@ backend in `crates/runtime`.
   other work streams build against them.
 - A capability is not done when the code works. Two gates run in CI, in opposite
   directions, and both must stay green:
-  - `scripts/surface-drift.test.mjs` walks **code → docs**: a top-level CLI
-    command or subcommand missing from the documentation, a `CliConfig`/
-    `TuiConfig`/`ServerConfig` key undocumented in either configuration guide, a
-    REST route absent from `apps/server/SERVER-API.md`, a doc lacking its
-    `.zh-CN.md` counterpart or cross-link, or an i18n table whose locales
-    disagree.
+  - `scripts/surface-drift.test.mjs` walks **code → docs**, and **derives** what
+    to look at rather than listing it: every file under `apps/cli/src`, every
+    `<package>/src/config.ts`, every file under `apps/server/src`, every module
+    declaring locale tables. It fails when a CLI command or subcommand is
+    missing from the documentation, a config key is undocumented in either
+    configuration guide, a REST route is absent from
+    `apps/server/SERVER-API.md`, a doc lacks its `.zh-CN.md` counterpart or
+    cross-link, or an i18n table's locales disagree. Four checks assert the gate's
+    own coverage, two of them named "the … surface this gate scans is the whole
+    … surface"; each compares the scan against a **second, independently
+    derived** view — commander's own
+    command tree (obtained by running the real CLI through
+    `scripts/cli-command-tree.mjs`), the config-key manifest in
+    `packages/shared/src/config-manifest.ts`, and a workspace-wide sweep for
+    each registration idiom. Registering a surface somewhere new therefore
+    fails the gate instead of being silently exempt. Do not make one of those
+    green by widening a scan root without first asking whether the surface
+    belongs where it now lives.
   - `scripts/doc-claim-reachability.test.mjs` walks **docs → code**: a symbol,
     `seekforge` command, `--flag`, `/slash` command, `SEEKFORGE_*` variable or
     config key that the documentation presents as usable but that no surface
     reaches. This is the direction that catches a capability which shipped, was
     tested, was documented, and had no entry point — the shape behind three
-    incidents here. Its closing note lists what it deliberately cannot catch;
-    read that before assuming green means covered.
-  Run both with `node --test scripts/*.test.mjs`.
+    incidents here. Its corpus is **every Markdown page git tracks** and **every
+    source tree in the repository**; a page or tree that should not be read must
+    be entered in `NOT_CLAIMS` / `NOT_SOURCE` with its reason, so nothing goes
+    unchecked by accident. Its closing note lists what it deliberately cannot
+    catch; read that before assuming green means covered.
+  Run both with `node --test scripts/*.test.mjs`. Both shell out — `tsx` for the
+  CLI probe, `git ls-files` for the corpora — so run them after `pnpm install`,
+  from inside the repository.
+
+  This gate has had **five** blind spots of one shape: it hard-coded where to
+  look, so anything registered anywhere else was exempt by default and nothing
+  said so. The last one is why the CLI probe exists — `schedule`'s `install`,
+  `uninstall` and `status` are registered from
+  `for (const action of [...]) schedule.command(action)`, and no regex can read
+  a name that is not a literal. Widening a list would never have found it.
 - Run `pnpm typecheck` and `pnpm test` after changes.
 - When Rust code or tests change, also run the relevant Rust tests; prefer
   `cargo test --workspace` before delivery.
@@ -125,6 +149,25 @@ backend in `crates/runtime`.
   a commit, merge them into `main` when working on another branch, and push when
   a remote is configured.
 
+### Working from a brief
+
+- **Verify the brief's premise before acting on it.** A task description is a
+  claim about the code, not the code. Several briefs here have been wrong in
+  ways that would have produced a confident wrong change: "the report carries
+  the whole session's usage" (it never did — acting on it turned a double-count
+  into a budget-loosening undercount), "Phase 2 removes the 24 flat `loop-*`
+  commands" (there are 22, it removes two of them, and the rest manage single
+  Loops that outlive the DAG), "these two
+  formatters should be merged" (one of them lives in a package that cannot
+  import the shared code, so it would have passed locally and broken in the
+  editor).
+- A well-argued **"this should not be done"** is a better outcome than doing it.
+  Say which specific evidence contradicts the premise, then do the smaller
+  correct thing.
+- When the premise survives, say how you confirmed it. "I measured it" beats "I
+  read the comment" — comments are where three of the wrong premises above came
+  from.
+
 ### Independent code review
 
 - Every task that changes the repository must enter a separate code-review phase
@@ -143,8 +186,11 @@ backend in `crates/runtime`.
 
 - Verify against a **clean checkout, not just the dirty working tree** — local
   `typecheck`/`test` pass with uncommitted changes present can mask a commit
-  that is incomplete or wires a flag wrong. When in doubt, `git stash` your
-  pending edits and re-run, or check what a fresh clone would see.
+  that is incomplete or wires a flag wrong. Do it in a throwaway
+  `git worktree add` at clean `HEAD` with only your changes applied. This bullet
+  used to say "when in doubt, `git stash`", one line above the rule forbidding
+  it; an agent followed the first half and destroyed 27 files. Advice that
+  contradicts the rule below it will be taken, so it is gone.
 - **Never `git stash` when other agents share the working tree.** Stash is
   tree-wide: a pathspec is not always honored, and a stash of "your" files takes
   everyone else's uncommitted work with it. This has already destroyed two

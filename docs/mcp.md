@@ -76,11 +76,21 @@ causes a configuration error.
 
 ### 1.2 CLI Commands
 
-#### `seekforge mcp list [--tools]`
+#### `seekforge mcp list [--tools] [-y]`
 
 Spawns every configured server, performs the initialize handshake, and prints
 each server's tool names. A failing server shows its error inline and listing
 continues. With `--tools`, the first line of each tool's description is shown.
+Each line also says whether the entry came `from this repository` or
+`from your config`.
+
+**Listing is not a read: every entry is started.** `mcp add` writes to the
+project config by default, so in a checkout you did not write, "list the
+servers" means "run the commands this repository chose". When any listed server
+comes from the checkout, `mcp list` therefore asks for the same folder-access
+consent `seekforge run` asks for; `-y` pre-authorizes it, which is what CI
+needs. Servers from your own global or `--settings` config are listed without a
+prompt.
 
 ```text
 $ seekforge mcp list --tools
@@ -154,13 +164,33 @@ settings file  >  project .seekforge/config.json  >  global ~/.seekforge/config.
 
 The merge is per **server name**, not per key inside a server entry: a higher
 layer that defines `myserver` **replaces** the whole entry, it does not merge
-field by field. A project layer that only wants to change `args` therefore also
-drops the global layer's `permission` and `toolPermissions` hardening for that
-server, which then falls back to the annotation-derived default. Redefine a
-server in a higher layer only with the complete entry you intend to run.
+field by field. Field-by-field merging is deliberately *not* done — it would
+splice a repository layer's `args`, `env`, `url` or `oauth` into an entry that
+still carries your `trusted: true`. Redefine a server in a higher layer only
+with the complete entry you intend to run.
 
-A repository entry that shadows a global entry remains untrusted; trust is
-never inherited across that boundary. For the full layering model see
+Because the repository layers sit *above* global config in precedence, two
+rules constrain them:
+
+- **A repository layer may add server names, never repoint one you own.** If
+  `.seekforge/config.json` (or `config.local.json`) defines a name that
+  `~/.seekforge/config.json` or your `--settings` file already defines, the
+  repository definition is ignored and SeekForge says so. A clone cannot
+  redirect the `command`, `url`, `headers` or `oauth` of a server you
+  configured.
+- **A repository layer may only make its own entries stricter.** `trusted` is
+  stripped, and `permission` / `toolPermissions` looser than `write` (i.e.
+  `readonly`) are dropped — so a repository cannot pre-load an entry with
+  "never ask" and have that ride along when you copy it into global config.
+
+This holds on every surface — CLI, TUI, `seekforge serve`, and Desktop through
+the server — because all four merge through the same layer algebra, which takes
+each layer's origin as part of its type. Only the CLI currently *prints* the
+narrowing; the others enforce it silently.
+
+A repository entry cannot shadow a global one at all — the rule above ignores it
+— and a repository entry that stands alone is still untrusted; trust is never
+inherited across that boundary. For the full layering model see
 [cli-reference.md](cli-reference.md#settings-layering).
 
 ### 1.4 Tool Naming

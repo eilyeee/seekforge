@@ -352,6 +352,17 @@ export const api = {
     ),
   orchestrationReport: (ws?: string) =>
     request<import("../types").WorkspaceOrchestrationReport>("GET", withWorkspace("/api/orchestration/report", ws)),
+  /**
+   * Writes the SLO thresholds the report's breach verdict is computed against.
+   * `expectedUpdatedAt` is the policy the editor was filled from; the route
+   * refuses (409) rather than overwriting an edit made since it was read.
+   */
+  orchestrationPolicySet: (update: import("./orchestration-policy-input").OrchestrationPolicyUpdate, ws?: string) =>
+    request<NonNullable<import("../types").WorkspaceOrchestrationReport["policyState"]>>(
+      "PUT",
+      withWorkspace("/api/orchestration/policy", ws),
+      update,
+    ),
   orchestrationDiagnostics: (ws?: string) =>
     request<import("../types").WorkspaceOperationalDiagnostics>(
       "GET",

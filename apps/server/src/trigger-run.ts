@@ -16,9 +16,14 @@
  * soon as the run's session id is known (session.created) so the webhook can
  * answer 202 immediately; the run then continues to completion in the
  * background.
+ *
+ * When execution is isolated in a git worktree the trace is written there, not
+ * in the checkout that owns this run's ledger; `run-trace-mirror.ts` brings it
+ * back when the run ends.
  */
 
 import type { CreateAgentFn } from "./agent.js";
+import { beginRunSessionMirror } from "./run-trace-mirror.js";
 import type { TriggerMode } from "./triggers.js";
 import type { RunManager, RunStatus } from "./run-ledger.js";
 
@@ -81,6 +86,10 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
     let handle: Awaited<ReturnType<CreateAgentFn>> | undefined;
     let terminalStatus: RunStatus | undefined;
     let sessionId = "";
+    // An isolated run executes somewhere the ledger owner cannot read once the
+    // worktree is gone. Opened before the run so the mirror carries only what
+    // THIS run produced; inert when execution and ledger are the same tree.
+    const mirror = beginRunSessionMirror(input.workspace, ledgerWorkspace);
     try {
       controller.signal.throwIfAborted();
       handle = await input.createAgent({
@@ -185,6 +194,14 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
             error: { code: "incomplete", message: "triggered run ended without a terminal event" },
           });
         }
+        // Runs on every ending (completed, failed, cancelled): the audit trail
+        // of a cancelled run is exactly as disposable, and exactly as needed.
+        // It runs AFTER the ledger's terminal status, because the trace's own
+        // last writes happen after the terminal event — so a client polling
+        // GET /api/runs/:id can briefly see a finished run whose sessionId is
+        // not openable in the base yet. Copying earlier would mirror a trace
+        // that is still being written.
+        mirror.finish({ runManager: input.runManager, runId: input.runId, sessionId });
       }
     }
   };

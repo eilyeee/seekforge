@@ -390,10 +390,25 @@ seekforge loop-cleanup <worktree-name> [--force]
   `--worktree-limit` caps retained managed worktrees. `loop-dag-resources`
   inspects disk use and explicitly archives, promotes, or prunes completed graphs;
   pruning always retains worktrees with uncommitted changes.
-- `loop-speculate` and the Core `runSpeculativeLoop` helper run exactly two or three repair strategies
-  under one mandatory cost cap in isolated workspaces and selects the lowest-cost
-  passing result. Runs and winners are resumable; `loop-speculation-promote` is the
-  separate explicit merge step. REST and Desktop expose persisted runs and resource operations.
+  A node may declare `options` carrying the bounded Loop configuration a Graph
+  `loop` node can also declare (iteration, verification-plan, budget,
+  model-routing, review and requirement keys). The file parser used to ignore the
+  whole object; it now applies it and `export-graph` preserves it, while any other
+  key is rejected by name. Adding `options` to a DAG file changes that DAG's
+  fingerprint, so finish an in-flight checkpoint before adding one.
+- `loop-speculate` and the Core `runSpeculativeLoop` helper run exactly two or
+  three repair strategies under one mandatory cost cap in isolated workspaces and
+  select the lowest-cost passing result. **They run on the Engineering Graph**:
+  the candidates become a fan-out of `loop` nodes with no dependencies between
+  them, launched in one wave under one shared `costBudgetUsd`, so each candidate
+  reserves an equal weighted share of the cap rather than the whole cap. Isolation
+  is one managed worktree per candidate with dependency integration off, so a
+  losing candidate's tree never reaches the winner's. Runs and winners are
+  resumable; `loop-speculation-promote` is the separate explicit merge step. REST
+  and Desktop expose persisted runs and resource operations. The persisted
+  `.seekforge/loop-speculations/` document is unchanged, so a speculation recorded
+  by the Loop DAG engine still lists and still promotes — but one that was mid-run
+  on that engine cannot be resumed, and says so by name.
 - `--deliver checkpoint|merge|patch|pr` performs an explicit post-pass delivery
   from a retained Loop worktree. `pr` pushes the Loop branch and creates a draft
   pull request through `gh`. Delivery records its mode, status, attempt count,
@@ -512,6 +527,10 @@ engine has therefore entered a **deprecation window**:
   rejected: existing `.seekforge/loop-dags/` state stays resumable — `--resume`,
   `--rerun`, `--approve`, and `loop-dag-resources` all behave exactly as before —
   for the whole window.
+- **`loop-speculate` no longer runs on it.** The last non-DAG caller of
+  `runLoopDag` is gone. The engine now has one runtime caller — the `loop-dag`
+  command — plus `loop-dag-resources` and `GET /api/loop-dags` reading its
+  checkpoints.
 - **The next major release removes the engine.** There is no dated cut-off yet.
   Finish what is in flight, but start new work on the Graph.
 - `loop-dag` and `loop-dag-resources` print that notice on **stderr** when they
@@ -532,11 +551,17 @@ seekforge graph validate graph.json
 seekforge graph run graph.json
 ```
 
-Step 1 refuses to emit a graph it cannot make behave identically: `outputPaths`,
-`consumeDependencyOutputs`, `verifierId`, per-node `options`, unequal
-`budgetWeight` under a shared budget, `predictiveBudget` under a shared budget,
-and a mixed per-node `failurePolicy` each fail with a named reason rather than
-being silently dropped.
+Step 1 refuses to emit a graph it cannot make behave identically, and names the
+reason instead of dropping the field: a per-node `options` key the Graph cannot
+declare, more than 32 `outputPaths`, more than 32 consumed dependency outputs, a
+dependency id that cannot become a Graph input name, a `budgetWeight` above
+1000, a `maxDurationMs` above 24 hours, a dependency policy needing more than 32
+condition terms, managed worktrees combined with explicit node workspaces,
+concurrency without isolation, `fanIn` without managed worktrees, and an
+approval gate id that is invalid or already taken. Everything else —
+`verifierId`, declared `outputPaths`, `consumeDependencyOutputs`, per-node
+`failurePolicy`, `predictiveBudget`, and the declarable half of `options` —
+converts, with the surviving differences reported as advisories on stderr.
 
 **Differences you still have to know.** These are behavior differences, not
 gaps; the ones the conversion can detect are reported on stderr by step 1:
@@ -565,7 +590,21 @@ type LoopOptions = {
   workspace: string;
   verifyCommand: string;        // fixed verifier; analyzed modes also require acceptance
   autoVerificationPlan?: boolean; // discover and freeze a root plan on a new Loop
-  verificationPlan?: Array<{ id: string; command: string; required?: boolean; timeoutMs?: number }>;
+  // One owner: @seekforge/shared parseLoopVerificationPlan. Every surface that
+  // accepts a plan (engine, graph node, WS loop frame, POST /api/runs, eval
+  // task) runs the same rules.
+  verificationPlan?: Array<{
+    id: string;                  // unique, /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
+    command: string;             // non-blank, <= 8192 chars
+    required?: boolean;
+    timeoutMs?: number;          // 1 .. 2147483647 (the largest delay a timer can hold)
+    paths?: string[];            // 1..64 unique relative prefixes
+    dependencyPaths?: string[];  // subset of paths
+    cacheable?: boolean;
+    dependsOn?: string[];        // unique known stage ids; the plan must be acyclic
+    parallel?: boolean;          // requires a non-empty resources list
+    resources?: string[];        // 1..16 unique names, /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
+  }>;
   stablePasses?: number; flakyRetries?: number;
   maxNoProgressRecoveries?: number; rollbackOnRegression?: boolean;
   requirementMode?: "quick" | "analyze" | "confirm"; // default quick
@@ -600,6 +639,14 @@ type LoopResult = {
   failureCategory?: LoopFailureCategory;
 };
 ```
+
+**Timeout ceiling.** `timeoutMs`, `verifyTimeoutMs`, `agentTimeoutMs` and
+`maxDurationMs` are capped at `MAX_LOOP_TIMEOUT_MS` (2 147 483 647 ms, ~24.8
+days). `setTimeout` keeps its delay in a signed 32-bit field, so a larger delay
+fires immediately instead of never — the longest wait you could ask for behaved
+as the shortest. A value above the cap is a `RangeError`; a value read back from
+a checkpoint written before the cap existed is clamped to it, so the Loop still
+resumes.
 
 `resumeAutoLoop` also accepts additive cost, token, duration, verifier-run, and
 iteration capacity. It restores cumulative elapsed time, tokens, verifier count,

@@ -39,7 +39,7 @@ import {
   writeProjectFileAtomic,
 } from "../config.js";
 import { readFileBounded } from "@seekforge/shared/bounded-file-read";
-import { MAX_CONFIG_FILE_BYTES } from "@seekforge/shared/config-layers";
+import { MAX_CONFIG_FILE_BYTES, sanitizeProjectConfig } from "@seekforge/shared/config-layers";
 import { PERMISSION_LEVEL, type PermissionName } from "@seekforge/shared";
 import { readJsonBody, requestAbortSignal, sendApiError, sendJson } from "../http.js";
 import { runShellCommand } from "../shell-command.js";
@@ -162,7 +162,14 @@ function writeConfigDoc(workspace: string, scope: McpScope, doc: ConfigDoc): voi
 }
 
 function mcpServersAt(workspace: string, scope: McpScope): Record<string, McpServerConfig> {
-  const servers = readConfigDoc(workspace, scope).mcpServers;
+  const doc = readConfigDoc(workspace, scope);
+  // Report the project scope the way every loader reduces it, not the way the
+  // file spells it. This screen is where a user decides whether to copy an entry
+  // into global config with `trusted: true`, so showing a `permission` that
+  // `loadConfig` drops would advertise a level the repository does not actually
+  // get. One owner does the reducing; this route must not re-derive it.
+  const reduced = scope === "project" ? sanitizeProjectConfig(doc) : doc;
+  const servers = reduced.mcpServers;
   if (typeof servers !== "object" || servers === null || Array.isArray(servers)) return {};
   return Object.fromEntries(Object.entries(servers).filter((entry) => isMcpServerConfig(entry[1])));
 }
@@ -199,7 +206,7 @@ function sanitizedOauth(oauth: McpServerConfig["oauth"]): Record<string, string>
   };
 }
 
-function sanitizedMcpServer(name: string, cfg: McpServerConfig, source: McpScope, shadowedGlobal = false) {
+function sanitizedMcpServer(name: string, cfg: McpServerConfig, source: McpScope, shadowedProject = false) {
   return {
     name,
     transport: cfg.url ? ("http" as const) : ("stdio" as const),
@@ -214,7 +221,8 @@ function sanitizedMcpServer(name: string, cfg: McpServerConfig, source: McpScope
     ...(cfg.permission ? { permission: cfg.permission } : {}),
     ...(cfg.toolPermissions ? { toolPermissions: cfg.toolPermissions } : {}),
     source,
-    shadowedGlobal,
+    /** A repository entry of this name exists and is ignored: the merge keeps the user's. */
+    shadowedProject,
   };
 }
 
@@ -487,9 +495,12 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
   }
 
   if (method === "GET" && path === "/api/mcp") {
-    // Configured servers only — never spawned here. Project entries shadow
-    // same-name global entries; secret values are represented by a sentinel
-    // that POST understands as "keep the existing value".
+    // Configured servers only — never spawned here. A repository layer may add
+    // names but never repoint one the user owns, so when both define a name the
+    // GLOBAL entry is the effective one and the project entry is reported as
+    // ignored. Listing the project entry as the winner told the user a
+    // repository had overridden their server, which is the opposite of what
+    // the merge does. Secret values are a sentinel POST reads as "keep".
     const globalServers = mcpServersAt(workspace, "global");
     const projectServers = mcpServersAt(workspace, "project");
     const names = [...new Set([...Object.keys(globalServers), ...Object.keys(projectServers)])].sort();
@@ -497,9 +508,9 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       res,
       200,
       names.map((name) =>
-        projectServers[name]
-          ? sanitizedMcpServer(name, projectServers[name], "project", globalServers[name] !== undefined)
-          : sanitizedMcpServer(name, globalServers[name]!, "global"),
+        globalServers[name]
+          ? sanitizedMcpServer(name, globalServers[name], "global", projectServers[name] !== undefined)
+          : sanitizedMcpServer(name, projectServers[name]!, "project"),
       ),
     );
   }

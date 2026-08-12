@@ -1,5 +1,11 @@
 import { compareByCodePoints } from "@seekforge/shared";
-export const ORCHESTRATION_RESOURCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+/**
+ * The resource-identifier format is a cross-package contract — a verification
+ * stage may reserve resources and that plan arrives over WS and REST — so it is
+ * owned by `@seekforge/shared`, which the protocol decoders can reach. Only the
+ * scheduling semantics below are core's.
+ */
+export { ORCHESTRATION_RESOURCE_ID_RE, isValidOrchestrationResourceId } from "@seekforge/shared";
 
 export type OrchestrationScheduleCandidate = {
   id: string;
@@ -11,10 +17,6 @@ export type OrchestrationScheduleCandidate = {
 export type OrchestrationRunningReservation = {
   resources?: readonly string[];
 };
-
-export function isValidOrchestrationResourceId(value: unknown): value is string {
-  return typeof value === "string" && ORCHESTRATION_RESOURCE_ID_RE.test(value);
-}
 
 /** Dot-separated resources form a hierarchy: `provider.deepseek` conflicts with `provider.deepseek.chat`. */
 export function orchestrationResourcesOverlap(left: string, right: string): boolean {

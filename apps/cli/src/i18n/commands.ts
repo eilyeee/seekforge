@@ -141,6 +141,8 @@ export const commands = {
     "cmd.mcp.serverError": "{name}  ({cmd}, {trust})  error: {error}",
     "cmd.mcp.trusted": "trusted",
     "cmd.mcp.untrusted": "untrusted",
+    "cmd.mcp.fromRepository": "from this repository",
+    "cmd.mcp.fromUser": "from your config",
 
     // ── cmd.mcpLogin.* ──────────────────────────────────────────────────
     "cmd.mcpLogin.unknownServer": 'no MCP server named "{name}" in config',
@@ -359,6 +361,8 @@ export const commands = {
     "cmd.mcp.serverError": "{name}  ({cmd}, {trust})  错误：{error}",
     "cmd.mcp.trusted": "受信任",
     "cmd.mcp.untrusted": "不受信任",
+    "cmd.mcp.fromRepository": "来自本仓库",
+    "cmd.mcp.fromUser": "来自你的配置",
 
     // ── cmd.mcpLogin.* ──────────────────────────────────────────────────
     "cmd.mcpLogin.unknownServer": "配置中没有名为「{name}」的 MCP 服务器",

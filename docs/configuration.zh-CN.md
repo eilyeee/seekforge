@@ -1065,7 +1065,7 @@ description: House style
 
 | 字段 | 合并策略 |
 | --- | --- |
-| `mcpServers` | 按服务器键合并。仓库条目会遮蔽同名全局条目，但始终不受信任；只有完整的用户级条目才能启用自动连接。 |
+| `mcpServers` | 按服务器键合并，且**区分来源**。仓库层（`.seekforge/config.json`、`config.local.json`，以及两者中的 profile）可以新增服务器名，但绝不能覆盖用户级层已定义的名字；它们的条目一律失去 `trusted`，以及任何比 `write` 更宽松的 `permission`/`toolPermissions`。只有完整的用户级条目才能启用自动连接。这一点在每个界面上都成立——CLI、TUI、`seekforge serve`，以及经由服务器的 Desktop——因为四者走的是同一套分层代数，而层的来源是其类型的一部分。目前只有 CLI 会把这类收窄打印出来，其余界面只执行、不提示。 |
 | `permissionRules` | 按高优先级在前拼接，但仓库层只能贡献有效的 `deny` 规则。 |
 | `hooks` | 在可信层间按阶段拼接：global → settings。仓库 hook 会被忽略。 |
 

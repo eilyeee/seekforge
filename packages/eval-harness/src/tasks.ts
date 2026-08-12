@@ -25,7 +25,7 @@ import {
 } from "@seekforge/core";
 import { readTextFileBounded } from "./file-io.js";
 import { MAX_TASK_FILE_BYTES, MAX_TASK_FILES } from "./limits.js";
-import { compareByCodePoints } from "@seekforge/shared";
+import { compareByCodePoints, parseLoopVerificationPlan } from "@seekforge/shared";
 
 export const TASK_RUNNERS = ["agent", "loop", "session_scenario", "graph"] as const;
 export type TaskRunner = (typeof TASK_RUNNERS)[number];
@@ -402,61 +402,13 @@ function parseLoop(value: unknown, where: string): LoopTaskConfig {
     throw new Error(`${where}.interruptAfterOccurrence requires interruptAfterEvent`);
   }
   if (value.verificationPlan !== undefined) {
-    if (
-      !Array.isArray(value.verificationPlan) ||
-      value.verificationPlan.length === 0 ||
-      value.verificationPlan.length > 16
-    ) {
-      throw new Error(`${where}.verificationPlan must contain 1 to 16 stages`);
-    }
-    const ids = new Set<string>();
-    loop.verificationPlan = value.verificationPlan.map((raw, index) => {
-      const stageWhere = `${where}.verificationPlan[${index}]`;
-      if (
-        !isRecord(raw) ||
-        typeof raw.id !== "string" ||
-        !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(raw.id) ||
-        ids.has(raw.id) ||
-        typeof raw.command !== "string" ||
-        raw.command.trim() === "" ||
-        raw.command.length > 8_192 ||
-        (raw.required !== undefined && typeof raw.required !== "boolean") ||
-        (raw.cacheable !== undefined && typeof raw.cacheable !== "boolean") ||
-        (raw.dependencyPaths !== undefined &&
-          (!Array.isArray(raw.dependencyPaths) ||
-            raw.dependencyPaths.length === 0 ||
-            raw.dependencyPaths.length > 64 ||
-            raw.dependencyPaths.some((path) => !Array.isArray(raw.paths) || !raw.paths.includes(path)))) ||
-        (raw.paths !== undefined &&
-          (!Array.isArray(raw.paths) ||
-            raw.paths.length === 0 ||
-            raw.paths.length > 64 ||
-            raw.paths.some(
-              (path) =>
-                typeof path !== "string" ||
-                path.length === 0 ||
-                path.length > 512 ||
-                path.startsWith("/") ||
-                /^[A-Za-z]:[\\/]/.test(path) ||
-                path
-                  .replaceAll("\\", "/")
-                  .split("/")
-                  .some((part) => part === "" || part === "." || part === ".."),
-            ))) ||
-        (raw.timeoutMs !== undefined && (!Number.isSafeInteger(raw.timeoutMs) || (raw.timeoutMs as number) <= 0))
-      ) {
-        throw new Error(`${stageWhere} is invalid`);
-      }
-      ids.add(raw.id);
-      return {
-        id: raw.id,
-        command: raw.command,
-        ...(typeof raw.required === "boolean" ? { required: raw.required } : {}),
-        ...(typeof raw.timeoutMs === "number" ? { timeoutMs: raw.timeoutMs } : {}),
-        ...(Array.isArray(raw.paths) ? { paths: raw.paths as string[] } : {}),
-        ...(Array.isArray(raw.dependencyPaths) ? { dependencyPaths: raw.dependencyPaths as string[] } : {}),
-        ...(typeof raw.cacheable === "boolean" ? { cacheable: raw.cacheable } : {}),
-      };
+    // A task file is authored text: a misspelled stage field is a fixture bug
+    // that must fail loudly, never a field to drop. Nothing here is replayed
+    // state, and the plan is handed to `runAutoLoop` as-is, so the engine's own
+    // stage-timeout ceiling is the right one.
+    loop.verificationPlan = parseLoopVerificationPlan(value.verificationPlan, {
+      label: `${where}.verificationPlan`,
+      rejectUnknownFields: true,
     });
   }
   if (value.resume !== undefined) {

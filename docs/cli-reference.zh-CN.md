@@ -216,6 +216,8 @@
 `--resume` / `--dag-id` 检查点。`--approve <node-id>` 可通过节点审批门，
 `--rerun <node-id>` 会让该节点及其下游结果失效。
 `--predictive-budget` 使用有界历史需求，`--worktree-limit` 限制保留的托管 worktree。
+逐节点 `options` 携带有界的 Loop 配置，并由 `export-graph` 原样保留；不支持的键会被指名拒绝。
+给 DAG 文件加上 `options` 会改变该 DAG 的指纹，因此请先跑完在途检查点再添加。
 `loop-dag-resources <id> inspect|archive|prune|promote` 管理图资源。
 
 **`loop-dag` 与 `loop-dag-resources` 已弃用。** 它们已进入弃用窗口，运行时会在
@@ -225,8 +227,9 @@ stderr 打印提示，因此不影响机器可读的 stdout。它们只接受正
 graph.json` → `seekforge graph validate graph.json` → `seekforge graph run
 graph.json`。见 [Loop DAG 的弃用窗口](loop-engineering.zh-CN.md#loop-dag-的弃用窗口)。
 
-`loop-speculate <file> --budget <usd>` 持久运行两到三个隔离策略；`loop-speculation-list` 与
-`loop-speculation-promote` 用于查看并显式合并胜出结果。
+`loop-speculate <file> --budget <usd>` 以工程图 fan-out 的形式持久运行两到三个隔离策略，它们共享同一个预算；
+`loop-speculation-list` 与 `loop-speculation-promote` 用于查看并显式合并胜出结果，也适用于由 Loop DAG 引擎
+记录的推测。
 `loop-evidence <id> --format json|sarif|junit [--compare <id>]` 可导出完整性证据或比较运行；`loop-evidence --verify <file>` 重校验导出报告的完整性摘要，不匹配时以非零码退出。
 `graph validate|run|resume|list|show|history|diagnose|health|priority|delete` 管理异构工程图；`graph intelligence [graph-id]` 报告有界自适应调度证据，`graph health <graph-id>` 汇总精确指纹预测、瓶颈、血缘与反事实。`graph migration-plan <file>` 预览根与子级失效，`graph expansion-plan <file>` 校验只追加演化，`graph migrate <file>` 应用可恢复树事务，`graph expand <file>` 应用只追加演化。`graph artifact-materialize <sha256> <size> <target>` 恢复一个已验证 CAS blob；`graph artifact-store inspect|prune` 检查或引用安全地回收 blob。`graph simulate <file> [--worst-case]` 无状态预测，`graph explain` 报告阻塞。`graph pause|continue|steer|cancel-node|reprioritize` 写入持久控制信箱，可作用于任何存活进程持有的 Graph；Graph 级命令在安全调度边界生效，针对节点的命令在该节点开始后被拒绝。`graph signal <graph-id> <name> [--payload <json>]` 向等待中的 Graph 投递已声明的外部信号。`graph evidence <graph-id>` 导出防篡改报告，`graph evidence --verify <file>` 重校验其完整性摘要，不匹配时以非零码退出。`graph compare <graph-id> [--run-number N]` 将当前状态与已归档的终态运行做对比。`graph template list|show|register|compare|deprecate` 管理带版本的 schema-v2 注册表，`compare` 在分类为 breaking 时以非零码退出。`orchestration report [--loop-offset N --graph-offset N --limit N]` 增加持久 SLO、全局消耗率、预测校准、上下文路由、运行时重规划、执行器容量、部署、灰度、证明和 CAS 复用。`orchestration policy show|set`、`orchestration index show|refresh`、`orchestration proposals list|refresh|approve|dismiss|apply|rollback|observe`、`orchestration rollout list|start|advance|pause|resume|reconcile [--reason <text>]`、`orchestration controller show|resume [--reason <text>]` 与 `orchestration maintain [--dry-run]` 管理持久生命周期。SLO 消耗率持续处于 critical 时，`orchestration maintain` 会冻结自适应控制器，从而暂停学习式 Graph 调度与上下文 Loop 路由；`orchestration controller resume` 无需等待消耗率自然回落即可解除冻结，`orchestration controller show` 报告当前模式与原因。`orchestration rollout pause` 用于按停正在劣化的金丝雀，并把原因写入灰度时间线。灰度使用证据相互独立的 5%/25%/100% 阶段；`--expected-updated-at` 拒绝过期决策，所有自动回滚均需显式开启。定义可组合 Agent、Loop、函数、路由、审批门和嵌套图。详见[图工程](graph-engineering.zh-CN.md)。
 TUI 与 Desktop/WebSocket Loop 还支持在安全边界暂停、继续、设置优先级和引导。

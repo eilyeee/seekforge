@@ -172,7 +172,7 @@ export type McpServer = {
   permission?: McpPermission;
   toolPermissions?: Record<string, McpPermission>;
   source: McpScope;
-  shadowedGlobal: boolean;
+  shadowedProject: boolean;
 };
 
 export type FindingStatus = "open" | "triaged" | "fixing" | "resolved" | "accepted_risk" | "dismissed" | "reopened";

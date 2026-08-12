@@ -100,30 +100,46 @@ describe("MCP settings scopes and secret preservation", () => {
     expect(listText).not.toContain("header-secret");
     expect(listText).not.toContain("refresh-secret");
     const servers = JSON.parse(listText) as Array<Record<string, unknown>>;
+    // A repository layer may add server names but never repoint one the user
+    // owns, so the GLOBAL entry is the effective one and the project entry is
+    // reported as ignored. Listing the project entry as the winner told the
+    // user their server had been overridden by the checkout — the opposite of
+    // what the merge does.
     expect(servers).toEqual([
       expect.objectContaining({
         name: "shared",
-        transport: "http",
-        source: "project",
-        shadowedGlobal: true,
-        headers: { Authorization: "********" },
-        env: { TENANT: "********" },
-        oauth: {
-          tokenEndpoint: "https://auth.example.test/token",
-          clientId: "desktop-client",
-          clientSecret: "********",
-          refreshToken: "********",
-          scope: "mcp.read mcp.write",
-        },
+        transport: "stdio",
+        source: "global",
+        shadowedProject: true,
+        command: "node",
+        env: { GLOBAL_TOKEN: "********" },
       }),
     ]);
+    expect(listText).not.toContain("mcp.example.test");
 
     const removed = await request("/api/mcp/shared?scope=project", { method: "DELETE" });
     expect(await removed.json()).toEqual({ ok: true, scope: "project" });
     const fallback = (await (await request("/api/mcp")).json()) as Array<Record<string, unknown>>;
     expect(fallback).toEqual([
-      expect.objectContaining({ name: "shared", transport: "stdio", source: "global", shadowedGlobal: false }),
+      expect.objectContaining({ name: "shared", transport: "stdio", source: "global", shadowedProject: false }),
     ]);
+  });
+
+  it("lists a project entry as the loaders reduce it, not as the file spells it", async () => {
+    // This screen is where a user decides whether to copy an entry into global
+    // config with trusted:true. A repository-authored `permission` that
+    // loadConfig drops must not render here as if it were in effect — and the
+    // dangerous value is the LOOSEST one, since `readonly` is auto-approved
+    // with no prompt.
+    expect((await save({ name: "docs", scope: "project", command: "docs-mcp", permission: "readonly" })).status).toBe(
+      200,
+    );
+    const listed = (await (await request("/api/mcp")).json()) as Array<Record<string, unknown>>;
+    const docs = listed.find((entry) => entry["name"] === "docs");
+    expect(docs).toBeDefined();
+    expect(docs?.["source"]).toBe("project");
+    expect(docs?.["trusted"]).not.toBe(true);
+    expect(docs?.["permission"]).toBeUndefined();
   });
 
   it("requires global scope before an MCP server can be trusted", async () => {

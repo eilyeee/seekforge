@@ -1,5 +1,5 @@
 import { lstatSync, realpathSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { isAbsolute, resolve, sep } from "node:path";
 import { isRecord } from "../util/guards.js";
 import {
   type EngineeringGraphDefinition,
@@ -140,10 +140,14 @@ export function resolveEngineeringGraphWorkspaces(
             ? node.workspace
             : resolve(graphRoot, node.workspace)
           : graphRoot);
-      const rel = relative(graphRoot, resolve(requested));
-      if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-        throw new Error(`Graph node ${key} workspace escapes the graph workspace`);
-      }
+      // Containment is one rule, checked once, against the resolved truth.
+      // There used to be a `relative(graphRoot, resolve(requested))` check
+      // above this one: `graphRoot` is realpath'd and `resolve()` is not, so
+      // the two spellings of the same path disagreed and any workspace reached
+      // through a symlinked ancestor — every macOS `/var/folders` temp dir —
+      // was rejected as an escape that the check below would have allowed.
+      // `lstat` still runs on the raw path, so a symlinked final component is
+      // refused before its target is ever consulted.
       const stat = lstatSync(requested);
       if (!stat.isDirectory() || stat.isSymbolicLink()) {
         throw new Error(`Graph node ${key} workspace must be a physical directory`);

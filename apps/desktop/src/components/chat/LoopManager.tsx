@@ -3,6 +3,13 @@ import { api, ApiError } from "../../lib/api";
 import { LatestRequest } from "../../views/async-coordination";
 import { useWorkspaceAsyncCoordinator } from "../../views/use-workspace-async";
 import { useT } from "../../lib/i18n";
+import {
+  orchestrationPolicyDraft,
+  orchestrationPolicySaveVersion,
+  parseOrchestrationPolicyInput,
+  type OrchestrationPolicyDraft,
+  type OrchestrationPolicyEdit,
+} from "../../lib/orchestration-policy-input";
 import { useStore } from "../../store";
 import type {
   EngineeringGraphDetail,
@@ -54,6 +61,11 @@ export function LoopManager({ running, onResume }: Props) {
   const [dagResources, setDagResources] = useState<Record<string, LoopDagResourceReport>>({});
   const [speculations, setSpeculations] = useState<LoopSpeculationSummary[]>([]);
   const [orchestration, setOrchestration] = useState<WorkspaceOrchestrationReport>();
+  // undefined = "not edited": the editor then shows the persisted policy, so a
+  // periodic report reload refreshes the fields instead of fighting the typist.
+  // Once edited, the draft carries the policy version it was filled from, which
+  // is what the save is checked against.
+  const [policyEdit, setPolicyEdit] = useState<OrchestrationPolicyEdit>();
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -96,6 +108,7 @@ export function LoopManager({ running, onResume }: Props) {
   useEffect(() => {
     setOrchestration(undefined);
     setOrchestrationBusy(false);
+    setPolicyEdit(undefined);
   }, [workspaceId]);
   useEffect(() => {
     for (const graph of graphs) if (graph.status === "running" && graph.runId) subscribeGraphRun(graph.runId);
@@ -520,6 +533,53 @@ export function LoopManager({ running, onResume }: Props) {
     }
   };
 
+  const changePolicyDraft = (draft: OrchestrationPolicyDraft) =>
+    setPolicyEdit((previous) =>
+      previous
+        ? { ...previous, draft }
+        : // Pin the version on the first keystroke: the token has to describe
+          // the policy the fields were filled from, not a later reload of it.
+          {
+            draft,
+            ...(orchestration?.policyState ? { baseUpdatedAt: orchestration.policyState.updatedAt } : {}),
+          },
+    );
+
+  /**
+   * Writes the SLO thresholds the report's breach verdict is computed against.
+   * The values go to the route exactly as typed — it and core own the bounds —
+   * and the version the fields were filled from is sent as `expectedUpdatedAt`,
+   * so a policy someone else changed meanwhile is reported, not overwritten.
+   */
+  const saveOrchestrationPolicy = async () => {
+    const version = orchestrationPolicySaveVersion(policyEdit, orchestration?.policyState);
+    if ("conflict" in version) {
+      setError(t("chat.loop.orchestration.policyEdit.conflict"));
+      return;
+    }
+    const request = orchestrationRequests.beginLatest(workspaceId);
+    if (!request) return;
+    setOrchestrationBusy(true);
+    try {
+      const update = parseOrchestrationPolicyInput(
+        policyEdit?.draft ?? orchestrationPolicyDraft(orchestration?.policyState),
+        version.expectedUpdatedAt,
+      );
+      await api.orchestrationPolicySet(update, workspaceId);
+      const report = await api.orchestrationReport(workspaceId);
+      if (orchestrationRequests.isCurrent(request)) {
+        setOrchestration(report);
+        // Re-prefill from what was actually persisted rather than from the draft.
+        setPolicyEdit(undefined);
+        setError("");
+      }
+    } catch (caught) {
+      if (orchestrationRequests.isCurrent(request)) setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      if (orchestrationRequests.isCurrent(request)) setOrchestrationBusy(false);
+    }
+  };
+
   const transitionOrchestrationRollout = async (
     proposal: OrchestrationProposal,
     operation: "start" | "advance" | "pause" | "resume",
@@ -660,6 +720,9 @@ export function LoopManager({ running, onResume }: Props) {
         busy={resourceBusy || orchestrationBusy}
         onRefresh={() => void refreshOrchestration()}
         onMaintain={() => void maintainOrchestration()}
+        policyDraft={policyEdit?.draft ?? orchestrationPolicyDraft(orchestration?.policyState)}
+        onPolicyDraftChange={changePolicyDraft}
+        onPolicySave={() => void saveOrchestrationPolicy()}
         onProposalReview={(proposal, decision) => void reviewOrchestrationProposal(proposal, decision)}
         onProposalApply={(proposal) => void deployOrchestrationProposal(proposal, "apply")}
         onProposalRollback={(proposal) => void deployOrchestrationProposal(proposal, "rollback")}

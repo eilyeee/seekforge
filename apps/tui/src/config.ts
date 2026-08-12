@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { HookConfig, McpServerConfig, MemoryMaintenanceConfig, ModelPricing } from "@seekforge/core";
 import type { HookStage, PermissionRule } from "@seekforge/shared";
-import { mergeConfigLayers, sanitizeProjectConfig } from "@seekforge/shared/config-layers";
+import { mergeConfigLayers, repositoryConfigLayer, userConfigLayer } from "@seekforge/shared/config-layers";
 import { classifyConfigKeys, type ConfigKeyVerdict, knownConfigKeys } from "@seekforge/shared/config-manifest";
 import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 
@@ -179,8 +179,12 @@ const HOOK_STAGE_ORDER: readonly HookStage[] = [
 /** Precedence: env > safe project preferences > ~/.seekforge/config.json */
 export function mergeTuiConfig(global: TuiConfig, project: TuiConfig): TuiConfig {
   // Repository config is downgraded before the shared merge: it cannot route
-  // credentials, execute startup code, authorize tools, or grant MCP trust.
-  return mergeConfigLayers<TuiConfig>([global, sanitizeProjectConfig(project)], { hookStages: HOOK_STAGE_ORDER });
+  // credentials, execute startup code, authorize tools, or grant MCP trust —
+  // and, because the layer carries its origin, it cannot repoint an MCP server
+  // the user defined either.
+  return mergeConfigLayers<TuiConfig>([userConfigLayer(global), repositoryConfigLayer(project)], {
+    hookStages: HOOK_STAGE_ORDER,
+  });
 }
 
 export function loadConfig(projectPath: string): TuiConfig {

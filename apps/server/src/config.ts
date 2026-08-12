@@ -41,7 +41,8 @@ import {
   MAX_CONFIG_FILE_BYTES,
   mergeConfigLayers,
   readJsonConfigLayer,
-  sanitizeProjectConfig,
+  repositoryConfigLayer,
+  userConfigLayer,
 } from "@seekforge/shared/config-layers";
 
 export const MAX_PROJECT_STATE_FILE_BYTES = 8_000_000;
@@ -469,8 +470,9 @@ export function loadConfig(workspace: string): ServerConfig {
   }
   // The checkout is untrusted: it may supply ordinary preferences and stricter
   // deny rules, but cannot route user credentials, execute startup commands,
-  // authorize tools, weaken isolation, or mark an MCP server trusted.
-  return mergeConfigLayers<ServerConfig>([global, sanitizeProjectConfig(project)], {
+  // authorize tools, weaken isolation, mark an MCP server trusted, or repoint
+  // an MCP server the user defined (the layer origin is what enforces the last).
+  return mergeConfigLayers<ServerConfig>([userConfigLayer(global), repositoryConfigLayer(project)], {
     hookStages: HOOK_STAGE_ORDER,
   });
 }

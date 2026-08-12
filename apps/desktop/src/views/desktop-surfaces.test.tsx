@@ -28,7 +28,7 @@ describe("Desktop operational surfaces", () => {
       },
       trusted: false,
       source: "project",
-      shadowedGlobal: false,
+      shadowedProject: false,
     };
     const html = renderToStaticMarkup(
       createElement(McpEditorDialog, {

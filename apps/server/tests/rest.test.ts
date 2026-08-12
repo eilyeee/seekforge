@@ -1638,7 +1638,7 @@ describe("mcp endpoints", () => {
       headers: {},
       trusted: false,
       source: "project",
-      shadowedGlobal: false,
+      shadowedProject: false,
     });
 
     const broken = body.find((s: { name: string }) => s.name === "broken");

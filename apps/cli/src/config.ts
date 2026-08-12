@@ -2,7 +2,14 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { HookConfig, McpServerConfig, MemoryMaintenanceConfig, ModelPricing } from "@seekforge/core";
 import type { PermissionRule } from "@seekforge/shared";
-import { mergeConfigLayers, sanitizeProjectConfig } from "@seekforge/shared/config-layers";
+import {
+  type ConfigLayer,
+  type ConfigLayerOrigin,
+  describeConfigMergeReport,
+  mergeConfigLayersWithReport,
+  repositoryConfigLayer,
+  userConfigLayer,
+} from "@seekforge/shared/config-layers";
 import { classifyConfigKeys, type ConfigKeyVerdict, knownConfigKeys } from "@seekforge/shared/config-manifest";
 import { FileTooLargeError, MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 
@@ -177,6 +184,19 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+/**
+ * loadConfig runs several times in one process (the command, its verify pass,
+ * doctor's probes), so a per-call warning would repeat the same line three or
+ * four times. Warnings go to stderr, never stdout: a machine output format owns
+ * stdout and must stay parseable.
+ */
+const warnedConfigLines = new Set<string>();
+function warnOnce(line: string): void {
+  if (warnedConfigLines.has(line)) return;
+  warnedConfigLines.add(line);
+  process.stderr.write(line);
+}
+
 function readJson(path: string): CliConfig {
   try {
     const parsed: unknown = JSON.parse(readTextFileBounded(path, MAX_CONFIG_FILE_BYTES));
@@ -314,11 +334,17 @@ function readSettingsFile(settingsPath: string): CliConfig {
 }
 
 /**
- * Resolve a named profile across the file layers and return it as a single
- * Partial<CliConfig> overlay. On a name clash the project profile wins over the
- * global one, and the local profile wins over both — matching the precedence of
- * the plain config layers. Deep-merge fields (mcpServers/permissionRules/hooks)
- * are combined across layers the same way the base config layers are.
+ * Resolve a named profile across the file layers, returning its layers ready to
+ * slot into the base merge — global-profile first, then project, then local, so
+ * a name clash resolves project over global and local over both, matching the
+ * precedence of the plain config layers.
+ *
+ * The profile is returned as SEPARATE tagged layers rather than one pre-merged
+ * overlay. Flattening it first would erase which file each entry came from, and
+ * for `mcpServers` that distinction is the trust boundary. Merging the whole
+ * stack in one pass is equivalent for every other field: scalars spread in the
+ * same order, `permissionRules` unshift in the same order, and `hooks`
+ * concatenate per stage in the same order.
  *
  * Returns `undefined` when `name` is unset. Throws a descriptive (hint-carrying)
  * error when `name` is given but no layer defines a profile of that name.
@@ -326,7 +352,7 @@ function readSettingsFile(settingsPath: string): CliConfig {
 function resolveProfile(
   name: string | undefined,
   layers: { global: CliConfig; project: CliConfig; local: CliConfig },
-): Partial<CliConfig> | undefined {
+): ConfigLayer<Partial<CliConfig>>[] | undefined {
   if (!name) return undefined;
   const { global, project, local } = layers;
   const profileAt = (config: CliConfig): Partial<CliConfig> | undefined => {
@@ -339,12 +365,10 @@ function resolveProfile(
   const globalProfile = profileAt(global);
   const projectProfile = profileAt(project);
   const localProfile = profileAt(local);
-  const sources = [
-    globalProfile,
-    projectProfile === undefined ? undefined : sanitizeProjectConfig(projectProfile),
-    localProfile === undefined ? undefined : sanitizeProjectConfig(localProfile),
-  ];
-  const present = sources.filter((p): p is Partial<CliConfig> => p !== undefined);
+  const present: ConfigLayer<Partial<CliConfig>>[] = [];
+  if (globalProfile !== undefined) present.push(userConfigLayer(globalProfile));
+  if (projectProfile !== undefined) present.push(repositoryConfigLayer(projectProfile));
+  if (localProfile !== undefined) present.push(repositoryConfigLayer(localProfile));
   if (present.length === 0) {
     const names = Array.from(new Set([global, project, local].flatMap(validProfileNames))).sort();
     const list = names.length > 0 ? names.join(", ") : "(none defined)";
@@ -352,15 +376,7 @@ function resolveProfile(
       hint: `available profiles: ${list}`,
     });
   }
-
-  // Same merge algebra as the base layers (scalars later-wins, mcpServers
-  // per-name, permissionRules higher-first, hooks per-stage lower-first) —
-  // env overrides OFF: a profile overlay must stay env-free; loadConfig
-  // applies them once at the end.
-  const merged = mergeConfigLayers<Partial<CliConfig>>(present, { envOverrides: false });
-  // `profiles` must not nest inside a profile overlay.
-  delete merged.profiles;
-  return merged;
+  return present;
 }
 
 /**
@@ -377,27 +393,50 @@ function resolveProfile(
  * deep-merge fields (mcpServers, permissionRules, hooks), each layer — including
  * the profile — is merged into the existing logic rather than replacing
  * wholesale. The `profiles` map itself is stripped from the returned config.
+ *
+ * `mcpServers` is the one deep-merge field where "the higher layer wins" is the
+ * wrong rule, because the higher layers here are the repository-owned ones. The
+ * shared merge enforces that from the layer origins: a repository layer may add
+ * server names but never repoint one the user owns, and may only make its own
+ * entries stricter. See packages/shared/src/config-layers.ts.
  */
 export function loadConfig(projectPath: string, settingsPath?: string, profile?: string): CliConfig {
+  return resolveConfig(projectPath, settingsPath, profile).config;
+}
+
+/**
+ * loadConfig plus the origin of each surviving MCP server name. Management
+ * commands need it: `mcp list` spawns what it lists, and "who wrote this entry"
+ * is the difference between running the user's own tool and running whatever a
+ * cloned repository put in `.seekforge/config.json`.
+ */
+export function resolveConfig(
+  projectPath: string,
+  settingsPath?: string,
+  profile?: string,
+): { config: CliConfig; mcpOrigins: Record<string, ConfigLayerOrigin> } {
   const global = readJson(join(homedir(), ".seekforge", "config.json"));
   const project = readJson(join(projectPath, ".seekforge", "config.json"));
   const local = readJson(join(projectPath, ".seekforge", "config.local.json"));
   const settings = settingsPath ? readSettingsFile(settingsPath) : {};
 
   const profileName = profile ?? process.env["SEEKFORGE_PROFILE"] ?? undefined;
-  const prof = resolveProfile(profileName, { global, project, local }) ?? {};
+  const profileLayers = resolveProfile(profileName, { global, project, local }) ?? [];
 
-  // Repository/local layers retain safe preferences, deny rules, and untrusted
-  // MCP definitions. User-owned global/settings layers retain full authority;
-  // env credentials/runtime overrides land on top.
-  const result = mergeConfigLayers<CliConfig>([
-    global,
-    sanitizeProjectConfig(project),
-    sanitizeProjectConfig(local),
-    prof,
-    settings,
+  // Repository layers retain safe preferences, deny rules, and untrusted MCP
+  // definitions — repositoryConfigLayer downgrades and tags in one step.
+  // User-owned global/settings layers retain full authority; env
+  // credentials/runtime overrides land on top.
+  const { config: result, report } = mergeConfigLayersWithReport<CliConfig>([
+    userConfigLayer(global),
+    repositoryConfigLayer(project),
+    repositoryConfigLayer(local),
+    ...profileLayers,
+    userConfigLayer(settings),
   ]);
+  // A narrowing the user cannot see is its own defect: say what was dropped.
+  for (const line of describeConfigMergeReport(report)) warnOnce(line);
   // `profiles` is a selection mechanism, not effective config — never leak it.
   delete result.profiles;
-  return result;
+  return { config: result, mcpOrigins: report.mcpServerOrigins };
 }

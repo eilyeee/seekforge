@@ -1,9 +1,15 @@
 /** User-triggered GitHub issue-to-PR and review-fix workflows. */
 
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import {
+  type BaseConfigShape,
+  mergeConfigLayers,
+  readJsonConfigLayer,
+  repositoryConfigLayer,
+} from "@seekforge/shared/config-layers";
 import { isAuthorizedDir } from "../authorized-dirs.js";
 import { fail } from "../colors.js";
 import { loadConfig } from "../config.js";
@@ -132,6 +138,114 @@ export function preserveSessionTraces(workPath: string, projectPath: string): vo
   } catch (error) {
     console.error(`  could not preserve the session trace: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+/**
+ * Project assets a worktree run should see. They are repository-owned text the
+ * agent would read in the base checkout anyway, and none of them can carry a
+ * credential or grant a capability.
+ *
+ * `.seekforge/plugins` is deliberately absent: a plugin can contribute a
+ * `trusted: true` MCP server and hooks (packages/core/src/plugins/load.ts), so
+ * carrying it in would hand the isolated run execution authority the config
+ * projection is careful not to give it. `.seekforge/sessions` is absent because
+ * it travels the other way (preserveSessionTraces).
+ */
+const WORKTREE_PROJECT_ASSETS = [
+  join(".seekforge", "skills"),
+  join(".seekforge", "agents"),
+  join(".seekforge", "commands"),
+  join(".seekforge", "output-styles"),
+  join(".seekforge", "memory", "project.md"),
+] as const;
+
+/**
+ * Whether git ignores `rel` in this worktree. Classified by EXIT CODE only
+ * (0 ignored, 1 not, anything else an error) — no output is parsed, so no
+ * locale can change the answer. An error is treated as "not ignored": the
+ * conservative direction is to write nothing.
+ */
+function ignoredInWorktree(workPath: string, rel: string): boolean {
+  return run("git", ["check-ignore", "-q", "--", rel], workPath).code === 0;
+}
+
+/**
+ * Make the base repository's project configuration visible inside the temporary
+ * worktree, so an isolated `resolve` run behaves like the same task run in the
+ * checkout.
+ *
+ * It is not visible by default because `.seekforge/` is conventionally
+ * gitignored (this repository's own .gitignore does it), and `git worktree add`
+ * populates a fresh checkout from the index — so the worktree gets AGENTS.md but
+ * no `.seekforge/`. Only the user's `~/.seekforge` layer survives, and the run
+ * silently loses the project's model choice, its `deny` permission rules, and
+ * its skills/subagents/commands/output-styles/memory.
+ *
+ * What is carried in, and why that is exactly the right amount:
+ *
+ *  - The project layer is projected through `sanitizeProjectConfig` — the same
+ *    reduction `loadConfig` applies to it in the base checkout. A file written
+ *    into `$TMPDIR` can therefore only ever hold what a repository layer is
+ *    allowed to assert anyway: bounded enum/scalar preferences and `deny`
+ *    permission rules. `apiKey`, `baseUrl`, `verifyCommand`, hooks and every
+ *    other user-owned key cannot pass the filter, so the temp directory never
+ *    receives a credential — the hazard that makes copying config around a bad
+ *    idea in the first place.
+ *  - `config.local.json` is projected too. It is personal, but after the same
+ *    reduction nothing machine-specific survives, and the run is supposed to
+ *    match the checkout.
+ *  - `mcpServers` is dropped from the projection. Repository-owned entries are
+ *    never `trusted`, so they can never connect in a headless run and would
+ *    change nothing — while their `env`/`headers`/`oauth` are precisely the
+ *    fields that could put a secret in a temp directory that later gets deleted.
+ *
+ * Never overwrites: a repository that actually commits `.seekforge/config.json`
+ * already has that layer in the worktree, and it wins.
+ *
+ * Nothing is written unless git IGNORES the destination path in this worktree.
+ * `resolve` finishes with `git add -A`, so a seeded file that git can see would
+ * be committed and pushed into the pull request — carrying the user's local
+ * preferences into someone else's repository. A path git does not ignore is
+ * either already tracked (so it is present anyway and needs no seeding) or
+ * would end up in the diff; both mean: leave it alone.
+ */
+export function seedWorktreeProjectLayer(projectPath: string, workPath: string): string[] {
+  const carried: string[] = [];
+  const target = join(workPath, ".seekforge", "config.json");
+  if (!existsSync(target) && ignoredInWorktree(workPath, join(".seekforge", "config.json"))) {
+    const layers = [
+      join(projectPath, ".seekforge", "config.json"),
+      join(projectPath, ".seekforge", "config.local.json"),
+    ].map((path) => repositoryConfigLayer(readJsonConfigLayer<BaseConfigShape>(path, { requireObject: true })));
+    const projected = mergeConfigLayers(layers, { envOverrides: false }) as Record<string, unknown>;
+    delete projected["mcpServers"];
+    if (Object.keys(projected).length > 0) {
+      try {
+        mkdirSync(join(workPath, ".seekforge"), { recursive: true, mode: 0o700 });
+        writeFileSync(target, `${JSON.stringify(projected, null, 2)}\n`, { mode: 0o600 });
+        carried.push(join(".seekforge", "config.json"));
+      } catch (error) {
+        console.error(
+          `  could not carry the project config into the worktree: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+  }
+  for (const rel of WORKTREE_PROJECT_ASSETS) {
+    const from = join(projectPath, rel);
+    const to = join(workPath, rel);
+    if (!existsSync(from) || existsSync(to) || !ignoredInWorktree(workPath, rel)) continue;
+    try {
+      mkdirSync(dirname(to), { recursive: true, mode: 0o700 });
+      cpSync(from, to, { recursive: true });
+      carried.push(rel);
+    } catch (error) {
+      console.error(
+        `  could not carry ${rel} into the worktree: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  return carried;
 }
 
 type Result = { code: number; stdout: string; stderr: string; missing: boolean; timedOut: boolean };
@@ -314,7 +428,11 @@ export async function resolveCommand(issueArg: string, opts: ResolveOptions): Pr
   }
 
   console.log(`▶ resolving issue #${issue.number}: ${issue.title}`);
-  if (useWorktree) console.log(`  isolated worktree: ${workPath}`);
+  if (useWorktree) {
+    console.log(`  isolated worktree: ${workPath}`);
+    const carried = seedWorktreeProjectLayer(projectPath, workPath);
+    if (carried.length > 0) console.log(`  project configuration carried in: ${carried.join(", ")}`);
+  }
   let removeOnExit = false;
   const originalCwd = process.cwd();
   try {
@@ -436,6 +554,12 @@ export async function resolveReviewCommand(prArg: string, opts: ResolveReviewOpt
     if (useWorktree) removeWorktree(projectPath, workPath, true);
     fail(`failed to check out PR ${prArg}`, { hint: checkout.stderr.trim() || undefined });
     return;
+  }
+  // Same code path, same defect: without this the review-fix run sees only
+  // ~/.seekforge and loses the project's model, deny rules and skills.
+  if (useWorktree) {
+    const carried = seedWorktreeProjectLayer(projectPath, workPath);
+    if (carried.length > 0) console.log(`  project configuration carried in: ${carried.join(", ")}`);
   }
 
   const originalCwd = process.cwd();

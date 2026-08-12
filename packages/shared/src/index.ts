@@ -3,6 +3,11 @@
  * No runtime dependencies. Zod schemas live in @seekforge/core.
  */
 
+import type { LoopVerificationStage } from "./loop-verification-contract.js";
+
+export * from "./guards.js";
+export * from "./loop-verification-contract.js";
+
 // ---------------------------------------------------------------------------
 // Permissions (single source of truth: docs/05-tool-system.md §4)
 // ---------------------------------------------------------------------------
@@ -1059,14 +1064,6 @@ export type LoopStatus =
   | "interrupted"
   | "requirements_pending";
 export type LoopBudgetReason = "cost" | "tokens" | "duration" | "verify_runs";
-export type LoopVerificationStage = {
-  id: string;
-  command: string;
-  required?: boolean;
-  timeoutMs?: number;
-  /** Relative file/directory prefixes used for incremental selection. */
-  paths?: string[];
-};
 export type LoopStageResult = {
   id: string;
   command: string;

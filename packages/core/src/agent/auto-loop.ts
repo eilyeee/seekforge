@@ -49,7 +49,8 @@ import { loadSessionMessages, truncateSessionAtUserTurn } from "./trace.js";
 import { rewindSessionToTurn } from "./session-rewind.js";
 import { logSkillOutcome, selectedSkillIdsForSession } from "../skills/index.js";
 import { discoverLoopVerificationPlan } from "./loop-verification-plan.js";
-import { parseLoopVerificationPlan } from "./loop-options-contract.js";
+import { MAX_LOOP_TIMEOUT_MS, parseLoopVerificationPlan } from "./loop-options-contract.js";
+import type { LoopVerificationStage } from "@seekforge/shared";
 import {
   buildAcceptanceReviewPrompt,
   buildRequirementAnalysisPrompt,
@@ -142,23 +143,13 @@ export type LoopRecoveryStrategy =
   | "reduce_scope"
   | "replan";
 
-export type LoopVerificationStage = {
-  id: string;
-  command: string;
-  required?: boolean;
-  timeoutMs?: number;
-  /** Relative file or directory prefixes that select this stage after an edit. */
-  paths?: string[];
-  /** Subset of paths pulled in through an internal package dependency. */
-  dependencyPaths?: string[];
-  /** Reuse a successful path-scoped result within the same iteration's full fallback pass. */
-  cacheable?: boolean;
-  /** Explicit prerequisites; ready stages in the same wave may run concurrently. */
-  dependsOn?: string[];
-  /** Explicit opt-in for concurrent execution with disjoint logical resources. */
-  parallel?: boolean;
-  resources?: string[];
-};
+/**
+ * Declared shape of one verification stage. Owned by `@seekforge/shared`
+ * alongside the rules that validate it — the WS `loop` frame carries the same
+ * stages and that package cannot depend on core, so a second declaration here
+ * could only ever be a narrower mirror of it.
+ */
+export type { LoopVerificationStage };
 
 export type LoopStageResult = {
   id: string;
@@ -360,6 +351,15 @@ export type LoopResult = {
   recoveryAttempts?: number;
   failureCategory?: LoopFailureCategory;
 };
+
+/**
+ * Every `setTimeout` delay in this module goes through here. A delay above
+ * {@link MAX_LOOP_TIMEOUT_MS} overflows the timer's signed 32-bit field and
+ * fires at once, so an unclamped 30-day timeout would abort instantly. New
+ * options are rejected at validation; this also covers durations replayed from
+ * a checkpoint written before that bound existed.
+ */
+const timerDelayMs = (value: number): number => Math.max(1, Math.min(value, MAX_LOOP_TIMEOUT_MS));
 
 /** Tail-cap captured output to ~4 KB so continuations/results stay bounded. */
 const TAIL_CAP = 4096;
@@ -644,6 +644,30 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
       throw new RangeError(`Loop ${name} must be ${allowZero ? "a non-negative" : "a positive"} safe integer`);
     }
   };
+  /**
+   * A duration that reaches `setTimeout` must be representable by a timer.
+   * Anything past {@link MAX_LOOP_TIMEOUT_MS} overflows and fires immediately,
+   * so the longest wait a caller can ask for would behave as the shortest.
+   * Only what the caller declares now is rejected: a value read back from a
+   * checkpoint is clamped at the timer instead (see `timerDelayMs`), because
+   * resume must not strand a state file an older build wrote. Only the new
+   * upper bound lives here; `positiveSafeInteger` below still owns the rest, so
+   * every other rejection keeps the message it has always had.
+   */
+  const timerDuration = (name: string, value: number | null | undefined): void => {
+    if (Number.isSafeInteger(value) && (value as number) > MAX_LOOP_TIMEOUT_MS) {
+      throw new RangeError(`Loop ${name} must be an integer from 1 to ${MAX_LOOP_TIMEOUT_MS}`);
+    }
+  };
+  // NOT maxDurationMs. That is a cumulative wall-clock BUDGET carried across
+  // resumes, not a timer delay: it is only ever subtracted from elapsed time and
+  // the difference is clamped by `timerDelayMs` before it reaches `setTimeout`.
+  // Bounding it here rejected `--max-duration 2592000` (30 days, which the CLI
+  // accepts and the docs advertise) and — worse — stranded every checkpoint
+  // holding one, because `resumeAutoLoop` re-injects the persisted budget and
+  // `autoResumeInterruptedLoops` would then fail the same loop on every attempt.
+  timerDuration("verifyTimeoutMs", opts.verifyTimeoutMs);
+  timerDuration("agentTimeoutMs", opts.agentTimeoutMs);
   positiveSafeInteger("tokenBudget", opts.tokenBudget ?? opts.resumeState?.tokenBudget);
   positiveSafeInteger("maxDurationMs", opts.maxDurationMs ?? opts.resumeState?.maxDurationMs);
   positiveSafeInteger("maxVerifyRuns", opts.maxVerifyRuns ?? opts.resumeState?.maxVerifyRuns);
@@ -672,7 +696,8 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
   if (configuredPlan !== undefined) {
     // Pure: runs here, before the lifecycle lease, provider resolution and any
     // persistence below. `loop-options-contract.ts` owns the rules; this API
-    // bounds a stage timeout only by "positive safe integer".
+    // bounds a stage timeout only by what a timer can represent, where the
+    // graph layer additionally caps it at its node ceiling.
     //
     // A plan the caller hands us now is authored and checked strictly. One read
     // back from resume state was written by a build whose rules we do not know,
@@ -857,8 +882,14 @@ async function runAutoLoopWithLease(
   const tokenBudget = opts.tokenBudget ?? opts.resumeState?.tokenBudget ?? undefined;
   const maxDurationMs = opts.maxDurationMs ?? opts.resumeState?.maxDurationMs ?? undefined;
   const maxVerifyRuns = opts.maxVerifyRuns ?? opts.resumeState?.maxVerifyRuns ?? undefined;
-  const verifyTimeoutMs = opts.verifyTimeoutMs ?? opts.resumeState?.verifyTimeoutMs ?? DEFAULT_LOOP_VERIFY_TIMEOUT_MS;
-  const agentTimeoutMs = opts.agentTimeoutMs ?? opts.resumeState?.agentTimeoutMs ?? DEFAULT_LOOP_AGENT_TIMEOUT_MS;
+  // Clamped, not just validated: a checkpoint written before the timer ceiling
+  // existed may carry a duration no timer can represent, and resume repairs it.
+  const verifyTimeoutMs = timerDelayMs(
+    opts.verifyTimeoutMs ?? opts.resumeState?.verifyTimeoutMs ?? DEFAULT_LOOP_VERIFY_TIMEOUT_MS,
+  );
+  const agentTimeoutMs = timerDelayMs(
+    opts.agentTimeoutMs ?? opts.resumeState?.agentTimeoutMs ?? DEFAULT_LOOP_AGENT_TIMEOUT_MS,
+  );
   const maxAgentRetries = opts.maxAgentRetries ?? opts.resumeState?.maxAgentRetries ?? DEFAULT_LOOP_AGENT_RETRIES;
   const priority = opts.priority ?? opts.resumeState?.priority ?? 0;
   const verificationPlan: LoopVerificationStage[] = opts.verificationPlan ??
@@ -1206,7 +1237,7 @@ async function runAutoLoopWithLease(
     const durationLimited = durationBudgetApplies && remainingDuration <= configuredTimeout;
     const timeoutMs = Math.max(1, Math.min(configuredTimeout, remainingDuration));
     const timeoutController = new AbortController();
-    const timeout = setTimeout(() => timeoutController.abort(), timeoutMs);
+    const timeout = setTimeout(() => timeoutController.abort(), timerDelayMs(timeoutMs));
     timeout.unref?.();
     const runSignal = AbortSignal.any([timeoutController.signal, ...(opts.signal ? [opts.signal] : [])]);
     const startedAt = Date.now();
@@ -1552,7 +1583,7 @@ async function runAutoLoopWithLease(
     const timeoutController = new AbortController();
     const remainingDuration = maxDurationMs === undefined ? agentTimeoutMs : Math.max(1, maxDurationMs - elapsedMs());
     const timeoutMs = Math.min(agentTimeoutMs, remainingDuration);
-    const timeout = setTimeout(() => timeoutController.abort(), timeoutMs);
+    const timeout = setTimeout(() => timeoutController.abort(), timerDelayMs(timeoutMs));
     timeout.unref?.();
     const signals = [budgetController.signal, timeoutController.signal, ...(opts.signal ? [opts.signal] : [])];
     const runSignal = AbortSignal.any(signals);
@@ -1935,7 +1966,7 @@ async function runAutoLoopWithLease(
       const timeoutController = new AbortController();
       const remainingDuration = maxDurationMs === undefined ? agentTimeoutMs : Math.max(1, maxDurationMs - elapsedMs());
       const timeoutMs = Math.min(agentTimeoutMs, remainingDuration);
-      const timeout = setTimeout(() => timeoutController.abort(), timeoutMs);
+      const timeout = setTimeout(() => timeoutController.abort(), timerDelayMs(timeoutMs));
       timeout.unref?.();
       const runSignal = AbortSignal.any([
         budgetController.signal,

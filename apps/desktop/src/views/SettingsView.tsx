@@ -227,7 +227,7 @@ function McpSection() {
                   {Object.keys(srv.env).length > 0 && (
                     <Badge tone="neutral">{t("settings.mcpEnv", { count: Object.keys(srv.env).length })}</Badge>
                   )}
-                  {srv.shadowedGlobal && <Badge tone="warn">{t("settings.mcpShadowsGlobal")}</Badge>}
+                  {srv.shadowedProject && <Badge tone="warn">{t("settings.mcpProjectIgnored")}</Badge>}
                   <Button
                     variant="ghost"
                     size="sm"

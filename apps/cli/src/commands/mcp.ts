@@ -1,7 +1,7 @@
 import { createMcpClient } from "@seekforge/core";
 import { dim, fail } from "../colors.js";
 import { t } from "../i18n.js";
-import { loadConfig } from "../config.js";
+import { resolveConfig } from "../config.js";
 import {
   addMcpServer,
   ConfigParseError,
@@ -10,22 +10,39 @@ import {
   removeMcpServer,
   writeConfigDoc,
 } from "../mcp-config.js";
+import { ensureWorkspaceAuthorized } from "./run.js";
 
 /**
  * `seekforge mcp list` — spawn each configured server, handshake, and list
  * its tool names. A failing server shows its error and the listing continues.
+ *
+ * Listing is not a read: every entry is started, so an entry that came out of
+ * the checkout's `.seekforge/config.json` means this command runs a command the
+ * repository chose. `mcp add` writes there by default, so those entries are
+ * ordinarily the user's own — the thing that separates them from a hostile
+ * clone's is whether anybody has vouched for this folder. So when any listed
+ * server is repository-owned, take the same folder-access consent `run`, `repl`,
+ * `loop` and `graph` take before touching the checkout (`-y` pre-authorizes).
+ * Servers from the user's own global/`--settings` config need no such gate.
  */
-export async function mcpListCommand(opts: { tools?: boolean }): Promise<void> {
-  const config = loadConfig(process.cwd());
+export async function mcpListCommand(opts: { tools?: boolean; yes?: boolean }): Promise<void> {
+  const projectPath = process.cwd();
+  const { config, mcpOrigins } = resolveConfig(projectPath);
   const servers = Object.entries(config.mcpServers ?? {});
   if (servers.length === 0) {
     console.log(t("cmd.mcp.none"));
     return;
   }
+  const fromRepository = servers.some(([name]) => mcpOrigins[name] === "repository");
+  if (fromRepository && !(await ensureWorkspaceAuthorized(projectPath, { yes: opts.yes === true, machine: false }))) {
+    return;
+  }
 
   for (const [name, serverConfig] of servers) {
     const commandLine = [serverConfig.command, ...(serverConfig.args ?? [])].join(" ");
-    const trustLabel = serverConfig.trusted ? t("cmd.mcp.trusted") : t("cmd.mcp.untrusted");
+    const trustLabel = `${serverConfig.trusted ? t("cmd.mcp.trusted") : t("cmd.mcp.untrusted")}, ${
+      mcpOrigins[name] === "repository" ? t("cmd.mcp.fromRepository") : t("cmd.mcp.fromUser")
+    }`;
     const client = createMcpClient({ name, config: serverConfig });
     try {
       const tools = await client.listTools();

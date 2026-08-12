@@ -17,15 +17,44 @@ JSONL trace as an interactive run, so it can be replayed with `seekforge replay
 <id>`, reviewed with `seekforge audit <id>`, and undone with `seekforge rewind
 <id>`.
 
-Where that trace lives depends on isolation. An `ask` trigger (and any trigger
-pinned to `isolation: "workspace"`) writes into the workspace, so it appears in
-`seekforge sessions` there. An `edit` trigger normally runs in its own git
-worktree (see guardrail 4 below) and **writes its session trace inside that
-worktree** — `seekforge sessions` run from the base repository will not list it.
-The run ledger stays in the base workspace either way: `GET /api/runs` (or
-`.seekforge/runs.jsonl`) gives you the `runId`, the `sessionId`, and the
-`worktreeId`/`worktreeBranch` labels; `cd` into that worktree to run
-`seekforge sessions` / `audit` / `replay` against the trace.
+Where the run executes depends on isolation, but the trace always ends up where
+you look for it. An `ask` trigger (and any trigger pinned to
+`isolation: "workspace"`) runs in the workspace and writes its trace there. An
+`edit` trigger normally runs in its own git worktree (see guardrail 4 below) and
+writes its trace inside that worktree while it runs; when the run ends, the
+server copies every session the run produced — its own and any it dispatched —
+into the base workspace's `.seekforge/sessions/`. The same is true of a detached
+background run started with `POST /api/runs`, agent or Loop: whatever executes in
+a worktree leaves its trace in the checkout that owns its run ledger. So
+`seekforge sessions`, `seekforge audit <id>` and `seekforge replay <id>` in the
+**base repository** find the run even after the worktree has been merged or
+discarded (`DELETE /api/worktrees/:id`), which used to delete the audit trail
+with it. The run ledger stays in the base workspace either way: `GET /api/runs`
+(or `.seekforge/runs.jsonl`) gives you the `runId`, the `sessionId` and the
+`worktreeId`/`worktreeBranch` labels — and that `sessionId` now names a session
+the base checkout can open.
+
+The copy is deliberately narrow. It carries only the known trace files
+(`session.json`, `messages.jsonl`, `tool-calls.jsonl`, `events.jsonl`,
+`checkpoints.jsonl`, `compaction.json`, `summary.md`), only for sessions that
+were not already there when the run started, and never over a session id the
+base already holds — an isolated run cannot write a file of its own choosing
+into the base's session store, and cannot rewrite an earlier run's record.
+
+It does **not** prove that a mirrored session came from the agent loop. A fresh
+worktree has no `.seekforge/`, so anything the run writes there that parses as a
+session is carried over, and there is nothing unforgeable to filter on — the
+trace is authored by the agent process either way, so a run that wants to record
+something false can do it inside its own genuine session. Treat a run's trace as
+that run's account of itself, which is what a session trace has always been. It is done by the server after the run: the run gains no
+access to the base checkout. Whatever cannot be carried over (an id already
+taken, an unreadable file, more than 64 sessions or 256 MiB of trace in one run)
+is reported as a single warning `notice` frame on the run, readable with
+`GET /api/runs/:id/events`, instead of being lost silently. A run that hits those
+limits loses dispatched traces, not its own — the session the ledger names is
+copied first. That ordering needs the id, so it does not apply to a run that
+failed or was cancelled before reporting one; there the cap falls back to
+creation order.
 
 ## Safety first
 

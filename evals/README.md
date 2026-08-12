@@ -159,8 +159,10 @@ count as pass→fail regressions. Copy a reviewed, representative report over
 tool failures, 0 session errors, deepseek-v4-flash. `pagination-window-fix`
 passed 2/3; every other task, including all five `graph-*` control-plane tasks,
 passed 3/3. Every suite gate passed, including all four baseline-comparison
-gates; the run still exits non-zero, because without `--fail-on-regression` a
-single failed sample is enough.
+gates. The run still exits non-zero: without `--fail-on-regression` a single
+failed sample is enough, which is the default local behaviour. CI passes that
+flag (`.github/workflows/eval.yml`), so the weekly gate goes red on a regression
+against the baseline or a failed suite gate — not on one sample of one task.
 
 > `gitSha` is `9891cd0` and the working tree was clean when the run started, so
 > the numbers are attributable to exactly that commit — the previous baseline

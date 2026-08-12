@@ -1,4 +1,5 @@
 import { isAbsolute, relative, sep } from "node:path";
+import { isDenseArray } from "@seekforge/shared";
 
 export type OrchestrationNodeRef = { id: string; dependsOn?: readonly string[] };
 
@@ -7,14 +8,13 @@ export function nextOrchestrationVersion(previous: string, now = new Date().toIS
   return new Date(Math.max(Date.parse(now), Date.parse(previous) + 1)).toISOString();
 }
 
-/** Array inputs crossing a runtime boundary must own every indexed entry. */
-export function isDenseArray(value: unknown): value is unknown[] {
-  if (!Array.isArray(value)) return false;
-  for (let index = 0; index < value.length; index++) {
-    if (!Object.hasOwn(value, index)) return false;
-  }
-  return true;
-}
+/**
+ * Array inputs crossing a runtime boundary must own every indexed entry. The
+ * implementation lives in `@seekforge/shared` because the protocol decoders
+ * there need the same guard and cannot depend on core; this stays core's name
+ * for it.
+ */
+export { isDenseArray };
 
 export function validateOrchestrationSelection(
   value: unknown,

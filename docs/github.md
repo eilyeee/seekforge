@@ -61,8 +61,11 @@ The fix run is genuinely unattended — it can never stop and ask you something:
    The run is `edit` mode with `acceptEdits` (file edits apply autonomously) and
    is bounded by the **required** `--max-cost` budget.
 4. **Verify**: if a `verifyCommand` (and/or `lintCommand`) is configured in
-   `.seekforge/config.json`, it is run. **If it fails, no PR is opened** — the
-   fix is left on the branch and the failure is reported.
+   **your user config** (`~/.seekforge/config.json` or a `--settings` file), it
+   is run. **If it fails, no PR is opened** — the fix is left on the branch and
+   the failure is reported. These are user-owned settings: a value in a
+   repository's `.seekforge/config.json` is stripped as repository input, so a
+   clone cannot make `resolve` run a command of its choosing.
 5. **Commit + push + open the PR** (the command does this directly):
    `git add -A` → `git commit -m "Resolve #<n>: <title>"` →
    `git push -u origin seekforge/issue-<n>` →
@@ -76,6 +79,23 @@ The fix run is genuinely unattended — it can never stop and ask you something:
    worktree is deleted, so the run stays auditable (see below).
 
 If the agent made no changes, `resolve` stops before committing (nothing to PR).
+
+### What the isolated worktree sees
+
+`.seekforge/` is normally gitignored, so a fresh worktree would not contain it
+and the run would fall back to your global config alone. `resolve` therefore
+carries the repository's project layer in: the project's preferences (model,
+edit format, …), its `deny` permission rules, and its `.seekforge/skills`,
+`agents`, `commands`, `output-styles` and `memory/project.md`.
+
+It carries in exactly that and no more. The config is projected through the same
+reduction the base checkout applies to a repository layer, so credentials,
+`baseUrl`, `verifyCommand` and hooks cannot reach the temporary directory.
+`mcpServers` is excluded — repository entries are never trusted and so can never
+connect in a headless run, while their `env`/`headers` could hold a secret.
+`.seekforge/plugins` is excluded because a plugin can grant a trusted MCP server
+and hooks. Nothing is written unless git ignores the destination, so the seeded
+files can never end up in the pull request. `resolve-review` does the same.
 
 ## Flags
 

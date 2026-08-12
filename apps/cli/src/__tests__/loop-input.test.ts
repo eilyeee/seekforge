@@ -55,6 +55,30 @@ test("DAG input resolves workspaces and preserves valid conditions", () => {
   assert.equal(parsed.fanIn?.maxIterations, 2);
 });
 
+test("DAG input carries declarable per-node options and names the rest", () => {
+  const workspace = process.cwd();
+  const base = { task: "task", verifyCommand: "pnpm test" };
+  const parsed = parseLoopDagInput(
+    { nodes: [{ id: "a", ...base, options: { maxIterations: 7, codeReview: true } }] },
+    workspace,
+  );
+  assert.deepEqual(parsed.nodes[0]?.options, { maxIterations: 7, codeReview: true });
+  // An empty declaration stays absent so it cannot change a DAG fingerprint.
+  assert.equal(
+    parseLoopDagInput({ nodes: [{ id: "a", ...base, options: {} }] }, workspace).nodes[0]?.options,
+    undefined,
+  );
+  assert.throws(
+    () => parseLoopDagInput({ nodes: [{ id: "a", ...base, options: { approvalMode: "confirm" } }] }, workspace),
+    /unsupported option: approvalMode/,
+  );
+  assert.throws(
+    () => parseLoopDagInput({ nodes: [{ id: "a", ...base, options: { maxIterations: 0 } }] }, workspace),
+    /maxIterations must be an integer/,
+  );
+  assert.throws(() => parseLoopDagInput({ nodes: [{ id: "a", ...base, options: 3 }] }, workspace), /must be an object/);
+});
+
 test("DAG input rejects semantic defects before runtime setup", () => {
   const workspace = process.cwd();
   const base = { task: "task", verifyCommand: "pnpm test" };

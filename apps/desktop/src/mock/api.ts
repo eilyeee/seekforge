@@ -339,6 +339,21 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   if (method === "POST" && /^\/api\/orchestration\/proposals\/[^/]+\/(?:approve|dismiss|apply|rollback)$/.test(path)) {
     return {};
   }
+  if (method === "PUT" && path === "/api/orchestration/policy") {
+    const update = (body ?? {}) as Record<string, number | string | undefined>;
+    return {
+      version: 1,
+      policy: {
+        ...(update.maxP95DurationMs === undefined ? {} : { maxP95DurationMs: update.maxP95DurationMs }),
+        ...(update.maxCostUsd === undefined ? {} : { maxCostUsd: update.maxCostUsd }),
+        ...(update.maxFailureRate === undefined ? {} : { maxFailureRate: update.maxFailureRate }),
+        ...(update.minForecastCoverage === undefined ? {} : { minForecastCoverage: update.minForecastCoverage }),
+      },
+      evaluationWindow: update.evaluationWindow ?? 100,
+      maxBreachRate: update.maxBreachRate ?? 0.05,
+      updatedAt: new Date().toISOString(),
+    };
+  }
   if (method === "POST" && path === "/api/orchestration/deployments/observe") return { deployments: [] };
   if (method === "POST" && path === "/api/orchestration/maintain") return {};
   if (method === "POST" && path === "/api/orchestration/rollouts/reconcile") return { rollouts: [] };
@@ -1159,7 +1174,7 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
         ? { oauth: { ...oauth, refreshToken: "********", ...(oauth.clientSecret ? { clientSecret: "********" } : {}) } }
         : {}),
       source: scope ?? "project",
-      shadowedGlobal: false,
+      shadowedProject: false,
     };
     const existing = mcpServers.findIndex((server) => server.name === name);
     if (existing >= 0) mcpServers[existing] = srv;

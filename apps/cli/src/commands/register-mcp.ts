@@ -8,8 +8,9 @@ export function registerMcpCommands(program: Command): void {
   mcp
     .command("list", { isDefault: true })
     .option("--tools", "also print each tool's description")
+    .option("-y, --yes", "pre-authorize this folder (listing starts servers the checkout may define)")
     .description("list configured MCP servers and the tools they expose")
-    .action(async (opts: { tools?: boolean }) => {
+    .action(async (opts: { tools?: boolean; yes?: boolean }) => {
       await mcpListCommand(opts);
     });
   mcp

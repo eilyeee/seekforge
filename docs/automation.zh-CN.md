@@ -8,7 +8,11 @@ SeekForge 的服务器可以在**外部事件**到达时运行任务——GitHub
 
 每次被触发的运行都是一个**普通的、可审计的会话**——它写入与交互式运行完全相同的 JSONL 追踪记录，可以用 `seekforge replay <id>` 回放、用 `seekforge audit <id>` 审阅、用 `seekforge rewind <id>` 撤销。
 
-追踪记录写在哪里取决于隔离方式。`ask` 触发器（以及任何显式设为 `isolation: "workspace"` 的触发器）写入工作区，因此会出现在该工作区的 `seekforge sessions` 中。`edit` 触发器通常在自己的 git worktree 中运行（见下文第 4 条），并**把会话追踪写在那个 worktree 里**——在基仓库中执行 `seekforge sessions` 是列不出它的。run ledger 无论如何都留在基工作区：`GET /api/runs`（或 `.seekforge/runs.jsonl`）会给出 `runId`、`sessionId` 以及 `worktreeId`/`worktreeBranch` 标签；`cd` 进那个 worktree 再运行 `seekforge sessions` / `audit` / `replay` 即可访问追踪记录。
+运行发生在哪里取决于隔离方式，但追踪记录最终总会落在你查找它的地方。`ask` 触发器（以及任何显式设为 `isolation: "workspace"` 的触发器）在工作区内运行并把追踪写在那里。`edit` 触发器通常在自己的 git worktree 中运行（见下文第 4 条），运行期间把追踪写在该 worktree 里；运行结束时，服务器会把这次运行产生的每个会话——它自身的，以及它派发的子 agent 会话——复制到基工作区的 `.seekforge/sessions/` 下。通过 `POST /api/runs` 启动的后台运行同样如此，无论是 agent 还是 Loop：凡是在 worktree 中执行的运行，其追踪都会落到持有该运行 ledger 的检出里。因此即使该 worktree 之后被合并或丢弃（`DELETE /api/worktrees/:id`，过去这会连审计线索一起删掉），在**基仓库**中执行 `seekforge sessions`、`seekforge audit <id>`、`seekforge replay <id>` 依然能找到这次运行。run ledger 无论如何都留在基工作区：`GET /api/runs`（或 `.seekforge/runs.jsonl`）给出 `runId`、`sessionId` 以及 `worktreeId`/`worktreeBranch` 标签——而这个 `sessionId` 现在指向的是基检出可以打开的会话。
+
+这次复制被刻意限制得很窄：只按名字复制已知的追踪文件（`session.json`、`messages.jsonl`、`tool-calls.jsonl`、`events.jsonl`、`checkpoints.jsonl`、`compaction.json`、`summary.md`），只复制运行开始时还不存在的会话，并且绝不覆盖基检出中已存在的会话 id——被隔离的运行既不能把自选文件写进基工作区的会话目录，也不能改写更早那次运行的记录。
+
+但它**不能**证明被复制过来的会话确实出自 agent 循环。新建的 worktree 里没有 `.seekforge/`，因此运行往里写的任何能被解析为会话的东西都会被带过去，而且没有任何不可伪造的依据可供过滤——反正整份追踪本来就由 agent 进程写入，想记录假内容，在它自己那份真实会话里就能记。请把一次运行的追踪理解为「该次运行对自己的陈述」，这本来就是会话追踪的含义。复制由服务器在运行结束后完成：运行本身不会因此获得对基检出的任何访问权限。凡是无法复制过去的内容（id 已被占用、文件不可读、单次运行超过 64 个会话或 256 MiB 追踪）都会作为**一条**汇总的 warning `notice` 帧记录在该 run 上，可通过 `GET /api/runs/:id/events` 读到，而不是被悄悄丢弃。触及上限的运行丢失的是派发出去的子会话追踪，而不是它自己的——run ledger 指向的那个会话会最先复制。这个排序需要知道 id，因此对「在报告出 id 之前就失败或被取消」的运行不适用，那种情况下上限按创建顺序生效。
 
 ## 安全为先
 

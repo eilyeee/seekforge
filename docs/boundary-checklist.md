@@ -4854,3 +4854,64 @@ either.
   premise of its own brief was false. Neither `scripts/` gate can see this class:
   every value is a real number of the right type, and they simply mean different
   things.
+
+## 423. A check that hard-codes where to look is exempt-by-default everywhere else
+
+The drift gate's failure message says "document it or the command is
+undiscoverable". Its implementation read `apps/cli/src/index.ts` and
+`apps/cli/src/commands/*.ts`. Every command registered anywhere else — and three
+registrars live one directory above `commands/` — was therefore exempt from a
+check whose name promises *every top-level command*, and nothing anywhere said
+so. The gate was green the entire time.
+
+This happened **five times in one file** before anyone treated the shape rather
+than the instance: router-style routes scanned but not segment-dispatch ones;
+`CliConfig` read but not `TuiConfig`/`ServerConfig`; `commands/` read but not the
+directory above it; `apps/server/src/routes/` read but not `rest.ts` one level up
+(which is how `GET /api/models` stayed undocumented); and finally the one that
+proved widening lists can never be enough — `schedule`'s `install`, `uninstall`
+and `status` are registered by `for (const action of [...]) schedule.command(action)`,
+and **no regex can read a name that is not a literal**.
+
+- **Do:** derive the input set. Walk a tree, glob a shape (`<package>/src/config.ts`),
+  ask git for the tracked corpus. A new file in a new directory is then covered by
+  construction rather than by remembering to add it.
+- **Do:** make the check assert its own coverage. A sweep for the *registration
+  idiom* across the whole workspace, asserted to fall inside the scanned root,
+  turns "registered somewhere new" into a failure instead of an exemption.
+- **Do:** get the second opinion from different machinery. Comparing a scan
+  against a second scan of the same shape is the vacuous test from #400 wearing a
+  disguise: a registrar neither one reads is absent from both sides and the
+  comparison passes. Run the real program and read its registry, or read a
+  manifest the running program itself depends on.
+- **Do not** make a coverage self-check green by widening the scanned root. Ask
+  first whether the surface belongs where it now lives; the gate has just told
+  you something moved.
+- **Caught:** four of the five by accident, while looking for something else. The
+  fifth by the runtime probe built after finally treating the class. That ratio
+  is the argument for the whole entry.
+
+## 424. A duration validated only as "a positive integer" reaches a timer that cannot hold it
+
+`stageTimeoutMs` bounded a Loop stage timeout by `Number.MAX_SAFE_INTEGER`, and
+the value went straight to `setTimeout`. Node stores a timer delay in a signed
+32-bit field: past 2³¹−1 ms it overflows, warns, and fires **immediately**. A
+stage asking for 30 days aborted on the next tick, so the longest timeout the
+API accepted was the shortest one it could produce — and the failure looked like
+a flaky verifier, not a bad bound.
+
+- **Do:** bound a duration by what its *sink* can represent, not by what its
+  *type* can hold. `Number.isSafeInteger` says nothing about a timer, a
+  `setTimeout`, a 32-bit protocol field or a database column.
+- **Do:** clamp at the sink as well as validating at the door. Validation only
+  sees what a caller declares now; a value replayed from persisted state, or one
+  arriving through a path added later, reaches the sink without passing the
+  check. Here the engine validated the plan and then executed the *raw* stages,
+  so a resumed plan's `timeoutMs` never met the parser at all.
+- **Do:** pin it with a test that observes the *effect*, not the bound.
+  Asserting "rejects 2³¹" passes against a build that still overflows on a
+  replayed value; asserting "a slow verifier still completes under a huge stage
+  timeout" is what actually caught it.
+- **Caught:** by reading the call chain from a validator to its consumer while
+  merging five copies of the validator. Neither `scripts/` gate can see this
+  class: the value is a number of the right type and the code compiles.

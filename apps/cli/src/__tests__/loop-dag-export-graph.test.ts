@@ -87,6 +87,21 @@ describe("seekforge loop-dag export-graph", () => {
     expect(definition.nodes[1]?.inputs).toEqual({ build: { nodeId: "build" } });
   });
 
+  it("exports the per-node options the DAG file declares", () => {
+    workspaceWith({
+      nodes: [{ id: "build", ...node, options: { maxIterations: 9, stablePasses: 2 } }],
+    });
+    const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+    loopDagExportGraphCommand("dag.json", { graphId: "options" });
+
+    expect(process.exitCode).toBeUndefined();
+    const printed = stdout.mock.calls.map((call) => String(call[0])).join("");
+    const definition = parseEngineeringGraphDefinition(JSON.parse(printed) as unknown);
+    expect(definition.nodes[0]?.loopOptions).toEqual({ maxIterations: 9, stablePasses: 2 });
+  });
+
   it("fails with the structured incompatibility instead of exporting a lookalike", () => {
     workspaceWith({
       nodes: [

@@ -1187,7 +1187,7 @@ Three fields merge across layers rather than replace:
 
 | Field | Merge strategy |
 | --- | --- |
-| `mcpServers` | Per-server key merge. Repository entries shadow same-name global entries but are always untrusted; only a complete user-owned entry can enable automatic connection. |
+| `mcpServers` | Per-server key merge, **provenance-aware**. Repository layers (`.seekforge/config.json`, `config.local.json`, and profiles in either) may introduce new server names but never override a name a user-owned layer defines; their entries always lose `trusted` and any `permission`/`toolPermissions` looser than `write`. Only a complete user-owned entry can enable automatic connection. This holds on every surface — CLI, TUI, `seekforge serve`, and Desktop through the server — because all four merge through the same layer algebra, which takes each layer's origin as part of its type. Only the CLI prints the narrowing; the others enforce it silently. |
 | `permissionRules` | Concatenated higher-precedence first, but repository layers contribute only valid `deny` rules. |
 | `hooks` | Per-stage concatenation across trusted layers: global → settings. Repository hooks are ignored. |
 

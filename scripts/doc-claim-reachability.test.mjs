@@ -28,50 +28,133 @@
 // the "What this file cannot see" note at the bottom.
 
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { isTestPath, root, sourceFilesUnder, workspacePackages } from "./surface-registry.mjs";
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (...parts) => readFileSync(join(root, ...parts), "utf8");
 
 /**
- * Pages that make claims about what a user can reach.
- *
- * `boundary-checklist.md` and `roadmap.md` are excluded on purpose and they are
- * the only exclusions. The boundary checklist is an engineering log of bug
- * *classes*: it quotes internal helpers, deleted code and hypothetical snippets
- * (`setsid`, `closeBrowser`, `foo_bar`, `/var`), none of which is a promise to a
- * user — it produced every false positive in the first pass of this file. The
- * roadmap describes work that has not shipped, so naming a symbol there is a
- * plan, not a claim of reachability.
+ * Every Markdown page in the working tree that git would keep — tracked files
+ * plus new ones not covered by .gitignore. Ignored output (eval reports,
+ * `.seekforge/` session summaries) is not documentation, and asking git rather
+ * than filtering directory names by hand is why that distinction needs no list.
+ * `--others` matters: a page added in this commit must be classified now, not
+ * on the next CI run.
  */
-function docPages() {
-  const pages = ["README.md", "README.zh-CN.md"];
-  for (const name of readdirSync(join(root, "docs"))) {
-    if (!name.endsWith(".md")) continue;
-    if (name.startsWith("boundary-checklist") || name.startsWith("roadmap")) continue;
-    pages.push(`docs/${name}`);
-  }
-  return pages;
+function trackedFiles(...patterns) {
+  return execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z", ...patterns], {
+    cwd: root,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  })
+    .split("\0")
+    .filter(Boolean)
+    .sort();
 }
+
+/**
+ * Pages that are deliberately NOT read as claims, each with the reason it is
+ * not one. Nothing may be silently unread: the test below requires every
+ * tracked Markdown file to be either a claims page or an entry here, so a new
+ * documentation directory fails the gate until somebody decides which it is.
+ * The old version read `README*.md` plus `docs/*.md` and nothing else, which
+ * left `apps/cli/README.md` — the page npm shows on the package listing, with
+ * twenty `seekforge …` invocations in it — checked by nobody, and said so
+ * nowhere.
+ */
+const NOT_CLAIMS = new Map([
+  ["AGENTS.md", "instructions to contributors; names internals and gate scripts, promises a user nothing"],
+  ["CHANGELOG.md", "history: it names commands and flags as they were, including ones since removed"],
+  [
+    "docs/boundary-checklist.md",
+    "an engineering log of bug *classes*: it quotes internal helpers, deleted code and hypothetical snippets " +
+      "(`setsid`, `closeBrowser`, `foo_bar`, `/var`), none of which is a promise to a user — it produced every " +
+      "false positive in the first pass of this file",
+  ],
+  ["docs/boundary-checklist.zh-CN.md", "translation of the boundary checklist"],
+  ["docs/roadmap.md", "describes work that has not shipped, so naming a symbol there is a plan, not a claim"],
+  ["docs/roadmap.zh-CN.md", "translation of the roadmap"],
+  [
+    "apps/tui/README.md",
+    'a scope document. It states what the TUI deliberately does NOT implement ("The TUI has no `/graph-run`") ' +
+      "in the same code spans it uses for what it does, and a reachability walk cannot tell a negative claim " +
+      "from a positive one",
+  ],
+  ["apps/tui/DESIGN.md", "the TUI's design rationale, same negative-claim idiom as its README"],
+  ["evals/README.md", "how to run the eval harness against fixtures; the fixtures are inputs, not surfaces"],
+  ["evals/round-52-measurements.md", "a measurement log of one eval round"],
+  ["spikes/README.md", "throwaway experiments, explicitly not shipped"],
+]);
+
+const FIXTURE_PAGE = /^evals\/fixtures\//;
+
+/** Pages that make claims about what a user can reach. */
+function docPages() {
+  return trackedFiles("*.md").filter((page) => !NOT_CLAIMS.has(page) && !FIXTURE_PAGE.test(page));
+}
+
+test("every documentation page is either read as a claim or excluded on the record", () => {
+  const pages = docPages();
+  assert.ok(pages.length > 20, `expected many documentation pages, found ${pages.length}`);
+  const stale = [...NOT_CLAIMS.keys()].filter((page) => !existsSync(join(root, page)));
+  assert.deepEqual(stale, [], "these pages are excluded from the claims corpus but no longer exist");
+  // Nothing to assert about `pages` itself — the point is that the two sets
+  // partition the tracked Markdown, so a page added anywhere lands in the read
+  // set by default and has to be argued out of it rather than into it.
+  for (const page of pages) {
+    assert.ok(!NOT_CLAIMS.has(page), `${page} is both read and excluded`);
+  }
+});
+
+/**
+ * Source trees whose code can make a documented claim reachable.
+ *
+ * Derived from the workspace globs rather than listed, plus the two source
+ * trees that are not packages. `.cjs` counts: the VS Code extension is written
+ * in it, and an extension-only consumer used to look like no consumer at all.
+ */
+function sourceRoots() {
+  const parents = new Set(workspacePackages().map((pkg) => dirname(pkg.dir)));
+  for (const extra of ["scripts", "examples"]) {
+    if (existsSync(join(root, extra))) parents.add(join(root, extra));
+  }
+  return [...parents].sort();
+}
+
+/**
+ * The scanned roots must cover every source tree in the repository, or a
+ * documented symbol whose only caller lives outside them reads as dead.
+ * `evals/` and `spikes/` are the two trees deliberately left out: the eval
+ * fixtures are miniature repositories the agent is run *against*, so their
+ * code calling something would not make it reachable for a user, and spikes
+ * are experiments that ship to nobody.
+ */
+const NOT_SOURCE = new Map([
+  ["evals", "fixture repositories the eval tasks run against — inputs, not surfaces"],
+  ["spikes", "throwaway experiments, explicitly not shipped"],
+]);
+
+test("every source tree in the repository is either scanned or excluded on the record", () => {
+  const tracked = trackedFiles("*.ts", "*.tsx", "*.mts", "*.cts", "*.mjs", "*.cjs", "*.js");
+  const scanned = new Set(sourceRoots().map((dir) => dir.slice(root.length + 1)));
+  const unscanned = [...new Set(tracked.map((file) => file.split("/")[0]))]
+    .filter((top) => !scanned.has(top) && !NOT_SOURCE.has(top))
+    .sort();
+  assert.deepEqual(
+    unscanned,
+    [],
+    "these top-level directories hold source this gate never reads, so a symbol they are the only consumer of " +
+      "reads as unreachable — add them to sourceRoots() or to NOT_SOURCE with the reason",
+  );
+});
 
 /** Every source file under `dir`, recursively, skipping build output. */
-function sourceFiles(dir, out = []) {
-  if (!existsSync(dir)) return out;
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name !== "node_modules" && entry.name !== "dist" && entry.name !== "target") sourceFiles(full, out);
-    } else if (/\.(ts|tsx|mts|mjs)$/.test(entry.name)) {
-      out.push(full);
-    }
-  }
-  return out;
-}
+const sourceFiles = (dir) => sourceFilesUnder(dir);
 
-const isTestFile = (rel) => /(^|\/)(tests?|__tests__)\//.test(rel) || /\.test\./.test(rel) || /(^|\/)mock\//.test(rel);
+const isTestFile = (rel) => isTestPath(rel);
 
 /** Line number (1-based) of a match offset, for a report a human can act on. */
 const lineAt = (source, index) => source.slice(0, index).split("\n").length;
@@ -189,12 +272,7 @@ function findUse(name, declaredIn, lines) {
 }
 
 test("every symbol the documentation names is consumed by something that ships", () => {
-  const files = [
-    ...sourceFiles(join(root, "apps")),
-    ...sourceFiles(join(root, "packages")),
-    ...sourceFiles(join(root, "scripts")),
-    ...sourceFiles(join(root, "examples")),
-  ];
+  const files = sourceRoots().flatMap((dir) => sourceFiles(dir));
   const declared = exportedSymbols(files);
   const lines = new Map(files.map((file) => [file.slice(root.length + 1), readFileSync(file, "utf8").split("\n")]));
 
@@ -258,13 +336,21 @@ function cliVocabulary() {
   for (const match of source.matchAll(/\.command\(\s*"([a-z][a-z0-9-]*)"/g)) commands.add(match[1]);
   for (const match of source.matchAll(/\.alias\(\s*"([a-z][a-z0-9-]*)"/g)) commands.add(match[1]);
   const flags = new Set();
+  // Options that take a required value, e.g. `--output-format <fmt>`. The
+  // parser below has to know: in `seekforge -p "…" --output-format json` the
+  // word `json` is that option's value, and reading it as the command word
+  // reported `seekforge json` as an unregistered command.
+  const valued = new Set();
+  const declaration = (text) => {
+    const names = [...text.matchAll(/(--[a-z][a-z0-9-]*|-[a-zA-Z])/g)].map((flag) => flag[1]);
+    for (const name of names) if (name.startsWith("--")) flags.add(name.slice(2));
+    if (/<[^>]+>/.test(text)) for (const name of names) valued.add(name);
+  };
   for (const match of source.matchAll(/\.(?:option|requiredOption|addOption)\(\s*[`"']([^`"']+)[`"']/g)) {
-    for (const flag of match[1].matchAll(/--([a-z][a-z0-9-]*)/g)) flags.add(flag[1]);
+    declaration(match[1]);
   }
-  for (const match of source.matchAll(/new Option\(\s*"([^"]+)"/g)) {
-    for (const flag of match[1].matchAll(/--([a-z][a-z0-9-]*)/g)) flags.add(flag[1]);
-  }
-  return { commands, flags };
+  for (const match of source.matchAll(/new Option\(\s*"([^"]+)"/g)) declaration(match[1]);
+  return { commands, flags, valued };
 }
 
 /** Inline code spans plus the lines of the named fences, with line numbers. */
@@ -285,9 +371,10 @@ function codeClaims(source, fenceLanguages) {
 }
 
 test("every documented `seekforge` invocation names a registered command and registered options", () => {
-  const { commands, flags } = cliVocabulary();
+  const { commands, flags, valued } = cliVocabulary();
   assert.ok(commands.size > 50, `expected the CLI to register many commands, found ${commands.size}`);
   assert.ok(flags.size > 50, `expected the CLI to register many options, found ${flags.size}`);
+  assert.ok(valued.size > 20, `expected many value-taking options, found ${valued.size}`);
 
   const unknown = [];
   for (const page of docPages()) {
@@ -308,7 +395,17 @@ test("every documented `seekforge` invocation names a registered command and reg
         // `pnpm --filter seekforge build`, whose `--filter` belongs to pnpm.
         if (tokens[at] !== "seekforge") continue;
         const rest = tokens.slice(at + 1);
-        const first = rest.find((token) => !token.startsWith("-"));
+        // Skip past option values, so `--model deepseek-chat` does not offer
+        // `deepseek-chat` as the command word.
+        let first;
+        for (let i = 0; i < rest.length; i += 1) {
+          const token = rest[i];
+          if (!token.startsWith("-")) {
+            first = token;
+            break;
+          }
+          if (valued.has(token.split("=")[0]) && !token.includes("=")) i += 1;
+        }
         // Only the first word is checked, never the whole chain: `config set
         // model` ends in an argument, not a third command, and no mechanical
         // rule separates the two.
@@ -331,12 +428,34 @@ test("every documented `seekforge` invocation names a registered command and reg
 // 2b. A documented TUI slash command must be one the TUI parses.
 // ---------------------------------------------------------------------------
 
+/**
+ * The single-segment URL paths the HTTP server owns, read out of its dispatch
+ * rather than named. `/api` was hard-coded here and `/ws` was not, so the
+ * moment a page mentioned the WebSocket upgrade path this check called it an
+ * unimplemented TUI command — the same "one instance patched, the class left
+ * open" shape the rest of this work is about.
+ */
+function serverPathRoots() {
+  const roots = new Set();
+  for (const file of sourceFiles(join(root, "apps", "server", "src"))) {
+    if (isTestFile(file.slice(root.length + 1))) continue;
+    for (const match of readFileSync(file, "utf8").matchAll(
+      /pathname\s*(?:===|!==|\.startsWith\(\s*)\s*"\/([a-z0-9-]+)/g,
+    )) {
+      roots.add(match[1]);
+    }
+  }
+  return roots;
+}
+
 test("every documented `/slash` command and its options exist in the TUI", () => {
   const tui = sourceFiles(join(root, "apps", "tui", "src"))
     .filter((file) => !isTestFile(file.slice(root.length + 1)))
     .map((file) => readFileSync(file, "utf8"))
     .join("\n");
   assert.ok(tui.length > 10000, "could not read the TUI sources");
+  const serverPaths = serverPathRoots();
+  assert.ok(serverPaths.has("api"), "could not read the server's URL path roots");
 
   const unknown = [];
   for (const page of docPages()) {
@@ -346,10 +465,10 @@ test("every documented `/slash` command and its options exist in the TUI", () =>
       // were the only three false positives this check produced; requiring the
       // segment to end at whitespace removes all of them without an ignore list.
       const command = /^\/([a-z][a-z0-9-]*)(?=\s|$)/.exec(claim.trim());
-      // `/api` alone is the REST namespace root, which the automation guide
-      // names as a prefix ("management endpoints are under `/api`"). It is a
-      // route prefix, never a TUI command.
-      if (!command || command[1] === "api") continue;
+      // A path the server dispatches on is a route, never a TUI command: the
+      // automation guide names `/api` as a prefix ("management endpoints are
+      // under `/api`") and SERVER-API.md names `/ws` as the upgrade path.
+      if (!command || serverPaths.has(command[1])) continue;
       if (!tui.includes(`"/${command[1]}`) && !tui.includes(`"${command[1]}"`)) {
         unknown.push(`${page}:${line} — \`/${command[1]}\` is not a TUI command`);
         continue;
@@ -367,29 +486,20 @@ test("every documented `/slash` command and its options exist in the TUI", () =>
 // ---------------------------------------------------------------------------
 
 test("every SEEKFORGE_* variable the docs present as an input is read somewhere", () => {
-  const corpus = [
-    ...sourceFiles(join(root, "apps")),
-    ...sourceFiles(join(root, "packages")),
-    ...sourceFiles(join(root, "scripts")),
-  ]
+  const corpus = sourceRoots()
+    .flatMap((dir) => sourceFiles(dir))
     .map((file) => readFileSync(file, "utf8"))
     .join("\n");
-  const extra = [];
-  for (const dir of [join(root, "crates"), join(root, ".github", "workflows")]) {
-    if (!existsSync(dir)) continue;
-    const stack = [dir];
-    while (stack.length > 0) {
-      const current = stack.pop();
-      for (const entry of readdirSync(current, { withFileTypes: true })) {
-        const full = join(current, entry.name);
-        if (entry.isDirectory()) {
-          if (entry.name !== "target") stack.push(full);
-        } else if (/\.(rs|ya?ml|toml)$/.test(entry.name)) {
-          extra.push(readFileSync(full, "utf8"));
-        }
-      }
-    }
-  }
+  // Rust and CI read these names too. The list used to be `crates/` plus
+  // `.github/workflows/`, which missed `apps/desktop/src-tauri/src/` — the
+  // Tauri shell is Rust living under `apps/`, and it is the only reader of
+  // `SEEKFORGE_SERVE_CMD` and `SEEKFORGE_WORKSPACE`. Asking git for the tracked
+  // files of each type has no such geography built into it.
+  const extra = trackedFiles("*.rs", "*.yml", "*.yaml", "*.toml").map((file) => readFileSync(join(root, file), "utf8"));
+  assert.ok(
+    extra.some((text) => text.includes("std::env::var")),
+    "no Rust source reached the environment-variable corpus",
+  );
   const source = `${corpus}\n${extra.join("\n")}`;
 
   const missing = [];
@@ -412,7 +522,8 @@ test("every SEEKFORGE_* variable the docs present as an input is read somewhere"
 // ---------------------------------------------------------------------------
 
 test("every config key the configuration guides document is read by the code", () => {
-  const source = [...sourceFiles(join(root, "apps")), ...sourceFiles(join(root, "packages"))]
+  const source = sourceRoots()
+    .flatMap((dir) => sourceFiles(dir))
     .filter((file) => !isTestFile(file.slice(root.length + 1)))
     .map((file) => readFileSync(file, "utf8"))
     .join("\n");
@@ -442,13 +553,18 @@ test("every config key the configuration guides document is read by the code", (
 // ---------------------------------------------------------------------------
 
 test("every @seekforge/* import in the documentation resolves to a real export", () => {
-  const surfaces = {
-    "@seekforge/core": packageSurface(join(root, "packages", "core", "src", "index.ts")),
-    "@seekforge/shared": packageSurface(join(root, "packages", "shared", "src", "index.ts")),
-    "@seekforge/eval-harness": packageSurface(join(root, "packages", "eval-harness", "src", "index.ts")),
-  };
-  for (const [name, surface] of Object.entries(surfaces)) {
-    assert.ok(surface.size > 50, `expected ${name} to export many symbols, found ${surface.size}`);
+  // Every workspace package with an entry point, not the three that happened
+  // to be importable when this was written. A fourth would otherwise have had
+  // its documented imports reported as "not a workspace package".
+  const surfaces = {};
+  for (const pkg of workspacePackages()) {
+    const entry = join(pkg.dir, "src", "index.ts");
+    if (!pkg.name?.startsWith("@seekforge/") || !existsSync(entry)) continue;
+    surfaces[pkg.name] = packageSurface(entry);
+  }
+  assert.ok(Object.keys(surfaces).length >= 3, `expected several importable packages, found ${Object.keys(surfaces)}`);
+  for (const name of ["@seekforge/core", "@seekforge/shared", "@seekforge/eval-harness"]) {
+    assert.ok(surfaces[name]?.size > 50, `expected ${name} to export many symbols, found ${surfaces[name]?.size ?? 0}`);
   }
 
   const broken = [];

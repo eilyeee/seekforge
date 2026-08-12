@@ -1,7 +1,9 @@
 import { MAX_LOOP_ITERATIONS } from "@seekforge/core";
+import { parseLoopVerificationPlan, type LoopVerificationStage } from "@seekforge/shared";
 import { readJsonBody, sendApiError, sendJson } from "../http.js";
 import { RUN_RETENTION_MAX_AGE_DAYS, RUN_RETENTION_MAX_COUNT } from "../run-ledger.js";
 import { isolateRunWorkspace, type RunIsolation } from "../run-isolation.js";
+import { beginRunSessionMirror } from "../run-trace-mirror.js";
 import { HEADLESS_DECLINE, startManagedTriggerRun, type TriggerRunHandle } from "../trigger-run.js";
 import type { RouteCtx } from "./context.js";
 
@@ -9,53 +11,21 @@ function object(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-type VerificationStage = { id: string; command: string; required?: boolean; timeoutMs?: number; paths?: string[] };
-
-function verificationStages(value: unknown): VerificationStage[] | null {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 16) return null;
-  const ids = new Set<string>();
-  const stages: VerificationStage[] = [];
-  for (const item of value) {
-    if (
-      !object(item) ||
-      typeof item.id !== "string" ||
-      !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(item.id) ||
-      ids.has(item.id) ||
-      typeof item.command !== "string" ||
-      item.command.trim() === "" ||
-      item.command.length > 8_192 ||
-      (item.required !== undefined && typeof item.required !== "boolean") ||
-      (item.timeoutMs !== undefined && (!Number.isSafeInteger(item.timeoutMs) || (item.timeoutMs as number) <= 0)) ||
-      (item.paths !== undefined &&
-        (!Array.isArray(item.paths) ||
-          item.paths.length === 0 ||
-          item.paths.length > 64 ||
-          !item.paths.every(
-            (path) =>
-              typeof path === "string" &&
-              path.length > 0 &&
-              path.length <= 512 &&
-              !path.includes("\0") &&
-              !path.startsWith("/") &&
-              !/^[A-Za-z]:[\\/]/.test(path) &&
-              !path
-                .replaceAll("\\", "/")
-                .split("/")
-                .some((part) => part === "" || part === "." || part === ".."),
-          )))
-    ) {
-      return null;
-    }
-    ids.add(item.id);
-    stages.push({
-      id: item.id,
-      command: item.command,
-      ...(typeof item.required === "boolean" ? { required: item.required } : {}),
-      ...(typeof item.timeoutMs === "number" ? { timeoutMs: item.timeoutMs } : {}),
-      ...(Array.isArray(item.paths) ? { paths: item.paths as string[] } : {}),
-    });
+/**
+ * Decodes the declared verification pipeline with the one owner of its rules.
+ * A REST body is authored text a client just wrote — not a plan replayed from
+ * persisted state — so an unknown stage field is a hard error rather than a
+ * field to drop: the route would otherwise start a run whose plan is quietly
+ * not the one that was requested. The engine's own ceiling applies to a stage
+ * timeout, because this route feeds `runAutoLoop` directly and must not refuse
+ * what the engine would run.
+ */
+function verificationStages(value: unknown): LoopVerificationStage[] | string {
+  try {
+    return parseLoopVerificationPlan(value, { label: "verificationPlan", rejectUnknownFields: true });
+  } catch (error) {
+    return error instanceof Error ? error.message : "verificationPlan is invalid";
   }
-  return stages;
 }
 
 function trackRun(rest: RouteCtx["rest"], run: TriggerRunHandle): void {
@@ -183,11 +153,12 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
       sendApiError(res, 400, "bad_request", "priority must be an integer from -10 to 10");
       return true;
     }
-    const parsedVerificationPlan = verificationPlan === undefined ? undefined : verificationStages(verificationPlan);
-    if (verificationPlan !== undefined && parsedVerificationPlan === null) {
-      sendApiError(res, 400, "bad_request", "verificationPlan must contain 1-16 valid stages with unique safe ids");
+    const decodedVerificationPlan = verificationPlan === undefined ? undefined : verificationStages(verificationPlan);
+    if (typeof decodedVerificationPlan === "string") {
+      sendApiError(res, 400, "bad_request", decodedVerificationPlan);
       return true;
     }
+    const parsedVerificationPlan: LoopVerificationStage[] | undefined = decodedVerificationPlan;
     if (
       requirementMode !== undefined &&
       requirementMode !== "quick" &&
@@ -238,6 +209,12 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
       rest.runManager.start(ledgerRun.runId, workspace, controller);
       let finalSessionId = "";
       const execute = async (): Promise<void> => {
+        // A Loop is isolated the same way an agent run is, so its trace is
+        // written in the worktree while its ledger entry lives here. Opened
+        // before the Loop writes anything and finished on every ending, so the
+        // sessionId recorded below stays openable in this checkout after the
+        // worktree is merged or removed.
+        const mirror = beginRunSessionMirror(executionWorkspace, workspace);
         try {
           controller.signal.throwIfAborted();
           const result = await rest.runLoop(
@@ -258,9 +235,7 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
               ...(verifyTimeoutMs !== undefined ? { verifyTimeoutMs: verifyTimeoutMs as number } : {}),
               ...(agentTimeoutMs !== undefined ? { agentTimeoutMs: agentTimeoutMs as number } : {}),
               ...(maxAgentRetries !== undefined ? { maxAgentRetries: maxAgentRetries as number } : {}),
-              ...(parsedVerificationPlan !== undefined && parsedVerificationPlan !== null
-                ? { verificationPlan: parsedVerificationPlan }
-                : {}),
+              ...(parsedVerificationPlan !== undefined ? { verificationPlan: parsedVerificationPlan } : {}),
               ...(stablePasses !== undefined ? { stablePasses: stablePasses as number } : {}),
               ...(flakyRetries !== undefined ? { flakyRetries: flakyRetries as number } : {}),
               ...(maxNoProgressRecoveries !== undefined
@@ -308,6 +283,19 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
             { type: "error", code: cancelled ? "cancelled" : "loop_error", message },
             { cacheSequence: false },
           );
+        } finally {
+          const { mirrored } = mirror.finish({
+            runManager: rest.runManager,
+            runId: ledgerRun.runId,
+            sessionId: finalSessionId,
+          });
+          // A Loop that threw never reported its session id, so its mirrored
+          // trace would sit in this checkout with nothing in the ledger naming
+          // it. Only when the attribution is unambiguous.
+          const only = mirrored.length === 1 ? mirrored[0] : undefined;
+          if (finalSessionId === "" && only !== undefined) {
+            rest.runManager.update(workspace, ledgerRun.runId, { sessionId: only });
+          }
         }
       };
       const completion = rest.coordinator

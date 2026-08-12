@@ -7,7 +7,7 @@ import type { AgentCoreDeps } from "../../src/agent/loop.js";
 import type { ToolContext, ToolDispatcher } from "../../src/tools/index.js";
 import { runAutoLoop, type LoopOptions, type LoopVerificationStage } from "../../src/agent/auto-loop.js";
 import { parseGraphLoopOptions, MAX_GRAPH_NODE_TIMEOUT_MS } from "../../src/agent/graph-contract.js";
-import { parseLoopVerificationPlan } from "../../src/agent/loop-options-contract.js";
+import { MAX_LOOP_TIMEOUT_MS, parseLoopVerificationPlan } from "../../src/agent/loop-options-contract.js";
 
 const noopDispatcher: ToolDispatcher = {
   list: () => [],
@@ -94,6 +94,11 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ["parallel without resources", [{ id: "a", command: "true", parallel: true }], /parallel requires resources/],
   ["a fractional timeout", [{ id: "a", command: "true", timeoutMs: 1.5 }], /timeoutMs/],
   ["a zero timeout", [{ id: "a", command: "true", timeoutMs: 0 }], /timeoutMs/],
+  [
+    "a timeout no timer can represent",
+    [{ id: "a", command: "true", timeoutMs: MAX_LOOP_TIMEOUT_MS + 1 }],
+    /timeoutMs must be an integer from 1 to/,
+  ],
 ];
 
 const ACCEPTED: unknown = [
@@ -186,6 +191,76 @@ describe("Loop verification plan contract", () => {
         label: "Loop verificationPlan",
       });
       expect(stage).toEqual({ id: "a", command: "true" });
+    });
+  });
+
+  describe("the timer ceiling", () => {
+    // `setTimeout` keeps its delay in a signed 32-bit field: Node fires a longer
+    // delay immediately (with a warning). An unbounded timeout is therefore not
+    // "very long", it is "instant" — the inversion these tests pin.
+    it("accepts the longest representable delay and rejects one past it", () => {
+      expect(MAX_LOOP_TIMEOUT_MS).toBe(2_147_483_647);
+      expect(() =>
+        parseLoopVerificationPlan([{ id: "a", command: "true", timeoutMs: MAX_LOOP_TIMEOUT_MS }], {
+          label: "Loop verificationPlan",
+        }),
+      ).not.toThrow();
+      expect(() =>
+        parseLoopVerificationPlan([{ id: "a", command: "true", timeoutMs: MAX_LOOP_TIMEOUT_MS + 1 }], {
+          label: "Loop verificationPlan",
+        }),
+      ).toThrow(/timeoutMs must be an integer from 1 to 2147483647/);
+    });
+
+    it("clamps rather than rejects a replayed stage timeout past the ceiling", () => {
+      expect(
+        parseLoopVerificationPlan([{ id: "a", command: "true", timeoutMs: Number.MAX_SAFE_INTEGER }], {
+          label: "Loop verificationPlan",
+          replayed: true,
+        }),
+      ).toEqual([{ id: "a", command: "true", timeoutMs: MAX_LOOP_TIMEOUT_MS }]);
+    });
+
+    it.each(["verifyTimeoutMs", "agentTimeoutMs"] as const)(
+      "rejects a declared %s past the ceiling before any effect",
+      async (name) => {
+        await expect(
+          runAutoLoop(deps(), {
+            ...opts(workspace, undefined),
+            [name]: MAX_LOOP_TIMEOUT_MS + 1,
+          } as unknown as LoopOptions),
+        ).rejects.toThrow(new RegExp(`${name} must be an integer from 1 to`));
+        expect(readdirSync(workspace)).toEqual([]);
+      },
+    );
+
+    it("does not apply the timer ceiling to the wall-clock budget", async () => {
+      // `maxDurationMs` is a cumulative budget compared against elapsed time,
+      // not a timer delay — the difference is clamped before it reaches
+      // setTimeout. Bounding it here rejected `--max-duration 2592000` (30
+      // days, which the CLI accepts) and stranded any checkpoint holding one,
+      // because resume re-injects the persisted budget and automatic recovery
+      // would then fail that loop on every attempt.
+      const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+      expect(thirtyDays).toBeGreaterThan(MAX_LOOP_TIMEOUT_MS);
+      await expect(
+        runAutoLoop(deps(), { ...opts(workspace, undefined), maxDurationMs: thirtyDays } as unknown as LoopOptions),
+      ).resolves.toBeDefined();
+    });
+
+    it("still waits for the verifier when a replayed stage asks for a delay no timer can hold", async () => {
+      // Regression: the delay reached setTimeout unclamped, the timer fired on
+      // the next tick and the stage aborted before the verifier could answer.
+      const plan = [{ id: "slow", command: "true", timeoutMs: Number.MAX_SAFE_INTEGER }];
+      const result = await runAutoLoop(deps(), {
+        ...opts(workspace, undefined),
+        verify: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          return { code: 0, output: "ok" };
+        },
+        resumeState: { verificationPlan: plan },
+      } as unknown as LoopOptions);
+      expect(result.status).toBe("passed");
     });
   });
 });

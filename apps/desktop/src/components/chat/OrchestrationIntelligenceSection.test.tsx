@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { setLocale } from "../../lib/i18n";
+import { orchestrationPolicyDraft, type OrchestrationPolicyDraft } from "../../lib/orchestration-policy-input";
 import type { WorkspaceOrchestrationReport } from "../../types";
 import { OrchestrationIntelligenceSection } from "./OrchestrationIntelligenceSection";
 
@@ -60,13 +61,16 @@ const report: WorkspaceOrchestrationReport = {
   rollouts: [],
 };
 
-function render(value?: WorkspaceOrchestrationReport): string {
+function render(value?: WorkspaceOrchestrationReport, draft?: OrchestrationPolicyDraft): string {
   return renderToStaticMarkup(
     createElement(OrchestrationIntelligenceSection, {
       report: value,
       busy: false,
       onRefresh: noop,
       onMaintain: noop,
+      policyDraft: draft ?? orchestrationPolicyDraft(value?.policyState),
+      onPolicyDraftChange: noop,
+      onPolicySave: noop,
       onProposalReview: noop,
       onProposalApply: noop,
       onProposalRollback: noop,
@@ -109,5 +113,42 @@ describe("OrchestrationIntelligenceSection", () => {
   it("omits the policy line when no policy has been persisted", () => {
     const { policyState: _unset, ...withoutPolicy } = report;
     expect(render(withoutPolicy)).not.toContain("SLO policy");
+  });
+
+  /**
+   * The panel judged breaches against thresholds no one could change from it.
+   * The editor has to read as a writer — and say what the thresholds are for.
+   */
+  it("offers an editor whose save action says it writes the thresholds behind the verdict", () => {
+    const markup = render(report);
+    expect(markup).toContain("Edit SLO thresholds</summary>");
+    expect(markup).toContain("Save SLO thresholds</button>");
+    expect(markup).toContain("These thresholds produce the SLO breach verdict shown above.");
+    // The persisted policy is what the fields start from, and the version the
+    // save is checked against is on screen.
+    expect(markup).toContain('value="120000"');
+    expect(markup).toContain("Saving is refused if someone changed the policy after it was loaded");
+    expect(markup).toContain("2026-01-01T00:00:00.000Z");
+    // Bounds are stated, never enforced by the widget: the route owns them.
+    expect(markup).toContain("Max failure rate (0-1)");
+    expect(markup).not.toContain('max="1"');
+  });
+
+  it("saves only after an edit, and offers the editor before any policy exists", () => {
+    // The class list mentions "disabled:" for hover states, so look at the save
+    // button's own opening tag rather than at the whole markup.
+    const saveButtonTag = (markup: string): string => {
+      const end = markup.indexOf(">Save SLO thresholds</button>");
+      return markup.slice(markup.lastIndexOf("<button", end), end + 1);
+    };
+    expect(saveButtonTag(render(report))).toContain('disabled=""');
+
+    const edited = render(report, { ...orchestrationPolicyDraft(report.policyState), maxCostUsd: "2" });
+    expect(saveButtonTag(edited)).not.toContain('disabled=""');
+
+    const { policyState: _unset, ...withoutPolicy } = report;
+    const first = render(withoutPolicy);
+    expect(first).toContain("Save SLO thresholds</button>");
+    expect(first).toContain("No policy is stored yet; saving creates one.");
   });
 });

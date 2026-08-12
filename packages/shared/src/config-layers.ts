@@ -11,10 +11,20 @@
  *   - its own KNOWN_CONFIG_KEYS / unknown-key scan and extras (CLI profiles,
  *     --settings file, config.local.json).
  *
+ * Every layer carries its ORIGIN, because for one field — mcpServers — "the
+ * higher layer wins" is the wrong rule. The repository-owned layers sit ABOVE
+ * the user's global config in every app's precedence stack, and in a cloned
+ * repository they are attacker-controlled input. Origin is part of the layer
+ * type rather than something a caller may pass: a surface that forgets it does
+ * not compile. Three surfaces silently missed this rule when it lived one level
+ * up, which is the whole reason it lives here now.
+ *
  * Merge semantics (layers ordered LOW → HIGH precedence):
  *   - scalars: object-spread in layer order (later layer wins per key);
  *   - mcpServers: merged per server NAME (later layer wins per name) instead
- *     of replacing the whole map;
+ *     of replacing the whole map — EXCEPT that a repository layer may only
+ *     introduce names, never repoint one a user-owned layer defines (see
+ *     resolveMcpServerLayers);
  *   - permissionRules: concatenated HIGHER-precedence first — evaluation is
  *     first-match-wins, so higher layers' rules take precedence;
  *   - hooks: concatenated per stage LOWER-precedence first — every hook runs,
@@ -32,7 +42,14 @@
 
 import { readFileBounded } from "./bounded-file-read.js";
 import { apiKeyEnvVar } from "./provider-env.js";
-import { HOOK_STAGES, type HookEntry, type HookStage, type PermissionRule } from "./index.js";
+import {
+  HOOK_STAGES,
+  type HookEntry,
+  type HookStage,
+  PERMISSION_LEVEL,
+  type PermissionName,
+  type PermissionRule,
+} from "./index.js";
 
 export const MAX_CONFIG_FILE_BYTES = 1_000_000;
 
@@ -51,6 +68,55 @@ export type BaseConfigShape = {
   mcpServers?: Record<string, unknown>;
   hooks?: Partial<Record<HookStage, HookEntry[]>>;
 };
+
+/**
+ * Who owns the FILE a layer came from. `user` = a layer the repository cannot
+ * write (`~/.seekforge/config.json`, an explicit `--settings` file, env);
+ * `repository` = anything that ships inside the checkout
+ * (`.seekforge/config.json`, `.seekforge/config.local.json`, and the profile
+ * overlays read out of either).
+ */
+export type ConfigLayerOrigin = "user" | "repository";
+
+/** One layer, tagged with its origin. Build these with the two helpers below. */
+export type ConfigLayer<T> = {
+  origin: ConfigLayerOrigin;
+  config: T;
+  /**
+   * Trust-scoped MCP fields dropped while downgrading this layer. Carried on
+   * the layer (rather than recomputed during the merge) because the reduction
+   * happens against the RAW file, and by merge time it has already happened.
+   */
+  narrowed?: readonly McpEntryNarrowing[];
+};
+
+/** One repository MCP entry and the trust-scoped fields refused on it. */
+export type McpEntryNarrowing = { server: string; fields: string[] };
+
+/** Diagnostics a merge produces, so a narrowing is never invisible. */
+export type ConfigMergeReport = {
+  /** Origin of every surviving mcpServers name. */
+  mcpServerOrigins: Record<string, ConfigLayerOrigin>;
+  /** Repository server names refused because a user-owned layer defines them. */
+  mcpShadowed: string[];
+  /** Repository entries whose trust-scoped fields were refused. */
+  mcpNarrowed: McpEntryNarrowing[];
+};
+
+/** Tag a layer the repository cannot write. Nothing is reduced. */
+export function userConfigLayer<T extends BaseConfigShape>(config: T): ConfigLayer<T> {
+  return { origin: "user", config };
+}
+
+/**
+ * Downgrade a layer that ships inside the checkout AND tag it, in one step, so
+ * the two cannot come apart — a layer tagged `repository` but never sanitized
+ * would keep exactly the authority the tag exists to remove.
+ */
+export function repositoryConfigLayer<T extends BaseConfigShape>(raw: T): ConfigLayer<T> {
+  const { config, narrowed } = downgradeRepositoryLayer(raw);
+  return { origin: "repository", config: config as T, narrowed };
+}
 
 export type MergeConfigLayersOptions = {
   /**
@@ -134,17 +200,93 @@ function isHookEntry(value: unknown): value is HookEntry {
   );
 }
 
+function isPermissionName(value: unknown): value is PermissionName {
+  return typeof value === "string" && Object.hasOwn(PERMISSION_LEVEL, value);
+}
+
+/**
+ * A repository layer may raise the bar on an MCP server, never lower it.
+ *
+ * PERMISSION_LEVEL runs least → most restrictive (readonly 0 … dangerous 4), so
+ * a declared value REPLACES whatever the tool would otherwise have been — and a
+ * lower number is wider, not narrower.
+ *
+ * The floor is `env`, not `write`. There is no single implicit level to compare
+ * against: `toolPermission` (packages/core/src/mcp/tools.ts) derives it from the
+ * tool's own annotations — `env` for `destructiveHint` or `openWorldHint`,
+ * `readonly` for `readOnlyHint`, `write` otherwise. `env` is the highest of
+ * those, so `env` and `dangerous` are the only two values that cannot widen
+ * ANY tool of the server. A floor of `write` looked safe because `write` is the
+ * unannotated default, but it let a repository declare `write` or `execute` on
+ * a server whose destructive tools would otherwise have been `env` — turning a
+ * prompt the user must answer every time (L3 is never session-grantable) into
+ * one that `auto`, and for `write` even `acceptEdits`, approves silently.
+ */
+function repositoryMayKeepPermission(value: unknown): value is PermissionName {
+  return isPermissionName(value) && PERMISSION_LEVEL[value] >= PERMISSION_LEVEL.env;
+}
+
+/**
+ * Strip what a repository layer may not assert on one MCP entry.
+ *
+ * `trusted` is refused because connecting starts a process or contacts an
+ * endpoint. `permission`/`toolPermissions` below `write` are refused because
+ * they are inert while the entry is untrusted but ride along the documented
+ * "review this project entry, then copy it to global with `trusted: true`"
+ * workflow — which is how a repository-authored `readonly` would become a real
+ * grant.
+ */
+function narrowRepositoryMcpEntry(entry: Record<string, unknown>): {
+  entry: Record<string, unknown>;
+  fields: string[];
+} {
+  const result = { ...entry };
+  const fields: string[] = [];
+  if (Object.hasOwn(result, "trusted") && result["trusted"] !== false) fields.push("trusted");
+  delete result["trusted"];
+  if (Object.hasOwn(result, "permission") && !repositoryMayKeepPermission(result["permission"])) {
+    fields.push("permission");
+    delete result["permission"];
+  }
+  if (isRecord(result["toolPermissions"])) {
+    const kept: Record<string, PermissionName> = {};
+    for (const [tool, value] of Object.entries(result["toolPermissions"])) {
+      if (repositoryMayKeepPermission(value)) kept[tool] = value;
+      else fields.push(`toolPermissions.${tool}`);
+    }
+    if (Object.keys(kept).length > 0) result["toolPermissions"] = kept;
+    else delete result["toolPermissions"];
+  } else if (Object.hasOwn(result, "toolPermissions")) {
+    // A non-object toolPermissions is rejected downstream anyway; drop it so a
+    // repository layer cannot make an entry merely look malformed.
+    fields.push("toolPermissions");
+    delete result["toolPermissions"];
+  }
+  return { entry: result, fields };
+}
+
 /**
  * Downgrade a repository-owned config layer before merging it with user-owned
  * settings. Project deny rules may make policy stricter, but allow rules cannot
  * authorize actions. MCP definitions remain available for explicit inspection,
- * while their `trusted` bit is forced off so only a user-owned layer can grant
- * automatic connection/startup.
+ * while their trust-scoped fields are refused so only a user-owned layer can
+ * grant automatic connection/startup or waive a prompt.
+ *
+ * This is the ONE-LAYER half of the reduction. The other half — a repository
+ * layer must not repoint a server name a user-owned layer defines — cannot be
+ * expressed here: this function sees a single layer and has no idea which names
+ * the user's own layers claim. That half lives in the merge, which holds the
+ * whole list. See resolveMcpServerLayers.
  */
 export function sanitizeProjectConfig<T extends BaseConfigShape>(layer: T): T;
 export function sanitizeProjectConfig(layer: unknown): BaseConfigShape;
 export function sanitizeProjectConfig(layer: unknown): BaseConfigShape {
-  if (!isRecord(layer)) return {};
+  return downgradeRepositoryLayer(layer).config;
+}
+
+function downgradeRepositoryLayer(layer: unknown): { config: BaseConfigShape; narrowed: McpEntryNarrowing[] } {
+  const narrowed: McpEntryNarrowing[] = [];
+  if (!isRecord(layer)) return { config: {}, narrowed };
   const source = layer as Record<string, unknown>;
   const result: Record<string, unknown> = {};
   for (const key of PROJECT_PREFERENCE_KEYS) {
@@ -198,14 +340,87 @@ export function sanitizeProjectConfig(layer: unknown): BaseConfigShape {
     const servers: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
     for (const [name, value] of Object.entries(layer.mcpServers)) {
       if (!isRecord(value)) continue;
-      const server = { ...value };
-      delete server.trusted;
-      servers[name] = server;
+      const server = narrowRepositoryMcpEntry(value);
+      servers[name] = server.entry;
+      if (server.fields.length > 0) narrowed.push({ server: name, fields: server.fields });
     }
     result.mcpServers = servers;
   }
 
-  return result as BaseConfigShape;
+  return { config: result as BaseConfigShape, narrowed };
+}
+
+/**
+ * The cross-layer half of the MCP reduction: a repository layer may INTRODUCE a
+ * server name, but may never take over one a user-owned layer defines — at any
+ * precedence, in either direction.
+ *
+ * Whole-entry replacement is kept deliberately. Merging field by field and
+ * "clamping the security fields" would be worse: it splices a repository
+ * layer's `args`/`env`/`url`/`oauth` into an entry that still carries the user's
+ * `trusted: true`, and those fields are not security fields under any such
+ * taxonomy — yet they are the entire attack surface. That turns a fail-closed
+ * defect into a fail-open one.
+ *
+ * Within one origin, later still wins (a `--settings` file overrides the user's
+ * global entry; `config.local.json` overrides the shared project config).
+ * Non-object entries are skipped rather than allowed to erase a valid lower
+ * layer, matching the rest of the merge.
+ */
+export function resolveMcpServerLayers<T extends BaseConfigShape>(
+  layers: readonly ConfigLayer<T>[],
+): { servers: Record<string, unknown>; defined: boolean; report: ConfigMergeReport } {
+  const userOwned = new Set<string>();
+  for (const layer of layers) {
+    if (layer.origin !== "user" || !isRecord(layer.config.mcpServers)) continue;
+    for (const [name, value] of Object.entries(layer.config.mcpServers)) {
+      if (isRecord(value)) userOwned.add(name);
+    }
+  }
+
+  // Null-prototype accumulators: a server literally named "__proto__" must
+  // become a data property, not a prototype assignment.
+  const servers: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  const mcpServerOrigins = Object.create(null) as Record<string, ConfigLayerOrigin>;
+  const shadowed = new Set<string>();
+  let defined = false;
+
+  for (const layer of layers) {
+    if (!isRecord(layer.config.mcpServers)) continue;
+    defined = true;
+    for (const [name, value] of Object.entries(layer.config.mcpServers)) {
+      if (!isRecord(value)) continue;
+      if (layer.origin === "repository" && userOwned.has(name)) {
+        shadowed.add(name);
+        continue;
+      }
+      servers[name] = value;
+      mcpServerOrigins[name] = layer.origin;
+    }
+  }
+
+  const mcpNarrowed = new Map<string, Set<string>>();
+  for (const layer of layers) {
+    for (const entry of layer.narrowed ?? []) {
+      // A narrowing on an entry that lost the name anyway is not worth reporting.
+      if (mcpServerOrigins[entry.server] !== "repository") continue;
+      const seen = mcpNarrowed.get(entry.server) ?? new Set<string>();
+      for (const field of entry.fields) seen.add(field);
+      mcpNarrowed.set(entry.server, seen);
+    }
+  }
+
+  return {
+    servers,
+    defined,
+    report: {
+      mcpServerOrigins: { ...mcpServerOrigins },
+      mcpShadowed: [...shadowed].sort(),
+      mcpNarrowed: [...mcpNarrowed.entries()]
+        .map(([server, fields]) => ({ server, fields: [...fields].sort() }))
+        .sort((a, b) => (a.server < b.server ? -1 : a.server > b.server ? 1 : 0)),
+    },
+  };
 }
 
 /**
@@ -214,22 +429,29 @@ export function sanitizeProjectConfig(layer: unknown): BaseConfigShape {
  * when envOverrides is on.
  */
 export function mergeConfigLayers<T extends BaseConfigShape>(
-  layers: readonly T[],
+  layers: readonly ConfigLayer<T>[],
   opts: MergeConfigLayersOptions = {},
 ): T {
-  const hookStages = opts.hookStages ?? HOOK_STAGES;
+  return mergeConfigLayersWithReport(layers, opts).config;
+}
 
-  // mcpServers merges per server name (later layer wins).
-  const mcpServers: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-  let hasMcpServers = false;
-  for (const layer of layers) {
-    if (!isRecord(layer.mcpServers)) continue;
-    hasMcpServers = true;
-    for (const [name, config] of Object.entries(layer.mcpServers)) {
-      // An invalid higher-precedence entry must not erase a valid lower layer.
-      if (isRecord(config)) mcpServers[name] = config;
-    }
-  }
+/**
+ * mergeConfigLayers plus the diagnostics. A surface that can show the user why
+ * their config was narrowed should use this one; a narrowing nobody can see is
+ * its own defect.
+ */
+export function mergeConfigLayersWithReport<T extends BaseConfigShape>(
+  tagged: readonly ConfigLayer<T>[],
+  opts: MergeConfigLayersOptions = {},
+): { config: T; report: ConfigMergeReport } {
+  const hookStages = opts.hookStages ?? HOOK_STAGES;
+  const layers = tagged.map((layer) => layer.config);
+
+  // mcpServers merges per server name (later layer wins) — except that a
+  // repository layer cannot take a name a user-owned layer defines.
+  const mcp = resolveMcpServerLayers(tagged);
+  const mcpServers = mcp.servers;
+  const hasMcpServers = mcp.defined;
 
   // permissionRules concatenate higher-precedence layers first: evaluation is
   // first-match-wins, so a higher layer's rule beats a lower one's.
@@ -297,18 +519,42 @@ export function mergeConfigLayers<T extends BaseConfigShape>(
   }
 
   return {
-    ...scalars,
-    ...(apiKey !== undefined ? { apiKey } : {}),
-    ...(provider !== undefined ? { provider } : {}),
-    ...(runtimeBin !== undefined ? { runtimeBin } : {}),
-    ...(sandbox !== undefined ? { sandbox } : {}),
-    // Preserve explicit empty structured values while leaving keys absent when
-    // no layer supplied a valid value.
-    ...(hasPermissionRules ? { permissionRules } : {}),
-    ...(hasMcpServers ? { mcpServers: { ...mcpServers } } : {}),
-    ...(hasHooks ? { hooks } : {}),
-    ...envOverrides,
-  } as T;
+    config: {
+      ...scalars,
+      ...(apiKey !== undefined ? { apiKey } : {}),
+      ...(provider !== undefined ? { provider } : {}),
+      ...(runtimeBin !== undefined ? { runtimeBin } : {}),
+      ...(sandbox !== undefined ? { sandbox } : {}),
+      // Preserve explicit empty structured values while leaving keys absent when
+      // no layer supplied a valid value.
+      ...(hasPermissionRules ? { permissionRules } : {}),
+      ...(hasMcpServers ? { mcpServers: { ...mcpServers } } : {}),
+      ...(hasHooks ? { hooks } : {}),
+      ...envOverrides,
+    } as T,
+    report: mcp.report,
+  };
+}
+
+/**
+ * One line per reduction, in English, for a surface that has a usable stderr.
+ * Empty when nothing was reduced, so a caller can iterate unconditionally.
+ */
+export function describeConfigMergeReport(report: ConfigMergeReport): string[] {
+  const lines: string[] = [];
+  for (const name of report.mcpShadowed) {
+    lines.push(
+      `warning: MCP server "${name}" is defined by this repository and by your own config; ` +
+        `the repository definition was ignored (a repository cannot repoint a server you own)\n`,
+    );
+  }
+  for (const { server, fields } of report.mcpNarrowed) {
+    lines.push(
+      `warning: MCP server "${server}" is repository-owned; ignored ${fields.join(", ")} ` +
+        `(a repository layer may only make a server stricter)\n`,
+    );
+  }
+  return lines;
 }
 
 /**

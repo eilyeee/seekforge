@@ -8,6 +8,7 @@ import type {
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import type { LoopIterationSnapshot, LoopStageResult, LoopVerificationStage } from "./auto-loop.js";
+import { parseLoopVerificationPlan } from "./loop-options-contract.js";
 import {
   DEFAULT_LOOP_AGENT_RETRIES,
   DEFAULT_LOOP_AGENT_TIMEOUT_MS,
@@ -19,7 +20,6 @@ import { resolveForWrite } from "../tools/sandbox.js";
 import { FileTooLargeError } from "../util/fs.js";
 import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 import { isRecord } from "../util/guards.js";
-import { isDenseArray } from "./orchestration.js";
 import { isValidLoopDagId } from "./loop-dag-validation.js";
 import {
   parseLoopCodeReview,
@@ -45,7 +45,6 @@ import {
 } from "./loop-requirements.js";
 import { acquireWorkspaceSessionGuard, type SessionLease } from "./session-lease.js";
 import {
-  LOOP_ID_RE,
   isValidLoopId,
   loopLogFile,
   loopStateFile as loopFile,
@@ -226,93 +225,20 @@ function compactLoopSnapshots(state: LoopState): LoopState {
   };
 }
 
+/**
+ * The sixth implementation of the verification-plan rules used to live here,
+ * re-rolling ~70 lines and hard-coding the same bounds as the other five. It is
+ * the resume-state decoder, so it reads plans written by builds whose rules we
+ * do not know: `replayed` repairs what it can and the decoder keeps its
+ * null-on-malformed contract, since a bad checkpoint field means "no plan",
+ * not a crash.
+ */
 function parseVerificationPlan(value: unknown): LoopVerificationStage[] | null {
-  if (!isDenseArray(value) || value.length === 0 || value.length > 16) return null;
-  const ids = new Set<string>();
-  const result: LoopVerificationStage[] = [];
-  for (const item of value) {
-    if (
-      !isRecord(item) ||
-      typeof item.id !== "string" ||
-      !LOOP_ID_RE.test(item.id) ||
-      ids.has(item.id) ||
-      typeof item.command !== "string" ||
-      item.command.trim() === "" ||
-      item.command.length > 8_192 ||
-      (item.required !== undefined && typeof item.required !== "boolean") ||
-      (item.cacheable !== undefined && typeof item.cacheable !== "boolean") ||
-      (item.parallel !== undefined && typeof item.parallel !== "boolean") ||
-      (item.resources !== undefined &&
-        (!isDenseArray(item.resources) ||
-          item.resources.length === 0 ||
-          item.resources.length > 16 ||
-          new Set(item.resources).size !== item.resources.length ||
-          item.resources.some(
-            (resource) => typeof resource !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(resource),
-          ))) ||
-      (item.parallel === true && !isDenseArray(item.resources)) ||
-      (item.dependsOn !== undefined &&
-        (!isDenseArray(item.dependsOn) ||
-          item.dependsOn.length === 0 ||
-          item.dependsOn.length > 15 ||
-          new Set(item.dependsOn).size !== item.dependsOn.length ||
-          item.dependsOn.some((id) => typeof id !== "string" || !LOOP_ID_RE.test(id)))) ||
-      (item.dependencyPaths !== undefined &&
-        (!isDenseArray(item.dependencyPaths) ||
-          item.dependencyPaths.length === 0 ||
-          item.dependencyPaths.length > 64 ||
-          !item.dependencyPaths.every((path) => isDenseArray(item.paths) && item.paths.includes(path)))) ||
-      (item.timeoutMs !== undefined && (!isSafeInteger(item.timeoutMs) || item.timeoutMs <= 0)) ||
-      (item.paths !== undefined &&
-        (!isDenseArray(item.paths) ||
-          item.paths.length === 0 ||
-          item.paths.length > 64 ||
-          !item.paths.every(
-            (path) =>
-              typeof path === "string" &&
-              path.length > 0 &&
-              path.length <= 512 &&
-              !path.includes("\0") &&
-              !path.startsWith("/") &&
-              !/^[A-Za-z]:[\\/]/.test(path) &&
-              !path
-                .replaceAll("\\", "/")
-                .split("/")
-                .some((part) => part === "" || part === "." || part === ".."),
-          )))
-    )
-      return null;
-    ids.add(item.id);
-    result.push({
-      id: item.id,
-      command: item.command,
-      ...(typeof item.required === "boolean" ? { required: item.required } : {}),
-      ...(typeof item.timeoutMs === "number" ? { timeoutMs: item.timeoutMs } : {}),
-      ...(isDenseArray(item.paths) ? { paths: item.paths as string[] } : {}),
-      ...(isDenseArray(item.dependencyPaths) ? { dependencyPaths: item.dependencyPaths as string[] } : {}),
-      ...(typeof item.cacheable === "boolean" ? { cacheable: item.cacheable } : {}),
-      ...(isDenseArray(item.dependsOn) ? { dependsOn: item.dependsOn as string[] } : {}),
-      ...(typeof item.parallel === "boolean" ? { parallel: item.parallel } : {}),
-      ...(isDenseArray(item.resources) ? { resources: item.resources as string[] } : {}),
-    });
+  try {
+    return parseLoopVerificationPlan(value, { label: "Loop verificationPlan", replayed: true });
+  } catch {
+    return null;
   }
-  const known = new Set(result.map((stage) => stage.id));
-  const remaining = new Map(result.map((stage) => [stage.id, new Set(stage.dependsOn ?? [])]));
-  for (const stage of result) {
-    if (stage.dependsOn?.some((id) => id === stage.id || !known.has(id))) return null;
-  }
-  const ready = [...remaining].filter(([, dependencies]) => dependencies.size === 0).map(([id]) => id);
-  let visited = 0;
-  while (ready.length > 0) {
-    const id = ready.shift()!;
-    remaining.delete(id);
-    visited++;
-    for (const [candidate, dependencies] of remaining) {
-      if (dependencies.delete(id) && dependencies.size === 0) ready.push(candidate);
-    }
-  }
-  if (visited !== result.length) return null;
-  return result;
 }
 
 function parseStageResults(value: unknown): LoopStageResult[] | null {

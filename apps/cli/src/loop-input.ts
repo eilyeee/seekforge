@@ -2,6 +2,7 @@ import {
   assertValidLoopDagNodes,
   isRecord,
   isValidLoopDagId,
+  parseGraphLoopOptions,
   parseLoopDagCondition,
   type LoopDagNode,
 } from "@seekforge/core";
@@ -124,6 +125,11 @@ export function parseLoopDagInput(value: unknown, workspace: string): ParsedLoop
       throw new Error(`Loop DAG node ${node.id} outputPaths must be a string array`);
     if (node.verifierId !== undefined && typeof node.verifierId !== "string")
       throw new Error(`Loop DAG node ${node.id} verifierId must be a string`);
+    // A node may declare bounded Loop configuration. Only the set a Graph
+    // `loop` node can also declare is accepted, so `loop-dag export-graph`
+    // carries it through unchanged; anything else is named, never dropped.
+    const options =
+      node.options === undefined ? undefined : parseGraphLoopOptions(node.options, `Loop DAG node ${node.id} options`);
     return {
       id: node.id,
       task: node.task,
@@ -143,6 +149,7 @@ export function parseLoopDagInput(value: unknown, workspace: string): ParsedLoop
         : {}),
       ...(Array.isArray(node.outputPaths) ? { outputPaths: node.outputPaths as string[] } : {}),
       ...(typeof node.verifierId === "string" ? { verifierId: node.verifierId } : {}),
+      ...(options && Object.keys(options).length > 0 ? { options } : {}),
     };
   });
   assertValidLoopDagNodes(nodes);

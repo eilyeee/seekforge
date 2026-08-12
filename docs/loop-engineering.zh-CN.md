@@ -311,9 +311,17 @@ seekforge loop-cleanup <worktree-name> [--force]
   旧 schema-v1 DAG 检查点会规范化为 schema v2，并把此前未记录的活跃时间视为零。
   `--predictive-budget` 会根据有界历史资源需求调整调度权重，`--worktree-limit` 限制保留的托管 worktree 数量；
   `loop-dag-resources` 可查看磁盘占用，并显式归档、提升或清理已完成依赖图；清理始终保留有未提交修改的 worktree。
-- `loop-speculate` 与 Core 的 `runSpeculativeLoop` 只允许运行两个或三个修复策略，共享一个必填成本上限并使用隔离工作区，
-  最终选择成本最低的通过候选。运行与胜出结果可恢复，`loop-speculation-promote` 是独立的显式合并步骤；REST 与 Desktop
-  也暴露持久运行和资源操作。
+  节点可以声明 `options`，携带工程图 `loop` 节点同样可声明的有界 Loop 配置（迭代、
+  验证流水线、预算、模型路由、评审与需求相关键）。文件解析器过去会整体忽略该对象；
+  现在它会生效，`export-graph` 也会原样保留，而其他任何键都会被指名拒绝。给 DAG
+  文件加上 `options` 会改变该 DAG 的指纹，因此请先跑完在途检查点再添加。
+- `loop-speculate` 与 Core 的 `runSpeculativeLoop` 只允许运行两个或三个修复策略，共享一个必填成本上限并使用隔离
+  工作区，最终选择成本最低的通过候选。**它们现在跑在工程图上**：候选会成为一组互不依赖的 `loop` 节点，在同一波内
+  启动并共享同一个 `costBudgetUsd`，因此每个候选按等权重拿到上限的一份，而不是各拿一整份。隔离方式是每个候选一个
+  受管 worktree 且关闭依赖整合，落败候选的工作树绝不会进入胜出者。运行与胜出结果可恢复，
+  `loop-speculation-promote` 是独立的显式合并步骤；REST 与 Desktop 也暴露持久运行和资源操作。持久化的
+  `.seekforge/loop-speculations/` 文档格式没有变化，因此由 Loop DAG 引擎记录的推测仍可列出、仍可提升；但在该引擎上
+  跑到一半的推测无法恢复，命令会指名说明。
 - `--deliver checkpoint|merge|patch|pr` 在通过后从保留 worktree 显式交付；`pr` 会推送
   Loop 分支，并通过 `gh` 创建草稿 PR。交付模式、状态、尝试次数、错误和最终产物都会写入
   Loop 状态。若验证通过后交付失败，可用 `loop-deliver <id>` 直接重试而无需重新运行 Agent；
@@ -401,6 +409,9 @@ worktree 被有意保留以供检查。若原始 loop 使用了 `--worktree`，
 - **在途 DAG 照常可用。** 不移除任何命令，也不拒绝任何检查点：已有的
   `.seekforge/loop-dags/` 状态在整个窗口内保持可恢复——`--resume`、`--rerun`、
   `--approve` 以及 `loop-dag-resources` 的行为与此前完全一致。
+- **`loop-speculate` 不再使用它。** `runLoopDag` 最后一个非 DAG 调用方已经消失。
+  该引擎现在只剩一个运行时调用方——`loop-dag` 命令——以及读取其检查点的
+  `loop-dag-resources` 和 `GET /api/loop-dags`。
 - **下一个大版本将移除该引擎。** 目前没有确定的截止日期。把在途的跑完，但新工作请
   直接从工程图开始。
 - `loop-dag` 与 `loop-dag-resources` 启动时会把上述提示打印到 **stderr**。它们的
@@ -420,10 +431,14 @@ seekforge graph validate graph.json
 seekforge graph run graph.json
 ```
 
-第 1 步拒绝产出它无法保证行为一致的图：`outputPaths`、
-`consumeDependencyOutputs`、`verifierId`、逐节点 `options`、共享预算下不相等的
-`budgetWeight`、共享预算下的 `predictiveBudget`，以及混用的逐节点 `failurePolicy`，
-都会带着明确原因失败，而不是被静默丢弃。
+第 1 步拒绝产出它无法保证行为一致的图，并给出明确原因而不是丢弃字段：工程图无法
+声明的逐节点 `options` 键、超过 32 个 `outputPaths`、超过 32 个被消费的依赖输出、
+无法成为图输入名的依赖 id、大于 1000 的 `budgetWeight`、超过 24 小时的
+`maxDurationMs`、需要超过 32 个条件项才能表达的依赖策略、受管 worktree 与显式节点
+工作区并用、无隔离的并发、缺少受管 worktree 的 `fanIn`，以及无效或已被占用的审批门
+id。其余内容——`verifierId`、声明的 `outputPaths`、`consumeDependencyOutputs`、
+逐节点 `failurePolicy`、`predictiveBudget` 以及 `options` 中可声明的部分——都会被
+转换，残留差异以 advisory 形式打印到 stderr。
 
 **仍需知道的差异。** 这些是行为差异而不是缺口；其中转换能检测到的会由第 1 步打印
 到 stderr：
@@ -448,7 +463,21 @@ type LoopOptions = {
   workspace: string;
   verifyCommand: string;        // 固定验证器；分析模式还要求验收通过
   autoVerificationPlan?: boolean; // 新 Loop 自动发现并冻结根目录验证计划
-  verificationPlan?: Array<{ id: string; command: string; required?: boolean; timeoutMs?: number }>;
+  // One owner: @seekforge/shared parseLoopVerificationPlan. Every surface that
+  // accepts a plan (engine, graph node, WS loop frame, POST /api/runs, eval
+  // task) runs the same rules.
+  verificationPlan?: Array<{
+    id: string;                  // unique, /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
+    command: string;             // non-blank, <= 8192 chars
+    required?: boolean;
+    timeoutMs?: number;          // 1 .. 2147483647 (the largest delay a timer can hold)
+    paths?: string[];            // 1..64 unique relative prefixes
+    dependencyPaths?: string[];  // subset of paths
+    cacheable?: boolean;
+    dependsOn?: string[];        // unique known stage ids; the plan must be acyclic
+    parallel?: boolean;          // requires a non-empty resources list
+    resources?: string[];        // 1..16 unique names, /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
+  }>;
   stablePasses?: number; flakyRetries?: number;
   maxNoProgressRecoveries?: number; rollbackOnRegression?: boolean;
   requirementMode?: "quick" | "analyze" | "confirm"; // 默认 quick
@@ -483,6 +512,12 @@ type LoopResult = {
   failureCategory?: LoopFailureCategory;
 };
 ```
+
+**超时上限。** `timeoutMs`、`verifyTimeoutMs`、`agentTimeoutMs` 与 `maxDurationMs`
+的上限为 `MAX_LOOP_TIMEOUT_MS`（2 147 483 647 毫秒，约 24.8 天）。`setTimeout` 以带
+符号 32 位整数保存延迟，超过该上限的延迟会立即触发而不是永不触发——过去你能请求的
+最长等待反而成了最短等待。超过上限的取值会抛出 `RangeError`；从上限存在之前写入的
+检查点读回的取值会被钳制到上限，因此 Loop 仍然可以恢复。
 
 `resumeAutoLoop` 可追加迭代、成本、Token、时长和校验次数，并恢复累计时长、Token、
 校验次数、worker/reviewer 会话、命令与冻结需求。编辑迭代复用一个 worker 会话；

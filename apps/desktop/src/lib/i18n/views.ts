@@ -393,7 +393,7 @@ export const views = {
     "settings.mcpPromptsEmpty": "No prompts exposed by the configured servers.",
     "settings.mcpListPrompts": "List prompts",
     "settings.mcpUsePrompt": "Use in chat",
-    "settings.mcpShadowsGlobal": "overrides global",
+    "settings.mcpProjectIgnored": "repository entry ignored",
     "settings.mcpTest": "Test",
     "settings.mcpTesting": "Testing…",
     "settings.mcpTestOk": "connected in {latency} ms · {tools} tools",
@@ -496,7 +496,7 @@ export const views = {
     "settings.mcpRemoveBtn": "Remove",
     "settings.mcpRemoveTitle": "Remove MCP server {name}?",
     "settings.mcpRemoveBodyScoped":
-      "This removes the server from {scope} configuration. A shadowed lower-precedence entry may become active.",
+      "This removes the server from {scope} configuration. Removing your own entry hands the server name to the one this repository defines.",
     "settings.mcpRemoveConfirm": "Remove",
 
     // ── DiagnosticsView ───────────────────────────────────────────
@@ -1043,7 +1043,7 @@ export const views = {
     "settings.mcpPromptsEmpty": "已配置的服务器未暴露任何提示词。",
     "settings.mcpListPrompts": "列出提示词",
     "settings.mcpUsePrompt": "用于对话",
-    "settings.mcpShadowsGlobal": "覆盖全局配置",
+    "settings.mcpProjectIgnored": "仓库中的同名条目已被忽略",
     "settings.mcpTest": "测试",
     "settings.mcpTesting": "测试中…",
     "settings.mcpTestOk": "连接成功，耗时 {latency} ms · {tools} 个工具",
@@ -1142,7 +1142,8 @@ export const views = {
     "settings.mcpDuplicateKey": "键不能重复。",
     "settings.mcpRemoveBtn": "移除",
     "settings.mcpRemoveTitle": "移除 MCP 服务器 {name}？",
-    "settings.mcpRemoveBodyScoped": "这将从{scope}配置中移除该服务器。被遮蔽的低优先级配置可能会重新生效。",
+    "settings.mcpRemoveBodyScoped":
+      "这将从{scope}配置中移除该服务器。移除你自己的条目，会把这个服务器名交给本仓库定义的那一条。",
     "settings.mcpRemoveConfirm": "移除",
 
     // ── DiagnosticsView ───────────────────────────────────────────

@@ -596,12 +596,17 @@ export {
 export {
   listLoopSpeculationStates,
   loadLoopSpeculationState,
+  loopSpeculationGraphDefinition,
   promoteLoopSpeculation,
   runSpeculativeLoop,
   type LoopSpeculationCandidate,
+  type LoopSpeculationCandidateResult,
+  type LoopSpeculationCandidateStatus,
+  type LoopSpeculationLoopOptions,
   type LoopSpeculationOptions,
   type LoopSpeculationResult,
   type LoopSpeculationState,
+  type PersistedLoopSpeculationCandidateStatus,
 } from "./loop-speculation.js";
 export {
   defaultLoopRecoveryStrategy,

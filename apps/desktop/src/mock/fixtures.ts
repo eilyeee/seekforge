@@ -362,7 +362,7 @@ export const mockMcpServers: McpServer[] = [
     env: { CONTEXT7_API_KEY: "********" },
     headers: {},
     source: "project",
-    shadowedGlobal: false,
+    shadowedProject: false,
   },
 ];
 

@@ -1,22 +1,11 @@
 import { isAbsolute, relative } from "node:path";
+import { normalizeVerificationPath } from "@seekforge/shared";
 import type { LoopVerificationDecision, LoopVerificationStage } from "./auto-loop.js";
 
-function normalizeVerificationPath(value: string): string | null {
-  if (value.length === 0 || value.length > 512 || value.includes("\0")) return null;
-  const normalized = value.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
-  if (
-    normalized === "" ||
-    normalized.startsWith("/") ||
-    /^[A-Za-z]:\//.test(normalized) ||
-    normalized.split("/").some((part) => part === "" || part === "." || part === "..")
-  )
-    return null;
-  return normalized.endsWith("/**") ? normalized.slice(0, -3) : normalized;
-}
-
-export function isVerificationPathPrefix(value: unknown): value is string {
-  return typeof value === "string" && normalizeVerificationPath(value) !== null;
-}
+// Selection and validation must agree on what a prefix means, and the surfaces
+// that validate a declared plan (WS, REST) sit below core, so the rule is owned
+// by `@seekforge/shared`. This module re-exports core's name for the predicate.
+export { isVerificationPathPrefix } from "@seekforge/shared";
 
 export function selectLoopVerificationStage(
   workspace: string,
