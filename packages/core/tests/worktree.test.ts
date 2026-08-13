@@ -239,6 +239,29 @@ describe("mergeWorktree", () => {
     expect(log).toContain("merge seekforge/lifecycle (seekforge worktree)");
   });
 
+  it("does not merge runtime state onto the base branch, but does merge shared project files", async () => {
+    // `.seekforge/` is normally gitignored, so this went unnoticed: in a
+    // repository that does not ignore it, the merge's auto-commit put the
+    // agent's own session traces, run ledger and personal config.local.json on
+    // the user's branch, and from there into a pull request. The rest of
+    // `.seekforge/` is the project's and must still merge.
+    const { path, branch } = await createWorktree(repo, "runtime-state");
+    mkdirSync(join(path, ".seekforge", "sessions", "s-1"), { recursive: true });
+    mkdirSync(join(path, ".seekforge", "skills"), { recursive: true });
+    writeFileSync(join(path, ".seekforge", "sessions", "s-1", "messages.jsonl"), "{}\n");
+    writeFileSync(join(path, ".seekforge", "runs.jsonl"), "{}\n");
+    writeFileSync(join(path, ".seekforge", "config.local.json"), '{"apiKey":"personal"}\n');
+    writeFileSync(join(path, ".seekforge", "config.json"), '{"model":"shared"}\n');
+    writeFileSync(join(path, ".seekforge", "skills", "team.md"), "# shared skill\n");
+
+    expect(await mergeWorktree(repo, path, branch)).toEqual({ merged: true });
+    expect(existsSync(join(repo, ".seekforge", "sessions", "s-1", "messages.jsonl"))).toBe(false);
+    expect(existsSync(join(repo, ".seekforge", "runs.jsonl"))).toBe(false);
+    expect(existsSync(join(repo, ".seekforge", "config.local.json"))).toBe(false);
+    expect(readFileSync(join(repo, ".seekforge", "config.json"), "utf8")).toContain("shared");
+    expect(readFileSync(join(repo, ".seekforge", "skills", "team.md"), "utf8")).toContain("shared skill");
+  });
+
   it("merges already-committed work without an extra checkpoint", async () => {
     const { path, branch } = await createWorktree(repo, "clean");
     writeFileSync(join(path, "clean.txt"), "committed\n");

@@ -1137,6 +1137,29 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 `loadConfig()` 的末尾应用，因此总是胜过任何文件或标志。`SEEKFORGE_PROFILE`
 只决定叠加哪个 `profiles` 条目（显式的 `--profile` 标志优先于它）。
 
+下面这些不映射到配置键——它们改变状态的存放位置，或改变某个界面的启动方式：
+
+| 变量 | 作用 |
+| --- | --- |
+| `SEEKFORGE_HOME` | 用户级 SeekForge 状态的根目录，默认 `~/.seekforge`：记忆库、会话追踪、最近项目、文件夹授权记录都随它一起移动。给机器账号或测试运行分配独立状态时设置它。 |
+| `SEEKFORGE_NO_BROWSER` | 任何非空值都会让 `seekforge mcp login` 不再拉起系统浏览器。授权 URL 始终会打印出来，因此这是 SSH 会话与无头机器上的走法。 |
+| `SEEKFORGE_STATIC_DIR` | 显式指定 `seekforge serve` 要托管的、已构建的 Web UI 目录。Tauri 外壳会设置它，因为编译后二进制的虚拟文件系统会让「相对于 server 模块查找」的默认方式失效。 |
+| `SEEKFORGE_DESKTOP_BOOTSTRAP_WORKSPACE` | Desktop 在用户尚未选定项目就启动 `serve` 时，所托管的占位工作区路径。 |
+| `SEEKFORGE_SERVE_CMD` | Desktop 外壳要启动的完整命令行（按空白切分），用来替代在 `PATH` 上解析 `seekforge serve`。它优先于 `PATH` 查找，因此是调试本地构建服务端时的覆盖开关。 |
+| `SEEKFORGE_WORKSPACE` | Desktop 打开的工作区目录，优先于进程的工作目录。 |
+
+### 导出给 hook 子进程的变量
+
+Hook 不是通过配置拿到这些值的；hook 运行器会把它们设置在子进程环境上，
+因此 hook 脚本可以直接从自己的环境里读：
+
+| 变量 | 取值 |
+| --- | --- |
+| `SEEKFORGE_HOOK_STAGE` | 触发本次 hook 的生命周期阶段。 |
+| `SEEKFORGE_TOOL` | 触发工具的名称；阶段与工具无关时为空字符串。 |
+
+statusline 命令会收到另一组变量——见[状态栏](#状态栏)。
+
 ---
 
 ## 代码导航（`repo_map` / `find_definition`）与 tree-sitter

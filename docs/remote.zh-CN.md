@@ -81,6 +81,14 @@ seekforge remote-run "fix the failing test" \
 文件系统去解析会把 agent 悄悄送到一个你从未指定过的地方。`--check` 先打印命令，正是
 为了这个原因。
 
+另有三个可选标志用于描述远端环境，它们三个都会出现在 `--check` 的输出里，在建立连接之前：
+
+| 标志 | 作用 |
+| --- | --- |
+| `--identity <file>` | 用于认证的 ssh 私钥文件。不指定时，由 ssh-agent 与你的 `ssh_config` 决定，和直接执行 `ssh` 时一样。 |
+| `--binary <path>` | `seekforge` 在远端主机上的位置。默认使用远端 `PATH` 上解析到的 `seekforge`。 |
+| `--provider <name>` | 仅为这次远程运行覆盖 provider。无论是否指定，远端主机用的都是**它自己的** API key——见下文。 |
+
 ### 它不会发送什么
 
 **你的 API key 永远不会离开本机。** Docker 之所以能只按变量名转发密钥，是因为容器与

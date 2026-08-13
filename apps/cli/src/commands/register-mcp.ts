@@ -41,7 +41,8 @@ in .seekforge/config.json. Servers configured with an explicit "oauth" block
 already carry their own credentials and are rejected here.
 `,
     )
-    .action(async (name: string, opts: { scope?: string; clientId?: string; clientSecret?: string }) => {
+    .option("-y, --yes", "pre-authorize this folder (a repository-defined server picks the authorization URL)")
+    .action(async (name: string, opts: { scope?: string; clientId?: string; clientSecret?: string; yes?: boolean }) => {
       await mcpLoginCommand(name, opts);
     });
   mcp

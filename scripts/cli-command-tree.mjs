@@ -11,7 +11,7 @@
 // singleton in the module graph, so the patch is seen by every registrar the
 // entry point pulls in — including any that no static list knows about.
 //
-// Prints one JSON object on stdout: {commands, subcommands, options}.
+// Prints one JSON object on stdout: {commands, subcommands, options, optionSites}.
 // Run it under tsx: `tsx scripts/cli-command-tree.mjs`.
 
 import { createRequire } from "node:module";
@@ -33,12 +33,36 @@ function collect(program) {
   const aliases = new Set();
   const subcommands = new Map();
   const options = new Set();
-  const addOptions = (cmd) => {
+  // One row per (long flag, command) registration, so a gate can say *where* a
+  // flag lives and can tell a flag this repository registers from one commander
+  // generates for every program it builds. `options` alone could say neither.
+  const sites = [];
+  const addOptions = (cmd, path) => {
     for (const option of cmd.options ?? []) {
-      for (const flag of String(option.flags ?? "").matchAll(/--([a-z][a-z0-9-]*)/g)) options.add(flag[1]);
+      // `.version()` registers `-V, --version` itself; commander remembers it by
+      // attribute name. Reading that back is how "commander's own option" stays
+      // a derived fact instead of a `--version` literal in a gate's ignore list.
+      let builtin = false;
+      try {
+        builtin = cmd._versionOptionName !== undefined && option.attributeName() === cmd._versionOptionName;
+      } catch {
+        builtin = false;
+      }
+      for (const flag of String(option.flags ?? "").matchAll(/--([a-z][a-z0-9-]*)/g)) {
+        options.add(flag[1]);
+        sites.push({
+          name: flag[1],
+          command: path.join(" "),
+          flags: String(option.flags ?? ""),
+          description: String(option.description ?? ""),
+          // An option commander hides from `--help` is not advertised to users.
+          hidden: option.hidden === true,
+          builtin,
+        });
+      }
     }
   };
-  addOptions(program);
+  addOptions(program, []);
   const walk = (cmd, path) => {
     for (const child of cmd.commands ?? []) {
       const name = child.name();
@@ -54,7 +78,7 @@ function collect(program) {
       // written up twice.
       for (const alias of child.aliases?.() ?? [])
         aliases.add(path.length === 0 ? alias : `${path.join(" ")} ${alias}`);
-      addOptions(child);
+      addOptions(child, [...path, name]);
       walk(child, [...path, name]);
     }
   };
@@ -64,6 +88,7 @@ function collect(program) {
     aliases: [...aliases].sort(),
     subcommands: Object.fromEntries([...subcommands].map(([key, set]) => [key, [...set].sort()]).sort()),
     options: [...options].sort(),
+    optionSites: sites.sort((a, b) => a.name.localeCompare(b.name) || a.command.localeCompare(b.command)),
   };
 }
 

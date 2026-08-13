@@ -15,7 +15,8 @@ import {
   registerMcpOAuthClient,
 } from "@seekforge/core";
 import { dim, fail } from "../colors.js";
-import { loadConfig } from "../config.js";
+import { ensureWorkspaceAuthorized } from "./run.js";
+import { loadConfig, resolveConfig } from "../config.js";
 import { t } from "../i18n.js";
 
 const AUTHORIZATION_TIMEOUT_MS = 5 * 60_000;
@@ -103,9 +104,10 @@ async function startLoopbackReceiver(state: string, signal: AbortSignal): Promis
  */
 export async function mcpLoginCommand(
   name: string,
-  opts: { scope?: string; clientId?: string; clientSecret?: string } = {},
+  opts: { scope?: string; clientId?: string; clientSecret?: string; yes?: boolean } = {},
 ): Promise<void> {
-  const config = loadConfig(process.cwd());
+  const projectPath = process.cwd();
+  const { config, mcpOrigins } = resolveConfig(projectPath);
   const server = config.mcpServers?.[name];
   if (!server) {
     fail(t("cmd.mcpLogin.unknownServer", { name }), { hint: t("cmd.mcpLogin.unknownServerHint") });
@@ -115,6 +117,15 @@ export async function mcpLoginCommand(
   if (!serverUrl) {
     fail(t("cmd.mcpLogin.notRemote", { name }));
     return;
+  }
+  // A repository layer can no longer repoint a name you own, but a name only it
+  // defines still carries a URL the checkout chose — and this command runs OAuth
+  // discovery against it, registers a client, and opens a browser at whatever
+  // authorization page it names. You picked the name; the checkout picked where
+  // it points. Same folder-access consent `mcp list` and `run` take.
+  if (mcpOrigins[name] === "repository") {
+    console.log(t("cmd.mcpLogin.fromRepository", { name, url: serverUrl }));
+    if (!(await ensureWorkspaceAuthorized(projectPath, { yes: opts.yes === true, machine: false }))) return;
   }
   if (server.oauth) {
     fail(t("cmd.mcpLogin.alreadyConfigured", { name }));

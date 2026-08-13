@@ -2,6 +2,92 @@
 
 ## Unreleased
 
+### `mcp login` sent your browser wherever the checkout said
+
+`mcp list` gained a folder-access gate last round because listing servers runs
+the commands a cloned repository chose. `mcp login` is the same shape one step
+further out: it discovers an authorization server from the entry's `url`,
+registers a client with it, and opens your browser at whatever page it names. A
+repository layer can no longer repoint a server name you own — but a name only
+the checkout defines still supplies that url. It now prints where it is about to
+send you and takes the same consent, with `-y` to pre-authorize.
+
+### An automatic commit that swept up the agent's own transcripts
+
+`mergeWorktree` auto-commits a dirty worktree before merging so nothing is lost.
+In a repository that does not gitignore `.seekforge/`, that `git add -A` put
+session traces, the run ledger and the personal `config.local.json` on the user's
+branch, and from there into a pull request. The merge checkpoint now excludes
+runtime state by pathspec while still committing what the project shares —
+`config.json`, `skills/`, `agents/`, `memory/project.md`.
+
+Two things learned by getting the scope wrong first. Excluding at the *node*
+checkpoint as well made a worktree whose only change was runtime state
+permanently dirty — never committable, and therefore never prunable — and that
+checkpoint commits on a throwaway `seekforge/*` branch nothing reaches the user
+through anyway. And naming an already-ignored path in an explicit pathspec makes
+`git add` fail with "the following paths are ignored" where no pathspec at all
+would have skipped it silently, which is why `.seekforge/worktrees/` is
+deliberately absent from the list.
+
+### One timer ceiling, four owners
+
+`2_147_483_647` — the largest delay `setTimeout` can hold, past which a timer
+fires *immediately* — was written five times under four names. It now lives in
+`@seekforge/shared/timers` as `MAX_TIMER_DELAY_MS`; `MAX_LOOP_TIMEOUT_MS`
+remains as the Loop-facing alias, because that is the vocabulary the Loop API's
+own error messages speak. A Loop-verification module was the wrong home for a
+fact about Node's timer API.
+
+Sharing the number is not sharing one reaction to exceeding it, and the sites
+deliberately differ: a duration authored now is rejected, one replayed from a
+checkpoint or read from a config file is clamped. A test now asserts the literal
+appears in exactly one file, so a sixth copy fails a test instead of waiting for
+the next grep. The one that measures the ceiling asks the *platform* where it is
+— it arms two real timers and asserts only the over-the-line one fires early —
+because comparing the constant to itself would agree by construction.
+
+### 18 flags and 8 environment variables nobody could find
+
+The drift gate walks code → docs, but an entire class of surface was outside it:
+nothing checked that a shipped flag was documented, and nothing checked
+environment variables at all. Both directions now do.
+
+The scoping premise turned out to be wrong in the useful direction. "142 options
+is too many to demand documentation for" does not survive measurement: **124 of
+them are already documented in both languages**, so the maximal rule asks for
+eighteen lines, not a hundred and forty-two. Every narrower rule loses one of
+the flags that motivated the check — "only value-taking options" drops
+`--auto-rollback`, a boolean deciding whether a regressed deployment is rolled
+back. The opt-out is derivable rather than a list: hide an option from `--help`
+and it stops being a user surface, which is one decision expressed in shipping
+code instead of two that can disagree.
+
+Now documented: the orchestration SLO thresholds (`--max-p95-ms`,
+`--max-failure-rate`, `--min-coverage`, `--evaluation-window`,
+`--max-breach-rate`), `--auto-rollback` and what it means on each of its three
+subcommands, `--min-samples`, `--speculation-id`, the `loop-dag export-graph`
+trio, the CAS retention bounds, the three `remote-run` ssh flags, and
+`-V, --version` — for which there had been no documented way to check your
+version at all. Plus `SEEKFORGE_HOME`, `SEEKFORGE_NO_BROWSER`, the two Desktop
+shell overrides, the two `serve` paths, and `SEEKFORGE_HOOK_STAGE` /
+`SEEKFORGE_TOOL`, which are *exported* to every hook subprocess and were part of
+the hook contract that hook authors had no way to learn about.
+
+**The two gates contradicted each other.** The new check demands documenting
+`seekforge --version`; the reachability gate greps `.option(` literals, so it did
+not know `--version` exists and would have failed any page that mentioned it. No
+wording could have satisfied both. It reads `.version(` as a registration now.
+
+### Corrections
+
+`docs/loop-engineering.md` and its Chinese twin listed `maxDurationMs` among the
+options capped at the timer ceiling and said a larger value throws. The cap on it
+was removed in the same round that added the paragraph — it is a cumulative
+wall-clock budget, not a timer delay, and capping it stranded every checkpoint
+holding one — but the prose was never updated. Both languages now say so, and
+say why.
+
 ### `seekforge mcp list` ran whatever a cloned repository told it to
 
 **Listing was never a read.** `mcp list` — the default `mcp` subcommand — spawns

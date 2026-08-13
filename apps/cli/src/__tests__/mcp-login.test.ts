@@ -1,4 +1,10 @@
 // End-to-end test of `seekforge mcp login` against a local OAuth + MCP server:
+//
+// The fixture declares the server in the PROJECT config, which is a repository
+// layer, so login asks for folder consent before discovering anything against a
+// url the checkout chose. That gate has its own tests; these exercise the OAuth
+// flow, so they vouch for the folder with `yes: true` — the same thing a user
+// does once, or CI does always.
 // discovery, dynamic registration, PKCE, the loopback callback, and where the
 // resulting credential is (and is not) written.
 
@@ -129,7 +135,7 @@ async function consentInBrowser(code = "auth-code-1"): Promise<URL> {
 }
 
 test("logs in with PKCE and stores the credential outside the project config", async () => {
-  const login = mcpLoginCommand("docs");
+  const login = mcpLoginCommand("docs", { yes: true });
   const authorizationUrl = await consentInBrowser();
   await login;
 
@@ -160,7 +166,12 @@ test("logs in with PKCE and stores the credential outside the project config", a
 });
 
 test("uses a pre-registered client when the server has no dynamic registration", async () => {
-  const login = mcpLoginCommand("docs", { clientId: "preregistered", clientSecret: "shh", scope: "mcp:write" });
+  const login = mcpLoginCommand("docs", {
+    clientId: "preregistered",
+    clientSecret: "shh",
+    scope: "mcp:write",
+    yes: true,
+  });
   const authorizationUrl = await consentInBrowser();
   await login;
 
@@ -189,7 +200,7 @@ async function captureFailure(run: () => Promise<void>): Promise<string> {
 
 test("rejects a callback whose state does not match, and stores nothing", async () => {
   const failure = await captureFailure(async () => {
-    const login = mcpLoginCommand("docs");
+    const login = mcpLoginCommand("docs", { yes: true });
     for (let attempt = 0; attempt < 200 && !logs.some((line) => line.includes("/authorize?")); attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
@@ -210,8 +221,8 @@ test("rejects a callback whose state does not match, and stores nothing", async 
 
 test("refuses stdio servers and reports logout for an unknown credential", async () => {
   const failure = await captureFailure(async () => {
-    await mcpLoginCommand("local");
-    await mcpLoginCommand("missing");
+    await mcpLoginCommand("local", { yes: true });
+    await mcpLoginCommand("missing", { yes: true });
   });
   assert.match(failure, /stdio server/);
   assert.match(failure, /no MCP server named "missing"/);

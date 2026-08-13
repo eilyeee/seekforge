@@ -117,10 +117,21 @@ seekforge mcp add fs npx -y @modelcontextprotocol/server-filesystem .
 
 Deletes a server from `mcpServers`. Accepts `--global` for the global config.
 
-#### `seekforge mcp login <name>`
+#### `seekforge mcp login <name> [-y]`
 
 Runs the interactive OAuth 2.1 authorization-code flow (PKCE, `S256`) against a
-remote server that has a `url` but no `oauth` block:
+remote server that has a `url` but no `oauth` block.
+
+You pick the name; whoever configured that entry picked the `url` it points at.
+A repository layer can never repoint a server name you already own, but a name
+only the checkout defines still supplies the origin this command discovers,
+registers a client with, and opens your browser at. So when the entry comes from
+the repository, `mcp login` prints where it is about to send you and asks for the
+same folder-access consent `seekforge run` and `mcp list` ask for; `-y`
+pre-authorizes it. An entry from your own global or `--settings` config needs no
+prompt.
+
+The flow itself:
 
 1. Discovers the authorization server from
    `/.well-known/oauth-protected-resource`, falling back to the MCP server's own

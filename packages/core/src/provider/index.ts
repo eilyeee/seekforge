@@ -20,6 +20,7 @@
  */
 
 import type { ChatResponse } from "@seekforge/shared";
+import { MAX_TIMER_DELAY_MS } from "@seekforge/shared/timers";
 import { onAbortOnce } from "../util/abort.js";
 import * as crypto from "node:crypto";
 import { DEFAULT_BASE_URL, DEFAULT_MODEL } from "./constants.js";
@@ -83,9 +84,16 @@ const STREAM_IDLE_TIMEOUT_MS = 120_000;
 const STREAM_TOTAL_TIMEOUT_MS = 600_000;
 export { MAX_PROVIDER_RESPONSE_BYTES as MAX_SSE_STREAM_BYTES } from "./protocol-limits.js";
 
+/**
+ * Clamped, not rejected: these come from a config file that may legitimately
+ * ask for "effectively no stream timeout", and refusing the request would be a
+ * worse answer than waiting the longest a timer can wait. Uncapped the value
+ * would overflow `setTimeout` and abort the stream on the next tick — the
+ * generous setting would behave as the strictest one possible.
+ */
 function boundedTimeoutMs(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.min(Math.floor(value), 2_147_483_647)
+    ? Math.min(Math.floor(value), MAX_TIMER_DELAY_MS)
     : fallback;
 }
 

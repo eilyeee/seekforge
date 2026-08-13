@@ -1,4 +1,4 @@
-const MAX_TIMER_DELAY_MS = 2_147_483_647;
+import { MAX_TIMER_DELAY_MS } from "@seekforge/shared/timers";
 
 export type RecurringIdleTimer = { dispose(): void };
 
@@ -10,10 +10,19 @@ export type RecurringIdleTimerOptions = {
   cancel?: (handle: unknown) => void;
 };
 
+/**
+ * An idle delay is rejected rather than clamped: it is authored now (a Server
+ * option or a caller's argument), so a value no timer can hold is a mistake to
+ * report, not one to silently cap. The ceiling is named in the message because
+ * 3e9 *is* a non-negative safe integer, and being told otherwise sends the
+ * reader looking for the wrong bug.
+ */
 export function idleTimerDelay(value: number | undefined, fallback: number, name: string, allowZero: boolean): number {
   const resolved = value ?? fallback;
   if (!Number.isSafeInteger(resolved) || resolved > MAX_TIMER_DELAY_MS || (allowZero ? resolved < 0 : resolved <= 0)) {
-    throw new RangeError(`${name} must be ${allowZero ? "a non-negative" : "a positive"} safe integer`);
+    throw new RangeError(
+      `${name} must be ${allowZero ? "a non-negative" : "a positive"} safe integer no greater than ${MAX_TIMER_DELAY_MS}`,
+    );
   }
   return resolved;
 }

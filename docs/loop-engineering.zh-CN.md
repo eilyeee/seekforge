@@ -513,11 +513,22 @@ type LoopResult = {
 };
 ```
 
-**超时上限。** `timeoutMs`、`verifyTimeoutMs`、`agentTimeoutMs` 与 `maxDurationMs`
-的上限为 `MAX_LOOP_TIMEOUT_MS`（2 147 483 647 毫秒，约 24.8 天）。`setTimeout` 以带
-符号 32 位整数保存延迟，超过该上限的延迟会立即触发而不是永不触发——过去你能请求的
-最长等待反而成了最短等待。超过上限的取值会抛出 `RangeError`；从上限存在之前写入的
-检查点读回的取值会被钳制到上限，因此 Loop 仍然可以恢复。
+**超时上限。** `timeoutMs`、`verifyTimeoutMs` 与 `agentTimeoutMs` 的上限为
+`MAX_LOOP_TIMEOUT_MS`（2 147 483 647 毫秒，约 24.8 天）。`setTimeout` 以带符号 32 位
+整数保存延迟，超过该上限的延迟会立即触发而不是永不触发——过去你能请求的最长等待反而
+成了最短等待。超过上限的取值会抛出 `RangeError`；从上限存在之前写入的检查点读回的
+取值会被钳制到上限，因此 Loop 仍然可以恢复。
+
+`maxDurationMs` **不**受该上限约束：它是跨恢复累计的挂钟时间预算，而非定时器延迟，
+因此 `--max-duration 2592000`（30 天）会被接受，只有剩余的时间片在进入定时器前被
+钳制。给它加上限会拒绝一个 CLI 本来就接受的取值，并让所有持有该预算的检查点无法
+恢复——因为恢复时会把持久化的预算重新注入。
+
+这个数值并不属于 Loop。它由 `@seekforge/shared/timers` 中的 `MAX_TIMER_DELAY_MS`
+唯一持有——Node 定时器延迟上限的单一归属方，同时供 Provider 的请求与流式超时、
+Server 的维护延迟选项使用；`MAX_LOOP_TIMEOUT_MS` 是它面向 Loop 的别名。共享同一个
+数值并不意味着共享同一种越界反应：当场声明的时长会被拒绝，从检查点回放或从配置文件
+读入的时长会被钳制。
 
 `resumeAutoLoop` 可追加迭代、成本、Token、时长和校验次数，并恢复累计时长、Token、
 校验次数、worker/reviewer 会话、命令与冻结需求。编辑迭代复用一个 worker 会话；

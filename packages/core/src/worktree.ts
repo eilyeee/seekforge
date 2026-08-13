@@ -193,6 +193,52 @@ export async function worktreeBranchExists(basePath: string, slug: string): Prom
   );
 }
 
+/**
+ * `.seekforge/` paths the MERGE checkpoint must never sweep into a commit.
+ *
+ * The rest of `.seekforge/` is meant to be shared and committed — `config.json`,
+ * `skills/`, `agents/`, `commands/`, `output-styles/`, `memory/project.md` are
+ * the project's, and excluding them would be wrong. These are runtime state:
+ * session traces, run ledgers, orchestration checkpoints, learned intelligence,
+ * and the personal `config.local.json`. A repository that gitignores
+ * `.seekforge/` never noticed; one that does not had the merge's auto-commit
+ * put its own transcripts on the user's branch, and from there into a pull
+ * request.
+ *
+ * Scope is the merge checkpoint alone. `checkpointWorktree` commits on the
+ * throwaway `seekforge/*` branch, which is deleted with the worktree, so
+ * nothing it stages reaches the user — and excluding there made a worktree
+ * whose only change was runtime state permanently dirty: never committable,
+ * and therefore never prunable.
+ *
+ * Not `info/exclude` either: a deliberate `git add` still works and
+ * `git status` still shows the files, so nothing becomes invisible.
+ *
+ * `.seekforge/worktrees/` is deliberately absent from the list: `ensureExcluded`
+ * already puts it in `info/exclude`, and naming an already-ignored path in an
+ * explicit pathspec makes `git add` fail with "the following paths are ignored"
+ * instead of skipping it — which is silent when no pathspec is given.
+ */
+const CHECKPOINT_EXCLUDED_PATHS = [
+  ".seekforge/sessions/",
+  ".seekforge/runs.jsonl",
+  ".seekforge/run-events/",
+  ".seekforge/loops/",
+  ".seekforge/loop-dags/",
+  ".seekforge/loop-speculations/",
+  ".seekforge/graphs/",
+  ".seekforge/graph-archives/",
+  ".seekforge/loop-dag-archives/",
+  ".seekforge/config.local.json",
+  ".seekforge/skills-usage.jsonl",
+  ".seekforge/loop-verification-intelligence.json",
+] as const;
+
+/** `git add -A` arguments that stage everything except {@link CHECKPOINT_EXCLUDED_PATHS}. */
+function mergeCheckpointAddArgs(): string[] {
+  return ["add", "-A", "--", ".", ...CHECKPOINT_EXCLUDED_PATHS.map((path) => `:(exclude)${path}`)];
+}
+
 /** Uncommitted changes in the worktree (`git status --porcelain` non-empty). */
 export async function isWorktreeDirty(worktreePath: string): Promise<boolean> {
   return (await git(worktreePath, ["status", "--porcelain"])) !== "";
@@ -208,6 +254,11 @@ export async function checkpointWorktree(
   await git(worktreePath, ["add", "-A"]);
   await git(worktreePath, ["commit", "-m", bounded]);
   return true;
+}
+
+/** Whether anything is staged (`git diff --cached --name-only` non-empty). */
+async function hasStagedChanges(worktreePath: string): Promise<boolean> {
+  return (await git(worktreePath, ["diff", "--cached", "--name-only"])) !== "";
 }
 
 /**
@@ -282,8 +333,12 @@ export async function mergeWorktree(
     throw new WorktreeGitError("git_error", `unsafe worktree revision: ${options.revision}`);
   }
   if (options.revision === undefined && (await isWorktreeDirty(worktreePath))) {
-    await git(worktreePath, ["add", "-A"]);
-    await git(worktreePath, ["commit", "-m", "seekforge worktree checkpoint"]);
+    await git(worktreePath, mergeCheckpointAddArgs());
+    // A worktree dirty only in excluded runtime state has nothing staged, and
+    // `git commit` fails rather than no-opping.
+    if (await hasStagedChanges(worktreePath)) {
+      await git(worktreePath, ["commit", "-m", "seekforge worktree checkpoint"]);
+    }
   }
 
   try {

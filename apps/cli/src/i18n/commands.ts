@@ -148,6 +148,8 @@ export const commands = {
     "cmd.mcpLogin.unknownServer": 'no MCP server named "{name}" in config',
     "cmd.mcpLogin.unknownServerHint": "run `seekforge mcp list` to see configured servers",
     "cmd.mcpLogin.notRemote": '"{name}" is a stdio server; OAuth applies to remote servers with a url',
+    "cmd.mcpLogin.fromRepository":
+      'note: "{name}" is defined by this repository, not by your config — authorizing will send you to {url}',
     "cmd.mcpLogin.alreadyConfigured":
       '"{name}" already has an oauth block in config; remove it to authorize interactively',
     "cmd.mcpLogin.discoveryHint": "the server must publish OAuth metadata under /.well-known/",
@@ -368,6 +370,7 @@ export const commands = {
     "cmd.mcpLogin.unknownServer": "配置中没有名为「{name}」的 MCP 服务器",
     "cmd.mcpLogin.unknownServerHint": "运行 `seekforge mcp list` 查看已配置的服务器",
     "cmd.mcpLogin.notRemote": "「{name}」是 stdio 服务器；OAuth 仅适用于配置了 url 的远程服务器",
+    "cmd.mcpLogin.fromRepository": "注意：「{name}」由本仓库定义，而非来自你的配置——授权会把你带到 {url}",
     "cmd.mcpLogin.alreadyConfigured": "「{name}」的配置中已有 oauth 段；如需交互授权，请先移除它",
     "cmd.mcpLogin.discoveryHint": "服务器需在 /.well-known/ 下发布 OAuth 元数据",
     "cmd.mcpLogin.discovered": "授权服务器：{issuer}",

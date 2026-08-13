@@ -97,6 +97,15 @@ here can resolve or verify it, and resolving it locally would silently send the
 agent somewhere you never named. `--check` prints the command first for exactly
 that reason.
 
+Three optional flags describe the remote side, and all three appear in
+`--check` output before anything connects:
+
+| Flag | Effect |
+| --- | --- |
+| `--identity <file>` | ssh private key to authenticate with. Without it, ssh-agent and your `ssh_config` decide, as they would for a plain `ssh`. |
+| `--binary <path>` | Where `seekforge` lives on the remote host. Default: whatever `seekforge` resolves to on the remote `PATH`. |
+| `--provider <name>` | Overrides the provider for the remote run only. The remote host uses **its own** API key either way — see below. |
+
 ### What it does not send
 
 **Your API key never leaves this machine.** Docker can forward a secret by NAME

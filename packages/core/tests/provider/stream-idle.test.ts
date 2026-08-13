@@ -1,3 +1,4 @@
+import { MAX_TIMER_DELAY_MS } from "@seekforge/shared/timers";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeepSeekProvider, MAX_SSE_STREAM_BYTES, ProviderProtocolError } from "../../src/provider/index.js";
 import type { ChatRequest } from "../../src/provider/index.js";
@@ -169,6 +170,55 @@ describe("chatStream mid-stream idle timeout", () => {
     const provider = createDeepSeekProvider({ apiKey: "k", streamIdleTimeoutMs: 100, streamTimeoutMs: 30 });
     await expect(provider.chatStream(req, () => {})).rejects.toThrow(/streaming response timed out after 30ms/);
     expect(cancelled).toBe(true);
+  });
+
+  /**
+   * The clamp site's negative control, stated as an effect.
+   *
+   * `streamTimeoutMs` comes from a config file, so a caller may legitimately
+   * ask for "effectively never" — 30 days here. That is past what `setTimeout`
+   * can hold, and unclamped the total-timeout timer fires on the next tick and
+   * rejects the stream before a single byte is read: the most generous setting
+   * available behaves as the strictest one possible. Asserting that some bound
+   * exists would not catch this; only reading the stream does. The same shape
+   * covers `streamIdleTimeoutMs`, whose timer is armed on every read.
+   */
+  it("streams to completion when the configured timeouts exceed what a timer can hold", async () => {
+    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+    expect(thirtyDaysMs).toBeGreaterThan(MAX_TIMER_DELAY_MS);
+    const chunks = ['data: {"choices":[{"delta":{"content":"patient"}}]}\n\n', "data: [DONE]\n\n"];
+    let i = 0;
+    const enc = new TextEncoder();
+    globalThis.fetch = (async () => ({
+      ok: true,
+      status: 200,
+      body: {
+        getReader: () => ({
+          // Each read takes a real tick, so an overflowed timer wins the race.
+          read: () =>
+            new Promise((resolve) => {
+              setTimeout(
+                () =>
+                  resolve(
+                    i < chunks.length
+                      ? { done: false, value: enc.encode(chunks[i++]!) }
+                      : { done: true, value: undefined },
+                  ),
+                5,
+              );
+            }),
+          cancel: async () => {},
+          releaseLock: () => {},
+        }),
+      },
+    })) as unknown as typeof fetch;
+
+    const provider = createDeepSeekProvider({
+      apiKey: "k",
+      streamIdleTimeoutMs: thirtyDaysMs,
+      streamTimeoutMs: thirtyDaysMs,
+    });
+    await expect(provider.chatStream(req, () => {})).resolves.toMatchObject({ content: "patient" });
   });
 
   it("rejects an oversized byte stream as a protocol error and cancels its reader", async () => {

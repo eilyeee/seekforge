@@ -21,6 +21,7 @@ import {
   sourceFilesUnder,
   sweep,
   textOf,
+  trackedSourceFiles,
   workspacePackages,
 } from "./surface-registry.mjs";
 
@@ -666,6 +667,317 @@ test("every CLI subcommand appears in both languages of documentation", async ()
       missing,
       [],
       `${label} never documents these subcommands — an undocumented subcommand is an undiscoverable one`,
+    );
+  }
+});
+
+/**
+ * Every `--flag` a command declares, grepped out of `apps/cli/src` — the text
+ * side of the options cross-check below, deliberately built the same way
+ * {@link scannedCliCommands} is so it inherits the same blind spot and the
+ * commander tree can expose it.
+ */
+function scannedCliOptions() {
+  const names = new Set();
+  const add = (declaration) => {
+    for (const flag of declaration.matchAll(/--([a-z][a-z0-9-]*)/g)) names.add(flag[1]);
+  };
+  for (const file of sourceFilesUnder(CLI_SRC)) {
+    if (isTestPath(rel(file))) continue;
+    const source = textOf(file);
+    for (const match of source.matchAll(/\.(?:option|requiredOption|addOption)\(\s*[`"']([^`"']+)[`"']/g))
+      add(match[1]);
+    for (const match of source.matchAll(/new Option\(\s*"([^"]+)"/g)) add(match[1]);
+  }
+  return names;
+}
+
+/**
+ * Options this gate does not require documentation for, each with the reason it
+ * is not required — the `NOT_CLAIMS` shape, for the same purpose: an option may
+ * leave the checked set only by an argument on the record, never by being
+ * forgotten.
+ *
+ * It is empty, and that is the finding rather than an oversight. 124 of the
+ * CLI's 142 options are already documented in both languages; the rule below
+ * asks for eighteen more lines, not a hundred and forty-two, so there is no
+ * option today whose documentation is not worth writing. The derivable opt-out
+ * is `hidden` (see below) and it should be preferred to an entry here, because
+ * hiding an option turns off `--help`'s advertisement of it too — an option
+ * users are told about but the documentation skips is the drift this gate is
+ * for.
+ */
+const OPTIONS_NOT_DOCUMENTED = new Map([]);
+
+/** The registered long options, with the commands each is declared on. */
+async function cliOptions() {
+  const tree = await commandTree;
+  const sites = new Map();
+  for (const site of tree.optionSites ?? []) {
+    if (!sites.has(site.name)) sites.set(site.name, []);
+    sites.get(site.name).push(site);
+  }
+  return sites;
+}
+
+/**
+ * The self-check for the option surface, in the direction that matters.
+ *
+ * The two sides are produced by different machinery on purpose: a regex over
+ * `apps/cli/src`, and the option registry of the program commander actually
+ * built. `scanned \ registered` is a dead registrar — an `.option()` call in a
+ * module the entry point no longer imports, whose flag the CLI would reject.
+ * `registered \ scanned` is the coverage direction, and it is non-empty today:
+ * `-V, --version` comes from `program.version()`, which no `.option(` literal
+ * spells out. That is the same "no regex can read a name that is not a
+ * literal" shape as the `schedule install` trio, and it is why the
+ * documentation check below consumes commander's list rather than this grep.
+ * Commander marks its own generated option, so the exemption is a fact read
+ * back off the tree rather than a `--version` string in an ignore list.
+ */
+test("the CLI options this gate scans are the options commander registers", async () => {
+  const sites = await cliOptions();
+  assert.ok(sites.size > 100, `commander reports only ${sites.size} options; the probe is not seeing the real program`);
+  const scanned = scannedCliOptions();
+
+  const invisible = [...scanned].filter((name) => !sites.has(name)).sort();
+  assert.deepEqual(
+    invisible,
+    [],
+    "the sources declare these options but the program commander builds does not have them — " +
+      "either the entry point no longer imports their registrar (the option is dead) or the probe cannot see it",
+  );
+
+  const unscanned = [...sites.keys()]
+    .filter((name) => !scanned.has(name) && !sites.get(name).some((site) => site.builtin))
+    .sort();
+  assert.deepEqual(
+    unscanned,
+    [],
+    "commander registers these options but no `.option()`/`new Option()` literal in apps/cli/src spells them out, " +
+      "and commander did not generate them either — find where they are registered before trusting any text scan " +
+      "of the option surface",
+  );
+});
+
+test("every CLI option appears in both languages of documentation", async () => {
+  const sites = await cliOptions();
+  for (const [name, reason] of OPTIONS_NOT_DOCUMENTED) {
+    assert.ok(sites.has(name), `--${name} is exempted from the option documentation check but is not registered`);
+    assert.ok(reason.length > 20, `--${name} is exempted from the option documentation check without a reason`);
+  }
+
+  // Which options must be documented, as a rule rather than a list:
+  //
+  //   - every long option the program registers, because the alternative rules
+  //     all lose one of the four flags this check was written for. "Only
+  //     value-taking options" drops `--auto-rollback`, a boolean that decides
+  //     whether a regressed deployment is rolled back. "Only options on
+  //     documented commands" is circular. "Only options outside a common core"
+  //     needs the list of the common core, which is the hand-maintained
+  //     allowlist this gate exists to not have.
+  //   - minus the ones commander hides from `--help`, because an option the
+  //     program itself does not advertise is not a user surface. Nothing is
+  //     hidden today; this is the lever to reach for when something should be
+  //     internal, and it is derivable, unlike the map above.
+  const required = [...sites.entries()].filter(
+    ([name, declarations]) => !declarations.every((site) => site.hidden) && !OPTIONS_NOT_DOCUMENTED.has(name),
+  );
+  assert.ok(required.length > 100, `expected the CLI to register many documented options, found ${required.length}`);
+
+  // Both languages, and the same corpus the subcommand check uses — any page of
+  // that language, not `docs/cli-reference.md` alone. 51 of the 142 options are
+  // documented where their capability lives instead (`--cron` and `--every` in
+  // the scheduling guide, `--host` and `--port` in the remote guide), and a gate
+  // that demanded a second home for all of them would be asking for the
+  // reference page to be a duplicate of every topic page. Both languages is not
+  // an extra demand: all 124 options documented today are documented in both, so
+  // this holds the line that already exists — the same reason the config-key
+  // check asks for both configuration guides.
+  for (const [chinese, label] of [
+    [false, "English documentation"],
+    [true, "Chinese documentation"],
+  ]) {
+    const spans = docCorpus(chinese).join("\n");
+    const missing = [];
+    for (const [name, declarations] of required) {
+      // `[^a-z0-9-]`, not `\b`: `--out` is not documented by a page that
+      // mentions `--output-format`, and eleven of these names prefix another.
+      if (new RegExp(`--${name}(?![a-z0-9-])`).test(spans)) continue;
+      const where = [...new Set(declarations.map((site) => `seekforge ${site.command}`.trim()))].join(", ");
+      const description = declarations.find((site) => site.description)?.description ?? "";
+      missing.push(`--${name} (${where})${description ? ` — ${description}` : ""}`);
+    }
+    assert.deepEqual(
+      missing.sort(),
+      [],
+      `${label} never mentions these options — an undocumented flag is one nobody can find; ` +
+        "document each on the page its command lives on, or hide it from `--help` if it is internal",
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// The environment-variable surface.
+//
+// Nothing walked this direction at all. `doc-claim-reachability.test.mjs` fails
+// when a page names a `SEEKFORGE_*` variable nothing reads; no check failed when
+// the program read one no page names, which is how `SEEKFORGE_NO_BROWSER` — the
+// knob that makes `seekforge mcp login` work on a headless box — came to be
+// described only in a comment above the line that reads it.
+// ---------------------------------------------------------------------------
+
+/**
+ * Trees whose environment variables are not a user surface, each with the
+ * reason — the `NOT_SOURCE` shape, and the test below keeps the two sets a
+ * partition of the repository so a new tree lands in the scanned half by
+ * default.
+ */
+const ENV_NOT_SOURCE = new Map([
+  ["scripts", "the repository's own CI and gate tooling; it ships in no package, and its knobs configure builds"],
+  ["evals", "fixture repositories the eval tasks run against — inputs, not surfaces"],
+  ["spikes", "throwaway experiments, explicitly not shipped"],
+]);
+
+const ENV_NAME = "SEEKFORGE_[A-Z0-9_]+";
+
+/**
+ * The `SEEKFORGE_*` names that cross the process boundary, and how.
+ *
+ * Two directions, both of them a public contract:
+ *
+ *   - **read**: `process.env.NAME`, `env["NAME"]` on a parameter the caller
+ *     defaults to `process.env`, or Rust's `std::env::var("NAME")`. These are
+ *     inputs a user sets.
+ *   - **written**: a name assigned into an environment a child process is
+ *     spawned with — the statusline script's seven fields and the two the hook
+ *     runner exports. These are outputs a user's script reads, and leaving them
+ *     out would exempt a contract that exists precisely to be consumed
+ *     externally.
+ *
+ * `declared` is the third bucket and the reason the reader can be strict: a
+ * `SEEKFORGE_*` token can also be an ordinary identifier (`SEEKFORGE_VERSION`,
+ * `SEEKFORGE_PROTOCOL_VERSION` are exported consts), and demanding
+ * documentation for those would make this gate cry wolf. Everything else is
+ * reported by the self-check below rather than silently dropped.
+ */
+let environmentCache;
+function environmentSurface() {
+  if (environmentCache) return environmentCache;
+  const record = (map, name, file, source, index) => {
+    if (!map.has(name)) map.set(name, new Set());
+    map.get(name).add(`${file}:${source.slice(0, index).split("\n").length}`);
+  };
+  const read = new Map();
+  const written = new Map();
+  const declared = new Set();
+  const mentioned = new Set();
+  const files = [];
+  for (const file of trackedSourceFiles()) {
+    if (ENV_NOT_SOURCE.has(file.split("/")[0])) continue;
+    files.push(file);
+    const source = textOf(join(root, file));
+    if (!source.includes("SEEKFORGE_")) continue;
+    for (const match of source.matchAll(new RegExp(`\\b(${ENV_NAME})\\b`, "g"))) mentioned.add(match[1]);
+    for (const match of source.matchAll(new RegExp(`\\b(?:export\\s+)?(?:const|let|static)\\s+(${ENV_NAME})\\b`, "g")))
+      declared.add(match[1]);
+    // An access site is a read unless it is the target of an assignment, which
+    // is how `process.env["SEEKFORGE_PROFILE"] = cliProfile` in the entry point
+    // is counted as the export it is rather than as a knob the CLI reads.
+    for (const match of source.matchAll(
+      new RegExp(`(?:process\\.)?\\benv(?:\\.(${ENV_NAME})|\\[\\s*["'](${ENV_NAME})["']\\s*\\])`, "g"),
+    )) {
+      const name = match[1] ?? match[2];
+      const tail = source.slice(match.index + match[0].length, match.index + match[0].length + 4);
+      record(/^\s*=[^=]/.test(tail) ? written : read, name, file, source, match.index);
+    }
+    for (const match of source.matchAll(new RegExp(`std::env::var(?:_os)?\\(\\s*"(${ENV_NAME})"`, "g")))
+      record(read, match[1], file, source, match.index);
+    // The object-literal form, which is how every child-process environment in
+    // this repository is built: `{ SEEKFORGE_TOOL: toolName ?? "" }`.
+    for (const match of source.matchAll(new RegExp(`^\\s*(${ENV_NAME})\\s*:`, "gm")))
+      record(written, match[1], file, source, match.index);
+  }
+  environmentCache = { read, written, declared, mentioned, files };
+  return environmentCache;
+}
+
+/**
+ * The environment scan reads every tracked source tree and subtracts
+ * `ENV_NOT_SOURCE`, so a tree added tomorrow is scanned by default and has to
+ * be argued out rather than into the surface. What still needs asserting is
+ * the other end: that each exclusion is current and reasoned, because a stale
+ * one is an exemption nobody is defending — and that the trees which do ship
+ * are in fact among the scanned.
+ */
+test("every source tree is either scanned for environment variables or excluded on the record", () => {
+  const trees = new Set(trackedSourceFiles().map((file) => file.split("/")[0]));
+  for (const [tree, reason] of ENV_NOT_SOURCE) {
+    // `existsSync`, not membership in `trees`: `evals/` is entirely fixtures,
+    // which the test-path filter already removes, and an exclusion that reads
+    // as stale the moment it is also covered another way is an exclusion
+    // somebody will delete for the wrong reason.
+    assert.ok(existsSync(join(root, tree)), `${tree}/ is excluded from the environment scan but no longer exists`);
+    assert.ok(reason.length > 20, `${tree}/ is excluded from the environment scan without a reason`);
+  }
+  const scanned = [...trees].filter((tree) => !ENV_NOT_SOURCE.has(tree)).sort();
+  for (const shipped of ["apps", "packages", "crates"]) {
+    assert.ok(scanned.includes(shipped), `${shipped}/ is not in the environment scan: ${scanned.join(", ")}`);
+  }
+});
+
+/**
+ * The self-check for the environment surface: every `SEEKFORGE_*` token the
+ * shipped source contains must be classified, or the documentation check below
+ * is silently running on a subset.
+ *
+ * This is the part a regex over `process.env.` cannot promise on its own. A
+ * name read through a helper that takes it as a parameter —
+ * `packages/shared/src/doctor.ts` hands its probes `env: (key) => process.env[key]`
+ * — appears in no access site the reader recognizes, and would otherwise drop
+ * out of the surface without a word. Here it fails instead, and whoever added
+ * it decides which bucket it belongs in.
+ */
+test("every SEEKFORGE_* name in the shipped source is classified", () => {
+  const { read, written, declared, mentioned, files } = environmentSurface();
+  assert.ok(files.length > 500, `expected the environment scan to read the repository, found ${files.length} files`);
+  assert.ok(read.size > 5, `expected the program to read several SEEKFORGE_* variables, found ${read.size}`);
+  const unclassified = [...mentioned]
+    .filter((name) => !read.has(name) && !written.has(name) && !declared.has(name))
+    .sort();
+  assert.deepEqual(
+    unclassified,
+    [],
+    "these SEEKFORGE_* names appear in shipped source but at no site this reader understands — it can see " +
+      '`process.env.NAME`, `env["NAME"]`, `std::env::var("NAME")`, a `NAME:` entry in a child environment and ' +
+      "a `const NAME` declaration, and nothing else; if one of these is read through a helper that takes the name " +
+      "as an argument, the documentation check never asks for it",
+  );
+});
+
+test("every environment variable the program reads or exports is documented in both languages", () => {
+  const { read, written } = environmentSurface();
+  const surface = [...new Set([...read.keys(), ...written.keys()])].sort();
+  assert.ok(surface.length > 10, `expected the program to expose many SEEKFORGE_* variables, found ${surface.length}`);
+  for (const [chinese, label] of [
+    [false, "English documentation"],
+    [true, "Chinese documentation"],
+  ]) {
+    // The same corpus as the option and subcommand checks. It deliberately does
+    // not include `apps/desktop/src-tauri/README.md`, which is the only page
+    // naming `SEEKFORGE_SERVE_CMD`, `SEEKFORGE_WORKSPACE` and
+    // `SEEKFORGE_STATIC_DIR`: that page is a build note for the Tauri shell, it
+    // has no Chinese counterpart, and a reader configuring SeekForge from
+    // `docs/configuration.md` has no path to it.
+    const spans = docCorpus(chinese).join("\n");
+    const missing = surface
+      .filter((name) => !new RegExp(`\\b${name}\\b`).test(spans))
+      .map((name) => `${name} (${[...(read.get(name) ?? written.get(name))].sort().join(", ")})`);
+    assert.deepEqual(
+      missing,
+      [],
+      `${label} never mentions these environment variables — a knob documented only next to the line that ` +
+        "reads it is a knob nobody can set; document each in the configuration guide",
     );
   }
 });

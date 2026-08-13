@@ -1262,6 +1262,30 @@ end of `loadConfig()`, so they always win over any file or flag. `SEEKFORGE_PROF
 only chooses which `profiles` overlay is layered in (the explicit `--profile`
 flag takes precedence over it).
 
+These do not map to a config key — they relocate state or change how a surface
+starts:
+
+| Variable | Effect |
+| --- | --- |
+| `SEEKFORGE_HOME` | Root of user-owned SeekForge state, default `~/.seekforge`: the memory store, session traces, recents, and the folder-authorization store all move with it. Set it to give a machine account or a test run its own state. |
+| `SEEKFORGE_NO_BROWSER` | Any non-empty value stops `seekforge mcp login` from launching the system browser. The authorization URL is always printed, so this is the path for SSH sessions and headless machines. |
+| `SEEKFORGE_STATIC_DIR` | Explicit directory of the built web UI for `seekforge serve`. The Tauri shell sets it because a compiled binary's virtual filesystem defeats the default lookup relative to the server module. |
+| `SEEKFORGE_DESKTOP_BOOTSTRAP_WORKSPACE` | Placeholder workspace path `serve` hosts when the Desktop starts it before the user has chosen a project. |
+| `SEEKFORGE_SERVE_CMD` | Full command line (split on whitespace) the Desktop shell spawns instead of resolving `seekforge serve` on `PATH`. It wins over the `PATH` lookup, which makes it the debugging override for a locally built server. |
+| `SEEKFORGE_WORKSPACE` | Workspace directory the Desktop opens, taking precedence over the process working directory. |
+
+### Exported to hook subprocesses
+
+Hooks do not receive these through config; the hook runner sets them on the
+child process, so a hook script can read them from its own environment:
+
+| Variable | Value |
+| --- | --- |
+| `SEEKFORGE_HOOK_STAGE` | The lifecycle stage that fired this hook. |
+| `SEEKFORGE_TOOL` | The triggering tool's name, or empty when the stage is not tool-scoped. |
+
+The statusline command receives its own set — see [Statusline](#statusline).
+
 ---
 
 ## Code navigation (`repo_map` / `find_definition`) & tree-sitter

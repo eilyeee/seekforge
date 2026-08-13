@@ -109,10 +109,19 @@ seekforge mcp add fs npx -y @modelcontextprotocol/server-filesystem .
 
 从 `mcpServers` 中删除一个服务器。同样接受 `--global` 操作全局配置。
 
-#### `seekforge mcp login <name>`
+#### `seekforge mcp login <name> [-y]`
 
 对「配置了 `url` 但没有 `oauth` 段」的远程服务器执行交互式 OAuth 2.1
-授权码流程（PKCE，`S256`）：
+授权码流程（PKCE，`S256`）。
+
+名字是你选的，而那个条目指向哪个 `url` 是配置它的人选的。仓库层永远无法改指你
+已经拥有的服务器名，但**只有检出目录定义的名字**，其 origin 仍然由它提供——而本
+命令会去那个 origin 做发现、注册客户端、并把你的浏览器打开到它指定的授权页。因此
+当条目来自仓库时，`mcp login` 会先打印它将把你带到哪里，并要求与 `seekforge run`、
+`mcp list` 相同的文件夹访问授权；`-y` 可预先授权。来自你自己的全局配置或
+`--settings` 的条目不会触发提示。
+
+流程本身：
 
 1. 先从 `/.well-known/oauth-protected-resource` 解析授权服务器（缺失时回退到
    MCP 服务器自身 origin），再读取其

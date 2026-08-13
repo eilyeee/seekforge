@@ -28,6 +28,7 @@
  */
 
 import { isDenseArray, isRecord, isValidOrchestrationResourceId } from "./guards.js";
+import { MAX_TIMER_DELAY_MS } from "./timers.js";
 
 /** One command in a Loop's verification pipeline. */
 export type LoopVerificationStage = {
@@ -61,13 +62,14 @@ export const MAX_LOOP_VERIFICATION_PATH_LENGTH = 512;
 /**
  * Longest duration any Loop timeout may request, in milliseconds (~24.8 days).
  *
- * `setTimeout` stores its delay in a signed 32-bit integer: a larger delay
- * overflows, Node warns, and the timer fires *immediately*. Accepting a bigger
- * number therefore turns the longest timeout a caller can ask for into the
- * shortest one there is, so every duration that reaches a timer is bounded by
- * this instead of by `Number.MAX_SAFE_INTEGER`.
+ * The Loop-facing name for {@link MAX_TIMER_DELAY_MS}, which owns the number and
+ * the reason for it. The alias stays because it is the vocabulary the Loop API,
+ * its error messages and `docs/loop-engineering.md` already speak — the same
+ * reason the rules below take `label` instead of hard-coding one surface's
+ * wording. Both names must always denote one value; only the shared module
+ * defines it.
  */
-export const MAX_LOOP_TIMEOUT_MS = 2_147_483_647;
+export const MAX_LOOP_TIMEOUT_MS = MAX_TIMER_DELAY_MS;
 
 const STAGE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 

@@ -1,3 +1,4 @@
+import { MAX_TIMER_DELAY_MS } from "@seekforge/shared/timers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchWithRetry,
@@ -274,5 +275,30 @@ describe("fetchWithRetry timeout", () => {
     await expect(fetchWithRetry("https://x/y", { method: "POST" }, { timeoutMs: value })).rejects.toBeInstanceOf(
       RangeError,
     );
+  });
+
+  /**
+   * The reject site's negative control, on both sides of the boundary.
+   *
+   * The rejection half alone is the weak assertion the ceiling's own history
+   * warns about: it passes against a build whose accepted range still overflows.
+   * So the second half arms a real timer at the largest accepted value and
+   * checks the request is not aborted — an overflowing delay would fire on the
+   * next tick and turn "wait 24.8 days" into "fail immediately", which is the
+   * failure this bound exists to prevent, and it would look like a network flake.
+   */
+  it("rejects a request timeout past the timer ceiling and honours one at it", async () => {
+    await expect(
+      fetchWithRetry("https://x/y", { method: "POST" }, { timeoutMs: MAX_TIMER_DELAY_MS + 1 }),
+    ).rejects.toBeInstanceOf(RangeError);
+
+    let captured: AbortSignal | undefined;
+    globalThis.fetch = ((_url: string, init: RequestInit) => {
+      captured = init.signal ?? undefined;
+      return new Promise((resolve) => setTimeout(() => resolve(res(200, "ok")), 20));
+    }) as unknown as typeof fetch;
+    const response = await fetchWithRetry("https://x/y", { method: "POST" }, { timeoutMs: MAX_TIMER_DELAY_MS });
+    expect(response.status).toBe(200);
+    expect(captured?.aborted).toBe(false);
   });
 });

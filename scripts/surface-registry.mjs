@@ -107,6 +107,50 @@ export function workspaceSources() {
   return workspaceCache;
 }
 
+let trackedSourceCache;
+/**
+ * Every tracked source file in the repository, as repo-relative paths, minus
+ * test code — Rust and the `.mts`/`.cts` variants included.
+ *
+ * {@link workspaceSources} deliberately reads a narrower extension set because
+ * its consumers sweep for TypeScript registration idioms. An environment
+ * variable is not a TypeScript idiom: the Tauri shell reads `SEEKFORGE_SERVE_CMD`
+ * and `SEEKFORGE_WORKSPACE` from `apps/desktop/src-tauri/src/main.rs`, so a
+ * scan that cannot open a `.rs` file would call both of them names nothing
+ * reads. Asking git for every tracked file of each type has no such geography
+ * built into it, and `--others` is here for the same reason it is above: a file
+ * added in this commit must be scanned now, not on the next CI run.
+ */
+export function trackedSourceFiles() {
+  if (!trackedSourceCache) {
+    trackedSourceCache = execFileSync(
+      "git",
+      [
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "*.ts",
+        "*.tsx",
+        "*.mts",
+        "*.cts",
+        "*.mjs",
+        "*.cjs",
+        "*.js",
+        "*.rs",
+      ],
+      { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+    )
+      .split("\0")
+      .filter(Boolean)
+      .filter((file) => !file.includes("node_modules/") && !file.endsWith(".d.ts"))
+      .filter((file) => !isTestPath(file))
+      .sort();
+  }
+  return trackedSourceCache;
+}
+
 const contents = new Map();
 /** File text, read once per process — the sweeps below cross the same files. */
 export function textOf(file) {

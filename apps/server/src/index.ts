@@ -34,6 +34,7 @@ import {
   type OrchestrationMaintenanceScheduler,
 } from "@seekforge/core";
 import { MAX_WS_PAYLOAD_BYTES } from "@seekforge/shared/protocol-limits";
+import { MAX_TIMER_DELAY_MS } from "@seekforge/shared/timers";
 import {
   createDefaultAgent,
   resumeDefaultLoop,
@@ -161,12 +162,14 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   if (opts.orchestrationAutoRollback && !opts.orchestrationAutoMaintain) {
     throw new Error("orchestrationAutoRollback requires orchestrationAutoMaintain");
   }
-  const maximumTimerDelayMs = 2_147_483_647;
+  // Rejected, not clamped, for the same reason as `idleTimerDelay`: these are
+  // options the embedder passes now, so a delay no timer can hold is a mistake
+  // to report rather than one to cap. `MAX_TIMER_DELAY_MS` owns the number.
   if (
     opts.orchestrationMaintenanceInitialDelayMs !== undefined &&
     (!Number.isSafeInteger(opts.orchestrationMaintenanceInitialDelayMs) ||
       opts.orchestrationMaintenanceInitialDelayMs < 0 ||
-      opts.orchestrationMaintenanceInitialDelayMs > maximumTimerDelayMs)
+      opts.orchestrationMaintenanceInitialDelayMs > MAX_TIMER_DELAY_MS)
   ) {
     throw new RangeError("orchestrationMaintenanceInitialDelayMs must be a non-negative safe timer delay");
   }
@@ -174,7 +177,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     opts.orchestrationMaintenanceIntervalMs !== undefined &&
     (!Number.isSafeInteger(opts.orchestrationMaintenanceIntervalMs) ||
       opts.orchestrationMaintenanceIntervalMs <= 0 ||
-      opts.orchestrationMaintenanceIntervalMs > maximumTimerDelayMs)
+      opts.orchestrationMaintenanceIntervalMs > MAX_TIMER_DELAY_MS)
   ) {
     throw new RangeError("orchestrationMaintenanceIntervalMs must be a positive safe timer delay");
   }

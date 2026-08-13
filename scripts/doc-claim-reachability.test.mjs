@@ -350,6 +350,15 @@ function cliVocabulary() {
     declaration(match[1]);
   }
   for (const match of source.matchAll(/new Option\(\s*"([^"]+)"/g)) declaration(match[1]);
+  // `program.version(v)` registers an option too, and no `.option()` literal
+  // spells it out — the same shape as the `schedule install` trio the CLI probe
+  // exists for. Without this a page documenting `seekforge --version` would be
+  // failed here for using an option the CLI "does not register", while
+  // `surface-drift.test.mjs` demands that very page: the two gates would have
+  // contradicted each other, with no wording of the docs able to satisfy both.
+  // Commander supplies `-V, --version` when `.version()` is called with no
+  // explicit flags, which is how this entry point calls it.
+  if (/\.version\(/.test(source)) declaration("-V, --version");
   return { commands, flags, valued };
 }
 

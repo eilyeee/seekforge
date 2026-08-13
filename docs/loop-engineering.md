@@ -640,13 +640,26 @@ type LoopResult = {
 };
 ```
 
-**Timeout ceiling.** `timeoutMs`, `verifyTimeoutMs`, `agentTimeoutMs` and
-`maxDurationMs` are capped at `MAX_LOOP_TIMEOUT_MS` (2 147 483 647 ms, ~24.8
-days). `setTimeout` keeps its delay in a signed 32-bit field, so a larger delay
-fires immediately instead of never — the longest wait you could ask for behaved
-as the shortest. A value above the cap is a `RangeError`; a value read back from
-a checkpoint written before the cap existed is clamped to it, so the Loop still
-resumes.
+**Timeout ceiling.** `timeoutMs`, `verifyTimeoutMs` and `agentTimeoutMs` are
+capped at `MAX_LOOP_TIMEOUT_MS` (2 147 483 647 ms, ~24.8 days). `setTimeout`
+keeps its delay in a signed 32-bit field, so a larger delay fires immediately
+instead of never — the longest wait you could ask for behaved as the shortest.
+A value above the cap is a `RangeError`; a value read back from a checkpoint
+written before the cap existed is clamped to it, so the Loop still resumes.
+
+`maxDurationMs` is deliberately **not** capped: it is a cumulative wall-clock
+budget carried across resumes, not a timer delay, so `--max-duration 2592000`
+(30 days) is accepted and only the remaining slice is clamped before it reaches
+a timer. Capping it rejected a value the CLI accepts and stranded every
+checkpoint holding one, because resume re-injects the persisted budget.
+
+The number is not the Loop's. It belongs to `MAX_TIMER_DELAY_MS` in
+`@seekforge/shared/timers`, the single owner of Node's timer-delay ceiling,
+shared with the provider's request and stream timeouts and the Server's
+maintenance-delay options; `MAX_LOOP_TIMEOUT_MS` is the Loop-facing alias for
+it. Sharing the number does not mean sharing one reaction to exceeding it: a
+duration authored now is rejected, a duration replayed from a checkpoint or read
+from a config file is clamped.
 
 `resumeAutoLoop` also accepts additive cost, token, duration, verifier-run, and
 iteration capacity. It restores cumulative elapsed time, tokens, verifier count,

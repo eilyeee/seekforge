@@ -16,6 +16,7 @@
     "./format": "./src/format.ts",
     "./ws-protocol": "./src/ws-protocol.ts",
     "./protocol-limits": "./src/protocol-limits.ts",
+    "./timers": "./src/timers.ts",
     "./bounded-file-read": "./src/bounded-file-read.ts"
   },
   "scripts": {

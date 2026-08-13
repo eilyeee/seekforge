@@ -5,6 +5,7 @@
  * but NEVER the API key (it only ever lives in the request headers).
  */
 
+import { MAX_TIMER_DELAY_MS } from "@seekforge/shared/timers";
 import type { RetryInfo } from "./types.js";
 import { onAbortOnce } from "../util/abort.js";
 import { MAX_PROVIDER_RESPONSE_BYTES } from "./protocol-limits.js";
@@ -234,8 +235,10 @@ export async function fetchWithRetry<T>(
     throw new RangeError(`provider maxRetries must be an integer between 0 and ${MAX_CONFIGURED_RETRIES}`);
   }
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) {
-    throw new RangeError("provider timeoutMs must be finite and between 1 and 2147483647");
+  // Rejected, not clamped: this is a per-call argument, and a request timeout
+  // past what `setTimeout` can hold would otherwise abort the attempt at once.
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMER_DELAY_MS) {
+    throw new RangeError(`provider timeoutMs must be finite and between 1 and ${MAX_TIMER_DELAY_MS}`);
   }
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
