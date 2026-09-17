@@ -12,21 +12,28 @@ import { promisify } from "node:util";
 import {
   acquireSessionLease,
   acquireWorkspaceSessionGuard,
+  approveProjectMcpServer,
   createMcpClient,
   expandShellInjections,
   expandUserCommand,
   fetchBalance,
+  formatMcpServerDefinition,
   getMcpPrompt,
   listMcpPrompts,
   listMcpResources,
   listOutputStyles,
+  listProjectMcpServers,
   loadUserCommands,
+  mcpConnectionDecision,
   MODEL_PRICING,
+  rejectProjectMcpServer,
   resolveProviderPreset,
   verifyProviderAccess,
   SessionBusyError,
   type McpClientEntry,
   type McpServerConfig,
+  type McpServerTrust,
+  type ProjectMcpServer,
 } from "@seekforge/core";
 import {
   ConfigValueError,
@@ -37,6 +44,7 @@ import {
   mutatePermissionRules,
   parsePermissionRuleInput,
   readProjectFile,
+  resolveServerConfig,
   seekforgeHome,
   setConfigValue,
   writeProjectFileAtomic,
@@ -44,7 +52,14 @@ import {
 } from "../config.js";
 import { readFileBounded } from "@seekforge/shared/bounded-file-read";
 import { GLOBAL_CONFIG_LOCK_ID, MAX_CONFIG_FILE_BYTES, sanitizeProjectConfig } from "@seekforge/shared/config-layers";
-import { compareByCodePoints, HOOK_STAGES, PERMISSION_LEVEL, type PermissionName } from "@seekforge/shared";
+import {
+  compareByCodePoints,
+  HOOK_STAGES,
+  HOOK_TYPES,
+  parseHookEntry,
+  PERMISSION_LEVEL,
+  type PermissionName,
+} from "@seekforge/shared";
 import { readJsonBody, requestAbortSignal, sendApiError, sendJson } from "../http.js";
 import { runShellCommand } from "../shell-command.js";
 import { addTodo, loadTodos, removeTodo, toggleTodo } from "@seekforge/shared/todos";
@@ -131,6 +146,17 @@ async function withSettingsMutation<T>(
   });
 }
 
+function sendUnapproved(res: RouteCtx["res"], name: string, status: "pending" | "rejected"): void {
+  sendApiError(
+    res,
+    403,
+    "forbidden",
+    status === "rejected"
+      ? `MCP server ${name} is defined by this repository and was rejected for this workspace; approve it to run it`
+      : `MCP server ${name} is defined by this repository and has not been approved for this workspace; review and approve it first`,
+  );
+}
+
 function settingsBusy(res: RouteCtx["res"], error: unknown): boolean {
   if (!(error instanceof SessionBusyError)) return false;
   sendApiError(res, 409, "session_busy", "cannot mutate settings while the selected scope is active");
@@ -192,6 +218,78 @@ function mcpServersAt(workspace: string, scope: McpScope): Record<string, McpSer
   return Object.fromEntries(Object.entries(servers).filter((entry) => isMcpServerConfig(entry[1])));
 }
 
+/**
+ * Trust for an explicit management action (Test / list tools) on one server.
+ * The user's own entry is tested as the user's: its `${VAR}` references expand
+ * whether or not it is trusted for automatic connection, or "Test" would send
+ * the literal reference. A repository entry runs only once the user approved
+ * this exact definition for the workspace; until then nothing starts, as in
+ * `seekforge mcp list`.
+ */
+function managementTrust(
+  workspace: string,
+  name: string,
+  config: McpServerConfig,
+  origin: "user" | "repository" | undefined,
+): McpServerTrust | "pending" | "rejected" {
+  if (origin !== "repository") return "user";
+  const decision = mcpConnectionDecision(name, config, { workspace, origin });
+  return decision === "project" ? "project" : decision === "rejected" ? "rejected" : "pending";
+}
+
+/**
+ * Servers an implicit listing (resources, prompts) may connect: exactly the
+ * ones a run would connect automatically, with the trust a run would use.
+ */
+function autoConnectableServers(
+  workspace: string,
+): Array<{ name: string; config: McpServerConfig; trust: McpServerTrust }> {
+  const { config, mcpOrigins } = resolveServerConfig(workspace);
+  const out: Array<{ name: string; config: McpServerConfig; trust: McpServerTrust }> = [];
+  for (const [name, server] of Object.entries(config.mcpServers ?? {})) {
+    if (!isMcpServerConfig(server)) continue;
+    const origin = mcpOrigins[name];
+    const decision = mcpConnectionDecision(name, server, { workspace, ...(origin ? { origin } : {}) });
+    if (decision === "user" || decision === "project") out.push({ name, config: server, trust: decision });
+  }
+  return out;
+}
+
+function mcpEntryFor(
+  workspace: string,
+  server: { name: string; config: McpServerConfig; trust: McpServerTrust },
+): McpClientEntry {
+  return {
+    serverName: server.name,
+    client: createMcpClient({
+      name: server.name,
+      config: server.config,
+      trust: server.trust,
+      workspaceRoots: [workspace],
+    }),
+    trusted: server.trust !== "untrusted",
+    trust: server.trust,
+  };
+}
+
+/** A repository-defined server as the approval list shows it. */
+function projectServerView(server: ProjectMcpServer) {
+  return {
+    name: server.name,
+    status: server.status,
+    transport: server.transport,
+    digest: server.digest,
+    definition: formatMcpServerDefinition(server.config),
+  };
+}
+
+function projectServersOf(workspace: string): ProjectMcpServer[] {
+  const { config, mcpOrigins } = resolveServerConfig(workspace);
+  return listProjectMcpServers(workspace, config.mcpServers, mcpOrigins).sort((a, b) =>
+    compareByCodePoints(a.name, b.name),
+  );
+}
+
 function maskedMap(values: Record<string, string> | undefined): Record<string, string> {
   return Object.fromEntries(
     Object.keys(values ?? {})
@@ -249,15 +347,54 @@ type StoredHooks = Record<string, Record<string, unknown>[]>;
 const HOOK_FIELD_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const MAX_HOOK_ENTRIES_PER_STAGE = 100;
 
+/** The entry fields the shared validator owns (it trims and may drop them). */
+const HOOK_KNOWN_FIELDS: ReadonlySet<string> = new Set([
+  "type",
+  "match",
+  "pattern",
+  "timeout",
+  "command",
+  "url",
+  "headers",
+  "allowedEnvVars",
+  "prompt",
+  "model",
+]);
+
+/** Hook types present in a stored hooks block (any stage). */
+function storedHookTypes(stored: unknown): Set<string> {
+  const types = new Set<string>();
+  if (stored === null || typeof stored !== "object" || Array.isArray(stored)) return types;
+  for (const entries of Object.values(stored as Record<string, unknown>)) {
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      const type = entry !== null && typeof entry === "object" ? (entry as { type?: unknown }).type : undefined;
+      if (typeof type === "string") types.add(type);
+    }
+  }
+  return types;
+}
+
 /**
- * Validates a hooks object from PUT /api/hooks. The fields this build knows are
- * checked; everything else on an entry is kept verbatim, and a stage is
- * accepted when the shared stage list names it or the stored config already
- * has it. An editor round trip therefore never strips a hook type, timeout or
- * stage a newer loader understands, while a brand-new misspelled stage is
- * still refused.
+ * Validates a hooks object from PUT /api/hooks.
+ *
+ * Known fields go through the shared validator (`parseHookEntry`), the one the
+ * config merge applies on load, so the editor cannot save an entry the engine
+ * would silently drop (a command hook without a command, an http hook with a
+ * credential in its URL, a backtracking matcher). What the validator returns
+ * replaces those fields; every other field is kept verbatim, including a known
+ * field that does not apply to the entry's type. An editor round trip therefore
+ * never strips something a newer loader understands. Tolerance for newer
+ * builds is bounded by what is already stored: a stage the shared list does
+ * not name, or a `type` it does not know, is accepted only when the stored
+ * block already has it (such an entry is kept verbatim after the generic
+ * checks), so a brand-new misspelling is still refused.
  */
-function validateHooks(input: unknown, storedStages: ReadonlySet<string>): { hooks: StoredHooks } | { error: string } {
+function validateHooks(
+  input: unknown,
+  storedStages: ReadonlySet<string>,
+  storedTypes: ReadonlySet<string>,
+): { hooks: StoredHooks } | { error: string } {
   if (input === null || typeof input !== "object" || Array.isArray(input)) return { error: "hooks must be an object" };
   const out: StoredHooks = {};
   for (const [stage, entries] of Object.entries(input as Record<string, unknown>)) {
@@ -269,29 +406,41 @@ function validateHooks(input: unknown, storedStages: ReadonlySet<string>): { hoo
       return { error: `${stage} has more than ${MAX_HOOK_ENTRIES_PER_STAGE} entries` };
     }
     const list: Record<string, unknown>[] = [];
-    for (const e of entries) {
-      if (e === null || typeof e !== "object" || Array.isArray(e)) return { error: `${stage} entries must be objects` };
+    for (const [index, e] of entries.entries()) {
+      const where = `${stage}[${index}]`;
+      if (e === null || typeof e !== "object" || Array.isArray(e))
+        return { error: `${where}: entry must be an object` };
       const entry = e as Record<string, unknown>;
       const badKey = Object.keys(entry).find((key) => !HOOK_FIELD_NAME_RE.test(key));
-      if (badKey !== undefined) return { error: `${stage} entry has an invalid field name: ${badKey}` };
-      const { command, match, pattern, type } = entry;
-      if (command !== undefined && (typeof command !== "string" || command.trim() === "")) {
-        return { error: `${stage} entry command must be a non-empty string` };
+      if (badKey !== undefined) return { error: `${where}: invalid field name: ${badKey}` };
+      const { type, match, pattern } = entry;
+      const knownType = type === undefined || (HOOK_TYPES as readonly unknown[]).includes(type);
+      if (!knownType) {
+        if (typeof type !== "string" || type.trim() === "")
+          return { error: `${where}: type must be a non-empty string` };
+        if (!storedTypes.has(type)) return { error: `${where}: unknown hook type ${JSON.stringify(type)}` };
+        if (match !== undefined && typeof match !== "string") return { error: `${where}: match must be a string` };
+        if (pattern !== undefined && typeof pattern !== "string")
+          return { error: `${where}: pattern must be a string` };
+        const kept: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(entry)) {
+          if ((key === "match" || key === "pattern") && value === "") continue;
+          kept[key] = value;
+        }
+        list.push(kept);
+        continue;
       }
-      if (type !== undefined && (typeof type !== "string" || type.trim() === "")) {
-        return { error: `${stage} entry type must be a non-empty string` };
-      }
-      if (command === undefined && type === undefined) {
-        return { error: `${stage} entry needs a non-empty command` };
-      }
-      if (match !== undefined && typeof match !== "string") return { error: `${stage} match must be a string` };
-      if (pattern !== undefined && typeof pattern !== "string") return { error: `${stage} pattern must be a string` };
+      const parsed = parseHookEntry(entry);
+      if (!parsed.ok) return { error: `${where}: ${parsed.error}` };
       const kept: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(entry)) {
-        if ((key === "match" || key === "pattern") && value === "") continue;
+        // Known fields come back normalized from the validator below; a blank
+        // optional string is dropped rather than stored.
+        if (HOOK_KNOWN_FIELDS.has(key) && Object.hasOwn(parsed.value, key)) continue;
+        if (HOOK_KNOWN_FIELDS.has(key) && typeof value === "string" && value.trim() === "") continue;
         kept[key] = value;
       }
-      list.push(kept);
+      list.push({ ...kept, ...parsed.value });
     }
     if (list.length > 0) out[stage] = list;
   }
@@ -443,14 +592,7 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
   // demand like POST /api/mcp/:name/tools. A server that fails or lacks
   // resource support contributes zero entries (listMcpResources never throws).
   if (method === "GET" && path === "/api/mcp/resources") {
-    const servers = Object.entries(loadConfig(workspace).mcpServers ?? {}).filter(
-      (entry) => isMcpServerConfig(entry[1]) && entry[1].trusted === true,
-    );
-    const entries: McpClientEntry[] = servers.map(([serverName, config]) => ({
-      serverName,
-      client: createMcpClient({ name: serverName, config, workspaceRoots: [workspace] }),
-      trusted: config.trusted === true,
-    }));
+    const entries = autoConnectableServers(workspace).map((server) => mcpEntryFor(workspace, server));
     const operation = requestAbortSignal(req, res);
     try {
       return sendJson(res, 200, { resources: await listMcpResources(entries, operation.signal) });
@@ -464,14 +606,7 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
   // demand. Mirrors /api/mcp/resources: a server that fails or lacks prompt
   // support contributes zero entries (listMcpPrompts never throws).
   if (method === "GET" && path === "/api/mcp/prompts") {
-    const servers = Object.entries(loadConfig(workspace).mcpServers ?? {}).filter(
-      (entry) => isMcpServerConfig(entry[1]) && entry[1].trusted === true,
-    );
-    const entries: McpClientEntry[] = servers.map(([serverName, config]) => ({
-      serverName,
-      client: createMcpClient({ name: serverName, config, workspaceRoots: [workspace] }),
-      trusted: config.trusted === true,
-    }));
+    const entries = autoConnectableServers(workspace).map((server) => mcpEntryFor(workspace, server));
     const operation = requestAbortSignal(req, res);
     try {
       return sendJson(res, 200, { prompts: await listMcpPrompts(entries, operation.signal) });
@@ -487,7 +622,8 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     const config = loadConfig(workspace).mcpServers?.[serverName];
     if (!isMcpServerConfig(config))
       return sendApiError(res, 404, "not_found", `MCP server not configured: ${serverName}`);
-    if (config.trusted !== true) {
+    const target = autoConnectableServers(workspace).find((server) => server.name === serverName);
+    if (!target) {
       return sendApiError(res, 403, "forbidden", `MCP server is not trusted: ${serverName}`);
     }
     const body = await readJsonBody(req, res);
@@ -505,8 +641,9 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     ) {
       return sendApiError(res, 400, "bad_request", "argument values must be strings");
     }
-    const client = createMcpClient({ name: serverName, config, workspaceRoots: [workspace] });
-    const entries: McpClientEntry[] = [{ serverName, client, trusted: config.trusted === true }];
+    const entry = mcpEntryFor(workspace, target);
+    const client = entry.client;
+    const entries: McpClientEntry[] = [entry];
     const operation = requestAbortSignal(req, res);
     try {
       const text = await getMcpPrompt(
@@ -523,6 +660,50 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       operation.cleanup();
       client.dispose();
     }
+  }
+
+  // Repository-defined servers (.seekforge/config.json, config.local.json,
+  // .mcp.json) and the user's standing decision on each for this workspace.
+  // Never connects anything. Checked before the /api/mcp/:name routes.
+  if (method === "GET" && path === "/api/mcp/project-servers") {
+    return sendJson(res, 200, { servers: projectServersOf(workspace).map(projectServerView) });
+  }
+
+  // Approve or reject one repository-defined server. The body names the digest
+  // of the definition the user reviewed; a definition that changed since then
+  // is a conflict, never a silent approval of something unseen.
+  if (
+    method === "POST" &&
+    segs.length === 5 &&
+    segs[1] === "mcp" &&
+    segs[2] === "project-servers" &&
+    (segs[4] === "approve" || segs[4] === "reject")
+  ) {
+    const name = segs[3]!;
+    const body = await readJsonBody(req, res);
+    if (body === undefined) return;
+    const digest = body !== null && typeof body === "object" ? (body as { digest?: unknown }).digest : undefined;
+    if (typeof digest !== "string" || !/^[a-f0-9]{64}$/.test(digest)) {
+      return sendApiError(res, 400, "bad_request", "body must be {digest} — the digest of the reviewed definition");
+    }
+    const current = projectServersOf(workspace).find((server) => server.name === name);
+    if (!current) {
+      return sendApiError(res, 404, "not_found", `not a repository-defined MCP server: ${name}`);
+    }
+    if (current.digest !== digest) {
+      return sendApiError(res, 409, "conflict", `the definition of ${name} changed since it was reviewed; reload it`);
+    }
+    try {
+      if (segs[4] === "approve") approveProjectMcpServer(workspace, name, current.config);
+      else rejectProjectMcpServer(workspace, name, current.config);
+    } catch (error) {
+      if (error instanceof SessionBusyError) {
+        return sendApiError(res, 409, "session_busy", "another SeekForge process is recording an MCP decision");
+      }
+      throw error;
+    }
+    const updated = projectServersOf(workspace).find((server) => server.name === name) ?? current;
+    return sendJson(res, 200, { server: projectServerView(updated) });
   }
 
   if (method === "GET" && path === "/api/mcp") {
@@ -767,9 +948,12 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
 
   if (method === "POST" && segs.length === 4 && segs[1] === "mcp" && segs[3] === "test") {
     const name = segs[2]!;
-    const config = loadConfig(workspace).mcpServers?.[name];
+    const { config: merged, mcpOrigins } = resolveServerConfig(workspace);
+    const config = merged.mcpServers?.[name];
     if (!isMcpServerConfig(config)) return sendApiError(res, 404, "not_found", `MCP server not configured: ${name}`);
-    const client = createMcpClient({ name, config, workspaceRoots: [workspace] });
+    const trust = managementTrust(workspace, name, config, mcpOrigins[name]);
+    if (trust === "pending" || trust === "rejected") return sendUnapproved(res, name, trust);
+    const client = createMcpClient({ name, config, trust, workspaceRoots: [workspace] });
     const started = Date.now();
     const operation = requestAbortSignal(req, res);
     try {
@@ -785,9 +969,12 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
 
   if (method === "POST" && segs.length === 4 && segs[1] === "mcp" && segs[3] === "tools") {
     const name = segs[2]!;
-    const config = loadConfig(workspace).mcpServers?.[name];
+    const { config: merged, mcpOrigins } = resolveServerConfig(workspace);
+    const config = merged.mcpServers?.[name];
     if (!isMcpServerConfig(config)) return sendApiError(res, 404, "not_found", `MCP server not configured: ${name}`);
-    const client = createMcpClient({ name, config, workspaceRoots: [workspace] });
+    const trust = managementTrust(workspace, name, config, mcpOrigins[name]);
+    if (trust === "pending" || trust === "rejected") return sendUnapproved(res, name, trust);
+    const client = createMcpClient({ name, config, trust, workspaceRoots: [workspace] });
     const operation = requestAbortSignal(req, res);
     try {
       const tools = await client.listTools(operation.signal);
@@ -900,7 +1087,7 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     const storedStages = new Set(
       stored !== null && typeof stored === "object" && !Array.isArray(stored) ? Object.keys(stored) : [],
     );
-    const result = validateHooks(hooksInput, storedStages);
+    const result = validateHooks(hooksInput, storedStages, storedHookTypes(stored));
     if ("error" in result) {
       return sendApiError(res, 400, "bad_request", result.error);
     }

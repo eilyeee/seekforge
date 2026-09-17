@@ -1,3 +1,4 @@
+import { REASONING_EFFORTS, isReasoningEffort, type ReasoningEffort } from "@seekforge/shared";
 import { useT } from "../../lib/i18n";
 import { Select, IconModel, IconSparkle, IconThinking, type SelectOption } from "../ui";
 import type { ChatTab } from "../../store";
@@ -11,7 +12,7 @@ type Props = {
   outputStyles: { name: string; kind: "builtin" | "custom" }[];
   onSetModel: (m: string) => void;
   onSetThinking: (on: boolean) => void;
-  onSetReasoningEffort: (e: "high" | "max") => void;
+  onSetReasoningEffort: (e: ReasoningEffort) => void;
   onSetOutputStyle: (s: string) => void;
 };
 
@@ -40,8 +41,7 @@ export function ModelBar({
   const thinkValue = thinkingOn ? tab.reasoningEffort : "off";
   const thinkOptions: SelectOption[] = [
     { value: "off", label: t("chat.thinkOff") },
-    { value: "high", label: t("chat.reasoning.high") },
-    { value: "max", label: t("chat.reasoning.max") },
+    ...REASONING_EFFORTS.map((effort) => ({ value: effort, label: t(`chat.reasoning.${effort}`) })),
   ];
 
   // Output style: always offer "default"; append discovered styles (built-in
@@ -73,8 +73,9 @@ export function ModelBar({
             onSetThinking(false);
             return;
           }
+          if (!isReasoningEffort(v)) return;
           onSetThinking(true);
-          onSetReasoningEffort(v as "high" | "max");
+          onSetReasoningEffort(v);
         }}
         size="sm"
         disabled={running}

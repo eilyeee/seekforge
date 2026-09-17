@@ -412,7 +412,8 @@ of `workspace-write` and `restricted`.
 
 This is a user-owned setting: repository config and repository profiles cannot
 set it. Settable via `config set`? **No** — edit your global config (or a
-`--settings` file) directly.
+`--settings` file) directly, or use Desktop Settings, which writes it to your
+global config only (`PUT /api/config` with `global: true`).
 
 ### `additionalDirectories`
 
@@ -440,7 +441,8 @@ the config-file form of `--add-dir` / `/add-dir`.
 
 This is a user-owned setting: repository config and repository profiles cannot
 set it. Settable via `config set`? **No** — edit your global config (or a
-`--settings` file) directly.
+`--settings` file) directly, or use Desktop Settings, which writes it to your
+global config only (`PUT /api/config` with `global: true`).
 
 ### `compaction`
 

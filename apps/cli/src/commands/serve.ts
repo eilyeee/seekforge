@@ -19,6 +19,8 @@ export type ServeOptions = {
   orchestrationAutoMaintain?: boolean;
   /** Roll back terminal regressions during idle orchestration maintenance. */
   orchestrationAutoRollback?: boolean;
+  /** Opt-in: write {port, token} here (0600, removed on shutdown) for other local clients. */
+  tokenFile?: string;
 };
 
 /**
@@ -64,9 +66,11 @@ export async function serveCommand(opts: ServeOptions): Promise<void> {
     graphAutoPrune: opts.graphAutoPrune,
     orchestrationAutoMaintain: opts.orchestrationAutoMaintain,
     orchestrationAutoRollback: opts.orchestrationAutoRollback,
+    ...(opts.tokenFile !== undefined ? { tokenFile: resolve(opts.tokenFile) } : {}),
   });
 
   console.log(t("cmd.serve.url", { port: String(port), token }));
+  if (opts.tokenFile !== undefined) console.log(t("cmd.serve.tokenFile", { path: resolve(opts.tokenFile) }));
   console.log(t("cmd.serve.workspaces", { count: workspaces.length }));
   for (const ws of workspaces) console.log(`  - ${ws}`);
   console.log(t("cmd.serve.pressCtrlC"));

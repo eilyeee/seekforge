@@ -574,6 +574,46 @@ describe("hooks editor tolerance", () => {
       expect((await call("/api/hooks", { method: "PUT", body: { hooks: bad } })).status).toBe(400);
     }
   });
+
+  it("validates known fields with the shared hook validator the loader uses", async () => {
+    const refusals: Array<[unknown, string]> = [
+      [{ stop: [{ type: "http", url: "https://user:pw@hooks.example/x" }] }, "stop[0]: url may not carry credentials"],
+      [{ stop: [{ type: "http" }] }, "an http hook needs a url"],
+      [{ stop: [{ type: "prompt", prompt: "  " }] }, "a prompt hook needs a non-empty prompt"],
+      [{ preToolUse: [{ command: "x", match: "(a+)+" }] }, "is refused"],
+      [{ preToolUse: [{ command: "x", timeout: 601 }] }, "timeout may not exceed"],
+      [{ stop: [{ command: "x" }, { type: "agent", command: "x" }] }, 'stop[1]: unknown hook type "agent"'],
+    ];
+    for (const [hooks, message] of refusals) {
+      const res = await call("/api/hooks", { method: "PUT", body: { hooks } });
+      expect(res.status).toBe(400);
+      expect(res.json.error.message).toContain(message);
+    }
+
+    // Known fields come back normalized; a type a newer build already stored
+    // round-trips verbatim.
+    const configPath = join(home, ".seekforge", "config.json");
+    const current = JSON.parse(readFileSync(configPath, "utf8"));
+    writeFileSync(configPath, JSON.stringify({ ...current, hooks: { stop: [{ type: "agent", agent: "reviewer" }] } }));
+    const put = await call("/api/hooks", {
+      method: "PUT",
+      body: {
+        hooks: {
+          stop: [
+            { type: "agent", agent: "reviewer", match: "" },
+            { command: "  echo done  ", pattern: "  ", note: "kept" },
+          ],
+        },
+      },
+    });
+    expect(put.status).toBe(200);
+    expect(put.json.hooks).toEqual({
+      stop: [
+        { type: "agent", agent: "reviewer" },
+        { command: "echo done", note: "kept" },
+      ],
+    });
+  });
 });
 
 describe("workspace terminal", () => {

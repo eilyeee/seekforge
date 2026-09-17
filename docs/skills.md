@@ -67,7 +67,7 @@ repository config). `SKILL.md` frontmatter supplies:
 | `model`, `effort` | Model for the rest of the run where the host can switch; `effort` is recorded but not applied mid-run. |
 | `context: fork`, `agent` | Run the skill in a subagent; `agent` names it (`Explore`/`Plan` map to `explorer`/`planner`). |
 | `disable-model-invocation` | `true`: only a user may invoke it — it is neither listed nor auto-selected. |
-| `user-invocable` | `false`: hidden from slash menus (exposed as `userInvocable` on `GET /api/skills`). |
+| `user-invocable` | `false`: hidden from slash menus — Desktop's `/skill:<id>` palette entries leave it out — and exposed as `userInvocable` on `GET /api/skills`. The model may still use the skill. |
 | `paths` | Globs; the skill is offered only when a workspace file matches one. |
 | `triggers`, `tags` | SeekForge's own selection metadata, when present. |
 

@@ -22,6 +22,8 @@ seekforge run "fix the flaky test"
 
 It applies to every surface that runs the agent: `seekforge run`/`ask`/REPL,
 the TUI, `seekforge serve` (and Desktop through it), and scheduled runs.
+`seekforge serve` exports what is still pending when it shuts down, waiting at
+most 5 seconds for the collector.
 
 ## Environment variables
 

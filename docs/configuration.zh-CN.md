@@ -369,7 +369,8 @@ seekforge config set commandAllowlist "pnpm test, cargo build" --global
   `workspace-write` 的网络保持开放。
 
 这是用户级设置：仓库配置与仓库 profile 都不能设置它。可通过 `config set` 设置？
-**不可以** —— 直接编辑你的全局配置（或 `--settings` 文件）。
+**不可以** —— 直接编辑你的全局配置（或 `--settings` 文件），或使用 Desktop 设置页，它只会写入
+你的全局配置（`PUT /api/config`，`global: true`）。
 
 ### `additionalDirectories`
 
@@ -393,7 +394,8 @@ seekforge config set commandAllowlist "pnpm test, cargo build" --global
 - 回退（rewind）不会恢复这些目录中的文件，而是将其报告为已跳过。
 
 这是用户级设置：仓库配置与仓库 profile 都不能设置它。可通过 `config set` 设置？
-**不可以** —— 直接编辑你的全局配置（或 `--settings` 文件）。
+**不可以** —— 直接编辑你的全局配置（或 `--settings` 文件），或使用 Desktop 设置页，它只会写入
+你的全局配置（`PUT /api/config`，`global: true`）。
 
 ### `compaction`
 

@@ -112,15 +112,50 @@ export type {
   ApiErrorCode,
 } from "@seekforge/shared";
 
-import type { AgentInfo, PermissionRule, SessionMeta } from "@seekforge/shared";
+import type { AgentInfo, PermissionRule } from "@seekforge/shared";
 
 // ---------------------------------------------------------------------------
 // Server contracts that only the Desktop consumes (SERVER-API.md). They are
 // declared here rather than in @seekforge/shared because no other package
 // produces or reads them.
 
-/** GET /api/sessions entries carry the user-chosen name when there is one. */
-export type NamedSessionMeta = SessionMeta & { name?: string };
+/** Standing of a repository-defined MCP server in this workspace. */
+export type ProjectMcpServerStatus = "pending" | "approved" | "rejected";
+
+/**
+ * GET /api/mcp/project-servers row: a server a checkout defines
+ * (.seekforge/config.json, config.local.json, .mcp.json). `definition` is the
+ * reviewable JSON text (references unexpanded); `digest` is what an approval
+ * or rejection is bound to — send back the one the user reviewed.
+ */
+export type ProjectMcpServer = {
+  name: string;
+  status: ProjectMcpServerStatus;
+  transport: "stdio" | "http" | "sse" | "invalid";
+  digest: string;
+  definition: string;
+};
+
+/** POST /api/sessions/:id/compact success (null body = nothing to compact). */
+export type SessionCompactResult = {
+  droppedTurns?: number;
+  beforeTokens?: number;
+  afterTokens?: number;
+  /** Messages from the user's preCompact / postCompact hooks. */
+  notices?: string[];
+};
+
+/** POST /api/plugins/install result. The plugin is installed disabled. */
+export type PluginInstallResult = {
+  manifest: PluginRecord["manifest"];
+  path: string;
+  digest: string;
+  updated: boolean;
+  /** Provenance record (local path, git commit, archive hash, marketplace). */
+  origin?: unknown;
+  /** One-line human-readable provenance, e.g. "git https://… @ <commit>". */
+  originLabel?: string;
+};
 
 /** GET /api/git/remote */
 export type GitRemoteInfo = {

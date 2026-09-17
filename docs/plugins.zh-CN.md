@@ -63,7 +63,7 @@ Claude Code 的 `.claude-plugin/plugin.json`（见 [Claude Code 插件](#claude-
 解包超时约束）。归档安装要求 `PATH` 上有 `tar` 与 `unzip`；仓库安装和 git 插件市场要求
 有 git。
 
-服务器的 `POST /api/plugins/install`（因而桌面端的安装流程）目前仍只接受本地路径。
+服务器的 `POST /api/plugins/install`（因而桌面端的安装流程）接受同样的来源。对于本地目录以外的来源，桌面端会先请你确认再去拉取，并显示副本的出处（`originLabel`：固定的提交或归档哈希）；插件在你于插件页启用之前一直是禁用的。
 
 ## 插件市场
 

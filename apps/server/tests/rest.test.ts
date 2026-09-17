@@ -1645,6 +1645,68 @@ describe("mcp endpoints", () => {
     expect(broken).toMatchObject({ name: "broken", transport: "stdio", trusted: false, env: {}, source: "project" });
   });
 
+  it("refuses to start a repository-defined server before the user approves it", async () => {
+    for (const route of ["/api/mcp/fake/test", "/api/mcp/fake/tools"]) {
+      const res = await authed(route, { method: "POST" });
+      expect(res.status).toBe(403);
+      const body = await jsonOf(res);
+      expect(body.error.code).toBe("forbidden");
+      expect(body.error.message).toContain("not been approved");
+    }
+  });
+
+  it("GET /api/mcp/project-servers lists repository servers with their reviewable definition", async () => {
+    const res = await authed("/api/mcp/project-servers");
+    expect(res.status).toBe(200);
+    const { servers } = await jsonOf(res);
+    expect(servers.map((server: { name: string }) => server.name)).toEqual(["broken", "fake"]);
+    const fake = servers.find((server: { name: string }) => server.name === "fake");
+    expect(fake).toMatchObject({
+      status: "pending",
+      transport: "stdio",
+      digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    // The definition is shown as written: the env value is the reviewer's to see,
+    // and the repository's `trusted: true` on "broken" never reaches it.
+    expect(JSON.parse(fake.definition)).toEqual({
+      args: [mcpFixture.serverPath],
+      command: process.execPath,
+      env: { SECRET_TOKEN: "hush-value" },
+    });
+    const broken = servers.find((server: { name: string }) => server.name === "broken");
+    expect(broken.definition).not.toContain("trusted");
+  });
+
+  it("approves or rejects only the definition the user reviewed", async () => {
+    const decide = (name: string, action: string, body: unknown) =>
+      authed(`/api/mcp/project-servers/${name}/${action}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const { servers } = await jsonOf(await authed("/api/mcp/project-servers"));
+    const digestOf = (name: string): string => servers.find((server: { name: string }) => server.name === name).digest;
+
+    expect((await decide("fake", "approve", {})).status).toBe(400);
+    const stale = await decide("fake", "approve", { digest: "0".repeat(64) });
+    expect(stale.status).toBe(409);
+    expect((await jsonOf(stale)).error.code).toBe("conflict");
+    expect((await decide("nope", "approve", { digest: digestOf("fake") })).status).toBe(404);
+
+    const rejected = await decide("fake", "reject", { digest: digestOf("fake") });
+    expect(rejected.status).toBe(200);
+    expect((await jsonOf(rejected)).server).toMatchObject({ name: "fake", status: "rejected" });
+    const refused = await authed("/api/mcp/fake/test", { method: "POST" });
+    expect(refused.status).toBe(403);
+    expect((await jsonOf(refused)).error.message).toContain("rejected");
+
+    for (const name of ["fake", "broken"]) {
+      const approved = await decide(name, "approve", { digest: digestOf(name) });
+      expect(approved.status).toBe(200);
+      expect((await jsonOf(approved)).server).toMatchObject({ name, status: "approved" });
+    }
+  });
+
   it("POST /api/mcp/:name/test reports per-server connection status", async () => {
     const res = await authed("/api/mcp/fake/test", { method: "POST" });
     expect(res.status).toBe(200);

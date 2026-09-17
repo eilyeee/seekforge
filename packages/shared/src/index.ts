@@ -734,6 +734,8 @@ export type SessionMeta = {
   createdAt: string;
   updatedAt: string;
   usage?: TokenUsage;
+  /** The user-chosen session name, when one was set (PATCH /api/sessions/:id). */
+  name?: string;
 };
 
 export type SkillScope = "builtin" | "global" | "project";
@@ -846,6 +848,10 @@ export type ServerConfig = {
   memoryAutoApproveConfidence?: number;
   /** Deterministic threshold/interval-based project-memory maintenance. */
   memoryMaintenance?: MemoryMaintenanceConfig;
+  /** User-owned directories outside the project the file tools may also use. */
+  additionalDirectories?: string[];
+  /** User-owned domain allowlist for sandboxed commands. */
+  sandboxNetwork?: { allowedDomains: string[]; deniedDomains?: string[] };
 };
 
 /** PUT /api/config keys shared by Server and Desktop. */
@@ -863,7 +869,9 @@ export type ConfigKey =
   | "planModel"
   | "escalateOnFailure"
   | "memoryAutoApproveConfidence"
-  | "memoryMaintenance";
+  | "memoryMaintenance"
+  | "additionalDirectories"
+  | "sandboxNetwork";
 
 /** GET /api/memory/stats — mirror of @seekforge/core MemoryStats. */
 export type MemoryStats = {
@@ -1015,6 +1023,11 @@ export type RewindResult = {
   restored: string[];
   deleted: string[];
   skipped: Array<{ path: string; reason: string }>;
+  /**
+   * Side effects of the rewound turns' shell commands that the rewind could
+   * not undo. Optional: servers predating the field omit it.
+   */
+  warnings?: string[];
 };
 
 /** GET /api/sessions/:id/turns entry — all-user-messages indexing (turn 0 = original task). */
@@ -1024,7 +1037,13 @@ export type SessionTurn = { turn: number; text: string; backtrackable: boolean }
 export type BacktrackResult = {
   removedMessages: number;
   keptMessages: number;
-  files: { restored: number; deleted: number; skipped: number } | null;
+  files: {
+    restored: number;
+    deleted: number;
+    skipped: number;
+    /** What the file restore could not undo (see RewindResult.warnings). Optional. */
+    warnings?: string[];
+  } | null;
 };
 
 /** GET/POST /api/todos entry (.seekforge/todos.md checklist line; 1-based index). */
@@ -2172,6 +2191,8 @@ export type ApiErrorCode =
   | "write_failed"
   | "git_error"
   | "not_a_git_repo"
+  /** POST /api/sessions/:id/compact: a preCompact hook refused the compaction. */
+  | "blocked_by_hook"
   // WS (ws.ts error frames)
   | "bad_frame"
   | "busy"

@@ -358,11 +358,12 @@ place) only gets the command to run by hand; a source checkout is told to
 ## Server flags
 
 `seekforge serve [paths...]` hosts the local Web/API server. It accepts a
-repeatable `--workspace <path>`, `--port <n>`, and the following background
-Loop control:
+repeatable `--workspace <path>`, `--port <n>`, the token file below, and the
+following background Loop control:
 
 | Flag | Description |
 | --- | --- |
+| `--token-file <path>` | Opt-in: once listening, also write `{"version":1,"port","token","pid","url"}` to this file (mode 0600, replaced atomically; parent directories are created 0700) and remove it on shutdown, so a local client that did not start the server — the VS Code extension, a script — can attach. Without it the token is only printed. Keep the file somewhere only you can read; anyone who can read it can drive the agent. |
 | `--loop-auto-resume` | Opt in to recovering durable ownerless `running` or already-`interrupted` Loops while their workspace is idle. Explicitly paused Loops stay paused. The first check runs after 30 seconds, then every 5 minutes. Busy workspaces and records with live Loop owners are skipped; an acquired idle guard remains active for the full recovery and permits only its own Agent sessions. Workspaces are handled sequentially, transient resume failures are retried on a later check, and server shutdown leaves an owned recovery `interrupted` for the next start. |
 | `--loop-auto-prune` | Opt in to pruning terminal Loop records during idle maintenance. By default, eligible records are pruned when older than 30 days or beyond the newest 100; resumable states and unfinished deliveries are never eligible. |
 | `--graph-auto-resume` | Opt in to resuming ownerless running Graphs or wait-paused Graphs with a ready timer/signal while the physical workspace is idle. Operator and approval pauses remain paused; candidates use mutable priority and persisted exponential backoff. |

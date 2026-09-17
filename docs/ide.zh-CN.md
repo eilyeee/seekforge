@@ -30,8 +30,10 @@ VS Code 扩展（`apps/vscode`）是本地 `seekforge serve` 的客户端。它�
 当请求发现没有服务器在监听时，扩展会提议启动服务器、设置 token 或打开该设置项。
 当服务器拒绝已保存的 token 时，它会提议设置新的 token。
 
-`seekforge serve` 只打印一次 token，不会写入文件；这就是扩展要么自己启动服务器、
-要么请你粘贴 token 的原因。
+默认情况下 `seekforge serve` 只打印一次 token，不会写入文件；这就是扩展要么自己启动
+服务器、要么请你粘贴 token 的原因。`seekforge serve --token-file <path>` 会在服务器运行期间
+另把端口和 token 写入该文件（权限 0600），并在停止时删除——这让并非由它启动服务的客户端也能
+找到服务器。扩展目前还不会读取这个文件；请用 **Set Server Token** 粘贴其中的 token。
 
 ## 聊天
 

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { StreamEvent } from "./events";
+import { reduceEvent, type StreamEvent } from "./events";
 import type { ServerFrame } from "./ws-types";
 import {
   activeTab,
   closeTab,
+  DEFAULT_REASONING_EFFORT,
+  reasoningEffortOf,
   editQueuedMessage,
   enqueueMessage,
   initialTabsState,
@@ -351,6 +353,44 @@ describe("header-control state (model/thinking/effort)", () => {
       thinking: true,
       reasoningEffort: "max",
     });
+  });
+
+  it("accepts the four shared efforts and falls back to the default for anything else", () => {
+    for (const effort of ["low", "medium", "high", "max"]) expect(reasoningEffortOf(effort)).toBe(effort);
+    expect(reasoningEffortOf("xhigh")).toBe(DEFAULT_REASONING_EFFORT);
+    expect(reasoningEffortOf(undefined)).toBe("high");
+  });
+});
+
+describe("subagent control between runs", () => {
+  it("an idle tab keeps its state on dispatch control errors and records an accepted control", () => {
+    let s = updateTab(initialTabsState(), "t1", (tab) => ({
+      chat: reduceEvent(tab.chat, {
+        type: "subagent.started",
+        dispatchId: "ag-1",
+        agentId: "bg",
+        task: "slow",
+        status: "running",
+      }),
+    }));
+    const queue = [{ id: 1, text: "later" }];
+    s = updateTab(s, "t1", { queue, conn: "connected" });
+    for (const code of ["dispatch_not_running", "unknown_dispatch"] as const) {
+      s = routeFrame(s, "t1", { type: "error", code, message: "no" } as ServerFrame);
+      const tab = activeTab(s);
+      expect(tab.chat.running).toBe(false);
+      expect(tab.queue).toEqual(queue);
+      expect(tab.wsError).toBe(`${code}: no`);
+    }
+    s = routeFrame(s, "t1", {
+      type: "subagent.control",
+      dispatchId: "ag-1",
+      operation: "cancel",
+      status: "accepted",
+    } as ServerFrame);
+    const card = activeTab(s).chat.items[0];
+    expect(card).toMatchObject({ kind: "subagent", status: "running", control: { operation: "cancel" } });
+    expect(activeTab(s).chat.running).toBe(false);
   });
 });
 

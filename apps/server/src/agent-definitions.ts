@@ -11,7 +11,15 @@
  */
 
 import { join } from "node:path";
-import { loadAgentDefinitionsFromDirs, parseAgentMarkdown, seekforgeHome, type AgentDefinition } from "@seekforge/core";
+import {
+  agentDefinitionRelPath,
+  loadAgentDefinitionsFromDirs,
+  MAX_AGENT_DEFINITION_BYTES,
+  MAX_AGENT_ID_CHARS,
+  parseAgentMarkdown,
+  seekforgeHome,
+  type AgentDefinition,
+} from "@seekforge/core";
 import { ConfigValueError, readProjectFile, removeProjectFile, writeProjectFileAtomic } from "./config.js";
 
 export type AgentDefinitionScope = "project" | "global";
@@ -21,15 +29,16 @@ const FORM_KEYS = ["name", "description", "tools", "mode", "model", "max-turns"]
 const FORM_KEY_SET: ReadonlySet<string> = new Set(FORM_KEYS);
 
 /**
- * A strict subset of core's agent id rule (which core does not export): the id
- * is a path segment here, so it is length-capped and can never hold a
- * separator or dot. The post-write load check is what proves core accepts it.
+ * Core's agent id character rule (frontmatter.ts AGENT_ID_RE, which core does
+ * not export); the length cap is core's own constant. The id is a path segment
+ * here, so it can never hold a separator or dot. The post-write load check is
+ * what proves core accepts it.
  */
-const AGENT_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const AGENT_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 const FRONTMATTER_KEY_RE = /^([A-Za-z][A-Za-z0-9_-]*):(.*)$/;
 const TOOL_NAME_RE = /^[A-Za-z0-9_.:*-]{1,128}$/;
 /** Core skips larger definitions; refusing them here keeps a save from vanishing. */
-const MAX_AGENT_MARKDOWN_BYTES = 256 * 1024;
+const MAX_AGENT_MARKDOWN_BYTES = MAX_AGENT_DEFINITION_BYTES;
 const MAX_EXTRA_VALUE_CHARS = 16_000;
 
 export type AgentExtraField = { key: string; value: string };
@@ -62,8 +71,12 @@ type FrontmatterEntry = { key: string; lines: string[] };
 type SplitMarkdown = { preamble: string[]; entries: FrontmatterEntry[]; body: string };
 
 export function assertAgentId(id: unknown): asserts id is string {
-  if (typeof id !== "string" || !AGENT_ID_RE.test(id)) {
-    throw new AgentDefinitionError(400, "bad_request", "id must be lowercase letters, digits and dashes (max 64)");
+  if (typeof id !== "string" || id.length > MAX_AGENT_ID_CHARS || !AGENT_ID_RE.test(id)) {
+    throw new AgentDefinitionError(
+      400,
+      "bad_request",
+      `id must be lowercase letters, digits and dashes (max ${MAX_AGENT_ID_CHARS})`,
+    );
   }
 }
 
@@ -72,7 +85,7 @@ function agentsRootOf(scope: AgentDefinitionScope, workspace: string): string {
 }
 
 function relPath(id: string): string {
-  return `.seekforge/agents/${id}/AGENT.md`;
+  return agentDefinitionRelPath(id);
 }
 
 /** Same frontmatter framing core's parser accepts. */

@@ -9,6 +9,7 @@
 import { existsSync } from "node:fs";
 import {
   buildAgentCoreDeps,
+  buildProvider,
   configureBrowserProfile,
   configureLspServers,
   configureSkillSources,
@@ -20,6 +21,8 @@ import {
   graphHandlersWithPlugins,
   createAgentCore,
   createDefaultDispatcher,
+  createMcpAwareDispatcher,
+  createPromptHookEvaluator,
   createRuntimeClient,
   engineeringGraphNeedsAgentRuntime,
   loadAgentDefinitions,
@@ -41,15 +44,17 @@ import {
   type LoopResult,
   type RuntimeClient,
   type DispatchManager,
-  type ToolSpec,
+  type HookConfig,
+  type HookPromptEvaluator,
   type McpClientEntry,
+  type McpRegistry,
   type PluginContributions,
   type EngineeringGraphDefinition,
   type EngineeringGraphState,
   type RunEngineeringGraphOptions,
 } from "@seekforge/core";
 import type { ConfirmResult, PermissionRequest, PermissionRule, RunOverrides } from "@seekforge/shared";
-import { loadConfig, seekforgeHome, type ServerConfig } from "./config.js";
+import { loadConfig, resolveServerConfig, seekforgeHome, type ServerConfig } from "./config.js";
 
 export type { RunOverrides } from "@seekforge/shared";
 
@@ -75,7 +80,11 @@ export type CreateAgentOptions = {
   extractMemory: boolean;
   /** Per-run model/thinking overrides (frame fields win over config). */
   overrides?: RunOverrides;
-  /** Run-bound subagent controls owned by the current WS connection. */
+  /**
+   * Subagent controls. The WS host passes its session-scoped manager (one per
+   * session, shared by every run of that session); unset, core makes a
+   * run-scoped one.
+   */
   dispatchManager?: DispatchManager;
   /** Cancels MCP discovery while assembling this run. */
   signal?: AbortSignal;
@@ -139,7 +148,7 @@ export function configureServerTools(workspace: string, config: ServerConfig): v
   // whatever it likes back.
   configureWebSearch(resolveWebSearchConfig(config.webSearch), workspace);
   // A user-only key, so the same value reaches every workspace: process-wide.
-  configureSkillSources({ claudeUserSkills: config.claudeUserSkills === true });
+  configureServerSkillSources(config);
   configureVision(
     config.visionModel?.baseUrl
       ? {
@@ -156,9 +165,46 @@ export function configureServerTools(workspace: string, config: ServerConfig): v
   );
 }
 
+/**
+ * Which skill directories every run reads (`claudeUserSkills`). A user-only key,
+ * so one process-wide value serves every workspace. Called at startup too, so
+ * GET /api/skills lists `~/.claude/skills` before the first agent is built.
+ */
+export function configureServerSkillSources(config: Pick<ServerConfig, "claudeUserSkills">): void {
+  configureSkillSources({ claudeUserSkills: config.claudeUserSkills === true });
+}
+
+/**
+ * Prompt-hook evaluator for hooks that fire outside a run (manual compaction).
+ * The provider is built only when a prompt hook actually asks, from the same
+ * config a run would use.
+ */
+export function createServerHookEvaluator(workspace: string): HookPromptEvaluator {
+  return createPromptHookEvaluator((model) => {
+    const config = loadConfig(workspace);
+    return buildProvider(
+      {
+        provider: config.provider,
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        modelPricing: config.modelPricing,
+        thinking: config.thinking,
+        reasoningEffort: config.reasoningEffort,
+        inlineImages: config.inlineImages,
+      },
+      model ?? config.model,
+    );
+  });
+}
+
+/** The hooks a run in `workspace` gets: user config plus enabled plugins. */
+export function serverHooks(workspace: string): HookConfig | undefined {
+  return mergePluginHooks(workspace, loadConfig(workspace).hooks, loadPluginContributions(workspace));
+}
+
 export function buildAgentDeps(
   opts: CreateAgentOptions,
-  mcpToolSpecs: ToolSpec[] = [],
+  mcpRegistry?: McpRegistry,
   pluginSnapshot?: PluginContributions,
 ): AgentCoreDeps & { runtime?: RuntimeClient } {
   const config = loadConfig(opts.workspace);
@@ -234,7 +280,10 @@ export function buildAgentDeps(
           ),
       },
     ),
-    dispatcher: createDefaultDispatcher(mcpToolSpecs),
+    // The registry's dispatcher carries the MCP tools (kept current on
+    // tools/list_changed, deferred behind tool_search past the threshold); the
+    // snapshot specs must not be passed as well — duplicate names throw.
+    dispatcher: mcpRegistry ? createMcpAwareDispatcher(mcpRegistry) : createDefaultDispatcher(),
     confirm: opts.confirm,
     ...(opts.persistRule ? { persistRule: opts.persistRule } : {}),
     onModelDelta: opts.onModelDelta,
@@ -251,16 +300,24 @@ export function buildAgentDeps(
   };
 }
 
-async function prepareAgentDeps(
+/**
+ * Everything one server run needs: MCP connections (only the servers allowed
+ * to connect — see mcpConnectionDecision — with the configured tool-search
+ * threshold) and the deps built around them. The caller owns `disposeMcp`.
+ * Exported for tests.
+ */
+export async function prepareAgentDeps(
   opts: CreateAgentOptions,
   signal: AbortSignal | undefined = opts.signal,
 ): Promise<{
   deps: AgentCoreDeps & { runtime?: RuntimeClient };
   entries: McpClientEntry[];
+  registry: McpRegistry;
   disposeMcp: () => void;
 }> {
   const pluginContributions = loadPluginContributions(opts.workspace);
-  const servers = mergePluginMcpServers(opts.workspace, loadConfig(opts.workspace).mcpServers, pluginContributions);
+  const { config, mcpOrigins } = resolveServerConfig(opts.workspace);
+  const servers = mergePluginMcpServers(opts.workspace, config.mcpServers, pluginContributions);
   // The MCP clients have to exist before the agent's deps (their tools go into
   // the dispatcher), but a sampling request needs the provider those deps own.
   // The handler resolves it when a request actually arrives, by which point
@@ -269,17 +326,29 @@ async function prepareAgentDeps(
   // What a server spends through sampling belongs in this session's total, so
   // the same bus is given to the handler and to the loop.
   const usageBus = createUsageBus();
-  const mcp = await loadMcpToolSpecs(servers, [opts.workspace], signal, {
-    sampling: createMcpSamplingHandler({
-      provider: () => deps?.provider,
-      confirm: opts.confirm,
-      onUsage: (usage) => usageBus.record(usage),
-    }),
-    ...(opts.askUser ? { elicitation: createMcpElicitationHandler({ askUser: opts.askUser }) } : {}),
-  });
+  const mcp = await loadMcpToolSpecs(
+    servers,
+    [opts.workspace],
+    signal,
+    {
+      sampling: createMcpSamplingHandler({
+        provider: () => deps?.provider,
+        confirm: opts.confirm,
+        onUsage: (usage) => usageBus.record(usage),
+      }),
+      ...(opts.askUser ? { elicitation: createMcpElicitationHandler({ askUser: opts.askUser }) } : {}),
+    },
+    {
+      workspace: opts.workspace,
+      // Who wrote each name decides whether it may connect: a repository entry
+      // only once approved for this workspace, a user entry only when trusted.
+      origins: mcpOrigins,
+      ...(config.mcpToolSearchThreshold !== undefined ? { toolSearchThreshold: config.mcpToolSearchThreshold } : {}),
+    },
+  );
   try {
-    deps = { ...buildAgentDeps(opts, mcp.specs, pluginContributions), usageBus };
-    return { deps, entries: mcp.entries, disposeMcp: mcp.dispose };
+    deps = { ...buildAgentDeps(opts, mcp.registry, pluginContributions), usageBus };
+    return { deps, entries: mcp.entries, registry: mcp.registry, disposeMcp: mcp.dispose };
   } catch (err) {
     mcp.dispose();
     throw err;

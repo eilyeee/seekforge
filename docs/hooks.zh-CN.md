@@ -76,7 +76,7 @@ Hook **归用户所有**。它们来自 `~/.seekforge/config.json`、显式的 `
 - `{"ok": false}` 被读作 `{"decision": "block", "reason": …}`——在 `preToolUse` 上拒绝该调用，在 `stop` 上让智能体继续工作，在 `postToolUse` 上把原因交给模型。
 - `{"ok": true}` **不构成任何决定**。模型检查可以拒绝动作，但绝不能让动作越过权限提示。事件中包含智能体及其工具产出的文本，因此应把 prompt hook 当作审阅者而非安全边界——强制策略请用 command hook。
 - 回复中没有判定结果即视为失败。
-- 检查使用本次会话的 provider（或可路由时使用 `model`），其 token 计入会话的用量与费用——`sessionEnd` 除外，它在会话总量确定之后才执行。没有模型可问的界面——`seekforge mcp-serve`，以及 REPL 和服务端的机械式 `/compact`——无法评估 prompt hook：在那里它们会失败。TUI 的 `/compact`（无论是否带 focus）会用本次会话的 provider 评估它们。
+- 检查使用本次会话的 provider（或可路由时使用 `model`），其 token 计入会话的用量与费用——`sessionEnd` 除外，它在会话总量确定之后才执行。没有模型可问的界面——`seekforge mcp-serve`——无法评估 prompt hook：在那里它们会失败。手动压缩会用本次会话已配置的 provider 评估它们：TUI 与 REPL 的 `/compact`（无论是否带 focus），以及服务端（`POST /api/sessions/:id/compact`，即 Desktop 的 `/compact`）。
 
 ## 阶段
 

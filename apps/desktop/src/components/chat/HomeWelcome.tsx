@@ -2,7 +2,7 @@ import { useEffect, useState, type ComponentType, type ReactNode } from "react";
 import { api } from "../../lib/api";
 import { useT } from "../../lib/i18n";
 import type { View } from "../../store";
-import type { AgentInfo, NamedSessionMeta, Skill } from "../../types";
+import type { AgentInfo, SessionMeta, Skill } from "../../types";
 import {
   IconAgents,
   IconArrowRight,
@@ -39,7 +39,7 @@ type Props = {
  */
 export function HomeWelcome({ onQuickAction, onNavigate, workspaceId }: Props) {
   const t = useT();
-  const [sessions, setSessions] = useState<NamedSessionMeta[]>([]);
+  const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
 

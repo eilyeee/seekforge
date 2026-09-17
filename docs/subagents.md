@@ -205,6 +205,11 @@ dispatches. Its background dispatches keep running, and:
 
 A result already read with `agent_result` is not delivered again.
 
+`seekforge serve` (and Desktop through it) keeps one such manager per session:
+background agents keep running after a turn ends, their cards can still be
+steered or cancelled, and deleting the session or stopping the server cancels
+them (see the [server API](../apps/server/SERVER-API.md)).
+
 ## Progress reports
 
 A dispatched agent may call `agent_report` with one short line — a milestone,

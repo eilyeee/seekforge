@@ -16,6 +16,7 @@ import type { Workspace, WorkspaceRegistry } from "../workspaces.js";
 import type { WorktreeManager } from "../worktrees.js";
 import type { TriggerRunHandle } from "../trigger-run.js";
 import type { RunManager } from "../run-ledger.js";
+import type { SessionDispatchRegistry } from "../session-dispatch.js";
 import type { StructuredLogger } from "../logger.js";
 import type { GraphExecutionAdapter } from "@seekforge/core";
 
@@ -44,6 +45,8 @@ export type RestContext = {
   requestId?: string;
   /** False when the host turned the workspace terminal off (startServer `terminal: false`). */
   terminalEnabled?: boolean;
+  /** Session-scoped subagent managers; a deleted session's dispatches end with it. */
+  sessionDispatch?: SessionDispatchRegistry;
 };
 
 /** Context for the global (non-workspace-scoped) routes. */

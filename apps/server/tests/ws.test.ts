@@ -322,8 +322,174 @@ describe("subagent controls", () => {
 
     releaseRun();
     await rx.waitFor((f) => f.type === "idle");
+    // The session's manager outlives the run; a settled dispatch is simply not running.
     sendFrame(ws, { type: "subagent.cancel", dispatchId: "ag-1" });
-    expect((await rx.waitFor((f) => f.type === "error")).code).toBe("not_running");
+    expect((await rx.waitFor((f) => f.type === "error")).code).toBe("dispatch_not_running");
+
+    // A connection that never ran a session has nothing to control.
+    const fresh = await open(server.port);
+    sendFrame(fresh.ws, { type: "subagent.cancel", dispatchId: "ag-1" });
+    expect((await fresh.rx.waitFor((f) => f.type === "error")).code).toBe("not_running");
+  });
+
+  it("keeps one session-scoped manager per session and controls background dispatches between runs", async () => {
+    const managers: Array<NonNullable<Parameters<CreateAgentFn>[0]["dispatchManager"]>> = [];
+    let takeSteering: (() => string[]) | undefined;
+    let failNext = false;
+    const workspace = makeWorkspace();
+    const { server } = await boot((opts) => {
+      if (failNext) {
+        failNext = false;
+        throw new Error("assembly failed");
+      }
+      const manager = opts.dispatchManager!;
+      managers.push(manager);
+      return {
+        agent: {
+          runTask: async function* (input) {
+            if (!input.resumeSessionId) {
+              manager.start({
+                agentId: "worker",
+                task: "keep going",
+                background: true,
+                run: async (signal, hooks) => {
+                  takeSteering = hooks.takeSteering;
+                  await new Promise<void>((resolve) => {
+                    signal.addEventListener("abort", () => resolve(), { once: true });
+                  });
+                  return { ok: false, error: { code: "aborted", message: "aborted" } };
+                },
+              });
+            }
+            const sessionId = input.resumeSessionId ?? `bg-${managers.length}`;
+            writeFileIn(
+              workspace,
+              `.seekforge/sessions/${sessionId}/session.json`,
+              JSON.stringify({
+                id: sessionId,
+                task: "t",
+                mode: "edit",
+                status: "completed",
+                createdAt: "2026-01-01T00:00:00.000Z",
+                updatedAt: "2026-01-01T00:00:00.000Z",
+              }),
+            );
+            yield { type: "session.created" as const, sessionId };
+            yield { type: "session.completed" as const, report: emptyReport() };
+          },
+        },
+        dispose: () => {},
+      };
+    }, workspace);
+    const { ws, rx } = await open(server.port);
+    sendFrame(ws, { type: "start", task: "first", mode: "edit", approvalMode: "auto" });
+    await rx.waitFor((f) => f.type === "idle");
+    expect(managers[0]!.sessionScoped).toBe(true);
+    expect(managers[0]!.get("ag-1")?.status).toBe("running");
+
+    // Between runs: guidance and cancellation still reach the background agent.
+    sendFrame(ws, { type: "subagent.steer", dispatchId: "ag-1", message: "wrap up" });
+    expect(await rx.waitFor((f) => f.type === "subagent.control")).toMatchObject({ operation: "steer" });
+    expect(takeSteering?.()).toEqual(["wrap up"]);
+
+    // The next run of the same session gets the same manager.
+    sendFrame(ws, { type: "send", sessionId: "bg-1", task: "second", approvalMode: "auto" });
+    await rx.waitFor((f) => f.type === "idle");
+    expect(managers[1]).toBe(managers[0]);
+
+    sendFrame(ws, { type: "subagent.cancel", dispatchId: "ag-1" });
+    expect(await rx.waitFor((f) => f.type === "subagent.control")).toMatchObject({ operation: "cancel" });
+    await waitUntil(() => managers[0]!.get("ag-1")?.status === "cancelled");
+
+    // A run that fails before it has a session leaves the connection on the
+    // session it had.
+    failNext = true;
+    sendFrame(ws, { type: "start", task: "broken", mode: "edit", approvalMode: "auto" });
+    expect((await rx.waitFor((f) => f.type === "error")).code).toBe("agent_error");
+    await rx.waitFor((f) => f.type === "idle");
+    sendFrame(ws, { type: "subagent.cancel", dispatchId: "ag-1" });
+    expect((await rx.waitFor((f) => f.type === "error")).code).toBe("dispatch_not_running");
+
+    // A new session gets its own manager.
+    sendFrame(ws, { type: "start", task: "third", mode: "edit", approvalMode: "auto" });
+    await rx.waitFor((f) => f.type === "idle");
+    expect(managers[2]).not.toBe(managers[0]);
+    expect(managers[2]!.get("ag-1")?.status).toBe("running");
+  });
+
+  it("keeps a run's tools until its background dispatches settle, and ends them on delete and shutdown", async () => {
+    const disposed: string[] = [];
+    const finishers = new Map<string, () => void>();
+    const managers = new Map<string, NonNullable<Parameters<CreateAgentFn>[0]["dispatchManager"]>>();
+    const workspace = makeWorkspace();
+    let runs = 0;
+    const { server } = await boot((opts) => {
+      const label = `run-${++runs}`;
+      return {
+        agent: {
+          runTask: async function* () {
+            opts.dispatchManager!.start({
+              agentId: "worker",
+              task: label,
+              background: true,
+              run: (signal) =>
+                new Promise((resolve) => {
+                  const done = () => resolve({ ok: true, data: { label } });
+                  finishers.set(label, done);
+                  signal.addEventListener("abort", done, { once: true });
+                }),
+            });
+            managers.set(label, opts.dispatchManager!);
+            writeFileIn(
+              workspace,
+              `.seekforge/sessions/${label}/session.json`,
+              JSON.stringify({
+                id: label,
+                task: "t",
+                mode: "edit",
+                status: "completed",
+                createdAt: "2026-01-01T00:00:00.000Z",
+                updatedAt: "2026-01-01T00:00:00.000Z",
+              }),
+            );
+            yield { type: "session.created" as const, sessionId: label };
+            yield { type: "session.completed" as const, report: emptyReport() };
+          },
+        },
+        dispose: () => {
+          disposed.push(label);
+        },
+      };
+    }, workspace);
+    const { ws, rx } = await open(server.port);
+    const runOnce = async () => {
+      sendFrame(ws, { type: "start", task: "go", mode: "edit", approvalMode: "auto" });
+      await rx.waitFor((f) => f.type === "idle");
+    };
+
+    // Released once the background dispatch finishes on its own.
+    await runOnce();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(disposed).toEqual([]);
+    finishers.get("run-1")!();
+    await waitUntil(() => disposed.includes("run-1"), 3000);
+
+    // Deleting the session cancels its dispatch and releases the run.
+    await runOnce();
+    const deleted = await fetch(`http://127.0.0.1:${server.port}/api/sessions/run-2`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(deleted.status).toBe(200);
+    expect(managers.get("run-2")!.get("ag-1")?.status).toBe("cancelled");
+    await waitUntil(() => disposed.includes("run-2"));
+
+    // Shutdown ends whatever is left.
+    await runOnce();
+    expect(disposed).not.toContain("run-3");
+    await server.close();
+    expect(managers.get("run-3")!.get("ag-1")?.status).toBe("cancelled");
+    expect(disposed).toContain("run-3");
   });
 
   it("rejects malformed subagent frames before consulting run state", async () => {

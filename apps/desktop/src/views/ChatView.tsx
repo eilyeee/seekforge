@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { activeTab, useStore } from "../store";
 import { api } from "../lib/api";
 import { mapToServerTurn, userTurnOf } from "../lib/backtrack";
+import { compactToast } from "../lib/compact-result";
+import { expandSkillInvocation, skillComposerEntries, type SkillComposerEntry } from "../lib/composer";
 import { buildHandoff, handoffFilename } from "../lib/handoff";
 import { ChatItems } from "../components/chat/ChatItems";
 import { HomeWelcome } from "../components/chat/HomeWelcome";
@@ -20,6 +22,7 @@ import { TabBar } from "../components/chat/TabBar";
 import { UsageFooter } from "../components/chat/UsageFooter";
 import { useT } from "../lib/i18n";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { RewindWarnings } from "../components/RewindWarnings";
 import { Button } from "../components/ui";
 import type { AccountBalance, ServerConfig, SlashCommand } from "../types";
 import { EditRevisions, valueForWorkspace } from "./async-coordination";
@@ -172,6 +175,23 @@ export function ChatView() {
     };
   }, [tab.ws]);
 
+  /** Skills a person may invoke from the palette (`/skill:<id>`). */
+  const [skillEntries, setSkillEntries] = useState<SkillComposerEntry[]>([]);
+  useEffect(() => {
+    let alive = true;
+    api
+      .skills(tab.ws)
+      .then((skills) => {
+        if (alive) setSkillEntries(skillComposerEntries(skills));
+      })
+      .catch(() => {
+        if (alive) setSkillEntries([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [tab.ws]);
+
   /** Available output styles (GET /api/output-styles) for the ModelBar picker. */
   const [outputStyles, setOutputStyles] = useState<{ name: string; kind: "builtin" | "custom" }[]>([]);
   useEffect(() => {
@@ -198,7 +218,8 @@ export function ChatView() {
     }
     api
       .sessionCompact(sessionId, tab.ws)
-      .then(() => showToast(t("chat.compactDone")))
+      .then((result) => showToast(compactToast(result, t)))
+      // A preCompact hook refusal arrives as a 409 whose message is the hook's reason.
       .catch((e: unknown) => showToast(t("chat.compactError", { error: e instanceof Error ? e.message : String(e) })));
   };
 
@@ -206,11 +227,14 @@ export function ChatView() {
   const [backtrackTarget, setBacktrackTarget] = useState<BacktrackTarget | null>(null);
   const [restoreFiles, setRestoreFiles] = useState(false);
   const [backtrackError, setBacktrackError] = useState<string | null>(null);
+  /** What the last backtrack's file restore could not undo, for the tab it ran on. */
+  const [backtrackWarnings, setBacktrackWarnings] = useState<{ tabId: string; warnings: string[] } | null>(null);
 
   const confirmBacktrack = async () => {
     const target = backtrackTarget;
     setBacktrackTarget(null);
     if (!target) return;
+    setBacktrackWarnings(null);
     const originatingTab = useStore.getState().tabs.tabs.find((candidate) => candidate.tabId === target.tabId);
     if (originatingTab?.ws !== target.workspaceId || originatingTab.chat.sessionId !== target.sessionId) return;
     const local = userTurnOf(originatingTab.chat.items, target.itemId);
@@ -225,9 +249,11 @@ export function ChatView() {
       }
       const currentTab = useStore.getState().tabs.tabs.find((candidate) => candidate.tabId === target.tabId);
       if (currentTab?.ws !== target.workspaceId || currentTab.chat.sessionId !== target.sessionId) return;
-      await api.backtrack(target.sessionId, turn, restoreFiles, target.workspaceId);
+      const result = await api.backtrack(target.sessionId, turn, restoreFiles, target.workspaceId);
       truncateAtItem(target.tabId, target.sessionId, target.itemId);
       setBacktrackError(null);
+      const warnings = result.files?.warnings ?? [];
+      if (warnings.length > 0) setBacktrackWarnings({ tabId: target.tabId, warnings });
     } catch (e) {
       setBacktrackError(String(e));
     }
@@ -312,6 +338,21 @@ export function ChatView() {
     }
   };
 
+  // A chosen skill loads its SKILL.md and leaves it in the draft, wrapped as a
+  // task the person completes (the TUI's /skill:<id> contract).
+  const insertSkill = (skillId: string): void => {
+    const tabId = tab.tabId;
+    const revision = draftRevisions.current.capture(tabId);
+    api
+      .skill(skillId, tab.ws)
+      .then((skill) => {
+        if (draftRevisions.current.isCurrent(tabId, revision)) {
+          setDraftForTab(tabId, expandSkillInvocation(skill.content ?? skill.description));
+        }
+      })
+      .catch((err) => showToast(err instanceof Error ? err.message : String(err)));
+  };
+
   // Slash-command registry for the composer palette: built-in UI/store actions,
   // the manual /compact action, and any project/user custom commands from the
   // server (choosing a custom command inserts its `body` into the draft).
@@ -347,9 +388,12 @@ export function ChatView() {
       hint: c.description,
       run: () => (commandTakesArgs(c.body) ? setArgsCommand(c) : insertCommand(c, "")),
     }));
-    return [...builtins.filter((b) => !customNames.has(b.name)), ...custom];
+    const skillCommands: ComposerCommand[] = skillEntries
+      .filter((entry) => !customNames.has(entry.name))
+      .map((entry) => ({ name: entry.name, hint: entry.hint, run: () => insertSkill(entry.skillId) }));
+    return [...builtins.filter((b) => !customNames.has(b.name)), ...custom, ...skillCommands];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [newSession, setMode, setView, tabMode, customCommands, compactSession]);
+  }, [newSession, setMode, setView, tabMode, customCommands, compactSession, skillEntries]);
 
   const requestClose = (tabId: string) => {
     const target = tabsState.tabs.find((t) => t.tabId === tabId);
@@ -484,6 +528,15 @@ export function ChatView() {
       {backtrackError && (
         <div className="border-t border-danger/40 bg-danger/10 px-4 py-1.5 font-mono text-xs text-danger">
           {t("chat.backtrackError", { error: backtrackError })}
+        </div>
+      )}
+
+      {backtrackWarnings && backtrackWarnings.tabId === tab.tabId && (
+        <div className="flex items-start gap-2 border-t border-warn/40 px-4 py-1.5">
+          <RewindWarnings warnings={backtrackWarnings.warnings} className="min-w-0 flex-1" />
+          <Button size="sm" variant="ghost" onClick={() => setBacktrackWarnings(null)}>
+            {t("action.close")}
+          </Button>
         </div>
       )}
 

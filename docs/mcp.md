@@ -291,8 +291,8 @@ rules constrain them:
 
 This holds on every surface — CLI, TUI, `seekforge serve`, and Desktop through
 the server — because all four merge through the same layer algebra, which takes
-each layer's origin as part of its type. Only the CLI currently *prints* the
-narrowing; the others enforce it silently.
+each layer's origin as part of its type. The CLI prints the narrowing and
+`seekforge serve` writes it to its log; the TUI enforces it silently.
 
 A repository entry cannot shadow a global one at all — the rule above ignores it
 — and a repository entry that stands alone stays unconnected until you approve
@@ -474,6 +474,15 @@ effect in the open session.
 `seekforge mcp add --trust` approves what it writes, and `mcp import` marks what
 it imports trusted (§1.2).
 
+In **Desktop** (and any client of `seekforge serve`), Settings → MCP lists the
+checkout's servers with their standing and the definition as written; Approve
+and Reject record the same decision for the open workspace. The server takes
+the digest of the definition you looked at and refuses the decision if the file
+changed in the meantime, so you never approve a definition you did not see
+(REST: `GET /api/mcp/project-servers`, `POST
+/api/mcp/project-servers/:name/approve|reject`). The next run connects an
+approved server.
+
 Once connected, a trusted or approved server's tools use a configured
 raw-tool-name override first, then the server default, then MCP annotations
 (`destructive`/`openWorld` escalate to `env`, `readOnly` maps to `readonly`),
@@ -482,10 +491,14 @@ only be stricter than that (§1.3). Entries connected for an explicit management
 action without either kind of standing stay at `env` and can never lower their
 permission through annotations.
 
-Explicit management actions such as Desktop's server test/tool inspection can
-connect a selected untrusted entry because the user initiated that exact
-connection; such a connection expands no references and gets the scrubbed
-environment. `seekforge mcp list` starts only entries with standing (see §1.2).
+Explicit management actions such as Desktop's server test/tool inspection
+connect the entry you selected with the standing its source gives it. An entry
+from your own config is yours even when it is not `trusted` for automatic
+connection, so testing it expands its `${VAR}` references like a run of a
+trusted entry would. An entry from the checkout is started only once approved
+for the workspace — a pending or rejected one is refused (`403`) and nothing
+runs — the same rule `seekforge mcp list` follows (see §1.2). Desktop's resource
+and prompt lists connect exactly the servers a run would.
 
 Tool results keep text under `content`, preserve bounded/redacted
 `structuredContent`, and describe binary content in `attachments`. **Image**

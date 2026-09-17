@@ -32,11 +32,12 @@ import type {
   MemoryStats,
   MemoryGovernanceReport,
   ModelInfo,
-  NamedSessionMeta,
   PermissionRuleEntry,
   PermissionRuleLayers,
   PermissionRuleScope,
+  ProjectMcpServer,
   PruneResult,
+  PluginInstallResult,
   PluginRecord,
   PluginSupplyChainEntry,
   RewindResult,
@@ -45,6 +46,8 @@ import type {
   SecurityFinding,
   SecurityFix,
   ServerConfig,
+  SessionCompactResult,
+  SessionMeta,
   SessionTurn,
   Skill,
   SkillSupplyChainEntry,
@@ -195,9 +198,9 @@ export const api = {
   },
 
   // Workspace-scoped: `?ws=<active>` is appended centrally via withWorkspace.
-  sessions: (ws?: string) => request<NamedSessionMeta[]>("GET", withWorkspace("/api/sessions", ws)),
+  sessions: (ws?: string) => request<SessionMeta[]>("GET", withWorkspace("/api/sessions", ws)),
   session: (id: string, ws?: string) =>
-    request<{ meta: NamedSessionMeta; messages: ChatMessage[]; events: AgentEvent[] }>(
+    request<{ meta: SessionMeta; messages: ChatMessage[]; events: AgentEvent[] }>(
       "GET",
       withWorkspace(`/api/sessions/${encodeURIComponent(id)}`, ws),
     ),
@@ -608,6 +611,22 @@ export const api = {
       withWorkspace(`/api/evolution/${encodeURIComponent(id)}/apply`, ws),
     ),
   mcp: (ws?: string) => request<McpServer[]>("GET", withWorkspace("/api/mcp", ws)),
+  /** Repository-defined MCP servers and the user's standing decision on each (never connects). */
+  mcpProjectServers: (ws?: string) =>
+    request<{ servers: ProjectMcpServer[] }>("GET", withWorkspace("/api/mcp/project-servers", ws)).then(
+      (result) => result.servers,
+    ),
+  /**
+   * Approve or reject one repository server. `digest` is the definition the
+   * user reviewed; a 409 `conflict` means it changed since and must be
+   * reviewed again.
+   */
+  mcpProjectServerDecide: (name: string, decision: "approve" | "reject", digest: string, ws?: string) =>
+    request<{ server: ProjectMcpServer }>(
+      "POST",
+      withWorkspace(`/api/mcp/project-servers/${encodeURIComponent(name)}/${decision}`, ws),
+      { digest },
+    ).then((result) => result.server),
   mcpTools: (name: string, ws?: string) =>
     request<{ tools: McpTool[] }>("POST", withWorkspace(`/api/mcp/${encodeURIComponent(name)}/tools`, ws)).then(
       (result) => result.tools,
@@ -735,12 +754,13 @@ export const api = {
 
   pluginCreate: (id: string, ws?: string) =>
     request<{ manifest: PluginRecord["manifest"]; path: string }>("POST", withWorkspace("/api/plugins", ws), { id }),
-  pluginInstall: (path: string, force = false, ws?: string) =>
-    request<{ manifest: PluginRecord["manifest"]; path: string; digest: string }>(
-      "POST",
-      withWorkspace("/api/plugins/install", ws),
-      { path, force },
-    ),
+  /**
+   * `source`: a local directory, a git URL (optionally `#ref`), an https
+   * `.tar.gz`/`.tgz`/`.zip` archive, or `<plugin>@<marketplace>`. The plugin
+   * is installed disabled until its digest is approved (pluginSetEnabled).
+   */
+  pluginInstall: (source: string, force = false, ws?: string) =>
+    request<PluginInstallResult>("POST", withWorkspace("/api/plugins/install", ws), { source, force }),
   pluginSetEnabled: (id: string, enabled: boolean, ws?: string) =>
     request<{ id: string; enabled: boolean; digest: string }>(
       "PUT",
@@ -893,9 +913,11 @@ export const api = {
   saveHooks: (hooks: StoredHooks, ws?: string) =>
     request<{ hooks: StoredHooks }>("PUT", withWorkspace("/api/hooks", ws), { hooks }),
 
-  // Manual session compaction (workspace-scoped). Result is treated as opaque.
+  // Manual session compaction (workspace-scoped). The server runs the user's
+  // preCompact/postCompact hooks around it; `notices` are their messages. A
+  // hook refusal is a 409 `blocked_by_hook` (an ApiError); null = nothing to compact.
   sessionCompact: (id: string, ws?: string) =>
-    request<unknown>("POST", withWorkspace(`/api/sessions/${encodeURIComponent(id)}/compact`, ws)),
+    request<SessionCompactResult | null>("POST", withWorkspace(`/api/sessions/${encodeURIComponent(id)}/compact`, ws)),
 
   // Fork a session into a NEW session id (the original is untouched); returns
   // the new id so the caller can open the forked copy (workspace-scoped).

@@ -26,8 +26,9 @@ import {
   truncateSessionAtUserTurn,
 } from "@seekforge/core";
 import type { AgentEvent, ToolResult } from "@seekforge/shared";
+import { createServerHookEvaluator, serverHooks } from "../agent.js";
 import { readProjectFile } from "../config.js";
-import { readJsonBody, sendApiError, sendJson } from "../http.js";
+import { readJsonBody, requestAbortSignal, sendApiError, sendJson } from "../http.js";
 import { isSafeId } from "../ids.js";
 import type { RouteCtx } from "./context.js";
 
@@ -36,6 +37,14 @@ type HistoricalAgentEvent = Extract<AgentEvent, { type: `subagent.${string}` | "
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+/**
+ * Core's closed color set (subagents/fields.ts parseColor, not exported): what
+ * core emits live. A stored value outside it is dropped from the replay.
+ */
+const SUBAGENT_COLOR_RE = /^(?:#(?:[0-9a-f]{3}|[0-9a-f]{6})|red|orange|yellow|green|blue|purple|pink|cyan)$/;
+/** Core bounds an agent_report line; a stored one longer than this is not core's. */
+const MAX_REPLAYED_REPORT_CHARS = 2_000;
 
 function persistedOrchestrationEvent(value: unknown): HistoricalAgentEvent | null | false {
   if (!isRecord(value) || typeof value.type !== "string") return false;
@@ -55,10 +64,17 @@ function persistedOrchestrationEvent(value: unknown): HistoricalAgentEvent | nul
   const task = value.task;
   if (typeof dispatchId !== "string" || typeof agentId !== "string" || typeof task !== "string") return false;
   const subSessionId = typeof value.subSessionId === "string" ? value.subSessionId : undefined;
+  // Presentation-only extras: kept when well-formed, dropped (not fatal) when not.
+  const color = typeof value.color === "string" && SUBAGENT_COLOR_RE.test(value.color) ? value.color : undefined;
+  const colorField = color !== undefined ? { color } : {};
   if (value.type === "subagent.started" && value.status === "running") {
-    return { type: value.type, dispatchId, agentId, task, status: "running" };
+    return { type: value.type, dispatchId, agentId, task, status: "running", ...colorField };
   }
   if (value.type === "subagent.step" && value.status === "running" && typeof value.toolName === "string") {
+    const message =
+      typeof value.message === "string" && value.message.length <= MAX_REPLAYED_REPORT_CHARS
+        ? value.message
+        : undefined;
     return {
       type: value.type,
       dispatchId,
@@ -67,6 +83,8 @@ function persistedOrchestrationEvent(value: unknown): HistoricalAgentEvent | nul
       status: "running",
       toolName: value.toolName,
       ...(subSessionId ? { subSessionId } : {}),
+      ...(message !== undefined ? { message } : {}),
+      ...colorField,
     };
   }
   if (value.type === "subagent.completed" && value.status === "done" && typeof value.resultSummary === "string") {
@@ -78,6 +96,7 @@ function persistedOrchestrationEvent(value: unknown): HistoricalAgentEvent | nul
       status: "done",
       resultSummary: value.resultSummary,
       ...(subSessionId ? { subSessionId } : {}),
+      ...colorField,
     };
   }
   if (
@@ -97,6 +116,7 @@ function persistedOrchestrationEvent(value: unknown): HistoricalAgentEvent | nul
       resultSummary: value.resultSummary,
       error: { code: value.error.code, message: value.error.message },
       ...(subSessionId ? { subSessionId } : {}),
+      ...colorField,
     };
   }
   if (value.type === "subagent.cancelled" && value.status === "cancelled" && typeof value.reason === "string") {
@@ -108,6 +128,7 @@ function persistedOrchestrationEvent(value: unknown): HistoricalAgentEvent | nul
       status: "cancelled",
       reason: value.reason,
       ...(subSessionId ? { subSessionId } : {}),
+      ...colorField,
     };
   }
   return false;
@@ -151,12 +172,27 @@ function sessionMutation<T>(res: RouteCtx["res"], sessionId: string, mutate: () 
   }
 }
 
+/** sessionMutation for an async mutation (the lease is taken inside it). */
+async function asyncSessionMutation<T>(
+  res: RouteCtx["res"],
+  sessionId: string,
+  mutate: () => Promise<T>,
+): Promise<{ value: T } | undefined> {
+  try {
+    return { value: await mutate() };
+  } catch (error) {
+    if (!(error instanceof SessionBusyError)) throw error;
+    sendApiError(res, 409, "session_busy", `session is running: ${sessionId}`);
+    return undefined;
+  }
+}
+
 export async function handle(ctx: RouteCtx): Promise<boolean> {
   await routes(ctx);
   return ctx.res.headersSent;
 }
 
-async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Promise<void> {
+async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx): Promise<void> {
   const path = url.pathname;
 
   if (method === "GET" && path === "/api/sessions") {
@@ -192,18 +228,20 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     if (dryRun !== true && hasActiveSessionRuns(workspace)) {
       return sendApiError(res, 409, "session_busy", "cannot prune while a session is running");
     }
-    return sendJson(
-      res,
-      200,
-      pruneSessions(workspace, {
-        ...(olderThanDays !== undefined ? { olderThanDays } : {}),
-        ...(keepLast !== undefined ? { keepLast } : {}),
-        ...(dryRun !== undefined ? { dryRun } : {}),
-      }),
-    );
+    const pruned = pruneSessions(workspace, {
+      ...(olderThanDays !== undefined ? { olderThanDays } : {}),
+      ...(keepLast !== undefined ? { keepLast } : {}),
+      ...(dryRun !== undefined ? { dryRun } : {}),
+    });
+    if (dryRun !== true) for (const id of pruned.removed) rest.sessionDispatch?.close(workspace, id);
+    return sendJson(res, 200, pruned);
   }
 
-  // Manual compaction of a stored session (folds the middle into a digest).
+  // Manual compaction of a stored session (folds the middle into a digest),
+  // wrapped in the user's preCompact / postCompact hooks. Core takes the
+  // session lease before the first hook and holds it through the rewrite, so a
+  // run cannot start on this session while its hooks are deciding; a client
+  // that goes away cancels the hooks.
   if (method === "POST" && segs.length === 4 && segs[1] === "sessions" && segs[3] === "compact") {
     const id = segs[2]!;
     if (!isSafeId(id)) return sendApiError(res, 400, "bad_request", `invalid session id: ${id}`);
@@ -213,9 +251,34 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     if (!readSessionMeta(workspace, id)) {
       return sendApiError(res, 404, "not_found", `session not found: ${id}`);
     }
-    const result = sessionMutation(res, id, () => compactSessionNow(workspace, id));
-    if (!result) return;
-    return sendJson(res, 200, result.value);
+    const operation = requestAbortSignal(req, res);
+    // A failing preCompact/postCompact hook is not a refusal (neither stage
+    // blocks on failure); its message is reported with the result.
+    const failures: string[] = [];
+    const result = await asyncSessionMutation(res, id, () =>
+      compactSessionNow(workspace, id, undefined, {
+        hooks: serverHooks(workspace),
+        signal: operation.signal,
+        evaluate: createServerHookEvaluator(workspace),
+        onError: (message) => failures.push(message),
+      }),
+    ).finally(() => operation.cleanup());
+    if (!result || res.headersSent) return;
+    const value = result.value;
+    if (value === null) return sendJson(res, 200, null);
+    if ("blocked" in value) {
+      // Nothing was changed. The error envelope keeps old clients showing the
+      // reason; the extra fields carry the hooks' notices.
+      return sendJson(res, 409, {
+        error: { code: "blocked_by_hook", message: value.reason },
+        blocked: true,
+        reason: value.reason,
+        notices: [...value.notices, ...failures],
+      });
+    }
+    const { notices: hookNotices = [], ...counts } = value;
+    const notices = [...hookNotices, ...failures];
+    return sendJson(res, 200, notices.length > 0 ? { ...counts, notices } : counts);
   }
 
   // Fork a stored session into a NEW session id (the original is untouched).
@@ -243,6 +306,8 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     if (!result) return;
     const deleted = result.value;
     if (!deleted) return sendApiError(res, 404, "not_found", `session not found: ${id}`);
+    // Its background subagents have no session left to report to.
+    rest.sessionDispatch?.close(workspace, id);
     return sendJson(res, 200, { deleted });
   }
 
@@ -367,10 +432,15 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
       if (turn <= 0 || turn >= userTurns) {
         return sendApiError(res, 400, "bad_request", `turn ${turn} is not backtrackable (turn 0 or out of range)`);
       }
-      let filesResult: { restored: number; deleted: number; skipped: number } | null = null;
+      let filesResult: { restored: number; deleted: number; skipped: number; warnings: string[] } | null = null;
       if (files === true) {
         const r = rewindSessionToTurn(workspace, id, turn, {}, lease);
-        filesResult = { restored: r.restored.length, deleted: r.deleted.length, skipped: r.skipped.length };
+        filesResult = {
+          restored: r.restored.length,
+          deleted: r.deleted.length,
+          skipped: r.skipped.length,
+          warnings: r.warnings,
+        };
       }
       const truncated = truncateSessionAtUserTurn(workspace, id, turn, lease);
       if (truncated === null) {

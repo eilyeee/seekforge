@@ -246,6 +246,7 @@ export const commands = {
     "cmd.serve.url": "SeekForge server: http://127.0.0.1:{port}/?token={token}",
     "cmd.serve.workspaces": "Serving {count} workspace(s) on 127.0.0.1 only:",
     "cmd.serve.pressCtrlC": "Press Ctrl+C to stop.",
+    "cmd.serve.tokenFile": "Token written to {path} (removed on shutdown)",
 
     // ── cmd.init.* ──────────────────────────────────────────────────────
     "cmd.init.createdConfig": "created .seekforge/config.json",
@@ -526,6 +527,7 @@ export const commands = {
     "cmd.serve.url": "SeekForge 服务器：http://127.0.0.1:{port}/?token={token}",
     "cmd.serve.workspaces": "仅在 127.0.0.1 上服务 {count} 个工作区：",
     "cmd.serve.pressCtrlC": "按 Ctrl+C 停止。",
+    "cmd.serve.tokenFile": "令牌已写入 {path}（服务停止时删除）",
 
     // ── cmd.init.* ──────────────────────────────────────────────────────
     "cmd.init.createdConfig": "已创建 .seekforge/config.json",

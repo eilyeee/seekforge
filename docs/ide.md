@@ -35,8 +35,12 @@ When a request finds nothing listening, the extension offers to start the
 server, set the token, or open the setting. When the server rejects the saved
 token, it offers to set a new one.
 
-`seekforge serve` prints its token once and does not write it to a file, which
-is why the extension either starts the server itself or asks you to paste it.
+By default `seekforge serve` prints its token once and does not write it to a
+file, which is why the extension either starts the server itself or asks you to
+paste it. `seekforge serve --token-file <path>` also writes the port and token
+to that file (mode 0600) while the server runs and removes it on shutdown — a
+way for a client that did not start the server to find it. The extension does
+not read such a file yet; paste the token from it with **Set Server Token**.
 
 ## Chat
 

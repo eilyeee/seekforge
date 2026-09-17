@@ -320,10 +320,11 @@ hunk 序号以及 `n: <原因>`。
 ## Server flag
 
 `seekforge serve [paths...]` 托管本地 Web/API 服务。它接受可重复的
-`--workspace <path>`、`--port <n>`，以及以下后台 Loop 控制项：
+`--workspace <path>`、`--port <n>`、下面的令牌文件，以及以下后台 Loop 控制项：
 
 | Flag | 说明 |
 | --- | --- |
+| `--token-file <path>` | 显式开启：开始监听后，另把 `{"version":1,"port","token","pid","url"}` 写入该文件（权限 0600，原子替换；缺失的父目录以 0700 创建），并在服务停止时删除，让并非由它启动服务的本地客户端（VS Code 扩展、脚本）也能连接。不加此项时令牌只会被打印。请把文件放在只有你能读取的位置——能读到它的人就能驱动 Agent。 |
 | `--loop-auto-resume` | 显式开启：工作区空闲时恢复失去 owner 的 `running` 或已有的 `interrupted` Loop；显式暂停的 Loop 保持暂停。首次检查在 30 秒后执行，之后每 5 分钟检查一次。繁忙工作区及仍有存活 Loop owner 的记录会被跳过；取得的空闲 guard 会覆盖完整恢复，并只放行其自身 Agent 会话。多个工作区顺序处理；瞬时恢复失败会在之后的检查中重试，服务关闭会把其拥有的恢复任务保留为 `interrupted`，供下次启动继续。 |
 | `--loop-auto-prune` | 显式开启空闲期终态 Loop 清理。默认清理超过 30 天或排在最新 100 条之外的合格记录；可恢复状态和未完成交付永不参与清理。 |
 | `--graph-auto-resume` | 显式开启：物理工作区空闲时恢复失去 owner 的运行中 Graph，或定时器/信号已就绪的 wait 暂停 Graph。人工控制与审批暂停保持暂停；候选使用可变优先级和持久指数退避。 |

@@ -4,7 +4,7 @@
  * zustand store delegates here; no DOM, no sockets — unit-tested in
  * tabs.test.ts.
  */
-import type { PermissionRequest } from "@seekforge/shared";
+import { isReasoningEffort, type PermissionRequest, type ReasoningEffort } from "@seekforge/shared";
 import { acknowledgeSubagentControl, initialChatState, reduceEvent, type ChatState } from "./events";
 import { emptyLoopProgress, reduceLoopEvent, type LoopProgress } from "./loop";
 import type { ConnState, ServerFrame } from "./ws-types";
@@ -37,6 +37,14 @@ export type QueuedMessage = { id: number; text: string };
 
 /** Upper bound on queued messages per tab. */
 export const MAX_QUEUED_MESSAGES = 20;
+
+/** A new tab's reasoning effort (sent only once thinking is switched on). */
+export const DEFAULT_REASONING_EFFORT: ReasoningEffort = "high";
+
+/** A known effort, or the default for anything else (a stale or foreign value). */
+export function reasoningEffortOf(value: unknown): ReasoningEffort {
+  return isReasoningEffort(value) ? value : DEFAULT_REASONING_EFFORT;
+}
 
 /** Worktree session binding: the tab's `ws` is the worktree's workspace id. */
 export type TabWorktree = {
@@ -92,7 +100,7 @@ export type ChatTab = {
   /** Thinking toggle; null = untouched (server config decides, nothing sent). */
   thinking: boolean | null;
   /** Reasoning effort; only sent while thinking is explicitly on. */
-  reasoningEffort: "high" | "max";
+  reasoningEffort: ReasoningEffort;
   /** Output style name; "" or "default" = server default (nothing sent). */
   outputStyle: string;
   /** Run-local sandbox; null = use the project configuration. */
@@ -164,7 +172,7 @@ function makeTab(tabId: string, ws = ""): ChatTab {
     planReady: false,
     model: "",
     thinking: null,
-    reasoningEffort: "high",
+    reasoningEffort: DEFAULT_REASONING_EFFORT,
     outputStyle: "",
     sandbox: null,
     continuationPreset: "extended",

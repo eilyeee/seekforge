@@ -7,6 +7,7 @@
  */
 
 import { MAX_UPLOAD_BYTES } from "@seekforge/shared/protocol-limits";
+import type { Skill } from "../types";
 import type { KVStorage } from "./storage";
 
 export type { KVStorage } from "./storage";
@@ -111,6 +112,50 @@ export function insertAtPath(
     text: text.slice(0, token.start) + inserted + text.slice(caret),
     caret: token.start + inserted.length,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Skills as palette entries ("/skill:<id>", the TUI's naming).
+
+export const SKILL_COMMAND_PREFIX = "skill:";
+const SKILL_HINT_MAX_CHARS = 60;
+
+/** A skill offered in the slash palette; `skillId` is the real id to fetch. */
+export type SkillComposerEntry = { name: string; hint: string; skillId: string };
+
+/**
+ * The skills a person may invoke from the palette: enabled ones, minus those
+ * whose SKILL.md says `user-invocable: false` (the model may still use those).
+ * Ids are sanitized to command-safe names; one that sanitizes to nothing is
+ * skipped, as is a second skill mapping to a name already taken.
+ */
+export function skillComposerEntries(
+  skills: ReadonlyArray<Pick<Skill, "id" | "name" | "description" | "enabled" | "userInvocable">>,
+): SkillComposerEntry[] {
+  const out: SkillComposerEntry[] = [];
+  const seen = new Set<string>();
+  for (const skill of skills) {
+    if (!skill.enabled || skill.userInvocable === false) continue;
+    const id = skill.id
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+    if (id === "" || seen.has(id)) continue;
+    seen.add(id);
+    const flat = (skill.description || skill.name || skill.id).replace(/\s+/g, " ").trim();
+    const hint = flat.length > SKILL_HINT_MAX_CHARS ? `${flat.slice(0, SKILL_HINT_MAX_CHARS)}…` : flat;
+    out.push({ name: `${SKILL_COMMAND_PREFIX}${id}`, hint: `(skill) ${hint}`, skillId: skill.id });
+  }
+  return out;
+}
+
+/**
+ * The draft an invoked skill leaves in the composer: its SKILL.md wrapped the
+ * way the TUI wraps it, ending in "Task: " for the person to complete.
+ */
+export function expandSkillInvocation(content: string, task = ""): string {
+  return `Apply the following skill/procedure to this task.\n\n<skill>\n${content.trim()}\n</skill>\n\nTask: ${task}`;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { FinalReport } from "@seekforge/shared";
-import { appendUser, initialChatState, reduceEvent, type ChatState, type StreamEvent } from "./events";
+import {
+  appendUser,
+  initialChatState,
+  planItemLabel,
+  planItemsFrom,
+  reduceEvent,
+  SUBAGENT_REPORT_LIMIT,
+  subagentColor,
+  type ChatState,
+  type StreamEvent,
+} from "./events";
 
 function play(events: StreamEvent[], from: ChatState = initialChatState()): ChatState {
   return events.reduce(reduceEvent, from);
@@ -428,6 +438,116 @@ describe("reduceEvent", () => {
     ]);
     expect(s.items).toHaveLength(1);
     expect(s.items[0]).toMatchObject({ kind: "subagent", steps: [] });
+  });
+
+  it("keeps agent_report lines as bounded reports, not step chips, through completion", () => {
+    const report = (index: number): StreamEvent => ({
+      type: "subagent.step",
+      dispatchId: "ag-1",
+      agentId: "reviewer",
+      task: "review",
+      status: "running",
+      toolName: "agent_report",
+      message: `  finding   ${index}\n<b>bold</b> `,
+      color: "blue",
+    });
+    const s = play([
+      { type: "subagent.started", dispatchId: "ag-1", agentId: "reviewer", task: "review", status: "running" },
+      {
+        type: "subagent.step",
+        dispatchId: "ag-1",
+        agentId: "reviewer",
+        task: "review",
+        status: "running",
+        toolName: "read_file",
+      },
+      ...Array.from({ length: SUBAGENT_REPORT_LIMIT + 2 }, (_, index) => report(index)),
+      {
+        type: "subagent.completed",
+        dispatchId: "ag-1",
+        agentId: "reviewer",
+        task: "review",
+        status: "done",
+        resultSummary: "ok",
+      },
+    ]);
+    const item = s.items[0] as Extract<(typeof s.items)[number], { kind: "subagent" }>;
+    expect(item.status).toBe("done");
+    expect(item.steps).toEqual(["read_file"]);
+    expect(item.reports).toHaveLength(SUBAGENT_REPORT_LIMIT);
+    // Whitespace is collapsed; markup stays inert text for the renderer.
+    expect(item.reports![0]).toBe("finding 2 <b>bold</b>");
+    expect(item.color).toBe("blue");
+  });
+
+  it("opens a card from a first report and accepts only core's color set", () => {
+    const s = play([
+      {
+        type: "subagent.step",
+        dispatchId: "ag-7",
+        agentId: "scout",
+        task: "scan",
+        status: "running",
+        toolName: "agent_report",
+        message: "half way",
+        color: "red; background:url(x)",
+      },
+      {
+        type: "subagent.started",
+        dispatchId: "ag-8",
+        agentId: "fixer",
+        task: "fix",
+        status: "running",
+        color: "#A1b2C3",
+      },
+      { type: "subagent.started", dispatchId: "ag-9", agentId: "other", task: "x", status: "running", color: "#12345" },
+    ]);
+    expect(s.items[0]).toMatchObject({ kind: "subagent", steps: [], reports: ["half way"] });
+    expect(s.items[0]).not.toHaveProperty("color");
+    expect(s.items[1]).toMatchObject({ color: "#a1b2c3" });
+    expect(s.items[2]).not.toHaveProperty("color");
+    expect(subagentColor("purple")).toBe("purple");
+    expect(subagentColor("magenta")).toBeUndefined();
+    expect(subagentColor("#abc")).toBe("#abc");
+    expect(subagentColor(42)).toBeUndefined();
+  });
+
+  it("finishes a background card from an earlier run when its terminal event arrives later", () => {
+    const first = play([
+      { type: "subagent.started", dispatchId: "ag-1", agentId: "bg", task: "slow", status: "running", color: "green" },
+      { type: "session.completed", report },
+    ]);
+    const next = play(
+      [
+        { type: "session.created", sessionId: "s-1" },
+        {
+          type: "subagent.completed",
+          dispatchId: "ag-1",
+          agentId: "bg",
+          task: "slow",
+          status: "done",
+          resultSummary: "finished between runs",
+        },
+      ],
+      appendUser(first, "next turn"),
+    );
+    const cards = next.items.filter((item) => item.kind === "subagent");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ status: "done", resultSummary: "finished between runs", color: "green" });
+  });
+
+  it("keeps a plan step's activeForm and shows it only while in progress", () => {
+    const items = planItemsFrom({
+      items: [
+        { step: "Run the tests", status: "in_progress", activeForm: "  Running the tests " },
+        { step: "Fix it", status: "pending", activeForm: "Fixing it" },
+        { step: "Ship", status: "done", activeForm: 7 },
+        { step: "Write docs", status: "in_progress", activeForm: "   " },
+      ],
+    })!;
+    expect(items[0]).toEqual({ step: "Run the tests", status: "in_progress", activeForm: "Running the tests" });
+    expect(items[2]).toEqual({ step: "Ship", status: "done" });
+    expect(items.map(planItemLabel)).toEqual(["Running the tests", "Fix it", "Ship", "Write docs"]);
   });
 
   it("accumulates reasoning.delta chunks into one streaming thinking item", () => {

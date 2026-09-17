@@ -82,7 +82,10 @@ before the install fails and the staging directory is deleted. `tar` and
 installs and git marketplaces.
 
 The server's `POST /api/plugins/install` (and therefore the Desktop install
-flow) still takes a local path only.
+flow) takes the same sources. Desktop asks for confirmation before it fetches
+anything that is not a local directory, and shows where the copy came from
+(`originLabel`: the pinned commit or archive hash); the plugin is disabled
+until you enable it on the Plugins page.
 
 ## Marketplaces
 

@@ -27,6 +27,7 @@ import {
   acquireSessionLease,
   DEPRECATED_MODELS,
   MODEL_PRICING,
+  parseSandboxNetworkPolicy,
   type HookConfig,
   type LspServerConfig,
   type McpServerConfig,
@@ -34,18 +35,23 @@ import {
   type ModelPricing,
   resolveMemoryMaintenanceConfig,
 } from "@seekforge/core";
-import type { HookStage, PermissionRule } from "@seekforge/shared";
+import { type HookStage, type PermissionRule, REASONING_EFFORTS, type ReasoningEffort } from "@seekforge/shared";
 import { GLOBAL_CONFIG_LOCK_ID } from "@seekforge/shared/config-layers";
 import { readFileBounded, readFileDescriptorBounded } from "@seekforge/shared/bounded-file-read";
 import {
+  type ConfigLayerOrigin,
+  describeConfigMergeReport,
   isProjectConfigKeyAllowed,
   MAX_CONFIG_FILE_BYTES,
   mergeConfigLayers,
+  mergeConfigLayersWithReport,
   readJsonConfigLayer,
+  readProjectMcpJsonLayer,
   repositoryConfigLayer,
   sanitizeProjectConfig,
   userConfigLayer,
 } from "@seekforge/shared/config-layers";
+import { normalizeExtraDir } from "@seekforge/shared/workspace-dirs";
 
 export const MAX_PROJECT_STATE_FILE_BYTES = 8_000_000;
 
@@ -93,8 +99,8 @@ export type ServerConfig = {
   modelContextWindows?: Record<string, number>;
   /** DeepSeek V4 thinking mode (default: API default). */
   thinking?: boolean;
-  /** Reasoning effort for thinking mode. */
-  reasoningEffort?: "high" | "max";
+  /** Reasoning effort for thinking mode (mapped per provider protocol by core). */
+  reasoningEffort?: ReasoningEffort;
   /** Stronger model for plan runs + failure escalation (same key/endpoint). */
   planModel?: string;
   /**
@@ -167,6 +173,16 @@ export type ServerConfig = {
   /** MCP servers (Claude Code-compatible). Edit the file directly; not settable via `config set`. */
   mcpServers?: Record<string, McpServerConfig>;
   /**
+   * Share (0-100) of the context budget MCP tool definitions may take before
+   * they are deferred behind tool_search. Unset = core's default.
+   */
+  mcpToolSearchThreshold?: number;
+  /**
+   * Shell command whose stdout is the API key. User-owned; the shared merge runs
+   * it to fill `apiKey`, and GET /api/config never returns it.
+   */
+  apiKeyHelper?: string;
+  /**
    * Fine-grained allow/ask/deny permission rules. First match of each action
    * category wins (deny, then ask, then allow); repository layers may only add
    * deny and ask rules. Edit trusted rules in user config.
@@ -195,14 +211,51 @@ export const CONFIG_KEYS = [
   "escalateOnFailure",
   "memoryAutoApproveConfidence",
   "memoryMaintenance",
+  // User-owned (absent from the shared PROJECT_PREFERENCE_KEYS): a repository
+  // can neither grant a directory nor shape the sandbox's network policy, so
+  // these save only with global=true.
+  "additionalDirectories",
+  "sandboxNetwork",
 ] as const;
 
 /** Allowed values for the enum-typed config keys. */
 const ENUM_VALUES: Record<string, readonly string[]> = {
   sandbox: ["off", "read-only", "workspace-write", "restricted"],
   compaction: ["mechanical", "llm"],
-  reasoningEffort: ["high", "max"],
+  reasoningEffort: REASONING_EFFORTS,
 };
+
+const MAX_ADDITIONAL_DIRECTORIES = 64;
+const MAX_DIRECTORY_CHARS = 4_096;
+
+/**
+ * Validates the Settings value for `additionalDirectories`: absolute (or `~`)
+ * paths of existing directories outside this workspace, stored as the physical
+ * directory that was approved (the shared owner's rule: a symlink rebound
+ * later must not move the grant). An empty list clears the key.
+ */
+function parseAdditionalDirectoriesInput(value: unknown, workspace: string): string[] | undefined {
+  if (!Array.isArray(value) || !value.every((entry): entry is string => typeof entry === "string")) {
+    throw new ConfigValueError("additionalDirectories must be a string[] of directory paths");
+  }
+  const entries = value.map((entry) => entry.trim()).filter(Boolean);
+  if (entries.length > MAX_ADDITIONAL_DIRECTORIES) {
+    throw new ConfigValueError(`at most ${MAX_ADDITIONAL_DIRECTORIES} additional directories`);
+  }
+  const stored: string[] = [];
+  for (const entry of entries) {
+    const absolute = isAbsolute(entry) || entry === "~" || entry.startsWith("~/");
+    if (!absolute || entry.length > MAX_DIRECTORY_CHARS) {
+      throw new ConfigValueError(`additional directory must be an absolute path: ${entry}`);
+    }
+    const physical = normalizeExtraDir(entry, workspace);
+    if (physical === null) {
+      throw new ConfigValueError(`not an existing directory outside this workspace: ${entry}`);
+    }
+    if (!stored.includes(physical)) stored.push(physical);
+  }
+  return stored.length > 0 ? stored : undefined;
+}
 
 export class ConfigValueError extends Error {}
 
@@ -477,8 +530,23 @@ const HOOK_STAGE_ORDER: readonly HookStage[] = [
   "notification",
 ];
 
-/** Precedence: env > safe project preferences > ~/.seekforge/config.json */
+/** Precedence: env > safe project preferences > .mcp.json > ~/.seekforge/config.json */
 export function loadConfig(workspace: string): ServerConfig {
+  return resolveServerConfig(workspace).config;
+}
+
+/** Merge warnings this process already logged; each is reported once. */
+const reportedMergeWarnings = new Set<string>();
+
+/**
+ * loadConfig plus the origin of every surviving MCP server name: what the MCP
+ * registry needs to decide whether a server may connect, and what the project
+ * server approval routes need to tell a repository entry from the user's own.
+ */
+export function resolveServerConfig(workspace: string): {
+  config: ServerConfig;
+  mcpOrigins: Record<string, ConfigLayerOrigin>;
+} {
   const global = readJson(join(seekforgeHome(), ".seekforge", "config.json"));
   let project: ServerConfig = {};
   try {
@@ -491,19 +559,68 @@ export function loadConfig(workspace: string): ServerConfig {
   // deny rules, but cannot route user credentials, execute startup commands,
   // authorize tools, weaken isolation, mark an MCP server trusted, or repoint
   // an MCP server the user defined (the layer origin is what enforces the last).
-  return mergeConfigLayers<ServerConfig>([userConfigLayer(global), repositoryConfigLayer(project)], {
-    hookStages: HOOK_STAGE_ORDER,
-  });
+  // Claude Code's `.mcp.json` sits right above the user layer and below the
+  // project config, as in the CLI: when both project files name a server,
+  // SeekForge's own file wins.
+  const { config, report } = mergeConfigLayersWithReport<ServerConfig>(
+    [userConfigLayer(global), readProjectMcpJsonLayer<ServerConfig>(workspace), repositoryConfigLayer(project)],
+    { hookStages: HOOK_STAGE_ORDER },
+  );
+  // A narrowing nobody can see is its own defect; the server's log is where an
+  // operator watching `seekforge serve` looks.
+  for (const line of describeConfigMergeReport(report)) {
+    if (reportedMergeWarnings.has(line)) continue;
+    reportedMergeWarnings.add(line);
+    process.stderr.write(line);
+  }
+  return { config, mcpOrigins: report.mcpServerOrigins };
 }
 
-/** Merged config with the apiKey masked for transport (GET /api/config). */
+/** A secret's display form: its first characters, never the whole value. */
+function maskSecret(value: string): string {
+  return `${value.slice(0, 6)}****`;
+}
+
+/**
+ * Merged config for transport (GET /api/config). Nothing that is a secret or
+ * runs a command leaves the process:
+ * - `mcpServers` (entries may carry secret env values; GET /api/mcp exposes a
+ *   sanitized view), `hooks` (commands and HTTP headers; GET /api/hooks is the
+ *   editor's own route) and `lspServers` (commands and env) are omitted;
+ * - `apiKeyHelper` (a command line) is omitted; only the key it produced is
+ *   reported, masked like any other key;
+ * - `apiKey`, `visionModel.apiKey` and `webSearch.braveApiKey` are masked.
+ * `runtimeBin` stays: it is a local path the Settings screen itself edits.
+ */
 export function maskedConfig(workspace: string): Record<string, unknown> {
-  // mcpServers is omitted entirely: entries may carry secret env values
-  // (GET /api/mcp exposes a sanitized view instead).
-  const { mcpServers: _mcpServers, ...merged } = loadConfig(workspace);
+  const {
+    mcpServers: _mcpServers,
+    hooks: _hooks,
+    lspServers: _lspServers,
+    apiKeyHelper: _apiKeyHelper,
+    ...merged
+  } = loadConfig(workspace);
+  const visionModel: unknown = merged.visionModel;
+  const webSearch: unknown = merged.webSearch;
   return {
     ...merged,
-    apiKey: merged.apiKey ? `${merged.apiKey.slice(0, 6)}****` : undefined,
+    ...(isObjectRecord(visionModel)
+      ? {
+          visionModel: {
+            ...visionModel,
+            ...(typeof visionModel.apiKey === "string" ? { apiKey: maskSecret(visionModel.apiKey) } : {}),
+          },
+        }
+      : {}),
+    ...(isObjectRecord(webSearch)
+      ? {
+          webSearch: {
+            ...webSearch,
+            ...(typeof webSearch.braveApiKey === "string" ? { braveApiKey: maskSecret(webSearch.braveApiKey) } : {}),
+          },
+        }
+      : {}),
+    apiKey: merged.apiKey ? maskSecret(merged.apiKey) : undefined,
     // Selectable model list: the user's configured ids, or core's non-deprecated
     // defaults so the picker is never empty.
     models: merged.models && merged.models.length > 0 ? merged.models : DEFAULT_MODEL_LIST,
@@ -555,6 +672,24 @@ export function setConfigValue(workspace: string, key: string, value: unknown, g
       throw new ConfigValueError("memoryAutoApproveConfidence must be a number between 0 and 1");
     }
     stored = num;
+  } else if (key === "additionalDirectories") {
+    stored = parseAdditionalDirectoriesInput(value, workspace);
+  } else if (key === "sandboxNetwork") {
+    // null clears the policy. An object goes through core's validator, which
+    // throws rather than dropping an entry (a policy that silently lost its
+    // allowlist would open the network); an empty allowedDomains is a policy.
+    if (value === null) stored = undefined;
+    else {
+      try {
+        const policy = parseSandboxNetworkPolicy(value);
+        stored = {
+          allowedDomains: [...policy.allowedDomains],
+          ...(policy.deniedDomains ? { deniedDomains: [...policy.deniedDomains] } : {}),
+        };
+      } catch (error) {
+        throw new ConfigValueError(error instanceof Error ? error.message : String(error));
+      }
+    }
   } else if (key === "memoryMaintenance") {
     // Structured, trusted-only policy. Validation also rejects unknown nested
     // keys so a typo cannot silently disable a threshold or archival guard.
