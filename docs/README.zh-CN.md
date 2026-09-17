@@ -42,6 +42,7 @@
 - [自主 GitHub issue → PR](github.zh-CN.md) — `seekforge resolve <issue>`：获取
   issue，在工作分支上以 headless 方式修复，验证后打开一个 draft PR。
   智能体负责修复；用户的 `resolve` 命令执行 push/PR（护城河得以保留）。
+  另含在 `@seekforge` 评论时作答或修复的可复用 GitHub Action。
 - [远程 / 隔离执行](remote.zh-CN.md) — agent-runner 契约与 Docker 参考 runner
   （`seekforge sandbox-run`）：单工作区挂载、密钥经由环境变量传递、
   网络权衡，以及容器化运行的审计。
@@ -57,6 +58,8 @@
   桌面外壳：[apps/desktop/src-tauri/README.md](../apps/desktop/src-tauri/README.md)
 - [服务器 REST + WS API](../apps/server/SERVER-API.md) — 桌面/网页工作台
   所遵循的契约。
+- [VS Code 扩展与 IDE 桥](ide.zh-CN.md) — 聊天、原生 diff 权限审阅、编辑器上下文、
+  从 VS Code 启动服务器，以及终端 UI 所连接的回环桥契约。
 - 自定义斜杠命令（frontmatter、`$ARGUMENTS`/`$1..$9`、`:` 命名空间、
   `` !`shell` ``、`run_user_command`）的文档见
   [TUI README](../apps/tui/README.md#custom-commands)。

@@ -166,3 +166,124 @@ with two deliberate differences:
 - **It pushes with a plain `git push`**, to the upstream `gh pr checkout`
   configured — which for a PR from a fork is *that fork's* branch, not your
   repository. Check whose PR you are fixing before you run it.
+
+## GitHub Action: answer or fix on a comment
+
+`.github/actions/seekforge` is a reusable composite action that runs SeekForge
+in CI when a collaborator mentions it. A comment such as
+`@seekforge why does startup take ten seconds?` on an issue or pull request
+gets an answer as a comment; `@seekforge fix` on an issue runs `resolve` and
+links the draft pull request it opened. A ready-to-copy workflow is in
+[`examples/github-action/seekforge.yml`](../examples/github-action/seekforge.yml).
+
+### What triggers it
+
+- Events: `issue_comment` (created), `pull_request_review_comment` (created),
+  and `issues` (opened; the title and body are searched). Edits never trigger
+  a run.
+- The text must contain the trigger phrase (input `trigger-phrase`, default
+  `@seekforge`) as a whole token, case-insensitively: `@seekforge-bot` and
+  `me@seekforge.dev` do not count.
+- **Only people with write, maintain, or admin access** start a run, checked
+  with the repository collaborator-permission API. Anyone else is ignored
+  without a reply, so a drive-by comment can neither spend the model budget nor
+  steer a run. Comments from bots, including the action's own replies, are
+  ignored too.
+
+The action first reacts with 👀 and posts a "working on it" comment that links
+the workflow run, then rewrites that comment with the result (a review comment
+gets its reply in the same thread). If the run fails or stops early, the same
+comment says so.
+
+### What runs
+
+A request is a **fix** when the text after the phrase starts with `fix`,
+`resolve`, or `implement` (and `allow-fix` is `"true"`); everything else is a
+**question**.
+
+- **Question** — the request, the issue or pull request title and description,
+  the review comment's file, line and diff hunk, and (on a pull request) its
+  diff capped at 200 KB are written to a prompt, each inside a fence longer than
+  any backtick run in it and labeled as user-written data. The prompt goes to
+  SeekForge on stdin:
+
+  ```bash
+  seekforge -p -y --permission-mode default --output-format json --ask \
+    --max-cost 1.00 --max-duration 900
+  ```
+
+  `-y` only records folder consent for the fresh checkout; `--permission-mode`
+  takes precedence and decides what the run may do. With the default mode the
+  run is read-only, and in the machine output format anything that would
+  prompt is denied. `permission-mode: acceptEdits` drops `--ask` so the run can
+  edit the checkout; this action never commits or pushes those edits.
+  `allowed-tools` and `disallowed-tools` become `--allowedTools` and
+  `--disallowedTools`.
+- **Fix on an issue** — `seekforge resolve <issue> --max-cost <usd> -y --base <branch>`
+  (plus `--model` and `--wait-ci` when set), exactly as described above: the
+  agent edits files in a worktree, and the command commits, pushes and opens a
+  draft pull request. The comment links that pull request.
+- **Fix on a pull request** — `seekforge resolve-review <pr> --max-cost <usd> -y`
+  for a pull request whose branch is in the same repository. A pull request
+  from a fork is refused with an explanation, because the action cannot push to
+  it.
+
+`resolve` works from the issue itself; any words after `fix` are not passed to
+it. Pull requests that a workflow opens with `GITHUB_TOKEN` do not start other
+workflows (a GitHub rule); push with a GitHub App or personal token if your CI
+must run on them.
+
+### Setup
+
+1. Add the provider's API key as a repository secret, for example
+   `DEEPSEEK_API_KEY`.
+2. Copy the example workflow to `.github/workflows/seekforge.yml` and pin the
+   action to a full commit SHA of this repository.
+3. Grant the job `contents: write`, `issues: write`, and `pull-requests: write`
+   (the example does). A workflow that should only answer can set
+   `allow-fix: "false"` and drop `contents: write`.
+
+### Inputs and outputs
+
+| Input | Default | Meaning |
+| --- | --- | --- |
+| `api-key` | — (required) | Provider API key; pass a secret. |
+| `provider` | `deepseek` | `deepseek`, `ark`, or `anthropic`; selects the key variable and the provider preset. |
+| `model` | provider default | Model id. |
+| `max-cost` | `1.00` | Per-run cost cap in USD. |
+| `max-duration` | `900` | Wall-clock cap for a question run, in seconds. |
+| `permission-mode` | `default` | `default` (read-only) or `acceptEdits`, for question runs. |
+| `allowed-tools` / `disallowed-tools` | empty | Comma-separated tool lists for question runs. |
+| `allow-fix` | `"true"` | Whether fix requests run `resolve` / `resolve-review`. |
+| `base-branch` | repository default branch | Branch fix pull requests target. |
+| `wait-ci` | `"false"` | Pass `--wait-ci` to fix runs. |
+| `trigger-phrase` | `@seekforge` | Phrase that starts a run. |
+| `seekforge-version` | `1.0.0` | Exact npm version to install. |
+| `github-token` | `github.token` | Token for permissions, comments, and pushes. |
+| `node-version` | `22` | Node.js version. |
+
+Outputs: `mode` (`question`, `fix`, or `skipped`), `result` (the posted text),
+`cost-usd` and `session-id` (question runs), `pull-request-url` (fix runs), and
+`comment-url`.
+
+### Safety notes
+
+- Every input is passed to the script through the environment and validated
+  before use (an exact version, a positive cost, known providers and modes, a
+  plain tool list, a valid branch name). Event text is only ever handled as
+  data; it is never part of a shell command.
+- The API key is exported only under the provider's variable, and the GitHub
+  token reaches `curl` through an owner-only header file rather than its
+  command line.
+- SeekForge runs with a private `HOME` under the runner's temp directory, so
+  its user config and folder consent never touch the runner account's own
+  `~/.seekforge`.
+- Posted text has the API key and token scrubbed, the trigger phrase broken up
+  so the answer cannot start another run, and is truncated to fit a comment.
+  Fix runs never quote their log into the comment; the details stay in the
+  access-controlled run log.
+- The issue text a fix run reads is still written by whoever opened the issue.
+  The run applies file edits only, inside a draft pull request a person reviews.
+
+`bash .github/actions/seekforge/test.sh` exercises the action script against
+synthetic events with `curl`, `seekforge`, and `npm` stubbed out.

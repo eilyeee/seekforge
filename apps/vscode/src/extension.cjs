@@ -1,21 +1,38 @@
+const path = require("node:path");
 const vscode = require("vscode");
-const WebSocket = require("ws");
 const {
+  DEFAULT_SERVER_URL,
   SeekForgeBridge,
-  formatAgentEvent,
+  connectionProblem,
   formatLoopReport,
   formatTranscript,
   hasDiffPreview,
+  isLoopbackHttpUrl,
   loopRow,
-  permissionHunkItems,
-  permissionSummary,
   readStoredToken,
-  taskWithEditorContext,
+  serverUrlPort,
   usageSummary,
   withWorkspace,
-  writeStoredToken,
   workspaceRootForEditor,
+  writeStoredToken,
 } = require("./bridge.cjs");
+const { ChatController } = require("./chat-controller.cjs");
+const { createChatViews } = require("./chat-webview.cjs");
+const {
+  activeSelection,
+  bridgeContext,
+  gatherPromptContext,
+  relativeInside,
+  selectionReference,
+} = require("./editor-context.cjs");
+const { startIdeBridge } = require("./ide-bridge.cjs");
+const { createReviewDocuments } = require("./review-documents.cjs");
+const { ServeProcess, serveInvocation } = require("./serve-launcher.cjs");
+const { WebSocketClient } = require("./websocket-client.cjs");
+
+function serverUrlSetting() {
+  return vscode.workspace.getConfiguration("seekforge").get("serverUrl", DEFAULT_SERVER_URL) || DEFAULT_SERVER_URL;
+}
 
 async function configuredBridge(context) {
   const config = vscode.workspace.getConfiguration("seekforge");
@@ -30,179 +47,25 @@ async function configuredBridge(context) {
       await config.update("token", undefined, target).catch(() => {});
     }
   }
-  return new SeekForgeBridge({
-    serverUrl: config.get("serverUrl", "http://127.0.0.1:3847"),
-    token,
-    WebSocketImpl: WebSocket,
-  });
-}
-
-/**
- * Modal dialogs elide long text, so the diff goes to a real editor document and
- * the modal keeps only the raw command/path the approval actually grants.
- */
-async function reviewPermission(request) {
-  if (hasDiffPreview(request)) {
-    const document = await vscode.workspace.openTextDocument({ language: "diff", content: request.preview.diff });
-    await vscode.window.showTextDocument(document, {
-      preview: true,
-      preserveFocus: true,
-      viewColumn: vscode.ViewColumn.Beside,
-    });
-  }
-  const hunks = permissionHunkItems(request);
-  // "Always allow" appears only when core proposed a rule, and the rule itself
-  // is in the modal detail: a frontend must never offer a persistence whose
-  // text it made up.
-  const choice = await vscode.window.showWarningMessage(
-    request.description,
-    { modal: true, detail: permissionSummary(request) },
-    ...(hunks.length > 0 ? ["Allow selected edits…"] : []),
-    "Allow once",
-    "Allow for session",
-    ...(request?.rememberRule ? ["Always allow"] : []),
-    "Reject",
-  );
-  if (choice === "Always allow") return { approved: true, remember: "always" };
-  if (choice === "Allow for session") return { approved: true, remember: "session" };
-  if (choice === "Allow once") return { approved: true };
-  if (choice !== "Allow selected edits…") return { approved: false };
-
-  const picked = await vscode.window.showQuickPick(hunks, {
-    canPickMany: true,
-    placeHolder: `Apply which of the ${hunks.length} edits?`,
-  });
-  // An empty or dismissed selection applies nothing, so it must not read as approval.
-  if (!picked || picked.length === 0) return { approved: false };
-  return { approved: true, selectedHunks: picked.map((item) => item.index) };
-}
-
-async function runTask(context, output, statusBar, options = {}) {
-  const { resumeSessionId } = options;
-  const workspaceRoot =
-    options.workspaceRoot ?? workspaceRootForEditor(vscode.workspace, vscode.window.activeTextEditor);
-  if (!workspaceRoot) {
-    void vscode.window.showErrorMessage("Open a workspace folder before starting SeekForge.");
-    return;
-  }
-  const prompt = await vscode.window.showInputBox({ prompt: resumeSessionId ? "Follow-up task" : "SeekForge task" });
-  if (!prompt) return;
-  const mode = await vscode.window.showQuickPick(["ask", "edit"], { placeHolder: "Run mode" });
-  if (!mode) return;
-
-  const bridge = await configuredBridge(context);
-  const workspaceId = options.workspaceId ?? (await bridge.workspaceId(workspaceRoot));
-  const task = taskWithEditorContext(prompt, vscode.window.activeTextEditor, workspaceRoot);
-  const frame = resumeSessionId
-    ? {
-        type: "send",
-        sessionId: resumeSessionId,
-        task,
-        mode,
-        approvalMode: "confirm",
-        ws: workspaceId,
-      }
-    : { type: "start", task, mode, approvalMode: "confirm", ws: workspaceId };
-
-  output.clear();
-  output.show(true);
-  output.appendLine(`> ${prompt}\n`);
-  statusBar.startRun();
-  await vscode.window
-    .withProgress(
-      { location: vscode.ProgressLocation.Notification, title: "SeekForge is running…", cancellable: true },
-      (progress, cancellationToken) => {
-        const controller = new AbortController();
-        const cancellation = cancellationToken.onCancellationRequested(() => controller.abort());
-        return bridge
-          .run(
-            frame,
-            async (message, reply) => {
-              if (message.type === "permission.request") {
-                const decision = await reviewPermission(message.request);
-                reply({ type: "permission.response", requestId: message.requestId, ...decision });
-                return;
-              }
-              if (message.type === "question.request") {
-                const answer = await vscode.window.showQuickPick(message.options, { placeHolder: message.question });
-                reply({ type: "question.answer", id: message.id, answer: answer ?? "" });
-                return;
-              }
-              if (message.type !== "event") return;
-              const event = message.event;
-              if (event.type === "model.delta") {
-                output.append(event.chunk);
-                return;
-              }
-              if (event.type === "reasoning.delta") {
-                output.append(`[thinking] ${event.chunk}`);
-                return;
-              }
-              if (event.type === "command.output") {
-                output.append(event.chunk);
-                return;
-              }
-              if (event.type === "usage.updated") {
-                // Session window, not the run: turns 2+ resume the session.
-                statusBar.reportUsage(event.sessionUsage ?? event.usage);
-                return;
-              }
-              if (event.type === "step.started") {
-                progress.report({ message: event.title });
-                return;
-              }
-              const line = formatAgentEvent(event);
-              if (line !== null) output.appendLine(line);
-              if (event.type === "session.completed")
-                statusBar.reportUsage(event.report?.sessionUsage ?? event.report?.usage);
-            },
-            { signal: controller.signal },
-          )
-          .finally(() => cancellation.dispose());
-      },
-    )
-    .then(
-      () => statusBar.endRun(),
-      (error) => {
-        statusBar.endRun();
-        throw error;
-      },
-    );
+  return new SeekForgeBridge({ serverUrl: serverUrlSetting(), token, WebSocketImpl: WebSocketClient });
 }
 
 /**
  * A persistent cost/token readout: DeepSeek cache-hit accounting is a product
- * guarantee, so a run's spend stays visible after the notification disappears.
+ * guarantee, so a run's spend stays visible after the chat is hidden.
  */
 function createStatusBar() {
   const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-  item.command = "seekforge.showOutput";
-  let lastUsage;
-  const render = (running) => {
-    const usage = lastUsage ? usageSummary(lastUsage) : "";
-    item.text = running ? "$(sync~spin) SeekForge" : usage ? `$(check) SeekForge` : "$(rocket) SeekForge";
-    item.tooltip = usage ? `SeekForge — ${usage}` : "SeekForge: no run yet";
-    if (usage) item.text += ` ${usage.split(" · ")[0]}`;
+  item.command = "seekforge.focusChat";
+  const render = (running, usage) => {
+    const summary = usage ? usageSummary(usage) : "";
+    item.text = running ? "$(sync~spin) SeekForge" : summary ? "$(check) SeekForge" : "$(rocket) SeekForge";
+    if (summary) item.text += ` ${summary.split(" · ")[0]}`;
+    item.tooltip = summary ? `SeekForge — ${summary}` : "SeekForge: open the chat";
     item.show();
   };
-  render(false);
-  return {
-    item,
-    startRun() {
-      lastUsage = undefined;
-      render(true);
-    },
-    reportUsage(usage) {
-      if (usage) lastUsage = usage;
-      render(true);
-    },
-    endRun() {
-      render(false);
-    },
-    dispose() {
-      item.dispose();
-    },
-  };
+  render(false, undefined);
+  return { render, dispose: () => item.dispose() };
 }
 
 async function runSafely(action) {
@@ -340,18 +203,354 @@ async function openLoopReport(context, target) {
   await vscode.window.showTextDocument(document, { preview: true });
 }
 
+/** Shell-style quoting, for showing (never running) the command line. */
+function displayArgument(value) {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * `seekforge serve` started by the extension, in a terminal the user can see
+ * and close. The printed token is saved to SecretStorage and masked in the
+ * terminal; closing the terminal stops the server.
+ */
+function createServerLauncher(context) {
+  let current;
+
+  async function start() {
+    if (current && !current.child.exited) {
+      current.terminal.show(true);
+      return;
+    }
+    const serverUrl = serverUrlSetting();
+    if (!isLoopbackHttpUrl(serverUrl)) {
+      throw new Error(
+        `seekforge.serverUrl is ${serverUrl}. VS Code can only start a server on this machine; set it to ${DEFAULT_SERVER_URL}.`,
+      );
+    }
+    if (!vscode.workspace.isTrusted) throw new Error("Trust this workspace before starting a SeekForge server for it.");
+    const folders = (vscode.workspace.workspaceFolders ?? [])
+      .filter((folder) => folder.uri.scheme === "file")
+      .map((folder) => folder.uri.fsPath);
+    if (folders.length === 0) throw new Error("Open a folder before starting a SeekForge server.");
+    // Only a user-level value counts: a repository must not choose what VS Code runs.
+    const inspected = vscode.workspace.getConfiguration("seekforge").inspect("serveCommand");
+    const command = String(inspected?.globalValue || inspected?.defaultValue || "seekforge");
+    const invocation = serveInvocation({ command, folders, port: serverUrlPort(serverUrl) });
+    const shown = [command, "serve", ...folders.filter((f) => !invocation.skipped.includes(f))];
+    const display = [...shown, "--port", String(serverUrlPort(serverUrl))].map(displayArgument).join(" ");
+
+    const child = new ServeProcess({
+      command: invocation.command,
+      args: invocation.args,
+      shell: invocation.shell,
+      cwd: folders[0],
+    });
+    const write = new vscode.EventEmitter();
+    const closed = new vscode.EventEmitter();
+    const backlog = [];
+    let opened = false;
+    const toTerminal = (text) => text.replace(/\r?\n/g, "\r\n");
+    const stopOutput = child.onOutput((text) => {
+      if (opened) write.fire(toTerminal(text));
+      else backlog.push(text);
+    });
+    const stopExit = child.onExit((code, signal) => {
+      write.fire(`\r\n[seekforge serve exited: ${code ?? signal}]\r\n`);
+      if (current?.child === child) current = undefined;
+    });
+    const terminal = vscode.window.createTerminal({
+      name: "SeekForge Server",
+      iconPath: new vscode.ThemeIcon("server-process"),
+      isTransient: true,
+      pty: {
+        onDidWrite: write.event,
+        onDidClose: closed.event,
+        open: () => {
+          opened = true;
+          write.fire(`$ ${display}\r\n`);
+          for (const text of backlog.splice(0)) write.fire(toTerminal(text));
+        },
+        close: () => {
+          void child.stop();
+        },
+        handleInput: (data) => {
+          if (data === "\x03") void child.stop().then(() => closed.fire());
+        },
+      },
+    });
+    const entry = {
+      child,
+      terminal,
+      dispose: async () => {
+        await child.stop();
+        stopOutput();
+        stopExit();
+        write.dispose();
+        closed.dispose();
+      },
+    };
+    current = entry;
+    terminal.show(true);
+
+    let ready;
+    try {
+      ready = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: "Starting seekforge serve…" },
+        () => child.ready,
+      );
+    } catch (error) {
+      // A server that never reported its address must not keep running
+      // unmanaged; its terminal stays open so the output can be read.
+      await child.stop();
+      if (current === entry) current = undefined;
+      if (error?.code === "ENOENT") {
+        throw new Error(
+          `Could not run "${command}". Install the CLI with "npm install -g seekforge", or set seekforge.serveCommand.`,
+        );
+      }
+      throw error;
+    }
+    await writeStoredToken(context.secrets, ready.token);
+    if (invocation.skipped.length > 0) {
+      void vscode.window.showWarningMessage(
+        `These folders were not passed to seekforge serve because their paths cannot be quoted safely for cmd.exe: ${invocation.skipped.join(", ")}`,
+      );
+    }
+    void vscode.window.showInformationMessage(
+      `SeekForge server is running on 127.0.0.1:${ready.port}; its token is saved in VS Code.`,
+    );
+  }
+
+  async function stop() {
+    const entry = current;
+    current = undefined;
+    if (!entry) return;
+    await entry.dispose();
+    entry.terminal.dispose();
+  }
+
+  return { start, stop, dispose: stop };
+}
+
+/** The active selection as a pinned attachment for the chat, or undefined outside the workspace. */
+function pinCurrentSelection(root) {
+  const selection = activeSelection(vscode.window.activeTextEditor);
+  const workspaceRoot = root ?? workspaceRootForEditor(vscode.workspace, vscode.window.activeTextEditor);
+  const reference = selection ? selectionReference(workspaceRoot, selection) : undefined;
+  return reference ? { reference, selection } : undefined;
+}
+
+function contextToggles() {
+  const config = vscode.workspace.getConfiguration("seekforge.context");
+  return {
+    selection: config.get("includeSelection", true),
+    openFiles: config.get("includeOpenFiles", true),
+    diagnostics: config.get("includeDiagnostics", true),
+  };
+}
+
+function manageIdeBridge(context, reviews, output) {
+  let bridge;
+  let starting;
+  const enabled = () => vscode.workspace.getConfiguration("seekforge").get("ideBridge.enabled", true);
+  const folders = () =>
+    (vscode.workspace.workspaceFolders ?? [])
+      .filter((folder) => folder.uri.scheme === "file")
+      .map((folder) => folder.uri.fsPath);
+
+  async function openFile({ path: target, line }) {
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.file(target));
+    const options = { preview: false };
+    if (line !== undefined) {
+      const position = new vscode.Position(Math.min(line, document.lineCount) - 1, 0);
+      options.selection = new vscode.Range(position, position);
+    }
+    await vscode.window.showTextDocument(document, options);
+  }
+
+  async function start() {
+    if (bridge || starting || !enabled()) return;
+    starting = startIdeBridge({
+      ideName: vscode.env.appName,
+      workspaceFolders: folders,
+      handlers: {
+        context: () => bridgeContext(vscode),
+        openDiff: (input) => reviews.openDiff(input),
+        openFile,
+      },
+    })
+      .then((started) => {
+        bridge = started;
+        output.appendLine(`[ide] bridge listening on 127.0.0.1:${started.port} (${started.lockPath})`);
+      })
+      .catch((error) => {
+        output.appendLine(`[ide] bridge not started: ${error instanceof Error ? error.message : String(error)}`);
+      })
+      .finally(() => {
+        starting = undefined;
+      });
+    await starting;
+  }
+
+  async function stop() {
+    await starting;
+    const running = bridge;
+    bridge = undefined;
+    await running?.close();
+  }
+
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(() => bridge?.refresh()),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (!event.affectsConfiguration("seekforge.ideBridge.enabled")) return;
+      void (enabled() ? start() : stop());
+    }),
+  );
+  void start();
+  return { stop };
+}
+
+let deactivateTasks = [];
+
 function activate(context) {
   const output = vscode.window.createOutputChannel("SeekForge");
   const statusBar = createStatusBar();
   const loopsView = createLoopsView(context);
+  const reviews = createReviewDocuments(vscode);
+  const server = createServerLauncher(context);
+  const ideBridge = manageIdeBridge(context, reviews, output);
+  const activeSessions = new Set();
+  let offering = false;
+
+  async function offerHelp(error) {
+    if (offering) return;
+    const problem = connectionProblem(error);
+    const url = serverUrlSetting();
+    offering = true;
+    try {
+      if (problem === "offline") {
+        const choice = await vscode.window.showWarningMessage(
+          `No SeekForge server is answering at ${url}.`,
+          ...(isLoopbackHttpUrl(url) ? ["Start Server"] : []),
+          "Set Token",
+          "Open Settings",
+        );
+        if (choice === "Start Server") await runSafely(() => server.start());
+        else if (choice === "Set Token") await vscode.commands.executeCommand("seekforge.setToken");
+        else if (choice === "Open Settings") {
+          await vscode.commands.executeCommand("workbench.action.openSettings", "seekforge.serverUrl");
+        }
+      } else if (problem === "unauthorized") {
+        const choice = await vscode.window.showWarningMessage(
+          `The SeekForge server at ${url} rejected the saved token.`,
+          "Set Token",
+          ...(isLoopbackHttpUrl(url) ? ["Restart Server from VS Code"] : []),
+        );
+        if (choice === "Set Token") await vscode.commands.executeCommand("seekforge.setToken");
+        else if (choice) {
+          await server.stop();
+          await runSafely(() => server.start());
+        }
+      }
+    } finally {
+      offering = false;
+    }
+  }
+
+  let views;
+  const refreshStatusBar = () => {
+    const controllers = views ? views.controllers() : [];
+    const running = controllers.some((controller) => controller.running);
+    const usage = views?.current().controller.state.status.usage ?? undefined;
+    statusBar.render(running, usage);
+  };
+
+  function createController({ isVisible, reveal, openInEditor }) {
+    return new ChatController({
+      connect: async (root) => {
+        const bridge = await configuredBridge(context);
+        const workspaceRoot = root ?? workspaceRootForEditor(vscode.workspace, vscode.window.activeTextEditor);
+        if (!workspaceRoot) throw new Error("Open a workspace folder before chatting with SeekForge.");
+        return { bridge, workspaceRoot, workspaceId: await bridge.workspaceId(workspaceRoot) };
+      },
+      gatherContext: (workspaceRoot) => gatherPromptContext(vscode, workspaceRoot, contextToggles()),
+      pinSelection: pinCurrentSelection,
+      reviewDiff: async (request) => {
+        if (!hasDiffPreview(request)) return;
+        const title = `SeekForge: ${request.toolName} ${request.preview.path ?? ""}`.trim();
+        const opened = await reviews.openPreview(request.preview.diff, title);
+        if (opened) return;
+        const document = await vscode.workspace.openTextDocument({ language: "diff", content: request.preview.diff });
+        await vscode.window.showTextDocument(document, { preview: true, viewColumn: vscode.ViewColumn.Beside });
+      },
+      openWorkspaceFile: async (root, relative) => {
+        const target = path.resolve(root, relative);
+        if (!relativeInside(root, target)) return;
+        await vscode.window.showTextDocument(vscode.Uri.file(target), { preview: true });
+      },
+      openInEditor: async () => {
+        openInEditor();
+      },
+      attention: (kind, text) => {
+        if (isVisible()) return;
+        const message = kind === "permission" ? `SeekForge needs your approval: ${text}` : `SeekForge asks: ${text}`;
+        void vscode.window.showWarningMessage(message, "Show").then((choice) => {
+          if (choice) void reveal();
+        });
+      },
+      onProblem: (error) => {
+        void offerHelp(error);
+      },
+      onStatus: () => refreshStatusBar(),
+      log: (line) => output.appendLine(line),
+      activeSessions,
+    });
+  }
+
+  views = createChatViews(vscode, context.extensionUri, {
+    createController,
+    onPanelsChanged: () => refreshStatusBar(),
+  });
+
+  deactivateTasks = [() => server.stop(), () => ideBridge.stop()];
+
   context.subscriptions.push(
     output,
     statusBar,
     loopsView,
+    reviews,
+    views,
     vscode.window.registerTreeDataProvider("seekforge.loops", loopsView.provider),
     vscode.commands.registerCommand("seekforge.refreshLoops", () => loopsView.refresh()),
     vscode.commands.registerCommand("seekforge.showLoop", (target) => runSafely(() => openLoopReport(context, target))),
     vscode.commands.registerCommand("seekforge.showOutput", () => output.show(true)),
+    vscode.commands.registerCommand("seekforge.focusChat", () => runSafely(() => views.focusCurrent())),
+    vscode.commands.registerCommand("seekforge.openChatInEditor", () => runSafely(async () => views.openPanel())),
+    vscode.commands.registerCommand("seekforge.newTask", () =>
+      runSafely(async () => {
+        const surface = await views.focusCurrent();
+        surface.controller.newSession();
+      }),
+    ),
+    vscode.commands.registerCommand("seekforge.resumeSession", () =>
+      runSafely(async () => {
+        const surface = await views.focusCurrent();
+        await surface.controller.handleMessage({ type: "listSessions" });
+      }),
+    ),
+    vscode.commands.registerCommand("seekforge.insertSelection", () =>
+      runSafely(async () => {
+        const surface = views.current();
+        // Read the selection before focus moves: an editor-area chat tab
+        // becomes the active editor and hides the text editor's selection.
+        const pinned = pinCurrentSelection(surface.controller.workspace?.root);
+        await views.focusCurrent();
+        surface.controller.addSelection(pinned);
+      }),
+    ),
+    vscode.commands.registerCommand("seekforge.stopRun", () => views.current().controller.stop()),
+    vscode.commands.registerCommand("seekforge.startServer", () => runSafely(() => server.start())),
+    vscode.commands.registerCommand("seekforge.stopServer", () => runSafely(() => server.stop())),
     vscode.commands.registerCommand("seekforge.setToken", () =>
       runSafely(async () => {
         const token = await vscode.window.showInputBox({
@@ -364,30 +563,6 @@ function activate(context) {
         void vscode.window.showInformationMessage(
           token.trim() ? "SeekForge token saved securely." : "SeekForge token cleared.",
         );
-      }),
-    ),
-    vscode.commands.registerCommand("seekforge.newTask", () => runSafely(() => runTask(context, output, statusBar))),
-    vscode.commands.registerCommand("seekforge.resumeSession", () =>
-      runSafely(async () => {
-        const bridge = await configuredBridge(context);
-        const workspaceRoot = workspaceRootForEditor(vscode.workspace, vscode.window.activeTextEditor);
-        if (!workspaceRoot) {
-          void vscode.window.showErrorMessage("Open a workspace folder before resuming a SeekForge session.");
-          return;
-        }
-        const workspaceId = await bridge.workspaceId(workspaceRoot);
-        const sessions = await bridge.request(withWorkspace("/api/sessions", workspaceId));
-        const picked = await vscode.window.showQuickPick(
-          sessions.map((session) => ({ label: session.task, description: session.id, session })),
-          { placeHolder: "Resume a SeekForge session" },
-        );
-        if (picked) {
-          await runTask(context, output, statusBar, {
-            resumeSessionId: picked.session.id,
-            workspaceRoot,
-            workspaceId,
-          });
-        }
       }),
     ),
     vscode.commands.registerCommand("seekforge.reviewMemory", () =>
@@ -447,13 +622,8 @@ function activate(context) {
     ),
     vscode.commands.registerCommand("seekforge.showDiff", () =>
       runSafely(async () => {
-        const bridge = await configuredBridge(context);
-        const workspaceRoot = workspaceRootForEditor(vscode.workspace, vscode.window.activeTextEditor);
-        if (!workspaceRoot) {
-          void vscode.window.showErrorMessage("Open a workspace folder before showing a SeekForge diff.");
-          return;
-        }
-        const workspaceId = await bridge.workspaceId(workspaceRoot);
+        const { bridge, workspaceId } = await connected(context, "showing a SeekForge diff");
+        if (!bridge) return;
         const result = await bridge.request(withWorkspace("/api/diff", workspaceId));
         const document = await vscode.workspace.openTextDocument({
           language: "diff",
@@ -465,6 +635,10 @@ function activate(context) {
   );
 }
 
-function deactivate() {}
+async function deactivate() {
+  const tasks = deactivateTasks;
+  deactivateTasks = [];
+  await Promise.allSettled(tasks.map((task) => task()));
+}
 
 module.exports = { activate, deactivate };

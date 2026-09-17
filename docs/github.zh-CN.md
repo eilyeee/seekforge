@@ -130,3 +130,69 @@ seekforge resolve 42 --max-cost 1.00 --wait-ci -y
 
 - **这里的 `--wait-ci` 不做 CI 修复。** 它只等待（同样是 15 分钟上限）并报告检查失败，绝不会针对失败日志再启动一次智能体运行。如果需要再来一轮，请在 push 修复后重新运行 `resolve-review`。
 - **它使用普通的 `git push`**，推送到 `gh pr checkout` 配置的 upstream——对于来自 fork 的 PR，那是*该 fork 的*分支，而不是你的仓库。运行前请确认你在修的是谁的 PR。
+
+## GitHub Action：在评论中作答或修复
+
+`.github/actions/seekforge` 是一个可复用的 composite action，在协作者提到 SeekForge 时于 CI 中运行它。在 issue 或 pull request 上发表诸如 `@seekforge why does startup take ten seconds?` 的评论，会得到一条回答评论；在 issue 上发表 `@seekforge fix` 会运行 `resolve`，并附上它打开的 draft pull request 链接。可直接复制使用的 workflow 见 [`examples/github-action/seekforge.yml`](../examples/github-action/seekforge.yml)。
+
+### 触发条件
+
+- 事件：`issue_comment`（created）、`pull_request_review_comment`（created）以及 `issues`（opened；会搜索标题与正文）。编辑永远不会触发运行。
+- 文本必须以完整词元的形式包含触发短语（输入 `trigger-phrase`，默认 `@seekforge`），不区分大小写：`@seekforge-bot` 与 `me@seekforge.dev` 都不算。
+- **只有拥有 write、maintain 或 admin 权限的人**才能启动运行，这一点通过仓库协作者权限 API 检查。其他人会被静默忽略，因此路过的评论既无法消耗模型预算，也无法操纵运行。来自机器人的评论（包括该 action 自己的回复）同样被忽略。
+
+action 会先添加 👀 反应，并发布一条链接到 workflow 运行的"正在处理"评论，之后用结果改写这条评论（review 评论会在同一讨论串中回复）。如果运行失败或提前停止，同一条评论会说明情况。
+
+### 运行内容
+
+当触发短语之后的文本以 `fix`、`resolve` 或 `implement` 开头（且 `allow-fix` 为 `"true"`）时，请求被视为**修复**；其余一律视为**提问**。
+
+- **提问** —— 请求本身、issue 或 pull request 的标题与描述、review 评论所在的文件、行号与 diff 片段，以及（在 pull request 上）上限 200 KB 的 diff 会被写入提示词，每一段都放在比其中任何反引号串都更长的代码围栏里，并标注为用户编写的数据。提示词通过 stdin 交给 SeekForge：
+
+  ```bash
+  seekforge -p -y --permission-mode default --output-format json --ask \
+    --max-cost 1.00 --max-duration 900
+  ```
+
+  `-y` 只为新的 checkout 记录文件夹授权；`--permission-mode` 优先级更高，决定运行可以做什么。默认模式下运行是只读的，并且在机器输出格式下，任何需要询问的操作都会被拒绝。`permission-mode: acceptEdits` 会去掉 `--ask`，使运行可以修改 checkout；该 action 从不提交或推送这些改动。`allowed-tools` 与 `disallowed-tools` 分别对应 `--allowedTools` 与 `--disallowedTools`。
+- **在 issue 上修复** —— `seekforge resolve <issue> --max-cost <usd> -y --base <branch>`（设置时另加 `--model` 与 `--wait-ci`），行为与上文所述完全一致：智能体在 worktree 中编辑文件，由命令提交、推送并打开 draft pull request。评论会附上该 pull request 的链接。
+- **在 pull request 上修复** —— 对于分支位于同一仓库的 pull request，运行 `seekforge resolve-review <pr> --max-cost <usd> -y`。来自 fork 的 pull request 会被拒绝并附上说明，因为该 action 无法向其推送。
+
+`resolve` 以 issue 本身为依据；`fix` 之后的文字不会传给它。由 workflow 使用 `GITHUB_TOKEN` 打开的 pull request 不会触发其他 workflow（这是 GitHub 的规则）；如果你的 CI 必须在这些 PR 上运行，请使用 GitHub App 或个人 token 推送。
+
+### 配置步骤
+
+1. 将 provider 的 API key 添加为仓库 secret，例如 `DEEPSEEK_API_KEY`。
+2. 把示例 workflow 复制到 `.github/workflows/seekforge.yml`，并将该 action 固定到本仓库的完整 commit SHA。
+3. 为 job 授予 `contents: write`、`issues: write` 与 `pull-requests: write`（示例已包含）。只需作答的 workflow 可以设置 `allow-fix: "false"` 并去掉 `contents: write`。
+
+### 输入与输出
+
+| 输入 | 默认值 | 含义 |
+| --- | --- | --- |
+| `api-key` | —（必填） | provider 的 API key；请传入 secret。 |
+| `provider` | `deepseek` | `deepseek`、`ark` 或 `anthropic`；决定 key 所用的环境变量与 provider 预设。 |
+| `model` | provider 默认 | 模型 id。 |
+| `max-cost` | `1.00` | 单次运行的成本上限（美元）。 |
+| `max-duration` | `900` | 提问运行的墙钟时间上限（秒）。 |
+| `permission-mode` | `default` | 提问运行使用 `default`（只读）或 `acceptEdits`。 |
+| `allowed-tools` / `disallowed-tools` | 空 | 提问运行的逗号分隔工具列表。 |
+| `allow-fix` | `"true"` | 修复请求是否运行 `resolve` / `resolve-review`。 |
+| `base-branch` | 仓库默认分支 | 修复 pull request 的目标分支。 |
+| `wait-ci` | `"false"` | 为修复运行传入 `--wait-ci`。 |
+| `trigger-phrase` | `@seekforge` | 启动运行的短语。 |
+| `seekforge-version` | `1.0.0` | 要安装的确切 npm 版本。 |
+| `github-token` | `github.token` | 用于权限检查、评论与推送的 token。 |
+| `node-version` | `22` | Node.js 版本。 |
+
+输出：`mode`（`question`、`fix` 或 `skipped`）、`result`（发布的文本）、`cost-usd` 与 `session-id`（提问运行）、`pull-request-url`（修复运行），以及 `comment-url`。
+
+### 安全说明
+
+- 每个输入都经由环境变量传给脚本，并在使用前校验（确切的版本号、正数成本、已知的 provider 与模式、普通的工具列表、合法的分支名）。事件文本只作为数据处理，绝不会成为 shell 命令的一部分。
+- API key 只以对应 provider 的环境变量导出；GitHub token 通过仅所有者可读的请求头文件交给 `curl`，而不是出现在其命令行中。
+- SeekForge 使用 runner 临时目录下的私有 `HOME` 运行，因此其用户配置与文件夹授权绝不会触及 runner 账户自己的 `~/.seekforge`。
+- 发布的文本会抹去 API key 与 token，拆开触发短语使回答无法再次触发运行，并截断到评论可容纳的长度。修复运行从不把日志引用到评论中；细节保留在受访问控制的运行日志里。
+- 修复运行读取的 issue 文本仍然出自开 issue 的人之手。该运行只会应用文件编辑，且改动位于需要人工审阅的 draft pull request 中。
+
+`bash .github/actions/seekforge/test.sh` 会在 `curl`、`seekforge` 与 `npm` 被替换为桩程序的情况下，用合成事件检验该 action 脚本。

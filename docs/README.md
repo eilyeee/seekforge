@@ -49,6 +49,7 @@ and quick start; this folder holds the reference docs.
 - [Autonomous GitHub issue → PR](github.md) — `seekforge resolve <issue>`: fetch
   an issue, fix it headless on a work branch, verify, and open a draft PR. The
   agent fixes; the user's `resolve` command performs the push/PR (moat preserved).
+  Also the reusable GitHub Action that answers or fixes on `@seekforge` comments.
 - [Remote / isolated execution](remote.md) — the agent-runner contract and the
   Docker reference runner (`seekforge sandbox-run`): single-workspace mount,
   key-via-env, the network tradeoff, and auditing containerized runs.
@@ -65,6 +66,9 @@ and quick start; this folder holds the reference docs.
   Desktop shell: [apps/desktop/src-tauri/README.md](../apps/desktop/src-tauri/README.md)
 - [Server REST + WS API](../apps/server/SERVER-API.md) — the contract the
   desktop/web workbench speaks.
+- [VS Code extension and IDE bridge](ide.md) — chat, native-diff permission
+  review, editor context, starting the server from VS Code, and the loopback
+  bridge contract the terminal UI connects to.
 - Custom slash commands (frontmatter, `$ARGUMENTS`/`$1..$9`, `:` namespacing,
   `` !`shell` ``, `run_user_command`) are documented in the
   [TUI README](../apps/tui/README.md#custom-commands).

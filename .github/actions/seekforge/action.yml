@@ -1,0 +1,135 @@
+name: SeekForge
+description: Answer questions and fix issues when a collaborator mentions SeekForge in an issue, pull request, or review comment.
+author: eilyeee
+branding:
+  icon: tool
+  color: blue
+
+inputs:
+  trigger-phrase:
+    description: Phrase a comment (or a new issue) must contain to start SeekForge. Matched as a whole token, case-insensitively.
+    required: false
+    default: "@seekforge"
+  seekforge-version:
+    description: Exact version of the `seekforge` npm package to install (x.y.z).
+    required: false
+    default: "1.0.0"
+  provider:
+    description: "Model provider preset: deepseek, ark, or anthropic."
+    required: false
+    default: deepseek
+  model:
+    description: Model id to use. Empty uses the provider's default model.
+    required: false
+    default: ""
+  api-key:
+    description: API key for the provider. Pass a repository secret, never a literal.
+    required: true
+  max-cost:
+    description: Per-run cost cap in USD. Every unattended SeekForge run must be bounded.
+    required: false
+    default: "1.00"
+  max-duration:
+    description: Wall-clock cap for an answer run, in seconds.
+    required: false
+    default: "900"
+  permission-mode:
+    description: >-
+      Approval mode for answer runs. `default` runs read-only (ask mode; anything that would prompt is denied).
+      `acceptEdits` lets the run edit the checkout (nothing is committed or pushed by this action).
+      Fix runs always use `seekforge resolve`, which applies file edits only.
+    required: false
+    default: default
+  allowed-tools:
+    description: Comma-separated tool allowlist for answer runs (`--allowedTools`). Empty allows every tool the mode permits.
+    required: false
+    default: ""
+  disallowed-tools:
+    description: Comma-separated tool denylist for answer runs (`--disallowedTools`).
+    required: false
+    default: ""
+  allow-fix:
+    description: >-
+      When "true", a request that starts with fix/resolve/implement runs `seekforge resolve` on an issue
+      or `seekforge resolve-review` on a same-repository pull request. Otherwise every request is answered.
+    required: false
+    default: "true"
+  base-branch:
+    description: Branch fix pull requests target. Empty uses the repository's default branch.
+    required: false
+    default: ""
+  wait-ci:
+    description: When "true", fix runs pass `--wait-ci`.
+    required: false
+    default: "false"
+  github-token:
+    description: Token used to read permissions, react, comment, and (for fixes) push and open pull requests.
+    required: false
+    default: ${{ github.token }}
+  node-version:
+    description: Node.js version to run SeekForge with.
+    required: false
+    default: "22"
+
+outputs:
+  mode:
+    description: "What ran: question, fix, or skipped."
+    value: ${{ steps.run.outputs.mode || steps.gate.outputs.mode }}
+  result:
+    description: The text posted back (truncated to fit a comment).
+    value: ${{ steps.run.outputs.result }}
+  cost-usd:
+    description: Cost of an answer run in USD, as SeekForge reported it.
+    value: ${{ steps.run.outputs.cost-usd }}
+  session-id:
+    description: SeekForge session id of an answer run.
+    value: ${{ steps.run.outputs.session-id }}
+  pull-request-url:
+    description: The pull request a fix run opened, when there is one.
+    value: ${{ steps.run.outputs.pull-request-url }}
+  comment-url:
+    description: URL of the comment SeekForge posted.
+    value: ${{ steps.gate.outputs.comment-url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node.js
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Check the request
+      id: gate
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        INPUT_TRIGGER_PHRASE: ${{ inputs.trigger-phrase }}
+        INPUT_ALLOW_FIX: ${{ inputs.allow-fix }}
+      run: bash "$GITHUB_ACTION_PATH/seekforge-action.sh" gate
+
+    - name: Install SeekForge
+      if: steps.gate.outputs.proceed == 'true'
+      shell: bash
+      env:
+        INPUT_SEEKFORGE_VERSION: ${{ inputs.seekforge-version }}
+      run: bash "$GITHUB_ACTION_PATH/seekforge-action.sh" install
+
+    - name: Run SeekForge
+      id: run
+      if: steps.gate.outputs.proceed == 'true'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        INPUT_SEEKFORGE_VERSION: ${{ inputs.seekforge-version }}
+        INPUT_PROVIDER: ${{ inputs.provider }}
+        INPUT_MODEL: ${{ inputs.model }}
+        INPUT_API_KEY: ${{ inputs.api-key }}
+        INPUT_MAX_COST: ${{ inputs.max-cost }}
+        INPUT_MAX_DURATION: ${{ inputs.max-duration }}
+        INPUT_PERMISSION_MODE: ${{ inputs.permission-mode }}
+        INPUT_ALLOWED_TOOLS: ${{ inputs.allowed-tools }}
+        INPUT_DISALLOWED_TOOLS: ${{ inputs.disallowed-tools }}
+        INPUT_BASE_BRANCH: ${{ inputs.base-branch }}
+        INPUT_WAIT_CI: ${{ inputs.wait-ci }}
+      run: bash "$GITHUB_ACTION_PATH/seekforge-action.sh" run
