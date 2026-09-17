@@ -18,8 +18,16 @@ import {
   parseDebugFilter,
 } from "../debug-log.js";
 import { parsePermissionAnswer, permissionPromptText } from "../permission-answer.js";
+import { formatPermissionRequest, formatPlanItems } from "../render.js";
 import { runShell, runShellCapture } from "../shell-capture.js";
 import { classicReplRequested, decideInteractiveFrontend, launchTui, resolveTuiEntry } from "../tui-launch.js";
+
+// The TUI's own launch parser, loaded at run time: the forwarding below must be
+// what it accepts, but the CLI's typecheck should not pull in the TUI's sources.
+const tuiCliArgs = new URL("../../../tui/src/cli-args.ts", import.meta.url).href;
+const { parseTuiArgs } = (await import(tuiCliArgs)) as {
+  parseTuiArgs: (argv: readonly string[]) => Record<string, unknown>;
+};
 
 const tty = { env: {}, stdinIsTTY: true, stdoutIsTTY: true, explicitChat: false };
 
@@ -31,7 +39,68 @@ describe("decideInteractiveFrontend", () => {
         ...tty,
         flags: { continue: true, model: "deepseek-v4-pro", addDir: [], yes: undefined },
       }),
-    ).toEqual({ kind: "tui", args: ["--continue", "--model", "deepseek-v4-pro"] });
+    ).toEqual({ kind: "tui", args: ["--continue", "--model=deepseek-v4-pro"] });
+  });
+
+  it("forwards the session flags the TUI now reads, in the =value form", () => {
+    const decision = decideInteractiveFrontend({
+      ...tty,
+      flags: {
+        resume: "s1",
+        permissionMode: "plan",
+        yes: true,
+        dangerouslySkipPermissions: true,
+        addDir: ["../x", "-odd"],
+        settings: "s.json",
+        profile: "work",
+        mcpConfig: "m.json",
+        strictMcpConfig: true,
+        appendSystemPrompt: "-be terse",
+        verbose: true,
+        model: "m",
+      },
+    });
+    expect(decision).toEqual({
+      kind: "tui",
+      args: [
+        "--resume=s1",
+        "--permission-mode=plan",
+        "--yes",
+        "--add-dir=../x",
+        "--add-dir=-odd",
+        "--settings=s.json",
+        "--profile=work",
+        "--mcp-config=m.json",
+        "--strict-mcp-config",
+        "--append-system-prompt=-be terse",
+        "--verbose",
+        "--model=m",
+      ],
+    });
+    // What the TUI parser makes of it.
+    expect(decision.kind === "tui" ? parseTuiArgs(decision.args) : undefined).toMatchObject({
+      resume: "s1",
+      permissionMode: "plan",
+      yes: true,
+      addDirs: ["../x", "-odd"],
+      settings: "s.json",
+      profile: "work",
+      mcpConfig: "m.json",
+      strictMcpConfig: true,
+      appendSystemPrompt: "-be terse",
+      verbose: true,
+      model: "m",
+    });
+  });
+
+  it("lets --resume win over -c and drops an empty appended prompt, as the REPL does", () => {
+    expect(
+      decideInteractiveFrontend({ ...tty, flags: { continue: true, resume: "s2", appendSystemPrompt: "" } }),
+    ).toEqual({ kind: "tui", args: ["--resume=s2"] });
+    expect(decideInteractiveFrontend({ ...tty, flags: { dangerouslySkipPermissions: true } })).toEqual({
+      kind: "tui",
+      args: ["--yes"],
+    });
   });
 
   it("keeps the classic REPL for `chat`, --classic and SEEKFORGE_CLASSIC_REPL", () => {
@@ -51,16 +120,25 @@ describe("decideInteractiveFrontend", () => {
     expect(
       decideInteractiveFrontend({
         ...tty,
-        flags: { resume: "s1", yes: true, addDir: ["../x"], permissionMode: "plan", model: "m" },
+        flags: { resume: "s1", yes: true, ask: true, sessionId: "x", maxCost: 1, outputStyle: "concise", model: "m" },
       }),
-    ).toEqual({ kind: "repl", unsupported: ["--add-dir", "--permission-mode", "--resume", "--yes"] });
-    expect(decideInteractiveFrontend({ ...tty, env: { SEEKFORGE_PROFILE: "work" }, flags: {} })).toEqual({
-      kind: "repl",
-      unsupported: ["SEEKFORGE_PROFILE"],
-    });
+    ).toEqual({ kind: "repl", unsupported: ["--ask", "--max-cost", "--output-style", "--session-id"] });
     expect(
-      decideInteractiveFrontend({ ...tty, env: { SEEKFORGE_PROFILE: "work" }, flags: { profile: "work" } }),
-    ).toEqual({ kind: "repl", unsupported: ["--profile"] });
+      decideInteractiveFrontend({
+        ...tty,
+        flags: { systemPrompt: "x", appendSystemPromptFile: "f", agents: "{}", debug: true, allowedTools: "a" },
+      }),
+    ).toEqual({
+      kind: "repl",
+      unsupported: ["--agents", "--allowedTools", "--append-system-prompt-file", "--debug", "--system-prompt"],
+    });
+  });
+
+  it("leaves a SEEKFORGE_PROFILE in the environment to the TUI, which reads it itself", () => {
+    expect(decideInteractiveFrontend({ ...tty, env: { SEEKFORGE_PROFILE: "work" }, flags: {} })).toEqual({
+      kind: "tui",
+      args: [],
+    });
   });
 
   it("reads SEEKFORGE_CLASSIC_REPL's falsy spellings as off", () => {
@@ -341,5 +419,56 @@ describe("runShell", () => {
     expect(await runShellCapture("echo hi", process.cwd())).toBe("hi\n");
     expect(await runShellCapture("echo oops; exit 2", process.cwd())).toBe("[command failed: exit 2: oops\n]");
     expect(await runShellCapture("sleep 5", process.cwd(), 50)).toBe("[command failed: timed out after 50ms]");
+  });
+});
+
+describe("terminal prompt formatting", () => {
+  it("prints a plan approval as one indented block, raw", () => {
+    const plan = "Leave plan mode and implement this plan:\n\n1. edit a.ts\n   - keep the API\n2. run tests";
+    expect(
+      formatPermissionRequest(
+        { toolName: "exit_plan_mode", permission: "write", description: plan, sessionGrantable: false },
+        "Permission required",
+      ),
+    ).toEqual([
+      "\nPermission required [write] exit_plan_mode",
+      "  Leave plan mode and implement this plan:",
+      "",
+      "  1. edit a.ts",
+      "     - keep the API",
+      "  2. run tests",
+    ]);
+    // The answer line for it still offers a refusal with a reason.
+    expect(
+      permissionPromptText({
+        toolName: "exit_plan_mode",
+        permission: "write",
+        description: plan,
+        sessionGrantable: false,
+      }),
+    ).toContain("n: <reason>");
+    expect(parsePermissionAnswer("n: split step 2", { sessionGrantable: false })).toEqual({
+      allow: false,
+      feedback: "split step 2",
+    });
+  });
+
+  it("shows the raw command or path instead of the description", () => {
+    expect(formatPermissionRequest(request({ path: "src/a.ts" }), "P")).toEqual([
+      "\nP [execute] run_command",
+      "  command: pnpm test",
+      "  path:    src/a.ts",
+    ]);
+  });
+
+  it("shows a step in progress by its activeForm", () => {
+    expect(
+      formatPlanItems([
+        { step: "Write the parser", status: "done", activeForm: "Writing the parser" },
+        { step: "Run the tests", status: "in_progress", activeForm: "Running the tests" },
+        { step: "Fix lint", status: "in_progress" },
+        { step: "Ship", status: "pending", activeForm: "Shipping" },
+      ]),
+    ).toEqual(["  ☑ Write the parser", "  ◐ Running the tests", "  ◐ Fix lint", "  ☐ Ship"]);
   });
 });

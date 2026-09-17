@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../config.js", () => ({
   loadConfig: () => ({ apiKey: "test-key", model: "deepseek-v4-flash" }),
+  resolveConfig: () => ({ config: { apiKey: "test-key", model: "deepseek-v4-flash" }, mcpOrigins: {} }),
 }));
 
 vi.mock("../authorized-dirs.js", () => ({

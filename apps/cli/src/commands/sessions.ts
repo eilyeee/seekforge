@@ -14,7 +14,7 @@ import { clipLine } from "@seekforge/shared/format";
 import { fail } from "../colors.js";
 import { loadConfig } from "../config.js";
 import { t } from "../i18n.js";
-import { formatUsage } from "../render.js";
+import { formatPlanItems, formatUsage } from "../render.js";
 
 function truncate(text: string, max: number): string {
   return clipLine(text.replace(/\s+/g, " ").trim(), max);
@@ -110,10 +110,7 @@ export function sessionsShowCommand(id: string, opts: { json?: boolean } = {}): 
   for (const [key, value] of rows) if (value !== undefined) console.log(`${t(key).padEnd(10)}${value}`);
   if (meta.plan && meta.plan.length > 0) {
     console.log(t("cmd.sessions.showPlan"));
-    for (const item of meta.plan) {
-      const box = item.status === "done" ? "☑" : item.status === "in_progress" ? "◐" : "☐";
-      console.log(`  ${box} ${item.step}`);
-    }
+    for (const line of formatPlanItems(meta.plan)) console.log(line);
   }
   console.log(t("cmd.sessions.showTask"));
   console.log(meta.task);

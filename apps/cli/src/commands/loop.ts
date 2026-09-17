@@ -65,8 +65,9 @@ import { dirname, join, relative, resolve } from "node:path";
 import { formatCostUsd } from "@seekforge/shared/format";
 import { createCliAgentDeps, prepareMcp } from "../agent-factory.js";
 import { dim, fail, green, red } from "../colors.js";
-import { loadConfig } from "../config.js";
+import { loadConfig, resolveConfig } from "../config.js";
 import { t } from "../i18n.js";
+import type { McpOrigins } from "../run-setup.js";
 import { ensureWorkspaceAuthorized } from "./run.js";
 import { buildCiRepairPrompt, PR_CHECKS_TIMEOUT_MS } from "../resolve.js";
 import { createGitHubCiProvider, createGitLabCiProvider, type LoopCiProvider } from "../ci-provider.js";
@@ -686,7 +687,13 @@ export async function loopSpeculateCommand(
   if (!preflight) return;
   try {
     await withLoopAgentRuntime(
-      { config: preflight.config, workspace, model: preflight.model, extractMemory: true },
+      {
+        config: preflight.config,
+        mcpOrigins: preflight.mcpOrigins,
+        workspace,
+        model: preflight.model,
+        extractMemory: true,
+      },
       async ({ deps, controller }) => {
         const result = await runSpeculativeLoop(deps, {
           workspace,
@@ -907,14 +914,14 @@ export async function loopDeliverCommand(
       if (repairContext) return repairContext;
       const preflight = await preflightLoop(workspace, opts);
       if (!preflight) throw new Error("CI repair prerequisites were not satisfied");
-      const mcp = await prepareMcp(preflight.config, workspace);
+      const mcp = await prepareMcp(preflight.config, workspace, undefined, preflight.mcpOrigins);
       disposeMcp = mcp.dispose;
       const created = createCliAgentDeps({
         config: preflight.config,
         workspace,
         pluginContributions: mcp.pluginContributions,
         model: preflight.model,
-        mcpToolSpecs: mcp.specs,
+        ...(mcp.registry ? { mcpRegistry: mcp.registry } : {}),
         confirm: async () => false,
         extractMemory: false,
         subagents: loadAgentDefinitions(workspace, mcp.pluginContributions),
@@ -997,40 +1004,43 @@ export async function loopDagCommand(
   const preflight = await preflightLoop(workspace, opts);
   if (!preflight) return;
   const { nodes, nodeWorkspaces, fanIn } = parsed;
-  const { config, model } = preflight;
+  const { config, model, mcpOrigins } = preflight;
   try {
-    await withLoopAgentRuntime({ config, workspace, model, extractMemory: true }, async ({ deps, controller }) => {
-      const approvedNodes = new Set(opts.approve ?? []);
-      const results = await runLoopDag(deps, {
-        workspace,
-        nodes,
-        maxConcurrency: opts.maxConcurrency ?? 1,
-        ...(opts.managedWorktrees ? { managedWorktrees: true } : {}),
-        ...(opts.managedWorktreeLimit !== undefined ? { managedWorktreeLimit: opts.managedWorktreeLimit } : {}),
-        ...(opts.predictiveBudget ? { predictiveBudget: true } : {}),
-        ...(fanIn ? { fanIn } : {}),
-        ...(opts.dagId ? { dagId: opts.dagId } : {}),
-        ...(opts.resume ? { resume: true } : {}),
-        ...(opts.rerun?.length ? { rerunFrom: opts.rerun } : {}),
-        approveNode: (node) => approvedNodes.has(node.id),
-        ...(nodeWorkspaces.size > 0 ? { workspaceForNode: (node) => nodeWorkspaces.get(node.id) ?? workspace } : {}),
-        ...(opts.budget !== undefined ? { costBudgetUsd: opts.budget } : {}),
-        ...(opts.tokenBudget !== undefined ? { tokenBudget: opts.tokenBudget } : {}),
-        ...(opts.maxDurationSeconds !== undefined
-          ? { maxDurationMs: Math.round(opts.maxDurationSeconds * 1_000) }
-          : {}),
-        signal: controller.signal,
-        onNodeEvent: (nodeId, event) => console.log(`[${nodeId}] ${formatLoopEvent(event)}`),
-        onFanIn: (result) =>
-          console.log(`[fan-in] ${result.status} · ${result.branch}${result.error ? ` · ${result.error}` : ""}`),
-      });
-      console.log(
-        results
-          .map((result) => `${result.id}\t${result.status}${result.reason ? `\t${result.reason}` : ""}`)
-          .join("\n"),
-      );
-      if (results.some((result) => result.status !== "passed")) process.exitCode = 1;
-    });
+    await withLoopAgentRuntime(
+      { config, mcpOrigins, workspace, model, extractMemory: true },
+      async ({ deps, controller }) => {
+        const approvedNodes = new Set(opts.approve ?? []);
+        const results = await runLoopDag(deps, {
+          workspace,
+          nodes,
+          maxConcurrency: opts.maxConcurrency ?? 1,
+          ...(opts.managedWorktrees ? { managedWorktrees: true } : {}),
+          ...(opts.managedWorktreeLimit !== undefined ? { managedWorktreeLimit: opts.managedWorktreeLimit } : {}),
+          ...(opts.predictiveBudget ? { predictiveBudget: true } : {}),
+          ...(fanIn ? { fanIn } : {}),
+          ...(opts.dagId ? { dagId: opts.dagId } : {}),
+          ...(opts.resume ? { resume: true } : {}),
+          ...(opts.rerun?.length ? { rerunFrom: opts.rerun } : {}),
+          approveNode: (node) => approvedNodes.has(node.id),
+          ...(nodeWorkspaces.size > 0 ? { workspaceForNode: (node) => nodeWorkspaces.get(node.id) ?? workspace } : {}),
+          ...(opts.budget !== undefined ? { costBudgetUsd: opts.budget } : {}),
+          ...(opts.tokenBudget !== undefined ? { tokenBudget: opts.tokenBudget } : {}),
+          ...(opts.maxDurationSeconds !== undefined
+            ? { maxDurationMs: Math.round(opts.maxDurationSeconds * 1_000) }
+            : {}),
+          signal: controller.signal,
+          onNodeEvent: (nodeId, event) => console.log(`[${nodeId}] ${formatLoopEvent(event)}`),
+          onFanIn: (result) =>
+            console.log(`[fan-in] ${result.status} · ${result.branch}${result.error ? ` · ${result.error}` : ""}`),
+        });
+        console.log(
+          results
+            .map((result) => `${result.id}\t${result.status}${result.reason ? `\t${result.reason}` : ""}`)
+            .join("\n"),
+        );
+        if (results.some((result) => result.status !== "passed")) process.exitCode = 1;
+      },
+    );
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
@@ -1173,19 +1183,19 @@ type PreparedLoopRequest =
 async function executeLoop(request: PreparedLoopRequest, projectPath: string, prepared?: LoopPreflight): Promise<void> {
   const preflight = prepared ?? (await preflightLoop(projectPath, request.opts));
   if (!preflight) return;
-  const { config, model } = preflight;
-  await runPreparedLoop(request, projectPath, config, model);
+  await runPreparedLoop(request, projectPath, preflight);
 }
 
-type LoopPreflight = { config: ReturnType<typeof loadConfig>; model: string | undefined };
+type LoopPreflight = { config: ReturnType<typeof loadConfig>; mcpOrigins: McpOrigins; model: string | undefined };
 
 async function preflightLoop(
   projectPath: string,
   opts: LoopOptions | LoopResumeOptions,
 ): Promise<LoopPreflight | undefined> {
   let config: ReturnType<typeof loadConfig>;
+  let mcpOrigins: McpOrigins;
   try {
-    config = loadConfig(projectPath, undefined, opts.profile);
+    ({ config, mcpOrigins } = resolveConfig(projectPath, undefined, opts.profile));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const hint = (err as { hint?: string }).hint;
@@ -1208,16 +1218,16 @@ async function preflightLoop(
   if (!(await ensureWorkspaceAuthorized(projectPath, { yes: opts.yes === true, machine: false }))) {
     return;
   }
-  return { config, model };
+  return { config, mcpOrigins, model };
 }
 
 async function runPreparedLoop(
   request: PreparedLoopRequest,
   projectPath: string,
-  config: ReturnType<typeof loadConfig>,
-  model: string | undefined,
+  preflight: LoopPreflight,
 ): Promise<void> {
   const { opts } = request;
+  const { config, model, mcpOrigins } = preflight;
   // The loop is inherently autonomous: it must apply edits without a human in
   // the loop. We always run in acceptEdits. Without -y we still proceed (that
   // is the sensible default for a "drive to green" command) but print a note.
@@ -1227,6 +1237,7 @@ async function runPreparedLoop(
     await withLoopAgentRuntime(
       {
         config,
+        mcpOrigins,
         workspace: projectPath,
         model,
         extractMemory: true,

@@ -35,7 +35,7 @@
 | `--resume <id>` | run, ask, -p, chat | 恢复指定会话（见 `seekforge sessions`） |
 | `--fork-session` | run, ask, -p, chat | 与 `--resume`/`--continue` 搭配：先复制该会话，在副本上继续，原会话保持不变 |
 | `--session-id <id>` | run, ask, -p, chat | 用指定 id（而不是自动生成的 id）创建新会话。可用 UUID，也可用字母、数字、`.`、`_`、`-`（最多 128 个字符）。该 id 已存在，或与 `--resume`、`--continue`、`--fork-session` 同用时会被拒绝 |
-| `--add-dir <path>` | run, ask, -p, chat | 为 `@` 引用增加只读根目录（可重复） |
+| `--add-dir <path>` | run, ask, -p, chat | 授权项目之外的一个目录（可重复）：文件工具可以在其中读写，权限级别、确认提示和规则与工作区内相同，`@` 引用也会在其中解析。与用户配置中的 `additionalDirectories` 合并。见[额外目录](#额外目录) |
 | `--max-turns <n>` | run, ask, -p, chat | 限制 agent 轮次上限（chat 中按每条消息计） |
 | `--max-cost <usd>` | run, ask, -p, chat | 累计成本达到该预算（USD）即停止运行；平缓取消，追踪记录保留。在 chat 中限制整个会话：正在运行的回合停止，且不再开始新回合。也可通过配置键 `maxCostUsd` 设置（对 run、ask、-p 生效） |
 | `--max-duration <seconds>` | run, ask, -p, sandbox-run, remote-run | 墙钟时间达到该预算即停止运行 —— 它是一个定时器，所以即使运行已经完全不再产生事件（命令卡死、MCP 服务器沉默）也照样触发。作用于整次调用，而不是单个回合。平缓取消，追踪记录保留。也可通过配置键 `maxDurationSeconds` 设置 |
@@ -55,7 +55,7 @@ flag 以及 `--verbose` 同样适用于交互会话。系统提示词被替换�
 
 | Flag | 说明 |
 | --- | --- |
-| `--plan` | 先做只读规划，确认后在同一会话中执行。agent 也可以用 `exit_plan_mode` 提交计划；批准该确认后，同一次运行会以编辑模式继续（见 [Cookbook → 跨文件重构](cookbook.zh-CN.md#跨文件重构)） |
+| `--plan` | 先做只读规划，确认后在同一会话中执行。agent 也可以用 `exit_plan_mode` 提交计划：确认提示会打印计划内容，批准后同一次运行以编辑模式继续并实施计划，之后不会再问一次"是否执行此计划？"；回答 `n: <原因>` 则拒绝并让 agent 修改计划（见 [Cookbook → 跨文件重构](cookbook.zh-CN.md#跨文件重构)）。只读会话（`ask`、`-p --ask`）从不执行计划：其中的 `exit_plan_mode` 会被拒绝 |
 | `--worktree [name]` | 创建一个保留的 git worktree（`.seekforge/worktrees/run-<name>`，分支 `seekforge/run-<name>`），并从你当前所在的同一子目录在其中运行。结束时会打印改动所在位置（json 结果中为 `worktree` 字段）；用 `git worktree remove --force <path>` 和 `git branch -D <branch>` 删除。不能与 `--resume`、`--continue`、`--fork-session` 同用。`-p` 也支持 |
 | `--json-schema <schema>` | 结构化输出——见[结构化输出](#结构化输出)。`ask` 与 `-p` 也支持 |
 | `--json-schema-file <path>` | 从文件读取该 schema（最多 256 KiB）。不能与 `--json-schema` 同用 |
@@ -67,9 +67,30 @@ flag 以及 `--verbose` 同样适用于交互会话。系统提示词被替换�
 | `--allowedTools <list>` | 仅允许这些工具（逗号分隔） |
 | `--disallowedTools <list>` | 拒绝这些工具（逗号分隔） |
 | `--dangerously-skip-permissions` | `-y` 的别名——自动批准 write/execute（危险命令仍被拒绝；env 变更仍会询问） |
-| `--mcp-config <file>` | 从 JSON 文件加载 MCP 服务器（与配置合并，除非加 `--strict-mcp-config`） |
+| `--mcp-config <file>` | 从 JSON 文件加载 MCP 服务器（与配置合并，除非加 `--strict-mcp-config`）。该文件与 `--settings` 一样属于你本人：其中带 `"trusted": true` 的服务器才会启动 |
 | `--strict-mcp-config` | 只使用 `--mcp-config` 指定的服务器，忽略配置文件中的 MCP 服务器 |
 | `--verbose` | 打印完整的工具参数与结果 |
+
+所有运行 agent 的命令（`run`、`ask`、`-p`、REPL、`loop`、`graph`）都通过同一个
+registry 连接 MCP 服务器：检出目录定义的服务器只有在对该工作区批准后才会启动（运行时
+会在 stderr 上列出待批准的服务器），服务器的 `tools/list_changed` 会传到正在运行的
+agent，而当各服务器的工具定义超过 `mcpToolSearchThreshold` 时，它们会被延迟到
+`tool_search` 之后（见 [MCP → 工具搜索](mcp.zh-CN.md#110-工具搜索延迟加载的-mcp-工具)）。
+超出范围的 `mcpToolSearchThreshold` 会在运行开始前被拒绝。
+
+## 额外目录
+
+`--add-dir <path>`（以及用户配置中的 `additionalDirectories`，绝不来自仓库配置）让
+文件工具可以在项目之外的某个目录中工作。相对路径按项目目录解析；该目录必须存在且位于
+项目之外，否则会被跳过并给出警告。授权遵循[安全模型](security-model.zh-CN.md)中的
+规则：
+
+- 权限级别、确认提示、规则与审批模式与工作区内相同，确认提示显示原始路径；
+- 包含关系基于 realpath 判断，因此离开所有授权目录的符号链接仍会被拒绝；
+- 授权目录的任意深度都适用敏感文件规则，任何 `.git` 目录下的写入都会被拒绝；
+- 每次运行都会重新校验这些目录；`run_command` 的工作目录以及 git、LSP 和 repo-map
+  工具仍只作用于工作区；
+- `seekforge rewind` 只恢复工作区内的文件——授权目录中的改动会被报告为跳过，不会撤销。
 
 ## ask 专属 flag
 
@@ -143,14 +164,30 @@ seekforge -p "review the last commit" --agents '{
 }'
 ```
 
-`description` 与 `prompt` 必填。可选：`tools`（数组或逗号分隔字符串；`[]` 表示
-不给任何工具）、`model`（`inherit` 表示沿用会话模型），以及 SeekForge 自己的
-`name`、`mode`（`ask`/`edit`）、`maxTurns`、`triggers`、`own`、`doNotTouch`、
-`boundary`。`color` 会被接受并忽略。其余字段——`disallowedTools`、
-`permissionMode`、`mcpServers`、`hooks` 等——一律拒绝，因为悄悄丢弃它们会让子代理
-拥有超出作者本意的权限。每个定义的校验方式与 `AGENT.md` 文件完全相同；JSON 上限为
-256 KiB、32 个子代理。本次运行中，内联子代理会替换同 id 的项目、用户、插件或内置
-子代理。
+`description` 与 `prompt` 必填。可选字段与 `AGENT.md` 文件相同：
+
+| 字段 | 取值 |
+| --- | --- |
+| `tools` | 数组或逗号分隔字符串；`[]` 表示不给任何工具。Claude Code 的工具名（`Read`、`Bash` 等）会映射为 SeekForge 的对应工具 |
+| `disallowedTools` | 在 `tools` 之后移除的工具；每个名称都必须是 SeekForge 认识的工具（也可用 Claude Code 的名称） |
+| `model` | 模型 id；`inherit` 表示沿用会话模型 |
+| `permissionMode` | `default`、`acceptEdits`、`plan`（只读）、`bypassPermissions`、`dontAsk` |
+| `isolation` | `worktree`（在托管的 git worktree 中编辑并返回 diff） |
+| `skills` | 其正文会预加载进子代理提示词的技能 id |
+| `effort` | `low`、`medium`、`high`、`max` |
+| `mcpServers` | 子代理可以使用的已连接 MCP 服务器名称（绝不是服务器定义） |
+| `hooks` | `preToolUse` / `postToolUse` / `Stop` 命令钩子，可用 SeekForge 格式（`{ "preToolUse": [{ "match", "pattern", "command" }] }`）或 Claude Code 格式（`{ "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command" }] }] }`） |
+| `color` | 显示颜色（`red`、`blue` 等，或 `#rrggbb`）；其他值会被忽略 |
+| `name`、`mode`（`ask`/`edit`）、`maxTurns`、`triggers`、`own`、`doNotTouch`、`boundary` | SeekForge 自己的字段 |
+
+内联定义来自你本人，因此与 `~/.seekforge/agents` 中的子代理一样拥有用户权限：其
+`permissionMode` 与 `hooks` 会生效。磁盘上的 `AGENT.md` 会被宽松地读取，而内联值
+不会：未知字段、匹配不到任何工具的 `disallowedTools` 名称、无效的技能 id 或服务器名、
+其他类型或其他阶段的钩子、带有无法使用的键（如 `timeout`）的钩子条目、无法精确对应
+到工具名的 Claude Code matcher，或每个阶段超过 16 个钩子，都会被拒绝——悄悄丢弃其中
+任何一项都可能让子代理拥有超出你本意的权限。钩子条目使用与配置钩子相同的校验器检查。
+JSON 上限为 256 KiB、32 个子代理。本次运行中，内联子代理会替换同 id 的项目、用户、
+插件或内置子代理。
 
 ## 调试输出
 
@@ -159,8 +196,8 @@ seekforge -p "review the last commit" --agents '{
 （`permission`）、上下文压缩（`context`）、文件改动（`file`）、实时命令输出
 （`command`）、包括 hook 消息在内的通知（`hooks`）、步骤（`step`）、模型消息
 （`model`）、子代理（`subagent`）、会话（`session`）——以及启动细节：生效的配置
-（`config`）、MCP 服务器及其信任状态（`mcp`）、worktree（`worktree`）和结构化输出
-的各次尝试（`structured`）。
+（`config`）、每个 MCP 服务器的状态（`mcp`：已连接及其信任方式与工具数、待批准、
+未受信任、失败）、worktree（`worktree`）和结构化输出的各次尝试（`structured`）。
 
 `--debug=api,tool` 只显示这些类别；`--debug='!command'`（加引号，避免 shell 处理
 `!`）显示除实时命令输出以外的全部内容。
@@ -168,13 +205,18 @@ seekforge -p "review the last commit" --agents '{
 ## 交互会话
 
 在终端中直接运行 `seekforge` 会打开 TUI（与 `seekforge-tui` 是同一个应用），并把
-`-c/--continue` 与 `-m/--model` 传给它。它会先询问目录访问授权，与 REPL 一直以来的
-做法相同。以下情况改为启动经典 readline REPL：
+它能读取的 flag 传给它：`-c/--continue`、`--resume`、`-m/--model`、
+`--permission-mode`、`-y`/`--dangerously-skip-permissions`、`--add-dir`、
+`--settings`、`--profile`（TUI 自己会读取 `SEEKFORGE_PROFILE`）、`--mcp-config`、
+`--strict-mcp-config`、`--append-system-prompt` 与 `--verbose`。它会先询问目录访问
+授权，与 REPL 一直以来的做法相同（`-y` 会直接授权该目录）。以下情况改为启动经典
+readline REPL：
 
 - 运行 `seekforge chat`、传入 `--classic`，或设置 `SEEKFORGE_CLASSIC_REPL=1`；
 - stdin 或 stdout 不是终端（管道输入的行为与以前一致）；
-- 传入了 TUI 暂不支持的 flag（`--resume`、`--permission-mode`、`--add-dir`、
-  `--settings`、`--profile` 或 `SEEKFORGE_PROFILE` 等）。stderr 上会注明是哪些
+- 传入了 TUI 暂不支持的 flag（`--ask`、`--fork-session`、`--session-id`、
+  `--system-prompt`、提示词文件相关 flag、`--output-style`、工具列表、`--max-turns`、
+  `--max-cost`、`--fallback-model`、`--agents`、`--debug`）。stderr 上会注明是哪些
   flag；REPL 支持所有这些 flag。
 
 REPL（`seekforge chat`）接受上表中的会话类 flag：`-y`、`-m`、`-c`、`--resume`、
@@ -182,15 +224,23 @@ REPL（`seekforge chat`）接受上表中的会话类 flag：`-y`、`-m`、`-c`�
 消息，并在执行前询问）、`--ask`、`--add-dir`、`--mcp-config`、`--strict-mcp-config`、
 系统提示词相关 flag、`--output-style`、工具列表、`--max-turns`、`--max-cost`、
 `--fallback-model`、`--agents`、`--debug`、`--verbose`、`--settings` 与 `--profile`。
-除 `/help` 之外：
+在 `--ask` 下，agent 的 `exit_plan_mode` 请求会被拒绝，因此计划永远不会把会话切换到
+编辑模式。除 `/help` 之外：
 
 | 输入 | 作用 |
 | --- | --- |
 | `!<command>` | 由你自己在工作区运行一条 shell 命令——不弹权限提示，就像在终端里直接输入。输出实时显示；Ctrl+C 可中止。命令、退出码和输出（截断到 16,000 个字符，保留开头与结尾；最多最近 8 条命令）会作为数据（而非指令）附加到你的下一条消息 |
-| `/compact [focus]` | 立即压缩当前会话。不带 focus 时是即时的机械摘要；带 focus 时由配置的 provider 围绕该重点生成摘要（模型调用失败时退回机械摘要） |
+| `/compact [focus]` | 立即压缩当前会话。不带 focus 时是即时的机械摘要；带 focus 时由配置的 provider 围绕该重点生成摘要（模型调用失败时退回机械摘要）。你的 `preCompact` / `postCompact` 钩子会以 `manual` 原因运行：其消息会被打印，`preCompact` 阻止时压缩会被取消（REPL 会说明）。Ctrl+C 可取消 |
+| `/think [on\|off\|low\|medium\|high\|max]` | 之后消息的思考模式与推理力度；给出级别会开启思考，`off` 会清除级别。各 provider 会收到它所接受的最接近级别（见 [`reasoningEffort`](configuration.zh-CN.md#reasoningeffort)） |
+| `/plan <task>` | 先只读规划，再询问是否执行——除非 agent 通过 `exit_plan_mode` 提交的计划已在该次运行中获批并实施 |
 | `/rename <title>` | 为当前会话命名；名称会显示在 `/sessions`、`seekforge sessions` 与 `sessions show` 中 |
 | `/sessions` | 最近的会话及其名称 |
+| `/<name> [args]` | 运行自定义命令（`.seekforge/commands/<name>.md`，你自己的或插件提供的）。与内置命令同名的文件（`plan.md`、`EXIT.md` 等）会被忽略——内置命令保留其名称——REPL 会在启动时提示一次 |
 | `# <fact>` | 将事实保存到项目记忆 |
+
+agent 在后台启动的子代理属于 REPL 会话，而不是启动它们的那条消息：该消息结束后它们
+继续运行，其结果会随你的下一条消息交给 agent。`/new`、`/resume <其他 id>` 以及退出
+REPL 会停止它们。
 
 Ctrl+C 会取消正在运行的回合或 `!` 命令，REPL 保持打开；在提示符处按 Ctrl+C 则与
 Ctrl+D 一样退出。通过管道输入 REPL 的每一行都会依次处理，包括在回合运行期间到达的行。

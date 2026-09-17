@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { GLOBAL_CONFIG_LOCK_ID, isProjectConfigKeyAllowed } from "@seekforge/shared/config-layers";
 import { acquireSessionLease } from "@seekforge/core";
+import { REASONING_EFFORTS } from "@seekforge/shared";
 import { availableProfiles, loadConfig } from "../config.js";
 import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "../bounded-file.js";
 import { t } from "../i18n.js";
@@ -25,7 +26,7 @@ const ALLOWED_KEYS = [
 const ENUM_VALUES: Record<string, readonly string[]> = {
   sandbox: ["off", "read-only", "workspace-write", "restricted"],
   compaction: ["mechanical", "llm"],
-  reasoningEffort: ["high", "max"],
+  reasoningEffort: REASONING_EFFORTS,
 };
 
 function configPath(global: boolean): string {

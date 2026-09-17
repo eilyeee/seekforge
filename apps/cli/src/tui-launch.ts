@@ -6,9 +6,9 @@
 // SIGTSTP on Ctrl+Z, and a stopped child under a still-running parent leaves the
 // shell waiting on the parent with nothing in the foreground.
 //
-// The TUI reads only a few launch flags. A session flag it would drop is not
-// dropped: the classic REPL honors every one of them, so the launch falls back
-// to it and says which flag caused that.
+// The TUI reads the launch flags in TUI_FLAGS (apps/tui/src/cli-args.ts). A
+// session flag it would drop is not dropped: the classic REPL honors every one
+// of them, so the launch falls back to it and says which flag caused that.
 
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -24,8 +24,28 @@ export type InteractiveFlags = {
 
 export type FrontendDecision = { kind: "tui"; args: string[] } | { kind: "repl"; unsupported?: string[] };
 
-/** Flags the TUI honors, by commander attribute name. */
-const TUI_FLAGS = new Set(["model", "continue", "classic"]);
+/**
+ * Flags the TUI honors, by commander attribute name, and how each is passed on.
+ * Values use the `--flag=value` form so a value that starts with "-" is not
+ * read as the next flag.
+ */
+const TUI_FLAGS: Record<string, (value: unknown) => string[]> = {
+  classic: () => [],
+  continue: () => ["--continue"],
+  resume: (value) => [`--resume=${String(value)}`],
+  model: (value) => [`--model=${String(value)}`],
+  permissionMode: (value) => [`--permission-mode=${String(value)}`],
+  yes: () => ["--yes"],
+  dangerouslySkipPermissions: () => ["--yes"],
+  addDir: (value) => (value as string[]).map((dir) => `--add-dir=${dir}`),
+  settings: (value) => [`--settings=${String(value)}`],
+  profile: (value) => [`--profile=${String(value)}`],
+  mcpConfig: (value) => [`--mcp-config=${String(value)}`],
+  strictMcpConfig: () => ["--strict-mcp-config"],
+  // An empty text appends nothing, and the TUI refuses an empty value.
+  appendSystemPrompt: (value) => (String(value) === "" ? [] : [`--append-system-prompt=${String(value)}`]),
+  verbose: () => ["--verbose"],
+};
 
 /** commander attribute name → the flag a user typed. */
 const FLAG_NAMES: Record<string, string> = {
@@ -79,16 +99,19 @@ export function decideInteractiveFrontend(input: {
   const { flags, env } = input;
   if (input.explicitChat || flags.classic === true || classicReplRequested(env)) return { kind: "repl" };
   if (!input.stdinIsTTY || !input.stdoutIsTTY) return { kind: "repl" };
-  const unsupported = Object.entries(flags)
-    .filter(([name, value]) => !TUI_FLAGS.has(name) && isSet(value))
+  const set = Object.entries(flags).filter(([, value]) => isSet(value));
+  const unsupported = set
+    .filter(([name]) => !Object.hasOwn(TUI_FLAGS, name))
     .map(([name]) => FLAG_NAMES[name] ?? `--${name}`);
-  // The TUI reads no config profile, so a profile from the environment would
-  // be ignored just as silently as the flag.
-  if (!isSet(flags["profile"]) && env["SEEKFORGE_PROFILE"]) unsupported.push("SEEKFORGE_PROFILE");
   if (unsupported.length > 0) return { kind: "repl", unsupported: [...new Set(unsupported)].sort() };
   const args: string[] = [];
-  if (flags.continue === true) args.push("--continue");
-  if (typeof flags.model === "string") args.push("--model", flags.model);
+  for (const [name, value] of set) {
+    // An explicit --resume wins over -c, as in the REPL; the TUI refuses both.
+    if (name === "continue" && isSet(flags["resume"])) continue;
+    // -y and its long alias are one flag to the TUI.
+    if (name === "dangerouslySkipPermissions" && isSet(flags["yes"])) continue;
+    args.push(...(TUI_FLAGS[name] as (value: unknown) => string[])(value));
+  }
   return { kind: "tui", args };
 }
 

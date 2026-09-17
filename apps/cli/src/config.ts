@@ -7,7 +7,7 @@ import type {
   MemoryMaintenanceConfig,
   ModelPricing,
 } from "@seekforge/core";
-import type { PermissionRule } from "@seekforge/shared";
+import type { PermissionRule, ReasoningEffort } from "@seekforge/shared";
 import {
   type ConfigLayer,
   type ConfigLayerOrigin,
@@ -63,8 +63,8 @@ export type CliConfig = {
   modelContextWindows?: Record<string, number>;
   /** DeepSeek V4 thinking mode (default: API default). /think toggles in the REPL. */
   thinking?: boolean;
-  /** V4 reasoning effort: "high" or "max". */
-  reasoningEffort?: "high" | "max";
+  /** Reasoning effort, mapped per provider/model (see docs/configuration.md). /think <level> sets it in the REPL. */
+  reasoningEffort?: ReasoningEffort;
   /** UI language for CLI chrome (errors, prompts, command output). */
   locale?: "en" | "zh-CN";
   /**

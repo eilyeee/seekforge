@@ -705,3 +705,34 @@ test("a repository layer may still introduce its own MCP server names", () => {
   assert.deepEqual(config.mcpServers?.["gh"], { command: "gh-mcp", trusted: true });
   cleanup();
 });
+
+test("configSetCommand accepts every reasoning effort and rejects anything else", () => {
+  const { projectPath, cleanup } = setupProject();
+  const oldCwd = process.cwd();
+  const oldExitCode = process.exitCode;
+  const oldError = console.error;
+  const oldLog = console.log;
+  const errors: string[] = [];
+  const file = join(projectPath, ".seekforge", "config.json");
+  try {
+    process.chdir(projectPath);
+    process.exitCode = undefined;
+    console.error = (message?: unknown) => errors.push(String(message));
+    console.log = () => {};
+    for (const level of ["low", "medium", "high", "max"]) {
+      configSetCommand("reasoningEffort", level, {});
+      assert.equal(process.exitCode, undefined, level);
+      assert.equal(JSON.parse(readFileSync(file, "utf8")).reasoningEffort, level);
+    }
+    configSetCommand("reasoningEffort", "xhigh", {});
+    assert.equal(process.exitCode, 1);
+    assert.match(errors.join("\n"), /low, medium, high, max/);
+    assert.equal(JSON.parse(readFileSync(file, "utf8")).reasoningEffort, "max");
+  } finally {
+    process.chdir(oldCwd);
+    process.exitCode = oldExitCode;
+    console.error = oldError;
+    console.log = oldLog;
+    cleanup();
+  }
+});

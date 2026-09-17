@@ -4,7 +4,9 @@ import {
   buildProvider,
   commandHasShellInjection,
   compactSessionNow,
+  createDispatchManager,
   createMemoryMaintenanceScheduler,
+  createPromptHookEvaluator,
   detectThinkingKeyword,
   expandShellInjections,
   expandUserCommand,
@@ -15,24 +17,50 @@ import {
   loadAgentDefinitions,
   loadUserCommands,
   MAX_USER_SHELL_RUNS,
+  mergePluginHooks,
   readSessionMeta,
   renameSession,
   createUsageBus,
   withInlineAgents,
+  type CompactionBlocked,
+  type CompactionHookOptions,
+  type DispatchManager,
+  type UserCommand,
   type UserShellRun,
 } from "@seekforge/core";
-import type { ApprovalMode, ConfirmResult, PermissionRequest, PermissionRule, TokenUsage } from "@seekforge/shared";
-import { expandExtraFileRefs, normalizeExtraDir } from "@seekforge/shared/workspace-dirs";
-import { cliMcpServerRequestHandlers, createCliAgent, prepareMcp } from "../agent-factory.js";
+import {
+  isReasoningEffort,
+  REASONING_EFFORTS,
+  type ApprovalMode,
+  type ConfirmResult,
+  type PermissionRequest,
+  type PermissionRule,
+  type TokenUsage,
+} from "@seekforge/shared";
+import { expandExtraFileRefs } from "@seekforge/shared/workspace-dirs";
+import {
+  cliMcpServerRequestHandlers,
+  createCliAgent,
+  mcpToolSearchThresholdProblem,
+  prepareMcp,
+  type PreparedMcp,
+} from "../agent-factory.js";
 import { buildToolGatingRules, parseToolList } from "../tool-gating.js";
 import { dim, fail, yellow } from "../colors.js";
-import { loadConfig, type CliConfig } from "../config.js";
-import { debugConfigLines, debugMcpLine, ensureWorkspaceAuthorized } from "./run.js";
+import { resolveConfig, type CliConfig } from "../config.js";
+import {
+  debugConfigLines,
+  debugMcpLine,
+  ensureWorkspaceAuthorized,
+  mcpStartupNotices,
+  planAlreadyApproved,
+  readOnlyConfirm,
+} from "./run.js";
 import { expandFileRefs } from "@seekforge/shared/file-refs";
 import { t } from "../i18n.js";
 import { apiKeyEnvVar } from "@seekforge/shared/provider-env";
 import { formatSessionLine, statusCommand } from "./sessions.js";
-import { createRenderer, formatContextSuffix, formatUsage } from "../render.js";
+import { createRenderer, formatContextSuffix, formatPermissionRequest, formatUsage } from "../render.js";
 import { parseNumberedChoice } from "../input-selection.js";
 import { runShell, runShellCapture } from "../shell-capture.js";
 import { runInheritedCommand } from "../inherited-command.js";
@@ -42,13 +70,124 @@ import { isCostBudgetExceeded } from "../cost-budget.js";
 import { resolvePermissionMode, UnknownPermissionModeError } from "../permission-mode.js";
 import {
   parseAgentsFlag,
-  resolveMcpServers,
+  resolveAddDirs,
+  resolveMcpSetup,
   resolvePromptFlags,
   resolveSessionFlags,
   RunSetupError,
+  type McpOrigins,
 } from "../run-setup.js";
 
 const HELP = t("repl.help");
+
+/** The REPL's own slash commands, aliases included. Keep in step with the switch in replCommand. */
+export const REPL_BUILTIN_COMMANDS: readonly string[] = [
+  "help",
+  "quit",
+  "exit",
+  "new",
+  "clear",
+  "diff",
+  "status",
+  "compact",
+  "rename",
+  "sessions",
+  "resume",
+  "plan",
+  "model",
+  "think",
+  "remember",
+  "usage",
+  "context",
+];
+
+/**
+ * Custom commands the REPL runs, and the names of those it ignores because a
+ * built-in has that name: a checked-out repository must not be able to turn
+ * `/plan` or `/compact` into a prompt of its own (the TUI applies the same rule).
+ */
+export function partitionUserCommands(commands: readonly UserCommand[]): {
+  usable: UserCommand[];
+  shadowed: string[];
+} {
+  const builtins = new Set(REPL_BUILTIN_COMMANDS);
+  const usable: UserCommand[] = [];
+  const shadowed: string[] = [];
+  for (const command of commands) {
+    if (builtins.has(command.name.toLowerCase())) shadowed.push(command.name);
+    else usable.push(command);
+  }
+  return { usable, shadowed };
+}
+
+/**
+ * Applies `/think <arg>` to the session config: on/off, or a reasoning effort
+ * (which turns thinking on). Returns false for an argument it does not know,
+ * leaving the config untouched.
+ */
+export function applyThinkArgument(config: CliConfig, arg: string): boolean {
+  if (arg === "on") {
+    config.thinking = true;
+  } else if (arg === "off") {
+    config.thinking = false;
+    // A stale effort from an earlier `/think <level>` would otherwise leak into
+    // the next run (and a later `/think on`).
+    delete config.reasoningEffort;
+  } else if (isReasoningEffort(arg)) {
+    config.thinking = true;
+    config.reasoningEffort = arg;
+  } else {
+    return false;
+  }
+  return true;
+}
+
+/** `/think`'s argument list, for its usage line. */
+export const THINK_ARGUMENTS = ["on", "off", ...REASONING_EFFORTS].join("|");
+
+/** What a manual compaction printed: hook notices first, then the outcome. */
+export function compactionOutcomeLines(
+  result: CompactionBlocked | { droppedTurns: number; beforeTokens: number; afterTokens: number; notices?: string[] },
+  doneKey: "repl.compacted" | "repl.compactedLlm",
+): string[] {
+  const lines = [...(result.notices ?? []).map((notice) => `• ${notice}`)];
+  if ("blocked" in result) {
+    lines.push(t("repl.compactBlocked", { reason: result.reason }));
+    return lines;
+  }
+  lines.push(t(doneKey, { dropped: result.droppedTurns, before: result.beforeTokens, after: result.afterTokens }));
+  return lines;
+}
+
+/**
+ * Per-message agent teardown for a session whose background subagents may
+ * outlive the message: a teardown is held back while any dispatch still runs
+ * (it may need that agent's runtime) and released once none does, or when the
+ * session ends.
+ */
+export function createDeferredDisposer(running: () => boolean): {
+  add: (dispose: () => void) => void;
+  flush: (force?: boolean) => void;
+} {
+  const pending: Array<() => void> = [];
+  const flush = (force = false): void => {
+    if (!force && running()) return;
+    for (const dispose of pending.splice(0)) {
+      try {
+        dispose();
+      } catch {
+        // One failing teardown must not keep the others alive.
+      }
+    }
+  };
+  return {
+    add: (dispose) => {
+      pending.push(dispose);
+      flush();
+    },
+    flush,
+  };
+}
 
 /** Bytes of a `!command`'s output kept for the next message (the terminal shows all of it). */
 const MAX_BANG_CAPTURE_BYTES = 256 * 1024;
@@ -132,10 +271,7 @@ function makeConfirm(
   currentSignal: SignalSource,
 ): (req: PermissionRequest) => Promise<ConfirmResult> {
   return async (req) => {
-    console.log(`\n${yellow(t("repl.permissionRequired"))} [${req.permission}] ${req.toolName}`);
-    if (req.command) console.log(`  command: ${req.command}`);
-    if (req.path) console.log(`  path:    ${req.path}`);
-    if (!req.command && !req.path) console.log(`  ${req.description}`);
+    for (const line of formatPermissionRequest(req, yellow(t("repl.permissionRequired")))) console.log(line);
     const answer = await readLine(permissionPromptText(req), questionOptions(currentSignal));
     return parsePermissionAnswer(answer, { sessionGrantable: sessionGrantable(req) });
   };
@@ -199,11 +335,12 @@ function reportSetupError(err: unknown): boolean {
 export async function replCommand(opts: ReplOptions): Promise<void> {
   const projectPath = process.cwd();
   const debug = createDebugLogger(opts.debug);
-  // Custom slash commands from .seekforge/commands/*.md (project + user).
-  const userCommands = loadUserCommands(projectPath);
-  let config: ReturnType<typeof loadConfig>;
+  // Custom slash commands from .seekforge/commands/*.md (project + user + plugins).
+  const { usable: userCommands, shadowed: shadowedCommands } = partitionUserCommands(loadUserCommands(projectPath));
+  let config: CliConfig;
+  let configOrigins: McpOrigins;
   try {
-    config = loadConfig(projectPath, opts.settingsFile, opts.profile);
+    ({ config, mcpOrigins: configOrigins } = resolveConfig(projectPath, opts.settingsFile, opts.profile));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const hint = (err as { hint?: string }).hint;
@@ -230,6 +367,7 @@ export async function replCommand(opts: ReplOptions): Promise<void> {
   let inlineAgents: ReturnType<typeof parseAgentsFlag>;
   let sessionPlan: ReturnType<typeof resolveSessionFlags>;
   let mcpConfig: CliConfig;
+  let mcpOrigins: McpOrigins;
   try {
     ({ approvalMode, planFromMode } = resolvePermissionMode({
       yes: opts.yes,
@@ -239,7 +377,9 @@ export async function replCommand(opts: ReplOptions): Promise<void> {
     prompts = resolvePromptFlags(opts, projectPath);
     inlineAgents = parseAgentsFlag(opts.agentsJson);
     sessionPlan = resolveSessionFlags(projectPath, opts);
-    mcpConfig = resolveMcpServers(config, opts);
+    ({ config: mcpConfig, origins: mcpOrigins } = resolveMcpSetup(config, configOrigins, opts));
+    const thresholdProblem = mcpToolSearchThresholdProblem(mcpConfig);
+    if (thresholdProblem) throw new RunSetupError(thresholdProblem);
   } catch (err) {
     if (reportSetupError(err)) return;
     throw err;
@@ -250,12 +390,9 @@ export async function replCommand(opts: ReplOptions): Promise<void> {
     base: config.permissionRules,
   });
   const sessionAllowedTools = parseToolList(opts.allowedTools);
-  const extraDirs: string[] = [];
-  for (const raw of opts.addDirs ?? []) {
-    const abs = normalizeExtraDir(raw, projectPath);
-    if (abs) extraDirs.push(abs);
-    else console.error(t("err.excludedDirSkipped", { dir: raw }));
-  }
+  // --add-dir: the file tools may read and write there, and @-references resolve there.
+  const { dirs: extraDirs, skipped: skippedDirs } = resolveAddDirs(opts.addDirs, projectPath);
+  for (const dir of skippedDirs) console.error(t("err.excludedDirSkipped", { dir }));
   const costBudgetUsd = opts.maxCostUsd;
 
   // Folder-access consent: authorize this directory once before the session.
@@ -311,24 +448,47 @@ export async function replCommand(opts: ReplOptions): Promise<void> {
   };
 
   const readLine = createLineReader(rl, process.stdin.isTTY !== true);
-  const confirm = makeConfirm(readLine, currentSignal);
+  const terminalConfirm = makeConfirm(readLine, currentSignal);
+  // --ask promised a read-only session: a plan approval would switch a run to edit mode.
+  const confirm = opts.ask ? readOnlyConfirm(terminalConfirm, (message) => console.log(dim(message))) : terminalConfirm;
   const askUser = makeAskUser(readLine, currentSignal);
   // MCP servers live for the whole REPL. The REPL has a terminal to prompt on,
   // so a server may ask for a model call or an answer — both go through the
   // same readline channels the agent itself uses.
   const usageBus = createUsageBus();
-  const mcp = await prepareMcp(
-    mcpConfig,
-    projectPath,
-    cliMcpServerRequestHandlers({
-      config,
-      confirm,
-      askUser,
-      usageBus,
-      ...(opts.model !== undefined ? { model: opts.model } : {}),
-    }),
+  let mcp: PreparedMcp;
+  try {
+    mcp = await prepareMcp(
+      mcpConfig,
+      projectPath,
+      cliMcpServerRequestHandlers({
+        config,
+        confirm,
+        askUser,
+        usageBus,
+        ...(opts.model !== undefined ? { model: opts.model } : {}),
+      }),
+      mcpOrigins,
+    );
+  } catch (err) {
+    rl.close();
+    fail(err instanceof Error ? err.message : String(err));
+    return;
+  }
+  debug.log("mcp", debugMcpLine(mcp));
+  // Background subagents belong to the session, not to the message that
+  // started them: one manager per session, handed to every run.
+  let dispatchManager: DispatchManager = createDispatchManager({ sessionScoped: true });
+  const agentTeardown = createDeferredDisposer(() =>
+    dispatchManager.list().some((dispatch) => dispatch.status === "running"),
   );
-  debug.log("mcp", debugMcpLine(mcpConfig, mcp.specs.length));
+  /** Ends the session's background subagents (a new session, or the REPL exiting). */
+  const endSessionDispatches = (next: "new" | "exit"): void => {
+    dispatchManager.disposeAll();
+    if (next === "new") dispatchManager = createDispatchManager({ sessionScoped: true });
+    agentTeardown.flush(true);
+  };
+  const sessionHooks = mergePluginHooks(projectPath, config.hooks, mcp.pluginContributions);
   let totalUsage: TokenUsage = { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 };
   let lastContext: { usedTokens: number; budgetTokens: number; percent: number } | undefined;
   let budgetExhausted = false;
@@ -345,6 +505,10 @@ export async function replCommand(opts: ReplOptions): Promise<void> {
   console.log(`${t("repl.welcome", { model, path: projectPath })}`);
   if (sessionId) console.log(dim(t("repl.continuingSession", { id: sessionId })));
   if (pendingSessionId) console.log(dim(t("repl.sessionStartId", { id: pendingSessionId })));
+  for (const line of mcpStartupNotices(mcp.registry)) console.log(dim(line));
+  if (shadowedCommands.length > 0) {
+    console.log(dim(t("repl.customShadowed", { names: shadowedCommands.map((name) => `/${name}`).join(", ") })));
+  }
   console.log(`${dim(t("repl.welcomeHint"))}\n`);
 
   const budgetReached = (spent: number): boolean => isCostBudgetExceeded(spent, costBudgetUsd);
@@ -388,7 +552,9 @@ export async function replCommand(opts: ReplOptions): Promise<void> {
       askUser,
       extractMemory: true,
       subagents: withInlineAgents(loadAgentDefinitions(projectPath, mcp.pluginContributions), inlineAgents),
-      mcpToolSpecs: mcp.specs,
+      ...(mcp.registry ? { mcpRegistry: mcp.registry } : {}),
+      ...(extraDirs.length > 0 ? { additionalDirectories: extraDirs } : {}),
+      dispatchManager,
     });
     const carried = shellRuns;
     shellRuns = [];
@@ -441,7 +607,7 @@ export async function replCommand(opts: ReplOptions): Promise<void> {
         }
       });
     } finally {
-      dispose();
+      agentTeardown.add(dispose);
       // A turn that never reached the session (busy, refused) delivered nothing.
       if (!started) shellRuns = [...carried, ...shellRuns].slice(-MAX_USER_SHELL_RUNS);
     }
@@ -453,6 +619,8 @@ export async function replCommand(opts: ReplOptions): Promise<void> {
     if (!(await runOnce(planTask, { mode: "ask", plan: true }))) return;
     // --ask promised a read-only session; executing would break that promise.
     if (opts.ask) return;
+    // Approved inside the run (exit_plan_mode) and already implemented there.
+    if (sessionId !== undefined && planAlreadyApproved(projectPath, sessionId)) return;
     const answer = (await readLine(t("repl.executeQuestion"))).trim().toLowerCase();
     if (answer === "y") {
       await runOnce("Execute the plan you produced above, step by step. Make the changes and run the verification.", {
@@ -489,44 +657,46 @@ export async function replCommand(opts: ReplOptions): Promise<void> {
       return;
     }
     const target = sessionId;
-    if (focus === "") {
-      const result = compactSessionNow(projectPath, target);
-      if (!result) console.log(t("repl.sessionTooShort"));
-      else
-        console.log(
-          t("repl.compacted", { dropped: result.droppedTurns, before: result.beforeTokens, after: result.afterTokens }),
-        );
-      return;
-    }
-    // A focus steers a model-written summary; the mechanical digest has no
-    // way to follow one.
-    console.log(dim(t("repl.compactingFocus", { focus })));
-    const summary = await llmCompactSessionNow(projectPath, target, summaryProvider(config, model), focus);
-    if (summary) {
-      if (summary.usage) totalUsage = addUsage(totalUsage, summary.usage);
-      console.log(
-        t("repl.compactedLlm", {
-          dropped: summary.droppedTurns,
-          before: summary.beforeTokens,
-          after: summary.afterTokens,
-        }),
-      );
-      return;
-    }
-    // null: too short, or the model call failed. The mechanical pass tells which.
-    const fallback = compactSessionNow(projectPath, target);
-    if (!fallback) {
-      console.log(t("repl.sessionTooShort"));
-      return;
-    }
-    console.log(dim(t("repl.compactFallback")));
-    console.log(
-      t("repl.compacted", {
-        dropped: fallback.droppedTurns,
-        before: fallback.beforeTokens,
-        after: fallback.afterTokens,
-      }),
-    );
+    // preCompact may cancel a manual compaction; postCompact hears about it.
+    // Prompt hooks are judged by the session's model, and their tokens count.
+    const provider = summaryProvider(config, model);
+    const hookOptions = (signal: AbortSignal): CompactionHookOptions => ({
+      ...(sessionHooks ? { hooks: sessionHooks } : {}),
+      signal,
+      evaluate: createPromptHookEvaluator(
+        () => provider,
+        (spent) => {
+          totalUsage = addUsage(totalUsage, spent);
+        },
+      ),
+    });
+    const mechanical = (signal: AbortSignal) => compactSessionNow(projectPath, target, undefined, hookOptions(signal));
+    await withCancellation(async (signal) => {
+      if (focus === "") {
+        const result = await mechanical(signal);
+        if (result) for (const line of compactionOutcomeLines(result, "repl.compacted")) console.log(line);
+        else if (!signal.aborted) console.log(t("repl.sessionTooShort"));
+        return;
+      }
+      // A focus steers a model-written summary; the mechanical digest has no
+      // way to follow one.
+      console.log(dim(t("repl.compactingFocus", { focus })));
+      const summary = await llmCompactSessionNow(projectPath, target, provider, focus, hookOptions(signal));
+      if (summary) {
+        if (!("blocked" in summary) && summary.usage) totalUsage = addUsage(totalUsage, summary.usage);
+        for (const line of compactionOutcomeLines(summary, "repl.compactedLlm")) console.log(line);
+        return;
+      }
+      if (signal.aborted) return;
+      // null: too short, or the model call failed. The mechanical pass tells which.
+      const fallback = await mechanical(signal);
+      if (!fallback) {
+        if (!signal.aborted) console.log(t("repl.sessionTooShort"));
+        return;
+      }
+      if (!("blocked" in fallback)) console.log(dim(t("repl.compactFallback")));
+      for (const line of compactionOutcomeLines(fallback, "repl.compacted")) console.log(line);
+    });
   };
 
   try {
@@ -573,9 +743,9 @@ export async function replCommand(opts: ReplOptions): Promise<void> {
       if (line.startsWith("/")) {
         const [cmd, ...rest] = line.split(/\s+/);
         const restText = line.slice((cmd ?? "").length).trim();
-        // Custom slash commands (.seekforge/commands/<name>.md) take priority over
-        // built-ins on a name clash: expand the body with the trailing args
-        // ($ARGUMENTS) and run it as a task.
+        // Custom slash commands (.seekforge/commands/<name>.md; never one named
+        // like a built-in, see partitionUserCommands): expand the body with the
+        // trailing args ($ARGUMENTS) and run it as a task.
         const customName = (cmd ?? "").replace(/^\//, "");
         const custom = customName ? userCommands.find((c) => c.name === customName) : undefined;
         if (custom) {
@@ -613,6 +783,7 @@ export async function replCommand(opts: ReplOptions): Promise<void> {
           case "/exit":
             return;
           case "/new":
+            endSessionDispatches("new");
             sessionId = undefined;
             sessionMode = baseMode;
             console.log(t("repl.nextMessageFresh"));
@@ -664,6 +835,7 @@ export async function replCommand(opts: ReplOptions): Promise<void> {
               console.log(t("repl.resumeUsage"));
               break;
             }
+            if (id !== sessionId) endSessionDispatches("new");
             sessionId = id;
             sessionMode = opts.ask ? "ask" : meta.mode;
             console.log(t("repl.continuingSession", { id }));
@@ -699,25 +871,19 @@ export async function replCommand(opts: ReplOptions): Promise<void> {
             if (!arg) {
               const state = config.thinking === false ? "off" : "on";
               const effortSuffix = config.reasoningEffort ? ` · effort ${config.reasoningEffort}` : "";
-              console.log(t("repl.thinkingCurrent", { state, effortSuffix }));
+              console.log(t("repl.thinkingCurrent", { state, effortSuffix, args: THINK_ARGUMENTS }));
               break;
             }
-            if (arg === "on") config.thinking = true;
-            else if (arg === "off") {
-              config.thinking = false;
-              // Clear any effort set by a prior `/think high|max`; otherwise a
-              // stale effort leaks into the next run (and a later `/think on`).
-              delete (config as { reasoningEffort?: string }).reasoningEffort;
-            } else if (arg === "high" || arg === "max") {
-              config.thinking = true;
-              config.reasoningEffort = arg;
-            } else {
-              console.log(t("repl.modelUsage"));
+            if (!applyThinkArgument(config, arg)) {
+              console.log(t("repl.modelUsage", { args: THINK_ARGUMENTS }));
               break;
             }
             const state = config.thinking === false ? "off" : "on";
             const effortSuffix = config.reasoningEffort ? ` · effort ${config.reasoningEffort}` : "";
-            const modelSuffix = model.startsWith("deepseek-v4") ? "" : " (needs a deepseek-v4 model: /model)";
+            // DeepSeek's own thinking switch exists on the V4 generation only;
+            // other providers map the effort per model (or ignore it).
+            const deepseek = (config.provider ?? "deepseek").toLowerCase() === "deepseek";
+            const modelSuffix = !deepseek || model.startsWith("deepseek-v4") ? "" : t("repl.thinkingNeedsV4");
             console.log(t("repl.thinkingSet", { state, effortSuffix, modelSuffix }));
             break;
           }
@@ -763,6 +929,7 @@ export async function replCommand(opts: ReplOptions): Promise<void> {
       }
     }
   } finally {
+    endSessionDispatches("exit");
     memoryMaintenanceScheduler?.dispose();
     rl.close();
     mcp.dispose();

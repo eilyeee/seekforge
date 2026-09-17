@@ -8,8 +8,16 @@
  * like `.seekforge/agents/<id>/AGENT.md`. Inline definitions come from the
  * person invoking the command, so they carry user authority (scope "global")
  * and override loaded definitions with the same id for that run only.
+ *
+ * The AGENT.md parser is lenient where a file on disk should keep loading (an
+ * unknown skill id or an unmappable hook is dropped). A value typed on the
+ * command line gets no such benefit of the doubt: anything the parser would
+ * drop is refused here, so what runs is what the user wrote.
  */
-import { AGENT_ID_RE } from "./frontmatter.js";
+import { parseHookEntry } from "@seekforge/shared";
+import type { HookConfig } from "../hooks/index.js";
+import { mapAgentToolName, parseAgentHooks, parseEffort, parseIsolation, parsePermissionMode } from "./fields.js";
+import { AGENT_ID_RE, type FrontmatterValue } from "./frontmatter.js";
 import { renderAgentMarkdown } from "./import.js";
 import { MAX_AGENT_DEFINITION_BYTES, parseAgentMarkdown } from "./load.js";
 import type { AgentDefinition } from "./types.js";
@@ -17,10 +25,36 @@ import type { AgentDefinition } from "./types.js";
 export const MAX_INLINE_AGENTS = 32;
 export const MAX_INLINE_AGENTS_BYTES = MAX_AGENT_DEFINITION_BYTES;
 
-/** Cosmetic Claude Code fields with no meaning here; accepted and ignored. */
-const IGNORED_FIELDS = new Set(["color"]);
-const STRING_FIELDS = ["description", "prompt", "name", "model", "own", "doNotTouch", "boundary"] as const;
-const KNOWN_FIELDS = new Set<string>([...STRING_FIELDS, "tools", "triggers", "mode", "maxTurns"]);
+const STRING_FIELDS = [
+  "description",
+  "prompt",
+  "name",
+  "model",
+  "own",
+  "doNotTouch",
+  "boundary",
+  "permissionMode",
+  "isolation",
+  "effort",
+  "color",
+] as const;
+const KNOWN_FIELDS = new Set<string>([
+  ...STRING_FIELDS,
+  "tools",
+  "disallowedTools",
+  "triggers",
+  "mode",
+  "maxTurns",
+  "skills",
+  "mcpServers",
+  "hooks",
+]);
+
+/** Keys of a SeekForge-shaped agent hook entry. */
+const HOOK_ENTRY_KEYS = new Set(["type", "match", "pattern", "command"]);
+/** Keys of a Claude Code-shaped entry (`{ matcher, hooks: [...] }`) and of each hook inside it. */
+const CLAUDE_HOOK_ENTRY_KEYS = new Set(["matcher", "hooks"]);
+const CLAUDE_HOOK_KEYS = new Set(["type", "command"]);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -39,11 +73,79 @@ function stringList(value: unknown, field: string, separator: string, where: str
   return trimmed;
 }
 
+function rejectUnknownKeys(value: Record<string, unknown>, known: ReadonlySet<string>, at: string): void {
+  const unknown = Object.keys(value).filter((key) => !known.has(key));
+  if (unknown.length > 0) {
+    throw new Error(`${at}: unsupported key(s) ${unknown.join(", ")} (supported: ${[...known].join(", ")})`);
+  }
+}
+
+/** A command hook, checked by the shared hook-entry validator. Agent hooks run commands only. */
+function checkCommandHook(hook: Record<string, unknown>, at: string): void {
+  const parsed = parseHookEntry(hook);
+  if (!parsed.ok) throw new Error(`${at}: ${parsed.error}`);
+  if ((parsed.value.type ?? "command") !== "command") throw new Error(`${at}: agent hooks run commands only`);
+}
+
+/**
+ * `hooks` in either shape parseAgentHooks reads. The stage names and the
+ * Claude matcher mapping stay with parseAgentHooks: each entry is run through
+ * it alone, and one that comes back empty is refused instead of dropped.
+ */
+function inlineHooks(value: unknown, where: string): HookConfig | undefined {
+  if (!isPlainObject(value)) throw new Error(`${where}: "hooks" must be an object keyed by stage`);
+  const expected = new Map<string, number>();
+  for (const [stage, entries] of Object.entries(value)) {
+    const probe = parseAgentHooks({ [stage]: [{ command: "true" }] });
+    const canonical = probe ? Object.keys(probe)[0] : undefined;
+    if (canonical === undefined) {
+      throw new Error(`${where}: hook stage "${stage}" is not available to an agent (preToolUse, postToolUse, Stop)`);
+    }
+    if (!Array.isArray(entries)) throw new Error(`${where}: "hooks.${stage}" must be an array`);
+    entries.forEach((entry: unknown, index) => {
+      const at = `${where}: "hooks.${stage}[${index}]"`;
+      if (!isPlainObject(entry)) throw new Error(`${at} must be an object`);
+      if (entry["hooks"] !== undefined) {
+        rejectUnknownKeys(entry, CLAUDE_HOOK_ENTRY_KEYS, at);
+        if (entry["matcher"] !== undefined && typeof entry["matcher"] !== "string") {
+          throw new Error(`${at}: "matcher" must be a string`);
+        }
+        if (!Array.isArray(entry["hooks"])) throw new Error(`${at}: "hooks" must be an array`);
+        entry["hooks"].forEach((hook: unknown, inner) => {
+          const hookAt = `${at}.hooks[${inner}]`;
+          if (!isPlainObject(hook)) throw new Error(`${hookAt} must be an object`);
+          rejectUnknownKeys(hook, CLAUDE_HOOK_KEYS, hookAt);
+          checkCommandHook(hook, hookAt);
+        });
+      } else {
+        rejectUnknownKeys(entry, HOOK_ENTRY_KEYS, at);
+        checkCommandHook(entry, at);
+      }
+      const produced = parseAgentHooks({ [stage]: [entry as unknown as FrontmatterValue] })?.[
+        canonical as keyof HookConfig
+      ];
+      if (!produced || produced.length === 0) {
+        throw new Error(
+          `${at} is not a usable agent hook (a command of at most 4096 characters; a Claude Code "matcher" ` +
+            'must name tools, like "Bash" or "Edit|Write")',
+        );
+      }
+      expected.set(canonical, (expected.get(canonical) ?? 0) + produced.length);
+    });
+  }
+  const hooks = parseAgentHooks(value as unknown as FrontmatterValue);
+  for (const [stage, count] of expected) {
+    const kept = hooks?.[stage as keyof HookConfig]?.length ?? 0;
+    if (kept < count) throw new Error(`${where}: too many "${stage}" hooks (at most ${kept} per stage)`);
+  }
+  return hooks;
+}
+
 /**
  * Parses the raw `--agents` value. Throws an Error naming the agent and field
  * on any problem; unknown fields are rejected rather than ignored, because a
- * silently dropped `disallowedTools` or `permissionMode` would leave an agent
- * with more reach than its author wrote.
+ * silently dropped field could leave an agent with more reach than its author
+ * wrote.
  */
 export function parseInlineAgentDefinitions(raw: string): AgentDefinition[] {
   if (Buffer.byteLength(raw, "utf8") > MAX_INLINE_AGENTS_BYTES) {
@@ -66,7 +168,7 @@ export function parseInlineAgentDefinitions(raw: string): AgentDefinition[] {
       throw new Error(`${where}: agent ids must be kebab-case (lowercase letters, digits, "-")`);
     }
     if (!isPlainObject(value)) throw new Error(`${where}: the definition must be an object`);
-    const unknown = Object.keys(value).filter((key) => !KNOWN_FIELDS.has(key) && !IGNORED_FIELDS.has(key));
+    const unknown = Object.keys(value).filter((key) => !KNOWN_FIELDS.has(key));
     if (unknown.length > 0) {
       throw new Error(
         `${where}: unsupported field(s) ${unknown.join(", ")} (supported: ${[...KNOWN_FIELDS].sort().join(", ")})`,
@@ -100,14 +202,63 @@ export function parseInlineAgentDefinitions(raw: string): AgentDefinition[] {
     // "inherit" is Claude Code's spelling of "use the session's model".
     const model = oneLine(text.model);
 
+    // Claude Code tool names (`Read`, `Bash`) mean SeekForge's; a name with no
+    // equivalent stays as written and simply matches no tool.
+    const tools =
+      value.tools === undefined
+        ? undefined
+        : [
+            ...new Set(
+              stringList(value.tools, "tools", ",", where).flatMap((name) => mapAgentToolName(name) ?? [name]),
+            ),
+          ];
+    // A deny list entry the parser cannot map would be dropped, leaving the
+    // tool usable: refuse it instead.
+    const disallowedTools =
+      value.disallowedTools === undefined
+        ? undefined
+        : stringList(value.disallowedTools, "disallowedTools", ",", where);
+    const unknownDenied = (disallowedTools ?? []).filter((name) => mapAgentToolName(name) === undefined);
+    if (unknownDenied.length > 0) {
+      throw new Error(`${where}: "disallowedTools" names no known tool: ${unknownDenied.join(", ")}`);
+    }
+    const fieldError = (error: unknown): Error =>
+      new Error(`${where}: ${error instanceof Error ? error.message : String(error)}`);
+    let permissionMode: AgentDefinition["permissionMode"];
+    let isolation: AgentDefinition["isolation"];
+    try {
+      permissionMode = parsePermissionMode(text.permissionMode);
+      isolation = parseIsolation(text.isolation);
+    } catch (error) {
+      throw fieldError(error);
+    }
+    const effort = text.effort === undefined ? undefined : parseEffort(text.effort);
+    if (text.effort !== undefined && effort === undefined) {
+      throw new Error(`${where}: "effort" must be low, medium, high or max`);
+    }
+    const skills =
+      value.skills === undefined ? undefined : [...new Set(stringList(value.skills, "skills", ",", where))];
+    const mcpServers =
+      value.mcpServers === undefined ? undefined : [...new Set(stringList(value.mcpServers, "mcpServers", ",", where))];
+    const hooks = value.hooks === undefined ? undefined : inlineHooks(value.hooks, where);
+
     // The on-disk parser is the validator of record: render, then parse back.
     const markdown = renderAgentMarkdown({
       id,
       name: oneLine(text.name) ?? id,
       description,
       triggers: value.triggers === undefined ? [] : stringList(value.triggers, "triggers", "|", where),
-      ...(value.tools !== undefined ? { tools: stringList(value.tools, "tools", ",", where) } : {}),
+      ...(tools !== undefined ? { tools } : {}),
+      ...(disallowedTools !== undefined ? { disallowedTools } : {}),
       mode,
+      ...(permissionMode !== undefined ? { permissionMode } : {}),
+      ...(isolation !== undefined ? { isolation } : {}),
+      ...(skills !== undefined ? { skills } : {}),
+      ...(effort !== undefined ? { effort } : {}),
+      // Cosmetic: a color the frontends cannot render is dropped by the parser.
+      ...(text.color !== undefined ? { color: text.color } : {}),
+      ...(mcpServers !== undefined ? { mcpServers } : {}),
+      ...(hooks !== undefined ? { hooks } : {}),
       own: oneLine(text.own),
       doNotTouch: oneLine(text.doNotTouch),
       boundary: oneLine(text.boundary),
@@ -115,11 +266,20 @@ export function parseInlineAgentDefinitions(raw: string): AgentDefinition[] {
       model: model === "inherit" ? undefined : model,
       body: prompt,
     });
+    let def: AgentDefinition;
     try {
-      return parseAgentMarkdown("global", id, markdown);
+      def = parseAgentMarkdown("global", id, markdown);
     } catch (error) {
-      throw new Error(`${where}: ${error instanceof Error ? error.message : String(error)}`);
+      throw fieldError(error);
     }
+    const dropped = (field: string, given: string[] | undefined, kept: string[] | undefined): void => {
+      const missing = (given ?? []).filter((item) => !(kept ?? []).includes(item));
+      if (missing.length > 0)
+        throw new Error(`${where}: "${field}" has invalid entries (or more than 32): ${missing.join(", ")}`);
+    };
+    dropped("skills", skills, def.skills);
+    dropped("mcpServers", mcpServers, def.mcpServers);
+    return def;
   });
 }
 

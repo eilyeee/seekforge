@@ -24,7 +24,7 @@ seekforge run "修复登录按钮点击无响应的问题"
 
 | Command | What it does |
 | --- | --- |
-| `seekforge` | interactive session — the TUI in a terminal; the classic REPL with `seekforge chat`, `--classic`, `SEEKFORGE_CLASSIC_REPL=1`, piped input, or flags the TUI does not support yet |
+| `seekforge` | interactive session — the TUI in a terminal (session flags such as `--resume`, `--permission-mode`, `-y`, `--add-dir`, `--settings`, `--profile` and `--mcp-config` are passed on); the classic REPL with `seekforge chat`, `--classic`, `SEEKFORGE_CLASSIC_REPL=1`, piped input, or flags the TUI does not support yet |
 | `seekforge run "<task>"` | run a development task (add `-y` to auto-approve safe writes/commands) |
 | `seekforge ask "<question>"` | read-only Q&A about the codebase |
 | `seekforge -p "<prompt>"` | headless print mode: one run, stream to stdout, exit (reads piped stdin) |
@@ -32,7 +32,7 @@ seekforge run "修复登录按钮点击无响应的问题"
 | `seekforge sessions` / `status` | list sessions / project overview |
 | `seekforge sessions show <id>` / `sessions rename <id> <title>` | describe / name a session |
 | `seekforge diff` | show the current git diff |
-| `seekforge doctor` | environment diagnostics (api key, node, git, runtime, mcp, editor, clipboard, OS sandbox, proxy, pdftotext) |
+| `seekforge doctor` | environment diagnostics (api key, node, git, runtime, mcp, editor, clipboard, OS sandbox, pdftotext, telemetry, and a proxy line when a proxy or CA bundle is configured) |
 | `seekforge resolve <issue> --max-cost <usd>` | fix an issue in an isolated worktree and open a draft PR (`--wait-ci`, `--dry-run`, `--no-worktree`) |
 | `seekforge resolve-review <pr> --max-cost <usd>` | address actionable PR feedback, verify, commit, and push fixes |
 | `seekforge schedule add\|list\|run` | register and run local cost-bounded scheduled jobs |
@@ -60,13 +60,13 @@ covered by [`docs/scheduling.md`](../../docs/scheduling.md) and
 | `--json` | back-compat alias for `--output-format stream-json` |
 | `-c, --continue` | resume the most recent session |
 | `--resume <id>` | resume a specific session |
-| `--add-dir <path>` | extra read-only root whose `@path` references resolve (repeatable) |
+| `--add-dir <path>` | grant a directory outside the project: the file tools may read and write there under the same prompts and rules, and `@path` references resolve there (repeatable; see [Additional directories](../../docs/cli-reference.md#additional-directories)) |
 | `--max-turns <n>` | cap the number of agent turns |
 | `--verbose` | print full tool args and results instead of a quiet summary |
 | `--fork-session` | with `-c`/`--resume`: continue in a copy of the session |
 | `--session-id <id>` | start the new session under this id (a UUID works) |
 | `--system-prompt-file` / `--append-system-prompt-file <path>` | replace / extend the system prompt from a file |
-| `--agents '<json>'` | subagents for this run only (Claude Code's `{"id": {"description", "prompt", …}}` shape) |
+| `--agents '<json>'` | subagents for this run only (Claude Code's `{"id": {"description", "prompt", …}}` shape, including `disallowedTools`, `permissionMode`, `isolation`, `skills`, `effort`, `mcpServers` and `hooks`) |
 | `--debug [filter]` | internal detail on stderr (`--debug=api,tool`, `--debug='!command'`) |
 | `--json-schema '<schema>'` | also produce a JSON value validating against the schema (`structured_output`) |
 | `--worktree [name]` | (`run`, `-p`) run in a new retained git worktree and print where the changes are |
@@ -78,7 +78,10 @@ Most of these also apply to the interactive session. Full reference:
 
 `seekforge chat` answers `/help`; `!<command>` runs a shell command in the
 workspace and carries its output into your next message; `/compact <focus>`
-has the model summarize around a focus; `/rename <title>` names the session.
+has the model summarize around a focus (your compaction hooks run, and may
+cancel it); `/think low|medium|high|max` sets the reasoning effort;
+`/rename <title>` names the session. A custom command file named like a
+built-in is ignored. Background subagents live as long as the session.
 Permission prompts accept `y`, `a` (this session), `n`, or `n: <reason>` to tell
 the agent why.
 
