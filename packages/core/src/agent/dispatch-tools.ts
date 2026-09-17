@@ -8,7 +8,14 @@
  * on the turn loop itself. `createCore` is injected (rather than importing
  * createAgentCore) so this module has no runtime dependency back on loop.ts.
  */
-import type { AgentEvent, FinalReport, PermissionRequest, TokenUsage, ToolResult } from "@seekforge/shared";
+import type {
+  AgentEvent,
+  FinalReport,
+  PermissionRequest,
+  PermissionRule,
+  TokenUsage,
+  ToolResult,
+} from "@seekforge/shared";
 import type { ToolContext } from "../tools/index.js";
 import {
   AGENT_SEND_TOOL,
@@ -59,8 +66,16 @@ export type DispatchRuntime = {
   createCore: (deps: AgentCoreDeps) => AgentCore;
 };
 
+/** How a caller other than dispatch_agent (a forked skill) shapes one dispatch. */
+export type DispatchOverrides = {
+  /** Run this definition instead of looking `agentId` up in the roster. */
+  definition?: AgentDefinition;
+  /** Rules for the nested run, appended after the parent run's current ones. */
+  permissionRules?: PermissionRule[];
+};
+
 export type DispatchTools = {
-  runDispatch(rawArgs: unknown, skipConfirm?: boolean): Promise<ToolResult>;
+  runDispatch(rawArgs: unknown, skipConfirm?: boolean, overrides?: DispatchOverrides): Promise<ToolResult>;
   runTeam(rawArgs: unknown): Promise<ToolResult>;
   handleAgentResult(rawArgs: unknown): ToolResult;
   runAgentSend(rawArgs: unknown): Promise<ToolResult>;
@@ -143,9 +158,16 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
     hooks: DispatchHooks,
     dispatchId: string,
     resumeSessionId?: string,
+    extraRules?: PermissionRule[],
   ): Promise<ToolResult> {
+    // The parent's live rules, not the configured ones: a skill the parent
+    // activated may have added rules, and a subagent must not escape them.
+    const baseRules = rt.ctx.policy.rules ?? deps.permissionRules;
     const nested = rt.createCore({
       ...deps,
+      ...(baseRules !== deps.permissionRules || (extraRules && extraRules.length > 0)
+        ? { permissionRules: [...(baseRules ?? []), ...(extraRules ?? [])] }
+        : {}),
       provider: def.model !== undefined && deps.providerForModel ? deps.providerForModel(def.model) : deps.provider,
       subagents: undefined,
       dispatchManager: undefined,
@@ -294,11 +316,15 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
    * the dispatch id immediately while the run continues under the
    * manager (poll with agent_result).
    */
-  async function runDispatch(rawArgs: unknown, skipConfirm = false): Promise<ToolResult> {
+  async function runDispatch(
+    rawArgs: unknown,
+    skipConfirm = false,
+    overrides: DispatchOverrides = {},
+  ): Promise<ToolResult> {
     const a = rawArgs as { agentId?: unknown; task?: unknown; background?: unknown };
     const agentId = typeof a?.agentId === "string" ? a.agentId : "";
     const task = typeof a?.task === "string" ? a.task.trim() : "";
-    const def = roster.find((d) => d.id === agentId);
+    const def = overrides.definition ?? roster.find((d) => d.id === agentId);
     if (!def) {
       return {
         ok: false,
@@ -347,7 +373,8 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
       agentId: def.id,
       task,
       signal: input.signal,
-      run: (signal, hooks) => executeNestedRun(def, task, signal, hooks, dispatchId),
+      run: (signal, hooks) =>
+        executeNestedRun(def, task, signal, hooks, dispatchId, undefined, overrides.permissionRules),
     });
     dispatchId = started.id;
     pushEvent({ type: "subagent.started", dispatchId, agentId: def.id, task, status: "running" });

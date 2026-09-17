@@ -38,6 +38,11 @@ export const COMMON_CONFIG_KEYS = [
   // config-layers.ts: a repository that could set it would choose what the
   // model reads back from a search.
   "webSearch",
+  // Language servers the lsp_* tools start, and the opt-in that loads
+  // ~/.claude/skills. Both user-only for the same reason: the first names a
+  // command to run, the second decides which instructions reach every run.
+  "lspServers",
+  "claudeUserSkills",
 ] as const;
 
 export const SURFACE_CONFIG_KEYS = {

@@ -26,6 +26,24 @@ export function skillSupplyChainReport(workspace: string): {
       conflictsWith: skill.conflictsWith,
       order: skill.order,
       content: skill.content,
+      // Everything below changes what an invocation does, so it is part of
+      // what the digest vouches for. Each key is undefined (and so omitted by
+      // JSON.stringify) unless set, which keeps pre-existing digests stable.
+      // `source` is included only for the frontmatter shape for the same reason.
+      source:
+        skill.source?.format === "frontmatter" ? { format: skill.source.format, root: skill.source.root } : undefined,
+      whenToUse: skill.whenToUse,
+      argumentHint: skill.argumentHint,
+      argumentNames: skill.argumentNames,
+      allowedTools: skill.allowedTools,
+      disallowedTools: skill.disallowedTools,
+      model: skill.model,
+      effort: skill.effort,
+      context: skill.context,
+      agent: skill.agent,
+      disableModelInvocation: skill.disableModelInvocation,
+      userInvocable: skill.userInvocable,
+      paths: skill.paths,
     });
     return {
       id: skill.id,

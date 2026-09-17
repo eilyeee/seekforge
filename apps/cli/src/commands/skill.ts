@@ -1,4 +1,5 @@
 import {
+  configureSkillSources,
   createSkillScaffold,
   importExternalSkill,
   loadSkills,
@@ -10,9 +11,21 @@ import {
   seekforgeHome,
   setSkillEnabled,
 } from "@seekforge/core";
+import { loadConfig } from "../config.js";
 import { t } from "../i18n.js";
 
+/** Read the user's skill-source opt-ins so listing matches what a run loads. */
+function applySkillSources(): void {
+  try {
+    configureSkillSources({ claudeUserSkills: loadConfig(process.cwd()).claudeUserSkills === true });
+  } catch {
+    // An unreadable config is reported by the commands that need it; listing
+    // still works with the defaults.
+  }
+}
+
 export function skillListCommand(): void {
+  applySkillSources();
   const loaded = loadSkillsDetailed(process.cwd());
   const skills = loaded.skills;
   if (skills.length === 0) {
@@ -54,6 +67,7 @@ export function skillRepairCommand(opts: { global?: boolean; id?: string }): voi
 }
 
 export function skillShowCommand(id: string): void {
+  applySkillSources();
   const skill = loadSkills(process.cwd()).find((s) => s.id === id);
   if (!skill) {
     console.error(t("err.skillNotFound", { id }));
@@ -62,6 +76,20 @@ export function skillShowCommand(id: string): void {
   }
   console.log(`# ${skill.name} [${skill.scope}]`);
   console.log(`tags: ${skill.tags.join(", ")}   triggers: ${skill.triggers.join(", ")}`);
+  const details: Array<[string, string | undefined]> = [
+    ["source", skill.source ? `${skill.source.root} (${skill.source.format})` : undefined],
+    ["when to use", skill.whenToUse],
+    ["arguments", skill.argumentHint ?? skill.argumentNames?.join(" ")],
+    ["allowed-tools", skill.allowedTools?.join(", ")],
+    ["disallowed-tools", skill.disallowedTools?.join(", ")],
+    ["model", skill.model],
+    ["effort", skill.effort],
+    ["context", skill.context === "fork" ? `fork${skill.agent ? ` (${skill.agent})` : ""}` : undefined],
+    ["paths", skill.paths?.join(", ")],
+    ["model invocation", skill.disableModelInvocation ? "disabled" : undefined],
+    ["user invocation", skill.userInvocable === false ? "hidden from slash menus" : undefined],
+  ];
+  for (const [label, value] of details) if (value) console.log(`${label}: ${value}`);
   console.log("");
   console.log(skill.content);
 }
@@ -102,6 +130,7 @@ export function skillCreateCommand(id: string): void {
 
 export function skillEnableCommand(id: string, opts: { global?: boolean }): void {
   try {
+    applySkillSources();
     const res = setSkillEnabled(process.cwd(), id, true, { global: opts.global });
     const scope = opts.global ? "global" : "project";
     console.log(t("cmd.skill.enabled", { id: res.id, scope }));
@@ -113,6 +142,7 @@ export function skillEnableCommand(id: string, opts: { global?: boolean }): void
 
 export function skillDisableCommand(id: string, opts: { global?: boolean }): void {
   try {
+    applySkillSources();
     const res = setSkillEnabled(process.cwd(), id, false, { global: opts.global });
     const scope = opts.global ? "global" : "project";
     const how = res.action === "marker" ? ` (override marker at ${res.path})` : "";

@@ -115,6 +115,32 @@ What a definition may reach depends on who stands behind it
 trusted: they come from the user's own files and are listed before anything is
 written. It never reads a repository's `.mcp.json`.
 
+### Skill tool rules
+
+A skill the model invokes can change the run's rules until the run ends
+(`packages/core/src/skills/invocation.ts`), and the same trust split applies:
+
+- `disallowed-tools` becomes deny rules at every scope. What cannot be matched
+  exactly is widened to the whole tool, and path entries are also denied in
+  their absolute form.
+- `allowed-tools` becomes allow rules **only** for builtin and user-scope skills
+  — `~/.seekforge/skills`, `~/.claude/skills` (read only with the user-level
+  `claudeUserSkills` opt-in), and skills of a plugin whose digest the user
+  enabled. A project skill (`.seekforge/skills`, `.claude/skills` in the
+  checkout) may restrict but never pre-approve: its `allowed-tools` is dropped,
+  and a same-id project skill that overrides a user skill loses the grant too.
+- Grants are exact or absent. An entry the rule matcher cannot express without
+  widening (Claude Code's exact `Bash(npm test)`, globs) is not granted; the
+  call prompts as usual. Granted rules are ordinary allow rules, so deny and ask
+  rules, `dangerous` commands, and compound shell commands keep their
+  precedence.
+- Rules land on the activating run's own policy object; the configured rule
+  array is never mutated, and the next run starts without them. Subagents the
+  run dispatches afterwards inherit them. A forked skill adds its own rules to
+  its subagent, which runs under a skill-specific agent id so `agent_send`
+  cannot resume it without them. An `invoke_skill` whose fork may edit is
+  itself classified as a write.
+
 ---
 
 ## 2. The user sees the raw command / path — never a model paraphrase

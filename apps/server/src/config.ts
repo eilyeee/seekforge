@@ -28,6 +28,7 @@ import {
   DEPRECATED_MODELS,
   MODEL_PRICING,
   type HookConfig,
+  type LspServerConfig,
   type McpServerConfig,
   type MemoryMaintenanceConfig,
   type ModelPricing,
@@ -147,6 +148,10 @@ export type ServerConfig = {
    * User config only — see PROJECT_PREFERENCE_KEYS.
    */
   webSearch?: { searxngUrl?: string; braveApiKey?: string };
+  /** Language servers for the lsp_* tools (user config only; see docs/lsp.md). */
+  lspServers?: Record<string, LspServerConfig>;
+  /** Also load Claude Code skills from `~/.claude/skills` (user config only). */
+  claudeUserSkills?: boolean;
   /** User-owned shell hooks fired around tool calls / lifecycle. */
   hooks?: HookConfig;
   /** MCP servers (Claude Code-compatible). Edit the file directly; not settable via `config set`. */

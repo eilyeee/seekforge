@@ -78,6 +78,50 @@ The server is spawned **lazily inside the tool**, never at import time, so
 typecheck, build, and the whole test suite pass whether or not any server is
 installed. A file type with no configured server returns `lsp_unsupported`.
 
+## Configured language servers
+
+The table above can be extended or overridden, by you and by plugins. In your
+**user** config (`~/.seekforge/config.json`; the key is ignored in a repository
+config, because it names a command to run):
+
+```json
+{
+  "lspServers": {
+    "terraform": {
+      "command": "terraform-ls",
+      "args": ["serve"],
+      "extensionToLanguage": { ".tf": "terraform", ".tfvars": "terraform-vars" }
+    },
+    "ts-fork": {
+      "command": "/opt/tools/my-ts-server",
+      "args": ["--stdio"],
+      "extensions": [".ts", ".tsx"],
+      "languageId": "typescript",
+      "env": { "NODE_OPTIONS": "--max-old-space-size=8192" },
+      "initializationOptions": { "preferences": { "quotePreference": "single" } }
+    }
+  }
+}
+```
+
+Each server needs a `command` and either `extensionToLanguage` (Claude Code's
+`.lsp.json` shape) or `extensions` plus one `languageId`; `args`, `env` (merged
+over the inherited environment) and `initializationOptions` (sent in
+`initialize`) are optional, and `transport` may only be `stdio`. A configured
+server **replaces** the built-in entry for every extension it names — there is
+no fallback to the built-in binaries for those extensions, and a configured
+command missing from `PATH` fails with `lsp_unavailable` naming the server.
+
+Enabled plugins contribute servers the same way (a native manifest's
+`contributes.lspServers`, or a Claude Code plugin's `.lsp.json`, with
+`${CLAUDE_PLUGIN_ROOT}` resolved); see [Plugins](plugins.md). For an extension
+several sources claim, your config wins, then the plugin with the lowest id.
+An invalid entry is skipped — the CLI and server print a warning — and never
+disables the other servers. Sessions are keyed by workspace, language and the
+exact command, so changing a server's command starts a fresh process instead of
+reusing the old one. The table is applied per workspace each time an agent is
+assembled.
+
 ## The tools
 
 | Tool | Args | Permission | What it does |

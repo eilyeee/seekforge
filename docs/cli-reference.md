@@ -151,8 +151,9 @@ is connected.
 ## Plugin commands
 
 `seekforge plugin` (alias `plugins`) manages first-class extension bundles.
-Project plugins are discovery-only; installation copies a reviewed directory to
-the user store and leaves it disabled until its exact digest is approved.
+Project plugins are discovery-only; installation stages the plugin (a local
+directory, a shallow git clone, or an https archive), copies it to the user
+store, and leaves it disabled until its exact digest is approved.
 
 | Command | What it does |
 | --- | --- |
@@ -160,14 +161,18 @@ the user store and leaves it disabled until its exact digest is approved.
 | `plugin inspect <id> [--json]` | Show the manifest or complete plugin record. |
 | `plugin validate <path>` | Validate a local plugin without installing it. |
 | `plugin create <id>` | Scaffold `.seekforge/plugins/<id>/plugin.json`. |
-| `plugin install <path>` | Atomically install a local plugin, disabled by default. |
-| `plugin update <path>` | Replace an installation and require approval again. |
+| `plugin install <source> [-f\|--force]` | Atomically install a plugin, disabled by default. `<source>` is a local directory, a git URL (`https://`, `ssh://`, `git@host:path`, `file://`, optional `#ref`), an https `.tar.gz`/`.tgz`/`.zip`, or `<plugin>@<marketplace>`; the pinned commit or archive sha256 is recorded and printed. |
+| `plugin update <source>` | Replace an installation from any install source and require approval again. |
 | `plugin rollback <id>` | Atomically restore the previous installed version; it stays disabled until its digest is approved again. |
 | `plugin supply-chain [--json]` | Report each plugin's integrity, locked and current digest, API compatibility, capabilities and rollback availability. |
 | `plugin enable\|disable <id>` | Approve the current digest or remove its contributions. |
 | `plugin remove <id>` | Uninstall and remove approval state. |
+| `plugin marketplace add <source> [--name <name>] [-f\|--force]` | Register a marketplace (a git URL, cloned shallowly into `~/.seekforge/plugin-marketplaces/<name>/`, or a local directory) that ships `.claude-plugin/marketplace.json`. |
+| `plugin marketplace remove <name>` | Unregister a marketplace and delete its cached copy; plugins installed from it stay installed. |
+| `plugin marketplace list [--json]` | List registered marketplaces, their pinned commit, and the plugins each offers (also the default for `plugin marketplace`). |
 
-See [Plugins](plugins.md) for the manifest and security model.
+See [Plugins](plugins.md) for the manifest, install sources, marketplaces and
+security model.
 
 ## MCP commands
 

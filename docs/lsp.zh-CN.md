@@ -60,6 +60,43 @@ Install the TypeScript/JavaScript language server: `npm i -g typescript-language
 
 服务器由**工具内部惰性启动**，绝不在 import 时启动，因此无论是否安装了服务器，typecheck、构建与整个测试套件都能通过。没有配置服务器的文件类型会返回 `lsp_unsupported`。
 
+## 配置语言服务器
+
+上表可以由你或插件扩展、覆盖。在你的**用户**配置（`~/.seekforge/config.json`）中设置；
+仓库配置中的该键会被忽略，因为它指定了要运行的命令：
+
+```json
+{
+  "lspServers": {
+    "terraform": {
+      "command": "terraform-ls",
+      "args": ["serve"],
+      "extensionToLanguage": { ".tf": "terraform", ".tfvars": "terraform-vars" }
+    },
+    "ts-fork": {
+      "command": "/opt/tools/my-ts-server",
+      "args": ["--stdio"],
+      "extensions": [".ts", ".tsx"],
+      "languageId": "typescript",
+      "env": { "NODE_OPTIONS": "--max-old-space-size=8192" },
+      "initializationOptions": { "preferences": { "quotePreference": "single" } }
+    }
+  }
+}
+```
+
+每个服务器需要 `command`，以及 `extensionToLanguage`（Claude Code `.lsp.json` 的形式）或
+`extensions` 加一个 `languageId` 二者之一；`args`、`env`（合并到继承的环境变量之上）与
+`initializationOptions`（随 `initialize` 发送）可选，`transport` 只能是 `stdio`。配置的服务器
+会**替换**它列出的每个扩展名对应的内置条目 —— 这些扩展名不再回退到内置二进制；配置的命令
+不在 `PATH` 上时，会以 `lsp_unavailable` 失败并指出是哪个服务器。
+
+已启用的插件以同样方式贡献服务器（原生清单的 `contributes.lspServers`，或 Claude Code 插件的
+`.lsp.json`，其中 `${CLAUDE_PLUGIN_ROOT}` 会被解析）；见[插件](plugins.zh-CN.md)。多个来源
+声明同一扩展名时，你的配置优先，其次是 ID 最小的插件。无效条目会被跳过 —— CLI 与服务器会
+打印警告 —— 绝不会连带停用其他服务器。会话按工作区、语言和确切的命令区分，因此修改某个
+服务器的命令会启动新进程，而不是复用旧进程。每次组装 agent 时，这张表都会按工作区重新应用。
+
 ## 工具
 
 | 工具 | 参数 | 权限 | 作用 |

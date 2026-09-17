@@ -1,6 +1,12 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { HookConfig, McpServerConfig, MemoryMaintenanceConfig, ModelPricing } from "@seekforge/core";
+import type {
+  HookConfig,
+  LspServerConfig,
+  McpServerConfig,
+  MemoryMaintenanceConfig,
+  ModelPricing,
+} from "@seekforge/core";
 import type { PermissionRule } from "@seekforge/shared";
 import {
   type ConfigLayer,
@@ -77,6 +83,14 @@ export type CliConfig = {
    * every run starts logged out. See docs/browser.md.
    */
   browserProfile?: string;
+  /**
+   * Language servers for the lsp_* tools, keyed by name; each replaces the
+   * built-in server for the extensions it lists. User config only.
+   * See docs/lsp.md.
+   */
+  lspServers?: Record<string, LspServerConfig>;
+  /** Also load Claude Code skills from `~/.claude/skills`. User config only. */
+  claudeUserSkills?: boolean;
   /**
    * Default per-run cost budget in USD: a `run`/`ask` stops once cumulative
    * cost reaches it (graceful abort, trace kept). Overridden by the CLI

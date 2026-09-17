@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import {
   buildAgentCoreDeps,
+  configureLspServers,
   createAgentCore,
   createDefaultDispatcher,
   createRuntimeClient,
@@ -10,6 +11,7 @@ import {
   loadPluginContributions,
   loadSkills,
   mergePluginHooks,
+  mergePluginLspServers,
   mergePluginMcpServers,
   wrapProviderWithCache,
   type AgentCore,
@@ -76,6 +78,9 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
   const { config } = opts;
   const workspace = opts.workspace ?? process.cwd();
   const pluginContributions = opts.pluginContributions ?? loadPluginContributions(workspace);
+  // Ignored entries are not printed: stdout belongs to Ink here, and a bad
+  // entry only means that language falls back to the built-in server.
+  configureLspServers(mergePluginLspServers(workspace, config.lspServers, pluginContributions), workspace);
 
   let runtime: RuntimeClient | undefined;
   if (config.runtimeBin) {

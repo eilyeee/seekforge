@@ -10,8 +10,11 @@ import { existsSync } from "node:fs";
 import {
   buildAgentCoreDeps,
   configureBrowserProfile,
+  configureLspServers,
+  configureSkillSources,
   configureVision,
   configureWebSearch,
+  mergePluginLspServers,
   resolveWebSearchConfig,
   resolveBrowserProfilePath,
   graphHandlersWithPlugins,
@@ -135,6 +138,8 @@ export function configureServerTools(workspace: string, config: ServerConfig): v
   // agent's searches at an endpoint of its choosing and feed the model
   // whatever it likes back.
   configureWebSearch(resolveWebSearchConfig(config.webSearch), workspace);
+  // A user-only key, so the same value reaches every workspace: process-wide.
+  configureSkillSources({ claudeUserSkills: config.claudeUserSkills === true });
   configureVision(
     config.visionModel?.baseUrl
       ? {
@@ -167,6 +172,12 @@ export function buildAgentDeps(
   // served from here: image_analyze reported "vision_unconfigured" no matter
   // what the config said.
   configureServerTools(opts.workspace, config);
+  for (const warning of configureLspServers(
+    mergePluginLspServers(opts.workspace, config.lspServers, pluginContributions),
+    opts.workspace,
+  )) {
+    console.error(`warning: ${warning}`);
+  }
 
   let runtime: RuntimeClient | undefined;
   if (config.runtimeBin && existsSync(config.runtimeBin)) {

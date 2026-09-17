@@ -9,10 +9,15 @@ import type { HookConfig, HookEntry, HookStage } from "../hooks/index.js";
 import type { McpServerConfig } from "../mcp/types.js";
 import { readWorkspaceStateFile } from "../util/workspace-state.js";
 import { BUILTIN_GRAPH_HANDLER_IDS } from "../agent/graph-declarative-handlers.js";
+import { lspServersSchema, parseLspServerConfig } from "../tools/lsp/config.js";
+import { CLAUDE_PLUGIN_MANIFEST, translateClaudePlugin } from "./claude.js";
 import {
   PLUGIN_API_VERSION,
+  type LspServerConfig,
   type PluginContributions,
+  type PluginFormat,
   type PluginManifest,
+  type PluginOrigin,
   type PluginRecord,
   type PluginScope,
 } from "./types.js";
@@ -84,6 +89,9 @@ const manifestSchema = z
       .object({
         skillRoots: z.array(z.string()).max(20).optional(),
         agentRoots: z.array(z.string()).max(20).optional(),
+        commandRoots: z.array(z.string()).max(20).optional(),
+        outputStyleRoots: z.array(z.string()).max(20).optional(),
+        lspServers: lspServersSchema.optional(),
         mcpServers: z.record(z.string().regex(PLUGIN_ID_RE), mcpServer).optional(),
         hooks: hookConfig.optional(),
         graphHandlers: z.record(z.string().regex(PLUGIN_ID_RE), z.enum(BUILTIN_GRAPH_HANDLER_IDS)).optional(),
@@ -94,7 +102,10 @@ const manifestSchema = z
   })
   .strict();
 
-type PluginState = { version: 1; plugins: Record<string, { enabled: boolean; digest: string; updatedAt: string }> };
+type PluginState = {
+  version: 1;
+  plugins: Record<string, { enabled: boolean; digest: string; updatedAt: string; origin?: PluginOrigin }>;
+};
 
 function safeRelativePath(value: string): boolean {
   if (value === "" || isAbsolute(value)) return false;
@@ -113,8 +124,21 @@ export function projectPluginsRoot(workspace: string): string {
 
 /** Resolves a physical plugin store without following symlinked child components. */
 export function resolvePluginStoreRoot(base: string, create: boolean): string | undefined {
+  return resolvePluginStateDir(base, "plugins", create);
+}
+
+/**
+ * `<base>/.seekforge/<name>` as a physical directory (created 0700 when
+ * `create` is set), refusing any symlinked or non-directory component below
+ * `base`. The one walk behind the plugin store and the marketplace cache.
+ */
+export function resolvePluginStateDir(
+  base: string,
+  name: "plugins" | "plugin-marketplaces",
+  create: boolean,
+): string | undefined {
   let current = realpathSync(resolve(base));
-  for (const part of [".seekforge", "plugins"]) {
+  for (const part of [".seekforge", name]) {
     current = join(current, part);
     let stat = lstatSync(current, { throwIfNoEntry: false });
     if (stat === undefined && create) {
@@ -147,18 +171,59 @@ function pluginState(): PluginState {
 }
 
 export function readPluginManifest(dir: string): PluginManifest {
+  return readPluginManifestDetailed(dir).manifest;
+}
+
+function readBoundedManifest(manifestPath: string, label: string): unknown {
+  const manifestStat = lstatSync(manifestPath);
+  if (manifestStat.isSymbolicLink() || !manifestStat.isFile() || manifestStat.size > MAX_PLUGIN_MANIFEST_BYTES) {
+    throw new Error(`${label} must be a bounded regular file`);
+  }
+  return JSON.parse(readFileSync(manifestPath, "utf8"));
+}
+
+/**
+ * Read a plugin directory's manifest: SeekForge's `plugin.json`, or — when
+ * that is absent — Claude Code's `.claude-plugin/plugin.json`, translated
+ * (see claude.ts). `warnings` lists what a Claude Code plugin ships that
+ * SeekForge could not map.
+ */
+export function readPluginManifestDetailed(dir: string): {
+  manifest: PluginManifest;
+  format: PluginFormat;
+  warnings: string[];
+} {
   const lexical = resolve(dir);
   const rootStat = lstatSync(lexical);
   if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) throw new Error("plugin root must be a real directory");
   const root = realpathSync(lexical);
   const manifestPath = join(root, "plugin.json");
-  const manifestStat = lstatSync(manifestPath);
-  if (manifestStat.isSymbolicLink() || !manifestStat.isFile() || manifestStat.size > MAX_PLUGIN_MANIFEST_BYTES) {
-    throw new Error("plugin.json must be a bounded regular file");
+  if (lstatSync(manifestPath, { throwIfNoEntry: false }) === undefined) {
+    const claudePath = join(root, CLAUDE_PLUGIN_MANIFEST);
+    const claudeDir = lstatSync(join(root, ".claude-plugin"), { throwIfNoEntry: false });
+    if (claudeDir?.isDirectory() && !claudeDir.isSymbolicLink() && lstatSync(claudePath, { throwIfNoEntry: false })) {
+      const translated = translateClaudePlugin(root, readBoundedManifest(claudePath, ".claude-plugin/plugin.json"));
+      // The translation already confined every root; re-check with the same
+      // rules as a native manifest so both shapes share one gate.
+      assertConfinedRoots(root, translated.manifest);
+      return { manifest: translated.manifest, format: "claude", warnings: translated.warnings };
+    }
   }
-  const parsed = manifestSchema.safeParse(JSON.parse(readFileSync(manifestPath, "utf8")));
+  const parsed = manifestSchema.safeParse(readBoundedManifest(manifestPath, "plugin.json"));
   if (!parsed.success) throw new Error(`invalid plugin.json: ${parsed.error.issues[0]?.message ?? "invalid manifest"}`);
-  for (const path of [...(parsed.data.contributes?.skillRoots ?? []), ...(parsed.data.contributes?.agentRoots ?? [])]) {
+  const manifest = parsed.data as PluginManifest;
+  assertConfinedRoots(root, manifest);
+  return { manifest, format: "seekforge", warnings: [] };
+}
+
+function assertConfinedRoots(root: string, manifest: PluginManifest): void {
+  const contributes = manifest.contributes;
+  for (const path of [
+    ...(contributes?.skillRoots ?? []),
+    ...(contributes?.agentRoots ?? []),
+    ...(contributes?.commandRoots ?? []),
+    ...(contributes?.outputStyleRoots ?? []),
+  ]) {
     if (!safeRelativePath(path)) throw new Error(`plugin contribution path is unsafe: ${path}`);
     let physical: string;
     try {
@@ -170,7 +235,6 @@ export function readPluginManifest(dir: string): PluginManifest {
       throw new Error(`plugin contribution path is not a confined directory: ${path}`);
     }
   }
-  return parsed.data as PluginManifest;
 }
 
 /** Hashes only regular files and rejects links/devices, bounding install and approval work. */
@@ -235,13 +299,24 @@ function readRoot(root: string, scope: PluginScope, state: PluginState): PluginR
   return names.map((name): PluginRecord => {
     const path = join(root, name);
     try {
-      const manifest = readPluginManifest(path);
+      const { manifest, format, warnings } = readPluginManifestDetailed(path);
       if (manifest.id !== name) throw new Error(`manifest id ${manifest.id} does not match directory ${name}`);
       const digest = digestPluginDirectory(path);
-      if (scope === "project") return { id: name, scope, path, status: "review_required", digest, manifest };
+      const described = { format, ...(warnings.length > 0 ? { warnings } : {}) };
+      if (scope === "project")
+        return { id: name, scope, path, status: "review_required", digest, manifest, ...described };
       const approval = state.plugins[name];
       const status = approval?.enabled ? (approval.digest === digest ? "enabled" : "changed") : "disabled";
-      return { id: name, scope, path, status, digest, manifest };
+      return {
+        id: name,
+        scope,
+        path,
+        status,
+        digest,
+        manifest,
+        ...described,
+        ...(approval?.origin ? { origin: approval.origin } : {}),
+      };
     } catch (error) {
       return {
         id: name,
@@ -282,7 +357,10 @@ export function pluginSupplyChainReport(workspace: string): { generatedAt: strin
     const capabilities = [
       ...(contributions?.skillRoots?.length ? ["skills"] : []),
       ...(contributions?.agentRoots?.length ? ["agents"] : []),
+      ...(contributions?.commandRoots?.length ? ["commands"] : []),
+      ...(contributions?.outputStyleRoots?.length ? ["output-styles"] : []),
       ...(Object.keys(contributions?.mcpServers ?? {}).length ? ["mcp"] : []),
+      ...(Object.keys(contributions?.lspServers ?? {}).length ? ["lsp"] : []),
       ...(Object.keys(contributions?.hooks ?? {}).length ? ["hooks"] : []),
       ...(Object.keys(contributions?.graphHandlers ?? {}).length ? ["graph-handlers"] : []),
       ...(Object.keys(contributions?.graphExecutors ?? {}).length ? ["graph-executors"] : []),
@@ -340,7 +418,10 @@ export function loadPluginContributions(workspace: string): PluginContributions 
   const result: PluginContributions = {
     skillRoots: [],
     agentRoots: [],
+    commandRoots: [],
+    outputStyleRoots: [],
     mcpServers: {},
+    lspServers: {},
     hooks: {},
     graphHandlers: {},
     graphExecutors: {},
@@ -356,6 +437,18 @@ export function loadPluginContributions(workspace: string): PluginContributions 
     for (const rel of plugin.manifest.contributes?.agentRoots ?? []) {
       const path = contributionPath(root, rel);
       if (path) result.agentRoots.push(path);
+    }
+    for (const rel of plugin.manifest.contributes?.commandRoots ?? []) {
+      const path = contributionPath(root, rel);
+      if (path) result.commandRoots!.push({ plugin: plugin.id, path });
+    }
+    for (const rel of plugin.manifest.contributes?.outputStyleRoots ?? []) {
+      const path = contributionPath(root, rel);
+      if (path) result.outputStyleRoots!.push({ plugin: plugin.id, path });
+    }
+    for (const [name, raw] of Object.entries(plugin.manifest.contributes?.lspServers ?? {})) {
+      const parsed = parseLspServerConfig(raw);
+      if (parsed.config) result.lspServers![`${plugin.id}:${name}`] = parsed.config;
     }
     for (const [name, config] of Object.entries(plugin.manifest.contributes?.mcpServers ?? {})) {
       // Enabling a plugin authorizes what the reviewed manifest declares, not
@@ -387,6 +480,19 @@ export function mergePluginHooks(
   mergeHooks(merged, pluginHooks);
   mergeHooks(merged, configured);
   return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+/**
+ * The language-server table a host hands to configureLspServers: plugin
+ * servers (named `<plugin>:<server>`) plus the user's `lspServers` config,
+ * which wins for any extension both claim.
+ */
+export function mergePluginLspServers(
+  workspace: string,
+  configured: Record<string, unknown> | undefined,
+  contributions = loadPluginContributions(workspace),
+): { plugin: Record<string, LspServerConfig>; user?: Record<string, unknown> } {
+  return { plugin: { ...(contributions.lspServers ?? {}) }, ...(configured ? { user: configured } : {}) };
 }
 
 export function mergePluginMcpServers(
