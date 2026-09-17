@@ -1,10 +1,23 @@
 import { DEFAULT_SUBAGENT_MAX_TURNS, type AgentDefinition } from "./types.js";
 
+export type SubagentPromptExtras = {
+  /** The run edits an isolated git worktree whose change goes back to the parent as a diff. */
+  isolated?: boolean;
+  /** The agent_report tool is available. */
+  canReport?: boolean;
+  /** Preloaded skill bodies (policy.ts buildPreloadedSkills). */
+  skills?: string;
+};
+
 /**
  * System prompt for a dispatched subagent run. Replaces the regular
  * SeekForge system prompt (via RunAgentTaskInput.systemPromptOverride).
  */
-export function buildSubagentPrompt(def: AgentDefinition, workspace: string): string {
+export function buildSubagentPrompt(
+  def: AgentDefinition,
+  workspace: string,
+  extras: SubagentPromptExtras = {},
+): string {
   const parts: string[] = [];
 
   parts.push(
@@ -37,6 +50,14 @@ export function buildSubagentPrompt(def: AgentDefinition, workspace: string): st
     throw new Error(`invalid subagent mode for ${def.id}: ${String(def.mode)}`);
   }
 
+  if (extras.isolated) {
+    parts.push(
+      "Isolation: this workspace is a separate git worktree created from the last commit, so uncommitted " +
+        "changes in the parent's checkout are not visible here. Your changes are returned to the parent as a " +
+        "diff it reviews and applies; do not commit them yourself.",
+    );
+  }
+
   const maxTurns = def.maxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS;
   parts.push(
     `Budget: at most ${maxTurns} turns of tool calls. Spend them on the calls that matter; ` +
@@ -55,7 +76,15 @@ export function buildSubagentPrompt(def: AgentDefinition, workspace: string): st
       "Stay under ~400 words unless the task genuinely demands more. The parent only sees this final report.",
   );
 
+  if (extras.canReport) {
+    parts.push(
+      "Progress: for long work you may call agent_report with one short line the parent sees at its next " +
+        "turn (a milestone or a blocker). It is rate-limited and never replaces the final report.",
+    );
+  }
+
   if (def.body) parts.push(def.body);
+  if (extras.skills) parts.push(extras.skills);
 
   return parts.join("\n\n");
 }

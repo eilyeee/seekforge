@@ -16,6 +16,8 @@
 - [插件](plugins.zh-CN.md) — 一等 skill/agent/MCP/hook 扩展包、绑定摘要的审批、
   生命周期命令与安全边界。
 - [技能](skills.zh-CN.md) — 原生格式、层级、自动选择、生命周期安全、诊断与使用遥测。
+- [子智能体](subagents.zh-CN.md) — `AGENT.md` 与 Claude Code agent 文件、frontmatter 字段、
+  仓库 agent 的权限边界、隔离 worktree agent、跨运行的后台 agent 与进度回报。
 - [浏览器 / 可视化验证](browser.zh-CN.md) — 可选的、基于 Playwright 的工具：
   打开页面（`browser_navigate`）、查看页面（`browser_screenshot` /
   `browser_snapshot` / `browser_console`）、操作页面（`browser_click` /

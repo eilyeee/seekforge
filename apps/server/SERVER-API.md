@@ -426,6 +426,12 @@ The legacy `step.started` title (`[agentId] toolName`) is still emitted for old
 clients, but new clients should use the structured events and identify a child by
 the parent run/session plus `dispatchId`.
 
+Every `subagent.*` event may carry `"color"` (a named color or `#rrggbb`, from
+the agent definition; presentation only). A child's progress line arrives as a
+`subagent.step` with `"toolName":"agent_report"` and a `"message"` string —
+model output, to be rendered as data. Persisted-history replay
+(`GET /api/sessions/:id`) keeps only the base fields.
+
 Rules:
 - `start`/`send` while a run is active → `{"type":"error","code":"busy"}`.
 - `send` resumes the session with its original ask/edit mode and

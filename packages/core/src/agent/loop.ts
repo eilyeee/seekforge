@@ -45,10 +45,12 @@ import {
   type Skill,
 } from "../skills/index.js";
 import {
+  AGENT_REPORT_TOOL,
   AGENT_RESULT_TOOL,
   AGENT_SEND_TOOL,
   DISPATCH_AGENT_TOOL,
   DISPATCH_TEAM_TOOL,
+  buildAgentReportToolDefinition,
   buildAgentResultToolDefinition,
   buildAgentSendToolDefinition,
   buildDispatchToolDefinition,
@@ -56,8 +58,11 @@ import {
   buildSubagentRoster,
   createDispatchManager,
   createEventQueue,
+  formatDispatchUpdates,
+  formatEarlierBackgroundResults,
   type AgentDefinition,
   type DispatchManager,
+  type DispatchSnapshot,
 } from "../subagents/index.js";
 import {
   clearOldToolResults,
@@ -138,6 +143,9 @@ export function createRetryBus(): RetryBus & { onRetry: (info: RetryInfo) => voi
 }
 
 export { hasActiveSessionRuns, isSessionRunActive } from "./session-lease.js";
+
+/** Per-dispatch provider controls (a subagent's `effort`). */
+export type ProviderModelOptions = { thinking?: boolean; reasoningEffort?: "high" | "max" };
 
 export type AgentCoreDeps = {
   provider: ChatProvider;
@@ -225,8 +233,12 @@ export type AgentCoreDeps = {
   /** Specialist agents dispatchable via the synthetic dispatch_agent tool. */
   subagents?: AgentDefinition[];
   /**
-   * Run-scoped subagent controller supplied by an interactive frontend. The
-   * caller may steer/cancel dispatches only while the owning run is active.
+   * Subagent controller supplied by an interactive frontend. A run-scoped one
+   * (the default) dies with the run. One created with
+   * `createDispatchManager({ sessionScoped: true })` and passed to every run of
+   * a session keeps background dispatches alive after the run that started
+   * them; the next run reports their outcome to the model, and the host calls
+   * `disposeAll()` when the session ends.
    */
   dispatchManager?: DispatchManager;
   /**
@@ -239,8 +251,10 @@ export type AgentCoreDeps = {
   /**
    * Builds a provider for a subagent's `model` override. Unset, or for
    * definitions without a model, dispatches use the default provider.
+   * `options` carries a subagent's `effort` (thinking / reasoning effort); an
+   * implementation that ignores it keeps the configured controls.
    */
-  providerForModel?: (model: string) => ChatProvider;
+  providerForModel?: (model: string, options?: ProviderModelOptions) => ChatProvider;
   /**
    * Model used for plan runs (input.plan === true) instead of the default
    * provider's model, resolved through providerForModel. Lets /plan think on
@@ -352,6 +366,8 @@ export type AgentCoreDeps = {
   _dispatchManager?: DispatchManager;
   /** Internal: safe-point steering queue for a nested subagent run. */
   _takeSubagentSteering?: () => string[];
+  /** Internal: a nested run's agent_report channel to its parent (advertises the tool). */
+  _reportToParent?: (args: unknown) => ToolResult;
   /** Internal: shared interactive permission queue across nested runs. */
   _confirmQueue?: ConfirmQueue;
 };
@@ -676,6 +692,19 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           }
         }
 
+        // One dispatch manager per run, or the host's. With a session-scoped
+        // one, background agents an earlier run started may have finished
+        // since: their outcome joins this run's task (traced, so a resume
+        // keeps it), and their terminal events open this run's stream.
+        const dispatchManager: DispatchManager | undefined =
+          roster.length > 0 ? (deps.dispatchManager ?? deps._dispatchManager ?? createDispatchManager()) : undefined;
+        const runGeneration = dispatchManager?.beginRun() ?? 0;
+        const earlierBackground: DispatchSnapshot[] =
+          dispatchManager?.sessionScoped && !promptBlocked && !runSignal.aborted
+            ? dispatchManager.takeUndelivered(runGeneration)
+            : [];
+        task += formatEarlierBackgroundResults(earlierBackground);
+
         // This run's 0-based user-turn index: how many role:"user" messages the
         // conversation holds BEFORE this run appends its task. 0 for a fresh
         // session; on resume, the count over the replayed history. Aligns with
@@ -871,7 +900,9 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 buildAgentResultToolDefinition(),
                 buildAgentSendToolDefinition(),
               ]
-            : deps.dispatcher.list();
+            : depth > 0 && deps._reportToParent
+              ? [...deps.dispatcher.list(), buildAgentReportToolDefinition()]
+              : deps.dispatcher.list();
         const allowedToolSet = deps.allowedTools ? new Set(deps.allowedTools) : undefined;
         const toolDefs = allowedToolSet ? allToolDefs.filter((tool) => allowedToolSet.has(tool.name)) : allToolDefs;
         let usage = ZERO_USAGE;
@@ -936,8 +967,11 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             delayMs: info.delayMs,
             reason: info.reason,
           });
-        const dispatchManager: DispatchManager | undefined =
-          roster.length > 0 ? (deps.dispatchManager ?? deps._dispatchManager ?? createDispatchManager()) : undefined;
+        // Set once this run's dispatch cleanup has drained; a session-scoped
+        // manager's background dispatches then stop reaching this run.
+        let dispatchesDetached = false;
+        const detachedUsage = dispatchManager?.takeDetachedUsage();
+        if (detachedUsage) usage = addUsage(usage, detachedUsage);
         const dispatchTools =
           dispatchManager !== undefined
             ? createDispatchTools({
@@ -960,13 +994,20 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 toSessionUsage,
                 trackOperation,
                 createCore: createAgentCore,
+                isDetached: () => dispatchesDetached,
               })
             : undefined;
+        for (const rec of earlierBackground) {
+          if (rec.result) dispatchTools?.emitDispatchTerminal(rec.id, rec.result);
+        }
         let dispatchCleanupComplete = false;
 
         async function cleanupDispatches(): Promise<AgentEvent[]> {
           if (dispatchCleanupComplete) return [];
-          dispatchManager?.disposeAll();
+          // A session-scoped manager outlives this run: only what this run
+          // owns in the foreground stops; its background dispatches go on.
+          if (dispatchManager?.sessionScoped) dispatchManager.endRun(runGeneration, "parent run ended");
+          else dispatchManager?.disposeAll();
           while (activeOperations.size > 0) {
             await Promise.allSettled([...activeOperations]);
           }
@@ -982,8 +1023,31 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             }
           }
           const finalDispatchEvents = queue.drainNow();
+          dispatchesDetached = true;
           dispatchCleanupComplete = true;
           return finalDispatchEvents;
+        }
+
+        /**
+         * Turn-boundary delivery: agent_report progress, and (session-scoped)
+         * background agents from an earlier run that finished during this one.
+         * The message is transient, like steering.
+         */
+        function* deliverDispatchUpdates(): Generator<AgentEvent> {
+          if (!dispatchManager) return;
+          const reports = dispatchManager.takeReports();
+          const finished = dispatchManager.sessionScoped ? dispatchManager.takeUndelivered(runGeneration) : [];
+          for (const rec of finished) {
+            if (rec.result) dispatchTools?.emitDispatchTerminal(rec.id, rec.result);
+          }
+          const spent = dispatchManager.takeDetachedUsage();
+          if (spent) {
+            usage = addUsage(usage, spent);
+            pushEvent({ type: "usage.updated", ...usageWindows() });
+          }
+          for (const ev of queue.drainNow()) yield ev;
+          const update = formatDispatchUpdates(reports, finished);
+          if (update) messages.push({ role: "user", content: update });
         }
 
         try {
@@ -1040,6 +1104,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             throwIfCancelled();
             // Surface events from background dispatches between turns.
             for (const ev of queue.drainNow()) yield ev;
+            yield* deliverDispatchUpdates();
 
             // A running subagent receives steering only at this safe point,
             // between provider turns. These messages are transient and therefore
@@ -1442,6 +1507,8 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 result = parseError;
               } else if (dispatchManager !== undefined && tc.name === AGENT_RESULT_TOOL) {
                 result = dispatchTools!.handleAgentResult(args);
+              } else if (depth > 0 && deps._reportToParent && tc.name === AGENT_REPORT_TOOL) {
+                result = deps._reportToParent(args);
               } else {
                 // Live output: this call gets its own emitOutput that feeds
                 // command.output events into the run's queue (capped per call).

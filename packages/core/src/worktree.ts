@@ -11,7 +11,17 @@
  */
 
 import { execFile } from "node:child_process";
-import { appendFileSync, existsSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { readUtf8FileBoundedSync } from "./util/fs.js";
@@ -234,9 +244,43 @@ const CHECKPOINT_EXCLUDED_PATHS = [
   ".seekforge/loop-verification-intelligence.json",
 ] as const;
 
-/** `git add -A` arguments that stage everything except {@link CHECKPOINT_EXCLUDED_PATHS}. */
-function mergeCheckpointAddArgs(): string[] {
-  return ["add", "-A", "--", ".", ...CHECKPOINT_EXCLUDED_PATHS.map((path) => `:(exclude)${path}`)];
+/**
+ * `git add -A` arguments (run in `cwd`) that stage everything except
+ * {@link CHECKPOINT_EXCLUDED_PATHS}.
+ *
+ * Only the exclusions that are not already ignored are named: an
+ * `:(exclude)` pathspec under an ignored directory that exists (a repository
+ * whose `.gitignore` lists `.seekforge/`) makes `git add` exit 1 with "paths
+ * are ignored", although nothing there would have been staged.
+ */
+async function mergeCheckpointAddArgs(cwd: string): Promise<string[]> {
+  const ignored = await ignoredPaths(cwd, CHECKPOINT_EXCLUDED_PATHS);
+  const excluded = CHECKPOINT_EXCLUDED_PATHS.filter((path) => !ignored.has(path));
+  return ["add", "-A", "--", ".", ...excluded.map((path) => `:(exclude)${path}`)];
+}
+
+/**
+ * The subset of `paths` git ignores in `cwd` (`git check-ignore`; exit 1 =
+ * none). Output is one path per line, which is unambiguous only for plain
+ * paths like the constants above.
+ */
+async function ignoredPaths(cwd: string, paths: readonly string[]): Promise<Set<string>> {
+  try {
+    const { stdout } = await execFileAsync("git", ["check-ignore", "--", ...paths], {
+      cwd,
+      maxBuffer: 1_000_000,
+      timeout: 60_000,
+      env: { ...process.env, LC_ALL: "C" },
+    });
+    return new Set(stdout.split("\n").filter((path) => path !== ""));
+  } catch (err) {
+    if ((err as { code?: unknown }).code === 1) return new Set();
+    const e = err as { stderr?: string; message?: string };
+    throw new WorktreeGitError(
+      "git_error",
+      `git check-ignore failed: ${(e.stderr || e.message || "").trim().slice(0, 500)}`,
+    );
+  }
 }
 
 /** Uncommitted changes in the worktree (`git status --porcelain` non-empty). */
@@ -333,7 +377,7 @@ export async function mergeWorktree(
     throw new WorktreeGitError("git_error", `unsafe worktree revision: ${options.revision}`);
   }
   if (options.revision === undefined && (await isWorktreeDirty(worktreePath))) {
-    await git(worktreePath, mergeCheckpointAddArgs());
+    await git(worktreePath, await mergeCheckpointAddArgs(worktreePath));
     // A worktree dirty only in excluded runtime state has nothing staged, and
     // `git commit` fails rather than no-opping.
     if (await hasStagedChanges(worktreePath)) {
@@ -395,4 +439,87 @@ export async function listGitWorktrees(basePath: string): Promise<GitWorktreeEnt
     // `detached`/`bare`/`locked`/`prunable` lines leave branch/head as-is.
   }
   return entries;
+}
+
+/** The commit a checkout is at (`git rev-parse HEAD`). */
+export async function worktreeHeadRevision(worktreePath: string): Promise<string> {
+  return git(worktreePath, ["rev-parse", "--verify", "HEAD"]);
+}
+
+/**
+ * Where `path` sits in its repository: the top-level directory and the
+ * repository-relative prefix ("" at the top level, otherwise "sub/dir/").
+ */
+export async function worktreeLocation(path: string): Promise<{ root: string; prefix: string }> {
+  try {
+    const [root, prefix] = await Promise.all([
+      git(path, ["rev-parse", "--show-toplevel"]),
+      git(path, ["rev-parse", "--show-prefix"]),
+    ]);
+    return { root, prefix };
+  } catch {
+    throw new WorktreeGitError("not_a_git_repo", `not a git repository: ${path}`);
+  }
+}
+
+/** A checkout's changes under one directory, staged and diffed against a fixed revision. */
+export type StagedWorktreeChanges = {
+  /** Changed paths relative to the directory. */
+  files: string[];
+  /** Binary-safe patch with repository-relative paths, for {@link applyWorktreePatch}. */
+  patch: string;
+  /** Text-only rendering of the same change, for a person to review. */
+  preview: string;
+};
+
+/**
+ * Stages every change under `dir` (a directory inside a SeekForge worktree)
+ * except runtime state, and returns the staged difference from `revision` —
+ * the commit the worktree was created from, so earlier commits on the
+ * worktree branch stay part of the change.
+ */
+export async function stageWorktreeChanges(dir: string, revision: string): Promise<StagedWorktreeChanges> {
+  if (!/^[0-9a-fA-F]{40,64}$/.test(revision)) {
+    throw new WorktreeGitError("git_error", `unsafe worktree revision: ${revision}`);
+  }
+  await git(dir, await mergeCheckpointAddArgs(dir));
+  const names = await gitRaw(dir, ["diff", "--cached", "--name-only", "--relative", "-z", revision, "--", "."]);
+  const files = names.split("\0").filter((name) => name !== "");
+  if (files.length === 0) return { files, patch: "", preview: "" };
+  const [patch, preview] = await Promise.all([
+    gitRaw(dir, ["diff", "--cached", "--binary", "--no-color", revision, "--", "."]),
+    gitRaw(dir, ["diff", "--cached", "--no-color", "--relative", revision, "--", "."]),
+  ]);
+  return { files, patch, preview };
+}
+
+/** Commits whatever is staged in a worktree; false when nothing is. */
+export async function commitStagedWorktree(worktreePath: string, message: string): Promise<boolean> {
+  if (!(await hasStagedChanges(worktreePath))) return false;
+  const bounded = message.trim().slice(0, 200) || "seekforge worktree checkpoint";
+  await git(worktreePath, ["commit", "--no-verify", "-m", bounded]);
+  return true;
+}
+
+/**
+ * Applies a patch from {@link stageWorktreeChanges} to the working tree (never
+ * the index) of the repository whose top level is `root`. With `check`, only
+ * validates. A patch that does not apply cleanly is reported, never forced.
+ */
+export async function applyWorktreePatch(
+  root: string,
+  patch: string,
+  options: { check?: boolean } = {},
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const dir = mkdtempSync(join(tmpdir(), "seekforge-patch-"));
+  try {
+    const file = join(dir, "change.patch");
+    writeFileSync(file, patch, { mode: 0o600 });
+    await git(root, ["apply", "--binary", "--whitespace=nowarn", ...(options.check ? ["--check"] : []), file]);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }

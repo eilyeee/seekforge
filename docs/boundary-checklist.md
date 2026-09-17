@@ -4915,3 +4915,23 @@ a flaky verifier, not a bad bound.
 - **Caught:** by reading the call chain from a validator to its consumer while
   merging five copies of the validator. Neither `scripts/` gate can see this
   class: the value is a number of the right type and the code compiles.
+
+## 425. An exclusion pathspec can fail on the ignore rules it was meant to respect
+
+The merge checkpoint staged a worktree with `git add -A -- . ':(exclude).seekforge/sessions/' …`
+so runtime state stays off the user's branch. In a repository whose
+`.gitignore` lists `.seekforge/`, that command exits 1 ("paths are ignored by
+one of your .gitignore files") as soon as `.seekforge/` exists in the checkout —
+an exclusion is still a pathspec naming an ignored path. The staging had
+happened, but the caller saw a failed git call, so auto-committing uncommitted
+work in a worktree an agent had run in failed in exactly the repositories that
+ignore runtime state, which the code comment named as the case that "never
+noticed".
+
+- **Do:** name in a pathspec only what git would otherwise act on. Ask
+  `git check-ignore` which exclusions are already ignored and leave those out;
+  they need no exclusion.
+- **Do:** test git plumbing against both repository shapes a rule depends on —
+  here, `.seekforge/` ignored and not ignored.
+- **Caught:** by the isolated-subagent tests, whose fixture repository ignores
+  `.seekforge/` as most real ones do.

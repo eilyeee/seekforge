@@ -17,7 +17,7 @@ the SeekForge feature you already know from another tool.
 | Project instructions (`CONVENTIONS.md`, `.clinerules`, `CLAUDE.md`, `AGENTS.md`) | `AGENTS.md` (created by `seekforge init`), plus curated `.seekforge/memory/project.md` memory. |
 | MCP servers | `mcpServers` config + `seekforge mcp add/list/remove`. See [MCP](mcp.md). |
 | Slash commands / custom commands | Built-in slash commands + custom commands under `.seekforge/commands/`. `description:` frontmatter and `$ARGUMENTS` work on every surface; `` !`shell` `` interpolation is expanded by the CLI REPL (`seekforge` with no command) and the server, **not** by the TUI. See the [TUI README](../apps/tui/README.md#custom-commands) for the file format. |
-| Subagents / specialist agents | `dispatch_agent` roster — `seekforge agent list/show/import`, definitions under `.seekforge/agents/`. |
+| Subagents / specialist agents | `dispatch_agent` roster — `seekforge agent list/show/import`, definitions under `.seekforge/agents/`. Claude Code's `.claude/agents/*.md` (project and `~/.claude/agents/`) load in place, with tool names mapped and repository files restricted to tightening. See [Subagents](subagents.md). |
 | Skills / reusable procedures | `.seekforge/skills/<id>/SKILL.md` — `seekforge skill create/list/import`. |
 | Session history / transcripts | Session traces under `.seekforge/` — `seekforge sessions`, `resume`, `replay`, `audit`. |
 | Permission / approval modes (auto-approve, plan mode) | Approval modes `auto` / `acceptEdits` / `confirm` / `manual`; `-y`, `--permission-mode`, `permissionRules`. Plan mode is not an approval mode — `--plan` (or `--permission-mode plan`) runs read-only under `confirm`. |

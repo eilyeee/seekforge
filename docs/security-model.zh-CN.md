@@ -109,6 +109,17 @@ Agent 启动的命令会收到一份移除了凭据环境变量的父环境副�
 - 持久记忆会被过滤：读起来像是给 agent 下指令的提取事实，会在入库前被丢弃（`packages/core/src/memory/extract.ts::INJECTION_PATTERN` `:59`，应用于 `:301`）。
 - 工具输出在重新进入上下文之前会先做机密信息脱敏（`packages/core/src/tools/redact.ts::redactSecrets` `:30`）。
 
+### 子智能体定义与回报
+
+仓库内的 agent 定义（`.seekforge/agents/` 与 `.claude/agents/`）是不可信输入，与仓库配置同理，只能收紧（`packages/core/src/subagents/policy.ts`）：
+
+- 比父运行审批模式更宽松的 `permissionMode` 会被收回到父运行的模式；更严格的模式（`default`、`plan`、`dontAsk`）照常生效。
+- 仓库定义里的 `hooks` 在解析时即被丢弃，调度时也不会合并，仓库无法借 agent 文件执行命令。
+- 任何作用域的 agent 都只能得到父运行已有工具的子集；`mcpServers` 只能筛选宿主已连接（即用户配置中已信任）的服务器，绝不会根据 agent 文件定义或连接新服务器。
+- 全局、插件（按审阅摘要启用）与内置定义按声明生效；以声明的审批模式运行时，调度提示会写明该模式。`seekforge agent import` 会丢弃 `hooks` 以及宽松的 `permissionMode`，所以导入永远不会放宽权限。
+- 隔离 agent 的改动会以 diff 形式经过父运行的写入规则与审批流程后才会应用（见[子智能体](subagents.zh-CN.md#隔离的-edit-agent)）；父运行结束后仍在运行的后台 agent 无法再获得任何授权。
+- 子 agent 的最终报告与 `agent_report` 进度行都是模型输出：它们以"数据而非指令"的框架呈现给父 agent，并有长度和次数上限。
+
 ---
 
 ## 6. 回退与审计：JSONL 追踪 + 检查点 / rewind

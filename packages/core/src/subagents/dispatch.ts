@@ -11,9 +11,16 @@ export const AGENT_RESULT_TOOL = "agent_result";
 /** Synthetic tool: continue a completed dispatch with a follow-up task. */
 export const AGENT_SEND_TOOL = "agent_send";
 
+/** Synthetic tool, nested runs only: a short progress message to the parent. */
+export const AGENT_REPORT_TOOL = "agent_report";
+
+function agentTraits(d: AgentDefinition): string {
+  return d.isolation === "worktree" && d.mode === "edit" ? `${d.mode}, isolated` : d.mode;
+}
+
 /** Builds the synthetic dispatch_agent tool definition for the roster. */
 export function buildDispatchToolDefinition(defs: AgentDefinition[]): ToolDefinitionForModel {
-  const lines = defs.map((d) => `${d.id} — ${d.description || d.name} (${d.mode})`);
+  const lines = defs.map((d) => `${d.id} — ${d.description || d.name} (${agentTraits(d)})`);
   return {
     name: DISPATCH_AGENT_TOOL,
     description:
@@ -21,7 +28,9 @@ export function buildDispatchToolDefinition(defs: AgentDefinition[]): ToolDefini
       "and you stay responsible for the final result. Worth the overhead for 3+ independent read-only " +
       "investigations (dispatch them in parallel) or an isolated, well-specified edit task; NOT for anything " +
       "1-2 of your own tool calls would answer. With background:true it returns a dispatch id immediately " +
-      "while the agent keeps running; poll with agent_result. Available agents:\n" +
+      "while the agent keeps running; poll with agent_result. Edit agents share your workspace one at a time; " +
+      'isolation:"worktree" lets an edit agent work in its own git worktree and return its change as a diff ' +
+      "for review instead. Available agents:\n" +
       lines.join("\n"),
     parameters: {
       type: "object",
@@ -38,6 +47,11 @@ export function buildDispatchToolDefinition(defs: AgentDefinition[]): ToolDefini
         background: {
           type: "boolean",
           description: "Start the agent and return immediately; poll with agent_result.",
+        },
+        isolation: {
+          type: "string",
+          enum: ["worktree"],
+          description: "Edit agents only: work in a separate git worktree; the change comes back as a reviewable diff.",
         },
       },
       required: ["agentId", "task"],
@@ -91,12 +105,29 @@ export function buildAgentSendToolDefinition(): ToolDefinitionForModel {
   };
 }
 
+/** Builds the agent_report tool definition (advertised to dispatched runs only). */
+export function buildAgentReportToolDefinition(): ToolDefinitionForModel {
+  return {
+    name: AGENT_REPORT_TOOL,
+    description:
+      "Send your parent agent one short progress line (a milestone, a finding it may act on, or a blocker). " +
+      "Rate-limited; the parent reads it at its next turn. Not a substitute for your final report.",
+    parameters: {
+      type: "object",
+      properties: {
+        message: { type: "string", description: "One short line, at most 500 characters." },
+      },
+      required: ["message"],
+    },
+  };
+}
+
 /** One-line-per-agent roster for the parent system prompt. */
 export function buildSubagentRoster(defs: AgentDefinition[]): string {
   return defs
     .map((d) => {
       const triggers = d.triggers.length > 0 ? ` triggers: ${d.triggers.join(", ")}` : "";
-      return `- ${d.id} (${d.mode}) — ${d.description || d.name}${triggers}`;
+      return `- ${d.id} (${agentTraits(d)}) — ${d.description || d.name}${triggers}`;
     })
     .join("\n");
 }

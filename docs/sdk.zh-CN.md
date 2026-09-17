@@ -223,7 +223,7 @@ checkout 后会拒绝旧检查点，而不会复用另一个工作区产生的�
 
 - **自定义工具 / 调度器**——把额外的 `ToolSpec[]` 传给 `createDefaultDispatcher(extraTools)`，或提供你自己的 `dispatcher`。
 - **MCP**——`loadMcpToolSpecs(config.mcpServers, [workspacePath])` 返回 `{ specs, dispose }`；把 `specs` 交给调度器（记得调用 `dispose`）。
-- **Subagents**——`deps.subagents = loadAgentDefinitions(workspace)` 使它们可经 `dispatch_agent` 及带依赖感知的 `dispatch_team` 调度；`deps.providerForModel` 为子 agent 的 `model` 覆盖构建 provider。
+- **Subagents**——`deps.subagents = loadAgentDefinitions(workspace)` 使它们可经 `dispatch_agent` 及带依赖感知的 `dispatch_team` 调度；`deps.providerForModel(model, options)` 为子 agent 的 `model` 覆盖构建 provider，`options` 携带其 `effort`（`thinking` / `reasoningEffort`）。保持会话常驻的宿主应在每次运行时传入 `deps.dispatchManager = createDispatchManager({ sessionScoped: true })`，使后台 agent 在启动它的运行结束后继续存活，并在会话结束时调用 `disposeAll()`。参见[子智能体](subagents.zh-CN.md)。
 - **Hooks**——`deps.hooks`（一个 `HookConfig`）在工具调用和生命周期各阶段触发 shell hook（`preToolUse` 可以拦截）。参见 [Configuration → hooks](configuration.zh-CN.md#hooks)。
 - **Runtime**——`deps.runtime = createRuntimeClient({ binPath })` 把文件 I/O 与命令执行委托给 Rust 后端。
 - **沙箱 / 放行清单 / 权限规则**——`deps.sandbox`、`deps.commandAllowlist`、`deps.permissionRules` 决定命令执行方式与权限门禁行为。

@@ -210,6 +210,32 @@ data. Directives embedded in it are ignored:
 - Secrets are redacted out of tool output before it re-enters the context
   (`packages/core/src/tools/redact.ts::redactSecrets` `:30`).
 
+### Subagent definitions and reports
+
+Agent definitions inside the repository (`.seekforge/agents/` and
+`.claude/agents/`) are untrusted input, like repository configuration, and may
+only tighten (`packages/core/src/subagents/policy.ts`):
+
+- A `permissionMode` looser than the parent run's approval mode is clamped to
+  the parent's; stricter modes (`default`, `plan`, `dontAsk`) apply as written.
+- `hooks` in a repository definition are dropped when it is parsed and never
+  merged at dispatch, so a repository cannot run a command through an agent
+  file.
+- An agent in any scope gets a subset of the tools its parent run already
+  has; `mcpServers` only filters servers the host connected (trusted in the
+  user's config) and never defines or connects one.
+- Global, plugin (enabled against a reviewed digest) and builtin definitions
+  get what they declare, and a dispatch that runs with a declared approval mode
+  says so in its prompt. `seekforge agent import` drops `hooks` and a loosening
+  `permissionMode`, so an import never widens authority.
+- An isolated agent's change reaches the checkout only as a diff that passes
+  the parent's write rules and approval flow (see
+  [Subagents](subagents.md#isolated-edit-agents)); a background agent still
+  running after its parent run ended cannot be granted anything.
+- A child's final report and its `agent_report` lines are model output: the
+  parent receives them framed as data, not instructions, and bounded in length
+  and count.
+
 ---
 
 ## 6. Rollback & audit: JSONL traces + checkpoints / rewind

@@ -221,13 +221,17 @@ baseline; see [Evals and the regression gate](docs/EVALS.md).
   rule matching; ship your own in `.seekforge/skills/<id>/`.
 - **Subagents** (five builtins — `explorer`, `reviewer`, `planner`,
   `test-writer`, `debugger` — plus `AGENT.md` in
-  `.seekforge/agents/<id>/` or imported Claude/Meta_Kim-style definitions)
-  let the main agent delegate bounded sub-tasks via `dispatch_agent` —
-  in parallel within a turn, in the background (`agent_result` to poll),
-  and resumable afterwards (`agent_send`). Each runs with its own prompt,
-  tool whitelist, optional model, and turn budget; governance/review agents
-  are read-only. A read-only (`ask`/`--plan`) session cannot dispatch an
-  edit agent.
+  `.seekforge/agents/<id>/`, Claude Code's `.claude/agents/*.md`, or imported
+  Claude/Meta_Kim-style definitions) let the main agent delegate bounded
+  sub-tasks via `dispatch_agent` — in parallel within a turn, in the
+  background (`agent_result` to poll), and resumable afterwards
+  (`agent_send`). Each runs with its own prompt, tool whitelist, approval
+  mode, preloaded skills, optional model and effort, and turn budget;
+  governance/review agents are read-only. Edit agents take turns on the
+  workspace or work in an isolated git worktree whose diff you review. A
+  read-only (`ask`/`--plan`) session cannot dispatch an edit agent, and a
+  repository's agent files can only tighten permissions. See
+  [docs/subagents.md](docs/subagents.md).
 - **Permission rules**: `permissionRules` in config add allow/deny entries
   per tool with command/path prefixes; deny always wins. Rules files merge
   from `~/.seekforge/AGENTS.md` → `AGENTS.md` → `AGENTS.local.md`.

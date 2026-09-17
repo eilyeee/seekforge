@@ -89,7 +89,7 @@ flowchart TD
 
 安全扫描使用一个独立的只追加事件源，位于 `.seekforge/security/events.jsonl`。`packages/core/src/security` 负责严格的 Agent 输出校验、Finding 与验证生命周期、威胁模型、修复证据，以及 JSON/Markdown/SARIF 渲染。CLI 代码只负责将 Agent 与项目检查的执行接入该领域。扫描器输出在其来源路径、行号范围与精确摘录都能在仓库内解析之前，均视为不可信。
 
-每个父 Agent 运行拥有一个用于子智能体的 Core dispatch 管理器。它发出结构化的生命周期事件（`started`、`step` 及一个终态事件），将取消隔离到被选中的子任务，并且只在模型轮次边界处消费排队的引导（steering）。服务器 WS 帧暴露这些控制；TUI 与桌面端渲染同一套共享事件契约，并在后续运行复用运行内 dispatch id 时保留已完成的卡片。
+每个父 Agent 运行拥有一个用于子智能体的 Core dispatch 管理器。它发出结构化的生命周期事件（`started`、`step` 及一个终态事件），将取消隔离到被选中的子任务，并且只在模型轮次边界处消费排队的引导（steering）和子 agent 的 `agent_report` 进度。服务器 WS 帧暴露这些控制；TUI 与桌面端渲染同一套共享事件契约，并在后续运行复用运行内 dispatch id 时保留已完成的卡片。宿主也可以提供一个会话级管理器（`createDispatchManager({ sessionScoped: true })`），使后台调度跨运行存活，其结果在下一次运行时送达模型。定义的解析与信任规则归 `packages/core/src/subagents/`（`fields.ts`、`policy.ts`）所有；edit agent 通过进程内的工作区编辑锁串行执行，或在隔离 worktree 中运行，改动以 diff 形式经父运行审批后应用（`isolation.ts`）。详见[子智能体](subagents.zh-CN.md)。
 
 `dispatch_team` 在同一管理器之上增加了确定性编排。一个 team 是经过校验的、由命名成员构成的无环图；就绪的成员在声明的并发上限内运行，依赖者等待，失败策略要么停止待处理工作、要么继续独立分支。团队成员发出普通的子智能体生命周期事件，因此引导、取消、用量统计与 trace 不会偏离一次性 dispatch 的行为。
 

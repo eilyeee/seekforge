@@ -178,7 +178,7 @@ export type AgentCoreDepsCommon = Pick<
   | "editFormat"
 > & {
   retryBus: RetryBus & { onRetry: (info: RetryInfo) => void };
-  providerForModel: (model: string) => ChatProvider;
+  providerForModel: NonNullable<AgentCoreDeps["providerForModel"]>;
 };
 
 /**
@@ -239,13 +239,14 @@ export function buildAgentCoreDeps(
     // key/endpoint, different model. deepseek-reasoner cannot drive the
     // tool-call loop, so fall back to the main provider. NOTE: fallbackModel
     // belongs to the MAIN provider only and is stripped here.
-    providerForModel: (model) => {
+    providerForModel: (model, options) => {
       if (model === "deepseek-reasoner") {
         extras.onReasonerFallback?.();
         return provider;
       }
       const { fallbackModel: _fallbackModel, ...perModelInput } = providerInput;
-      return buildProvider(perModelInput, model);
+      // A subagent's `effort` replaces the configured thinking controls for its runs only.
+      return buildProvider({ ...perModelInput, ...options }, model);
     },
     commandAllowlist: input.commandAllowlist,
     ...(input.sandbox && input.sandbox !== "off" ? { sandbox: input.sandbox } : {}),
