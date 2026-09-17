@@ -10,6 +10,10 @@ export const COMMON_CONFIG_KEYS = [
   "mcpServers",
   "hooks",
   "sandbox",
+  // Both user-owned: absent from PROJECT_PREFERENCE_KEYS in config-layers.ts,
+  // so a repository can neither grant a directory nor shape the network policy.
+  "sandboxNetwork",
+  "additionalDirectories",
   "compaction",
   "thinking",
   "reasoningEffort",

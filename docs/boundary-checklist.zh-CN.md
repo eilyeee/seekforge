@@ -4110,3 +4110,66 @@ router 式路由却没扫段分派式；读了 `CliConfig` 却没读 `TuiConfig`
   真正抓住它的那条。
 - **发现位置：** 在合并五份校验器副本时，顺着校验器到其消费者的调用链读出来的。
   `scripts/` 下两道门禁都看不见这一类：值的类型正确，代码也能编译。
+
+## 425. URL 前缀不是主机边界
+
+把 `GET https://docs.example.com` 当字符串前缀，同样会匹配
+`https://docs.example.com.evil.net/…` 与 `https://docs.example.com@evil.net/…`
+（后者的主机是 `evil.net`；`@` 之前的一切都是 userinfo）。加分隔符检查也救不了：
+`:` 和 `@` 都可以合法地紧跟在主机后面，而两者含义恰好相反。
+
+- **正确做法：** 把两边都解析出来再逐项比较——scheme、主机与端口，然后在 `/`
+  边界上比较路径。只有规则里没有主机（`GET https://`）、无从解析时，才保留纯字符
+  串前缀。
+- **正确做法：** 按标签匹配域名（`host === d || host.endsWith("." + d)`），并且
+  绝不对 IP 字面量做子域名测试：`10.0.0.1`「以」`.0.0.1`「结尾」。
+- **正确做法：** 对 deny/ask，结构匹配或原始匹配任一成立即算命中，无法解析的
+  URL 也算命中。
+- **正确做法：** 当判断基于**名字**、而连接发生在之后时，只解析一次并连接解析得到
+  的地址；否则名字可以在两者之间被改指。仅由通配符放行的名字不得落到回环或链路本地
+  地址上——能创建子域名的人就能决定它指向哪里。
+- **发现位置（评审）：** `sandboxNetwork` 代理批准了主机名，随后把这个名字交给
+  `net.connect`，由它再次解析，且不检查地址。
+- **发现位置：** `packages/core/src/tools/permissions.ts`——web_fetch 与
+  browser_navigate 的 allow 规则是对 `GET <url>` 的无锚定 `startsWith`。现在由
+  `rule-match.ts::urlCommandMatches` 负责；沙箱白名单与 `domain:` 规则共用
+  `network-policy.ts`。
+
+## 426. 机密路径检查必须锚定在机密所在的位置，而不是遍历的起点
+
+`search_text` 会跳过满足 `isSensitiveRelPath(rel)` 的文件，而 `rel` 是相对于被搜索
+目录的。搜索 `.seekforge` 时，其中的 `config.json` 就成了普通的 `config.json`，结果
+里带着 API key；直接搜索该文件本身也一样（`rel` 只是它的文件名）。
+
+- **正确做法：** 先算出相对于拥有该机密规则的根目录（工作区或授权目录）的路径，
+  再做测试；当一棵目录树里可能包含多个项目时，还要测试嵌套的副本
+  （`pkg/.seekforge/config.json`）。
+- **发现位置：** `packages/core/src/tools/builtins/fs.ts`（`search_text`），现改为
+  对相对于所属根目录的路径调用 `sandbox.ts::isSensitiveNestedPath`。
+
+## 427. 不同种类的授权需要不同的命名空间
+
+会话放行清单把命令前缀和裸工具名放在同一个数组里，而命令匹配器会对每一项做前缀
+匹配。于是，本次会话批准了 `write_file`，也就等于批准了
+`run_command("write_file …")`；而一条恰好以工具名命名的命令，也会批准那个工具。
+
+- **正确做法：** 让每种授权使用其他匹配器既产生不了、也不会接受的表示形式（这里用
+  NUL 分隔：含 NUL 的命令无法被启动，永远不会被记录，命令匹配器也会跳过它）。
+- **正确做法：** 被记住的授权，范围要限定在提示中展示过的对象上。文件工具的授权
+  现在是工具名加上被批准路径的物理目录——裸工具名会批准此后的每一个路径，包括
+  `.github/workflows/`。
+- **发现位置：** `packages/core/src/tools/permissions.ts`（`sessionToken`、
+  `sessionAllowed`）。
+
+## 428. 凡是会执行命令的工具，在策略上都是 shell 工具
+
+`run_tests` 通过与 `run_command` 相同的执行器运行传给它的命令，但规则匹配器与会话
+放行清单只特殊处理了 `run_command`/`task_kill`。对 `run_tests` 来说，allow 规则是
+无锚定前缀，还会匹配复合命令（`pnpm test; touch pwned`），而「不再询问」记住的是
+裸工具名——此后任何测试命令，无论是什么，都被批准。
+
+- **正确做法：** 按工具实际做的事（执行一行 shell）归类，并且只用一个集合来定义；
+  凡是这个类别起作用的地方——规则匹配、复合命令拒绝、会话 token、持久规则——都
+  使用这个集合。
+- **发现位置：** `packages/core/src/tools/rule-match.ts`
+  （`SHELL_COMMAND_TOOLS`、`SHELL_EXECUTING_TOOLS`）。

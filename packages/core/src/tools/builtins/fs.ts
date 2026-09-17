@@ -7,10 +7,11 @@ import { applyEdits } from "../edits.js";
 import {
   DEFAULT_IGNORE_DIRS,
   isSensitiveBasename,
-  isSensitiveRelPath,
+  isSensitiveNestedPath,
   resolveForRead,
   resolveForWrite,
   resolveInsideWorkspace,
+  toolPathRoot,
 } from "../sandbox.js";
 import { truncateHeadTail } from "../text.js";
 import { unifiedDiff } from "../diff.js";
@@ -37,7 +38,8 @@ const MAX_CONTEXT_LINES = 10;
  */
 function readCurrentForPreview(ctx: ToolContext, relPath: string): string | null {
   try {
-    const resolved = resolveForRead(ctx.workspace, relPath);
+    const target = toolPathRoot(ctx, relPath, "read");
+    const resolved = resolveForRead(target.root, target.path);
     return readUtf8FileBoundedSync(resolved, MAX_TOOL_FILE_BYTES);
   } catch {
     return null;
@@ -165,13 +167,12 @@ const listFiles = defineTool({
     path: args.path ?? ".",
   }),
   async run(args, ctx) {
+    const target = toolPathRoot(ctx, args.path ?? ".", "list");
     if (ctx.runtime) {
-      const res = await callRuntime<{ entries: string[]; truncated: boolean }>(
-        ctx.runtime,
-        "list_files",
-        ctx.workspace,
-        { path: args.path ?? ".", maxDepth: args.maxDepth ?? 10 },
-      );
+      const res = await callRuntime<{ entries: string[]; truncated: boolean }>(ctx.runtime, "list_files", target.root, {
+        path: target.path,
+        maxDepth: args.maxDepth ?? 10,
+      });
       return {
         // The same in-band sentinel the local walk appends. Without it the two
         // backends of one tool answer differently: a runtime-backed session
@@ -184,7 +185,7 @@ const listFiles = defineTool({
         meta: { truncated: res.truncated },
       };
     }
-    const root = resolveInsideWorkspace(ctx.workspace, args.path ?? ".");
+    const root = resolveInsideWorkspace(target.root, target.path);
     if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
       throw new ToolError("not_found", `Not a directory: ${args.path ?? "."}`);
     }
@@ -225,13 +226,14 @@ const readFile = defineTool({
   }),
   async run(args, ctx) {
     let content: string;
+    const target = toolPathRoot(ctx, args.path, "read");
     if (ctx.runtime) {
-      const res = await callRuntime<{ content: string }>(ctx.runtime, "read_file", ctx.workspace, {
-        path: args.path,
+      const res = await callRuntime<{ content: string }>(ctx.runtime, "read_file", target.root, {
+        path: target.path,
       });
       content = res.content;
     } else {
-      const resolved = resolveForRead(ctx.workspace, args.path);
+      const resolved = resolveForRead(target.root, target.path);
       if (!fs.existsSync(resolved)) {
         throw new ToolError("not_found", `File not found: ${args.path}`);
       }
@@ -408,7 +410,8 @@ const searchText = defineTool({
     path: args.path ?? ".",
   }),
   async run(args, ctx) {
-    const root = resolveInsideWorkspace(ctx.workspace, args.path ?? ".");
+    const target = toolPathRoot(ctx, args.path ?? ".", "list");
+    const root = resolveInsideWorkspace(target.root, target.path);
     if (!fs.existsSync(root)) {
       throw new ToolError("not_found", `Path not found: ${args.path ?? "."}`);
     }
@@ -446,6 +449,15 @@ const searchText = defineTool({
       // keep the raw path if it can't be resolved
     }
     const sessionsDir = path.join(workspaceReal, ".seekforge", "sessions");
+    // Secret paths are judged from the root the search belongs to, not from
+    // where the walk starts: searching `.seekforge` itself must not make its
+    // config.json look like an ordinary `config.json`.
+    let scopeReal = target.root;
+    try {
+      scopeReal = fs.realpathSync(target.root);
+    } catch {
+      // keep the raw root; resolveInsideWorkspace above already validated it
+    }
 
     const matches: SearchMatch[] = [];
     const filesWithMatches: string[] = [];
@@ -463,7 +475,9 @@ const searchText = defineTool({
         return;
       }
       if (!stat.isFile() || stat.size > MAX_SEARCHABLE_FILE_BYTES) return;
-      if (isSensitiveBasename(path.basename(filePath)) || isSensitiveRelPath(rel)) return;
+      if (isSensitiveBasename(path.basename(filePath)) || isSensitiveNestedPath(path.relative(scopeReal, filePath))) {
+        return;
+      }
       let buf: Buffer;
       try {
         buf = readFileBoundedSync(filePath, MAX_SEARCHABLE_FILE_BYTES);
@@ -599,11 +613,12 @@ async function runtimeBeforeContent(
   opts?: { signal?: AbortSignal },
 ): Promise<string | null> {
   try {
+    const target = toolPathRoot(ctx, relPath, "read");
     const res = await callRuntime<{ content: string }>(
       ctx.runtime!,
       "read_file",
-      ctx.workspace,
-      { path: relPath },
+      target.root,
+      { path: target.path },
       opts?.signal ? { signal: opts.signal } : undefined,
     );
     return res.content;
@@ -635,18 +650,21 @@ const writeFile = defineTool({
     };
   },
   async run(args, ctx) {
+    // Outside the workspace the checkpoint records the absolute path, which
+    // rewind reports as skipped rather than restoring into the workspace.
+    const target = toolPathRoot(ctx, args.path, "write");
     if (ctx.runtime) {
       if (ctx.checkpoint) {
-        ctx.checkpoint(args.path, await runtimeBeforeContent(ctx, args.path));
+        ctx.checkpoint(target.path, await runtimeBeforeContent(ctx, args.path));
       }
-      await callRuntime<{ path: string }>(ctx.runtime, "write_file", ctx.workspace, {
-        path: args.path,
+      await callRuntime<{ path: string }>(ctx.runtime, "write_file", target.root, {
+        path: target.path,
         content: args.content,
         overwrite: args.overwrite ?? false,
       });
       return { data: { path: args.path, bytesWritten: Buffer.byteLength(args.content, "utf8") } };
     }
-    const resolved = resolveForWrite(ctx.workspace, args.path);
+    const resolved = resolveForWrite(target.root, target.path);
     const exists = fs.existsSync(resolved);
     if (exists && !args.overwrite) {
       throw new ToolError("exists", `File already exists: ${args.path} (pass overwrite:true to replace)`);
@@ -654,7 +672,7 @@ const writeFile = defineTool({
     const expected = exists ? fs.statSync(resolved) : undefined;
     if (ctx.checkpoint) {
       try {
-        ctx.checkpoint(args.path, exists ? readUtf8FileBoundedSync(resolved, MAX_TOOL_FILE_BYTES) : null);
+        ctx.checkpoint(target.path, exists ? readUtf8FileBoundedSync(resolved, MAX_TOOL_FILE_BYTES) : null);
       } catch (error) {
         if (error instanceof FileTooLargeError) {
           throw new ToolError("too_large", `File exceeds ${MAX_TOOL_FILE_BYTES} bytes: ${args.path}`);
@@ -663,7 +681,7 @@ const writeFile = defineTool({
       }
     }
     fs.mkdirSync(path.dirname(resolved), { recursive: true });
-    const fd = openVerifiedWrite(ctx.workspace, args.path, resolved, {
+    const fd = openVerifiedWrite(target.root, target.path, resolved, {
       create: true,
       exclusive: !args.overwrite && !exists,
       ...(expected ? { expected } : {}),
@@ -736,19 +754,20 @@ const applyPatch = defineTool({
     if (ctx.selectedHunks !== undefined) {
       args = { ...args, edits: args.edits.filter((_, i) => ctx.selectedHunks!.includes(i)) };
     }
+    const target = toolPathRoot(ctx, args.path, "edit");
     if (ctx.runtime) {
       if (ctx.checkpoint) {
-        ctx.checkpoint(args.path, await runtimeBeforeContent(ctx, args.path));
+        ctx.checkpoint(target.path, await runtimeBeforeContent(ctx, args.path));
       }
-      const res = await callRuntime<{ path: string; editsApplied: number }>(ctx.runtime, "apply_patch", ctx.workspace, {
-        path: args.path,
+      const res = await callRuntime<{ path: string; editsApplied: number }>(ctx.runtime, "apply_patch", target.root, {
+        path: target.path,
         edits: args.edits,
       });
       return { data: res };
     }
-    const resolved = resolveForWrite(ctx.workspace, args.path);
+    const resolved = resolveForWrite(target.root, target.path);
     // Editing implies reading current content back into hints: same read rules apply.
-    resolveForRead(ctx.workspace, args.path);
+    resolveForRead(target.root, target.path);
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
       throw new ToolError("not_found", `File not found: ${args.path}`);
     }
@@ -764,8 +783,8 @@ const applyPatch = defineTool({
     }
     // applyEdits throws on no_match/ambiguous before anything is written.
     const next = applyEdits(content, args.edits);
-    ctx.checkpoint?.(args.path, content);
-    const fd = openVerifiedWrite(ctx.workspace, args.path, resolved, { create: false, exclusive: false, expected });
+    ctx.checkpoint?.(target.path, content);
+    const fd = openVerifiedWrite(target.root, target.path, resolved, { create: false, exclusive: false, expected });
     try {
       replaceFileContents(fd, next);
     } finally {

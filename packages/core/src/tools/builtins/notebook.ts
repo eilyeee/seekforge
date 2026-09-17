@@ -4,9 +4,10 @@ import { ToolError } from "../errors.js";
 import { unifiedDiff } from "../diff.js";
 import { isRecord } from "../../util/guards.js";
 import { readUtf8FileBoundedSync } from "../../util/fs.js";
-import { resolveForRead, resolveForWrite } from "../sandbox.js";
+import { resolveForRead, resolveForWrite, toolPathRoot } from "../sandbox.js";
 import { replaceExistingFile } from "../safe-write.js";
 import { defineTool, type ToolSpec } from "../registry.js";
+import type { ToolContext } from "../index.js";
 
 /**
  * Jupyter notebooks, as cells rather than as JSON.
@@ -97,8 +98,9 @@ function parseNotebook(raw: string, relPath: string): { notebook: Notebook; cell
   return { notebook: parsed as Notebook, cells };
 }
 
-function readNotebook(workspace: string, relPath: string): { raw: string; notebook: Notebook; cells: NotebookCell[] } {
-  const resolved = resolveForRead(workspace, relPath);
+function readNotebook(ctx: ToolContext, relPath: string): { raw: string; notebook: Notebook; cells: NotebookCell[] } {
+  const target = toolPathRoot(ctx, relPath, "read");
+  const resolved = resolveForRead(target.root, target.path);
   if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
     throw new ToolError("not_found", `File not found: ${relPath}`);
   }
@@ -140,7 +142,7 @@ const notebookRead = defineTool({
     path: args.path,
   }),
   async run(args, ctx) {
-    const { cells } = readNotebook(ctx.workspace, args.path);
+    const { cells } = readNotebook(ctx, args.path);
     const includeOutputs = args.includeOutputs !== false;
     return {
       data: {
@@ -189,7 +191,7 @@ const notebookEdit = defineTool({
       // Best effort, like every write preview: a diff of the CELL, since a diff
       // of the notebook's JSON is unreadable.
       try {
-        const { cells } = readNotebook(ctx.workspace, args.path);
+        const { cells } = readNotebook(ctx, args.path);
         const label = `${args.path}#cell${args.cellIndex}`;
         const before = cells[args.cellIndex] ? cellSource(cells[args.cellIndex]!) : null;
         const after = args.mode === "delete" ? "" : (args.source ?? "");
@@ -206,7 +208,7 @@ const notebookEdit = defineTool({
     };
   },
   async run(args, ctx) {
-    const { raw, notebook, cells } = readNotebook(ctx.workspace, args.path);
+    const { raw, notebook, cells } = readNotebook(ctx, args.path);
     if (args.cellIndex >= cells.length && args.mode !== "insert") {
       throw new ToolError(
         "cell_not_found",
@@ -245,10 +247,11 @@ const notebookEdit = defineTool({
     }
 
     const updated = serializeNotebook({ ...notebook, cells: next }, raw);
-    const resolved = resolveForWrite(ctx.workspace, args.path);
+    const target = toolPathRoot(ctx, args.path, "edit");
+    const resolved = resolveForWrite(target.root, target.path);
     const expected = fs.statSync(resolved);
-    ctx.checkpoint?.(args.path, raw);
-    replaceExistingFile(ctx.workspace, args.path, resolved, updated, expected);
+    ctx.checkpoint?.(target.path, raw);
+    replaceExistingFile(target.root, target.path, resolved, updated, expected);
     return { data: { path: args.path, mode: args.mode, cellIndex: args.cellIndex, cells: next.length } };
   },
 });

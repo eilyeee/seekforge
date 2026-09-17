@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "zod";
 import { ToolError } from "../errors.js";
-import { DEFAULT_IGNORE_DIRS, resolveInsideWorkspace } from "../sandbox.js";
+import { DEFAULT_IGNORE_DIRS, resolveInsideWorkspace, toolPathRoot } from "../sandbox.js";
 import { defineTool, type ToolSpec } from "../registry.js";
 import { compareByCodePoints } from "@seekforge/shared";
 
@@ -198,7 +198,8 @@ const glob = defineTool({
     path: args.path ?? ".",
   }),
   async run(args, ctx) {
-    const root = resolveInsideWorkspace(ctx.workspace, args.path ?? ".");
+    const target = toolPathRoot(ctx, args.path ?? ".", "list");
+    const root = resolveInsideWorkspace(target.root, target.path);
     if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
       throw new ToolError("not_found", `Not a directory: ${args.path ?? "."}`);
     }

@@ -1,8 +1,20 @@
-import { normalize, sep } from "node:path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { PERMISSION_LEVEL, type PermissionRule } from "@seekforge/shared";
 import type { ToolContext } from "./index.js";
 import type { ClassifiedCall } from "./registry.js";
 import { hasShellControlSyntax } from "./run-command.js";
+import {
+  normalizeWhitespace,
+  relativeToAny,
+  ruleMatches as matchRule,
+  SHELL_COMMAND_TOOLS,
+  SHELL_EXECUTING_TOOLS,
+  toolPatternMatches,
+  workspaceRelative,
+  type PathSubjects,
+} from "./rule-match.js";
+import { physicalToolPath } from "./sandbox.js";
 
 export type PermissionDecision =
   | "auto_readonly" // L0, always allowed
@@ -25,15 +37,46 @@ export type PermissionOutcome =
 export type PermissionRefusal = Extract<PermissionOutcome, { allowed: false }>;
 
 /**
- * The token an allow-for-session confirmation remembers, and that subsequent
- * calls are matched against: the classified command for run_command/task_kill
- * (prefix-matched, like commandAllowlist), else the bare tool name.
+ * Separates a non-command grant's tool name from its scope. A shell command
+ * containing NUL can never be spawned, so no command grant can collide with a
+ * tool grant, and the command matcher skips any entry that carries one.
  */
-function sessionToken(toolName: string, cls: ClassifiedCall): string {
-  if (toolName === "run_command" || toolName === "task_kill") {
+const GRANT_SEPARATOR = "\u0000";
+
+/**
+ * The token an allow-for-session confirmation remembers, and that subsequent
+ * calls are matched against:
+ *
+ * - shell tools: the classified command (prefix-matched, like
+ *   commandAllowlist);
+ * - tools with a path: the tool plus the PHYSICAL directory of that path. One
+ *   "don't ask again" on `src/a.ts` covers the other files directly in `src/`
+ *   — the same folder the user was looking at — but not `src/sub/`, not the
+ *   parent, and not `.github/workflows/`. A bare tool name, which this used to
+ *   be, covered every path for the rest of the run. Physical, so a symlink
+ *   inside the approved folder cannot carry the grant somewhere else. An exact
+ *   file was the other option; it makes the answer useless for the common
+ *   "create these three files here" and buys little over the directory, whose
+ *   contents the user can see;
+ * - anything else: the tool itself.
+ *
+ * "" means "cannot be granted" (a path that does not resolve).
+ */
+function sessionToken(toolName: string, cls: ClassifiedCall, ctx: ToolContext): string {
+  if (SHELL_COMMAND_TOOLS.has(toolName)) {
     return (cls.command ?? "").trim();
   }
-  return toolName;
+  if (cls.path !== undefined) {
+    // An empty path names the workspace itself, whose "directory" is its parent.
+    if (cls.path.trim() === "") return "";
+    try {
+      const physical = physicalToolPath(ctx.workspace, cls.path);
+      return `${toolName}${GRANT_SEPARATOR}${path.dirname(physical)}`;
+    } catch {
+      return "";
+    }
+  }
+  return `${toolName}${GRANT_SEPARATOR}`;
 }
 
 /**
@@ -60,14 +103,14 @@ function sessionAllowed(toolName: string, cls: ClassifiedCall, ctx: ToolContext)
   if (!sessionGrantable(cls)) return false;
   const list = ctx.policy.sessionAllowlist;
   if (!list || list.length === 0) return false;
-  const token = sessionToken(toolName, cls);
+  const token = sessionToken(toolName, cls, ctx);
   if (token === "") return false;
-  if (toolName === "run_command" && hasShellControlSyntax(token)) return false;
-  if (toolName === "run_command" || toolName === "task_kill") {
+  if (SHELL_EXECUTING_TOOLS.has(toolName) && hasShellControlSyntax(token)) return false;
+  if (SHELL_COMMAND_TOOLS.has(toolName)) {
     // Prefix-match on a command boundary — exact match or the entry followed by
     // a space. A bare `startsWith` would let `npm run build` auto-approve
     // `npm run build-all` or `npm run build; rm -rf .`, smuggling past the gate.
-    return list.some((entry) => token === entry || token.startsWith(`${entry} `));
+    return list.some((entry) => !entry.includes(GRANT_SEPARATOR) && (token === entry || token.startsWith(`${entry} `)));
   }
   return list.includes(token);
 }
@@ -105,11 +148,13 @@ export function proposeDurableRule(toolName: string, cls: ClassifiedCall): Permi
   if (cls.permission === "dangerous") return undefined;
   // Restricted to the tools whose allow rules are matched on a token boundary
   // — the same scoping ruleMatches and sessionAllowed use.
-  if (toolName !== "run_command" && toolName !== "task_kill") return undefined;
+  if (!SHELL_COMMAND_TOOLS.has(toolName)) return undefined;
   if (cls.command === undefined) return undefined;
   const match = normalizeWhitespace(cls.command);
   if (match === "") return undefined;
   if (hasShellControlSyntax(match)) return undefined;
+  // A `*` would be read back as a wildcard, granting more than was approved.
+  if (match.includes("*")) return undefined;
   return { action: "allow", tool: toolName, match };
 }
 
@@ -161,9 +206,10 @@ async function confirmWithUser(
       // Grow the run's in-memory session allowlist in place so the next
       // matching call auto-allows. Mutating the array the caller shares
       // across the session's calls is the whole point of the channel.
-      const token = sessionToken(toolName, cls);
+      const token = sessionToken(toolName, cls, ctx);
       const list = (ctx.policy.sessionAllowlist ??= []);
-      if (token !== "" && !list.includes(token)) list.push(token);
+      const forged = SHELL_COMMAND_TOOLS.has(toolName) && token.includes(GRANT_SEPARATOR);
+      if (token !== "" && !forged && !list.includes(token)) list.push(token);
     }
     return { allowed: true, decision: "user_approved", ...(selectedHunks !== undefined ? { selectedHunks } : {}) };
   }
@@ -180,62 +226,39 @@ async function confirmWithUser(
 /** A refusal note is guidance, not a document; bound what reaches the model. */
 const MAX_DENIAL_FEEDBACK_CHARS = 2000;
 
-/** Collapse runs of whitespace so a rule can't be evaded with extra spaces. */
-function normalizeWhitespace(s: string): string {
-  return s.trim().replace(/\s+/g, " ");
-}
-
 /**
- * Rule matching: tool must be "*" or the exact tool name; `match` is a
- * prefix test against the classified command (run_command/task_kill) or path
- * (fs tools). No `match` field = matches any call of that tool. Commands are
- * whitespace-normalized on both sides so a deny rule like "rm -rf" isn't
- * bypassed by inserting extra spaces ("rm  -rf") — the classifier normalizes
- * the same way before it runs, so the raw command must not slip past here.
+ * Evaluates rules against one call. The path forms are computed once, and only
+ * when a rule actually needs them — resolving a path touches the filesystem.
  */
-/**
- * Prefix match that only counts on a separator boundary: the rule must either
- * already end at a separator (e.g. `docs/`, `GET https://host/`) or the subject
- * must have a separator immediately after the matched prefix. This preserves
- * documented prefix rules while stopping `npm run build` from auto-approving
- * `npm run build-all`, or `src/foo` from granting `src/foobar.ts`.
- */
-function boundaryPrefix(subject: string, match: string, seps: readonly string[]): boolean {
-  if (subject === match) return true;
-  if (match.length === 0) return true;
-  if (!subject.startsWith(match)) return false;
-  if (seps.includes(match[match.length - 1]!)) return true;
-  return seps.includes(subject[match.length] ?? "");
-}
-
-function normalizeRulePath(value: string): string {
-  const trimmed = value.trim();
-  return trimmed === "" ? "" : normalize(trimmed);
-}
-
-function ruleMatches(rule: PermissionRule, toolName: string, cls: ClassifiedCall): boolean {
-  if (rule.tool !== "*" && rule.tool !== toolName) return false;
-  if (rule.match === undefined) return true;
-  // Allow rules require a boundary so a prefix can't smuggle a sibling command/
-  // path past the gate. Deny rules keep the broad prefix test — over-matching a
-  // deny fails closed.
-  const boundary = rule.action === "allow";
-  if (cls.command !== undefined) {
-    const subject = normalizeWhitespace(cls.command);
-    const match = normalizeWhitespace(rule.match);
-    // The command-token boundary applies only to shell tools (run_command/
-    // task_kill), matching sessionAllowed's scoping. Other command-bearing tools
-    // (web_fetch/web_search) match a URL prefix, where sub-path matching is the
-    // documented, intended behavior.
-    const shellTool = toolName === "run_command" || toolName === "task_kill";
-    return boundary && shellTool ? boundaryPrefix(subject, match, [" "]) : subject.startsWith(match);
-  }
-  // Permission rules must see the same lexical identity as the filesystem.
-  // Otherwise an allow for `src` also grants `src/../outside.ts`, while a deny
-  // for `secrets` misses `src/../secrets/key.txt`.
-  const subject = normalizeRulePath(cls.path ?? "");
-  const match = normalizeRulePath(rule.match);
-  return boundary ? boundaryPrefix(subject, match, ["/", sep]) : subject.startsWith(match);
+function ruleMatcher(toolName: string, cls: ClassifiedCall, ctx: ToolContext): (rule: PermissionRule) => boolean {
+  let subject: Parameters<typeof matchRule>[1] | undefined;
+  const build = (): Parameters<typeof matchRule>[1] => {
+    const raw = cls.path ?? "";
+    const workspaces = [ctx.workspace];
+    let physical: string | undefined;
+    try {
+      const real = fs.realpathSync(ctx.workspace);
+      if (real !== ctx.workspace) workspaces.push(real);
+      if (raw.trim() !== "" && cls.command === undefined) {
+        physical = workspaceRelative(real, physicalToolPath(ctx.workspace, raw));
+      }
+    } catch {
+      // Unresolvable: the lexical form is all there is, and the tool itself
+      // will refuse a path it cannot resolve.
+    }
+    const paths: PathSubjects = {
+      lexical: relativeToAny(raw, workspaces),
+      ...(physical !== undefined ? { physical } : {}),
+    };
+    return {
+      toolName,
+      ...(cls.command !== undefined ? { command: cls.command } : {}),
+      path: paths,
+      workspaces,
+    };
+  };
+  return (rule) =>
+    toolPatternMatches(rule.tool, toolName) && (rule.match === undefined || matchRule(rule, (subject ??= build())));
 }
 
 /**
@@ -265,7 +288,8 @@ export function denyBeforePrompt(
 
   // Deny rules first: a matching deny blocks at EVERY level (incl. readonly),
   // never prompts, never runs. First matching deny in the array wins.
-  const deny = (ctx.policy.rules ?? []).find((r) => r.action === "deny" && ruleMatches(r, toolName, cls));
+  const matches = ruleMatcher(toolName, cls, ctx);
+  const deny = (ctx.policy.rules ?? []).find((r) => r.action === "deny" && matches(r));
   if (deny) {
     return {
       allowed: false,
@@ -309,12 +333,13 @@ export async function enforcePermission(
   if (refused) return refused;
 
   const rules = ctx.policy.rules ?? [];
+  const matches = ruleMatcher(toolName, cls, ctx);
 
   // Ask rules sit between deny and everything that would run the call without
   // a person: they outrank read-only auto-approval, allow rules, the session
   // allowlist and every approval mode. What the user answers is still only
   // this call's answer — see sessionGrantable for what "remember" may cover.
-  if (rules.some((r) => r.action === "ask" && ruleMatches(r, toolName, cls))) {
+  if (rules.some((r) => r.action === "ask" && matches(r))) {
     return confirmWithUser(toolName, cls, ctx, true);
   }
 
@@ -324,11 +349,9 @@ export async function enforcePermission(
 
   // Allow rules: a matching allow skips the prompt — including for "env"
   // (that's the point: e.g. allow web_fetch for a specific docs domain).
-  const compoundRunCommand =
-    toolName === "run_command" && cls.command !== undefined && hasShellControlSyntax(cls.command);
-  const allow = compoundRunCommand
-    ? undefined
-    : rules.find((r) => r.action === "allow" && ruleMatches(r, toolName, cls));
+  const compoundShellCommand =
+    SHELL_EXECUTING_TOOLS.has(toolName) && cls.command !== undefined && hasShellControlSyntax(cls.command);
+  const allow = compoundShellCommand ? undefined : rules.find((r) => r.action === "allow" && matches(r));
   if (allow) {
     return { allowed: true, decision: "allow_rule" };
   }

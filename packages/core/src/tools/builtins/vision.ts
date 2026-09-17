@@ -4,7 +4,7 @@ import { onAbortOnce } from "../../util/abort.js";
 import { readResponseBody } from "../../util/response-body.js";
 import { FileTooLargeError, readFileBoundedSync } from "../../util/fs.js";
 import { ToolError } from "../errors.js";
-import { resolveForRead } from "../sandbox.js";
+import { resolveForRead, toolPathRoot } from "../sandbox.js";
 import { defineTool, type ToolSpec } from "../registry.js";
 
 const VISION_TIMEOUT_MS = 60_000;
@@ -119,7 +119,8 @@ const imageAnalyze = defineTool({
 
     // resolveForRead handles both workspace-relative and absolute paths and
     // rejects anything that escapes the workspace (symlinks included).
-    const resolved = resolveForRead(ctx.workspace, args.path);
+    const target = toolPathRoot(ctx, args.path, "read");
+    const resolved = resolveForRead(target.root, target.path);
     let bytes: Buffer;
     try {
       bytes = readFileBoundedSync(resolved, MAX_IMAGE_BYTES);

@@ -15,7 +15,8 @@
  *     tool-call loop, so it falls back to the main provider (the CLI hooks
  *     `onReasonerFallback` to print its warning; TUI/server stay silent);
  *   - the drift-prone conditional config→deps spread: sandbox (dropping
- *     "off") / compaction / planModel / escalateOnFailure /
+ *     "off"; a validated sandboxNetwork allowlist folds into it) /
+ *     additionalDirectories / compaction / planModel / escalateOnFailure /
  *     memoryAutoApproveConfidence / lintCommand (non-blank) / autoLint
  *     (explicit false only) / editFormat, plus the unconditional
  *     commandAllowlist passthrough.
@@ -44,6 +45,8 @@ import type { ChatProvider, ModelPricing, PricingSource, RetryInfo } from "../pr
 import { resolveMemoryMaintenanceConfig, type MemoryMaintenanceConfig } from "../memory/index.js";
 import { createDeepSeekProvider, DEFAULT_MODEL, pricingSourceFor, resolveProviderConfig } from "../provider/index.js";
 import { createRetryBus, type AgentCoreDeps, type RetryBus } from "./loop.js";
+import { parseSandboxNetworkPolicy } from "../tools/network-policy.js";
+import { sandboxForRun } from "../tools/os-sandbox.js";
 
 /**
  * Provider-construction inputs common to the main provider and the per-model
@@ -128,6 +131,15 @@ export type BuildAgentCoreDepsInput = Omit<ProviderBuildInput, "onRetry"> & {
   commandAllowlist?: string[];
   /** OS-level command sandbox; "off" (or unset) adds no key. */
   sandbox?: "off" | "read-only" | "workspace-write" | "restricted";
+  /**
+   * Raw `sandboxNetwork` config: a domain allowlist for sandboxed commands.
+   * Validated here (a malformed one throws rather than leaving the network
+   * open) and folded into `sandbox` as a profile. With `sandbox` unset it
+   * implies "workspace-write"; with `sandbox: "off"` it is not enforced.
+   */
+  sandboxNetwork?: unknown;
+  /** Absolute directories the file tools may also use (user-owned sources only). */
+  additionalDirectories?: string[];
   compaction?: "mechanical" | "llm";
   /** Already resolved by the caller (the TUI folds in routing.planModel). */
   planModel?: string;
@@ -168,6 +180,7 @@ export type AgentCoreDepsCommon = Pick<
   | "provider"
   | "commandAllowlist"
   | "sandbox"
+  | "additionalDirectories"
   | "compaction"
   | "planModel"
   | "escalateOnFailure"
@@ -214,6 +227,9 @@ export function buildAgentCoreDeps(
     throw new RangeError("memoryAutoApproveConfidence must be a finite number between 0 and 1");
   }
   const memoryMaintenance = resolveMemoryMaintenanceConfig(input.memoryMaintenance);
+  const sandbox = sandboxForRun(input.sandbox, {
+    ...(input.sandboxNetwork !== undefined ? { network: parseSandboxNetworkPolicy(input.sandboxNetwork) } : {}),
+  });
   // One retry bus shared by every provider this factory builds; the active
   // run routes its retries into the agent event stream (provider.retry).
   const retryBus = createRetryBus();
@@ -248,7 +264,10 @@ export function buildAgentCoreDeps(
       return buildProvider(perModelInput, model);
     },
     commandAllowlist: input.commandAllowlist,
-    ...(input.sandbox && input.sandbox !== "off" ? { sandbox: input.sandbox } : {}),
+    ...(sandbox !== undefined && sandbox !== "off" ? { sandbox } : {}),
+    ...(input.additionalDirectories && input.additionalDirectories.length > 0
+      ? { additionalDirectories: [...input.additionalDirectories] }
+      : {}),
     ...(input.compaction ? { compaction: input.compaction } : {}),
     ...(input.planModel ? { planModel: input.planModel } : {}),
     ...(input.escalateOnFailure ? { escalateOnFailure: true } : {}),

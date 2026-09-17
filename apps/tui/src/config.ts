@@ -20,7 +20,7 @@ export type TuiConfig = {
   runtimeBin?: string;
   /** Extra command prefixes allowed to auto-run without confirmation. */
   commandAllowlist?: string[];
-  /** Fine-grained rules; repository config may contribute deny rules only. */
+  /** Fine-grained rules; repository config may contribute deny and ask rules only. */
   permissionRules?: PermissionRule[];
   /** MCP servers (Claude Code-compatible). */
   mcpServers?: Record<string, McpServerConfig>;
@@ -36,6 +36,10 @@ export type TuiConfig = {
   vim?: boolean;
   /** OS-level command sandbox (off when unset). */
   sandbox?: "off" | "read-only" | "workspace-write" | "restricted";
+  /** Domain allowlist for sandboxed commands (user-owned; core validates it). */
+  sandboxNetwork?: { allowedDomains: string[]; deniedDomains?: string[] };
+  /** Directories outside the project the file tools may also use (user-owned). */
+  additionalDirectories?: string[];
   /** Shell command producing one custom status-bar line (JSON payload on stdin). */
   statusLine?: string;
   /** Warn at 80% and 100% of this cumulative cost (USD) per TUI session. */

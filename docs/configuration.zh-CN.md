@@ -28,13 +28,15 @@ hook 条目会被过滤掉，而低优先级层中的有效值仍然生效。
 项目文件属于仓库输入，包括 `.seekforge/config.json`、
 `.seekforge/config.local.json` 以及两者声明的 profile。它们可以设置普通偏好
 （`model`、`models`、`compaction`、`thinking`、`reasoningEffort`、
-`planModel`、`editFormat`、UI 偏好及类似的非授权字段）、添加 `deny` 权限规则，
-以及声明供显式检查的未信任 MCP 服务器。
+`planModel`、`editFormat`、UI 偏好及类似的非授权字段）、添加 `deny` 与 `ask`
+权限规则，以及声明供显式检查的未信任 MCP 服务器。
 
 它们不能提供凭据或凭据目的地（`apiKey`、`provider`、`baseUrl`），不能执行
 启动/运行时命令（`runtimeBin`、hook、`statusLine`、`lintCommand`、
 `verifyCommand`），不能自动授权操作（`commandAllowlist`、`allow` 权限规则、
-MCP `trusted`），也不能削弱 sandbox、提高消费上限、自动批准记忆或改变审计保留策略。
+MCP `trusted`），不能改变沙箱设置（`sandbox`、`sandboxNetwork`），不能授予项目
+之外的访问权（`additionalDirectories`），也不能提高消费上限、自动批准记忆或改变
+审计保留策略。
 自动记忆整理也属于用户级设置，因为它可以归档项目事实。这些设置必须来自
 `~/.seekforge/config.json`、环境变量或用户显式选择的 `--settings` 文件。
 项目 MCP 定义仍然可见，也可通过显式管理操作测试；但只有完整条目来自用户配置时，
@@ -278,12 +280,83 @@ seekforge config set commandAllowlist "pnpm test, cargo build" --global
 如果所请求的沙箱机制在运行时不可用，会话会直接失败——绝不会悄悄回退到
 无沙箱执行。看起来像权限拒绝的沙箱失败会先询问一次，再以无沙箱方式重试。
 
+在可写级别（`workspace-write`、`restricted`）下，
+[`additionalDirectories`](#additionaldirectories) 在沙箱内同样可写；在
+`read-only` 下保持只读。如果只想放行部分网络目的地，而不是全开或全关，请加上
+[`sandboxNetwork`](#sandboxnetwork)。
+
 ```json
 { "sandbox": "workspace-write" }
 ```
 
 可通过 `config set` 设置？**可以，但必须带 `--global`** —— 校验取值为 `off` / `read-only` /
 `workspace-write` / `restricted`。
+
+### `sandboxNetwork`
+
+沙箱命令的域名白名单，介于 `workspace-write`（网络全开）与 `restricted`
+（网络全关）之间。
+
+```json
+{
+  "sandbox": "workspace-write",
+  "sandboxNetwork": {
+    "allowedDomains": ["registry.npmjs.org", "*.github.com", "github.com"],
+    "deniedDomains": ["gist.github.com"]
+  }
+}
+```
+
+- `example.com` 只放行这一个主机；`*.example.com` 放行它的子域名，但不包括
+  `example.com` 本身（两者都需要时请都写上）。IP 字面量和 `localhost` 必须原样
+  写出。scheme、端口、路径以及单独的 `*` 都会被拒绝。`deniedDomains`（可选，
+  语法相同）优先于 allow 模式。被放行主机的任意端口都可访问。
+- 代理对放行的名字只解析一次，并且只连接解析得到的地址。仅由 `*.` 模式匹配的名字
+  若解析到回环、未指定或链路本地地址（例如云元数据端点），会被拒绝；如果某个名字
+  本就应当访问本机，请精确列出它。私有网段不会被阻断。
+- 命令运行时，`HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`（及其小写形式）指向
+  SeekForge 首次使用时启动的本地代理；操作系统沙箱会阻断其他所有连接，因此忽略
+  这些变量的工具（或使用 HTTP/HTTPS 以外协议的工具，例如 `git@` 形式的 SSH）没有
+  网络。`localhost`、`127.0.0.1` 与 `::1` 在 `NO_PROXY` 中。
+- 被拒绝的请求会收到 `403 Blocked by SeekForge sandbox`；命令结果会写明被拦截的
+  `host:port`，失败的命令会给出常规的一次性无沙箱重试提示。
+- 白名单只会收窄。未设置 `sandbox` 时，它意味着 `workspace-write`；与
+  `read-only` 或 `workspace-write` 一起使用时，它取代这两个级别原本开放的网络；
+  与 `restricted` 一起使用时，网络仍然完全阻断；`sandbox: "off"` 时不生效。
+- 如果 SeekForge 本身需要通过 `http://` 代理上网（`http_proxy` /
+  `https_proxy` / `all_proxy`，遵守 `no_proxy`），放行的流量会经由该代理转发。
+- 在 Linux 上，沙箱独立的网络命名空间通过一个小型转发器接到代理，该转发器在
+  沙箱内运行宿主机的 `node`。在 macOS 上，白名单生效期间命令无法打开或访问其他
+  本地端口。
+- 格式错误的值会在构建 agent 时报错——绝不会被丢弃，因为丢弃它会让
+  `workspace-write` 的网络保持开放。
+
+这是用户级设置：仓库配置与仓库 profile 都不能设置它。可通过 `config set` 设置？
+**不可以** —— 直接编辑你的全局配置（或 `--settings` 文件）。
+
+### `additionalDirectories`
+
+文件工具还可以使用的、位于项目之外的绝对目录——即 `--add-dir` / `/add-dir`
+的配置文件形式。
+
+```json
+{ "additionalDirectories": ["~/code/shared-lib", "/srv/fixtures"] }
+```
+
+- `read_file`、`list_files`、`search_text`、`glob`、`write_file`、
+  `apply_patch`、`notebook_read`、`notebook_edit` 与 `image_analyze` 接受位于这些
+  目录中的路径（模型会被告知使用绝对路径）。写入需要与工作区内相同的批准；
+  `acceptEdits` 同样适用。
+- 机密文件（`.env`、密钥、`.seekforge/config.json`、`.git/config` 等）在任意深度
+  都不可读，任何 `.git` 目录下都不可写。离开所有授权目录的符号链接会被拒绝。
+- 每次运行都会校验这些条目：`~` 展开为你的 home 目录，相对路径相对于项目解析，
+  不存在的路径、文件或位于项目内部的目录会被跳过并给出警告。每个目录都固定为
+  其真实（解析符号链接后的）位置。
+- 在可写的 `sandbox` 级别下，命令也可以写入这些目录。
+- 回退（rewind）不会恢复这些目录中的文件，而是将其报告为已跳过。
+
+这是用户级设置：仓库配置与仓库 profile 都不能设置它。可通过 `config set` 设置？
+**不可以** —— 直接编辑你的全局配置（或 `--settings` 文件）。
 
 ### `compaction`
 
@@ -629,36 +702,70 @@ TUI 和交互式 REPL 会利用空闲时间调度：启动 30 秒后首次检查
 
 ### `permissionRules`
 
-细粒度的允许/拒绝权限规则，用于增强内置的 5 级权限策略。每条规则是一个对象：
+细粒度的允许/询问/拒绝权限规则，用于增强内置的 5 级权限策略。每条规则是一个对象：
 
 ```typescript
 type PermissionRule = {
-  action: "allow" | "deny";
-  /** Tool name or "*" for any tool. */
+  action: "allow" | "deny" | "ask";
+  /** 工具名，或对工具名的 `*` 通配（"*"、"mcp__github__*"）。 */
   tool: string;
-  /**
-   * Prefix matched against the classified command (run_command family)
-   * or path (fs tools). Absent = matches any call of that tool.
-   */
+  /** 调用必须匹配的内容（见下文）。缺省 = 该工具的任何调用。 */
   match?: string;
 };
 ```
 
-**求值顺序**：每个 action 类别中第一条匹配的规则生效。deny 规则先于 allow
-规则扫描，因此匹配到的 deny 总是阻止（哪怕是只读工具）。allow 规则永远无法
-越过 ask 模式的阻止，也永远无法解救被归类为 `"dangerous"` 的调用。
+**动作**：
 
-来自不同配置层的规则是拼接而非替换。仓库层只能贡献 `deny` 规则；可信的
-global/settings 层可以包含两种 action。
+- `deny` 在所有级别（包括只读工具）直接阻止该调用，不询问。
+- `ask` 总是询问——哪怕是只读工具，哪怕某条 allow 规则、一次「不再询问」的回答
+  或某个审批档位（包括 `auto`）本会直接执行该调用。回答只对这一次调用有效：此时
+  的提示既不提供「本次会话」也不提供「始终」。ask 规则永远不会为被拒绝的调用解围。
+- `allow` 让匹配的调用无需询问即可执行——包括 `env`（L3）工具，预先批准某个文档
+  域名就是这样做的。allow 规则永远无法越过 ask 模式的阻止，也永远无法解救被归类为
+  `"dangerous"` 的调用，并且永远不会作用于带控制语法（`&&`、`;`、`|`、重定向、
+  `$(…)`、换行）的 shell 命令。
+
+**求值顺序**：先 deny 规则，再 ask 规则，最后 allow 规则；每个 action 类别中第一条
+匹配的规则生效。
+
+**`match` 的含义**取决于工具做什么：
+
+| 工具类型 | `match` | 示例 |
+| --- | --- | --- |
+| Shell 命令（`run_command`、`run_tests`、`task_kill`） | 按词边界的前缀（`pnpm test` 覆盖 `pnpm test --watch`，不覆盖 `pnpm test-all`），或带 `*` 通配符、与整条命令匹配的模式。allow 模式必须以字面的程序名开头。 | `"npm run *"`、`"git push *"` |
+| URL 工具（`web_fetch`、`browser_navigate`，分类为 `GET <url>`） | 按 scheme、主机与路径比较的 URL 前缀（因此 `GET https://docs.example.com` 永远不会覆盖 `docs.example.com.evil.net`），或用 `domain:<host>` 表示某主机及其所有子域名 | `"GET https://docs.example.com/guide"`、`"domain:example.com"` |
+| 文件工具 | 按目录边界的路径前缀；若包含 `*` 或 `?` 则为 glob（`**` 跨目录；`[` 与 `{` 按字面处理）。位于工作区内的路径一律按相对于工作区的形式比较，无论调用使用的是相对路径还是绝对路径。 | `"src"`、`"src/**"`、`"**/*.env"`、`"docs/*.md"` |
+| 其他带命令的工具（`web_search` 的 `SEARCH <query>`、MCP 的 `mcp:<server>/<tool>`） | 纯前缀 | `"mcp:github/"` |
+
+Deny 与 ask 规则朝安全侧失败：命令规则还会对复合命令中的每一条命令分别测试
+（`cd x && git push` 会命中 `"git push *"`），并忽略开头的 `NAME=value` 赋值和
+程序所在目录；路径规则还会匹配符号链接真正指向的位置；glob 还会匹配它所指的
+目录本身；URL 规则还会匹配无法解析的 URL。Allow 规则只匹配它写明的内容：路径
+必须在书写形式与真实解析形式下都匹配，因此允许目录中的符号链接不会扩大授权范围。
+
+兼容性提示：已有命令规则中的 `*` 过去是字面字符，现在是通配符。权限提示在
+「始终允许」时永远不会提出含 `*` 的规则。
+
+来自不同配置层的规则是拼接而非替换。仓库层只能贡献 `deny` 与 `ask` 规则；可信的
+global/settings 层可以包含全部三种 action。
 
 ```json
 {
   "permissionRules": [
-    { "action": "deny", "tool": "run_command", "match": "rm -rf /" },
-    { "action": "allow", "tool": "run_command", "match": "pnpm build" }
+    { "action": "deny", "tool": "*", "match": "**/*.pem" },
+    { "action": "ask", "tool": "run_command", "match": "npm publish*" },
+    { "action": "allow", "tool": "run_command", "match": "pnpm build" },
+    { "action": "allow", "tool": "web_fetch", "match": "domain:docs.example.com" },
+    { "action": "allow", "tool": "mcp__github__*" }
   ]
 }
 ```
+
+#### 拒绝时附带理由
+
+如果前端允许你在拒绝时输入一段说明，这段说明（去除首尾空白，最多 2,000 个字符）
+会以 "The user said: …" 的形式附加到模型读到的拒绝信息里，让它下一次尝试可以照做，
+而不必去猜。
 
 可通过 `config set` 设置？**不可以** —— 直接编辑文件，或者让权限提示替你写入
 （见下文）。
@@ -673,6 +780,11 @@ global/settings 层可以包含两种 action。
 | `a` | Allow for session | 本次运行内允许该调用及同类调用（不落盘） |
 | `A` | Always allow | 把规则写入 `~/.seekforge/config.json` |
 
+「同类调用」的范围刻意很窄。对 shell 命令，它指同一条命令（可以多带参数）。
+对文件工具，它指同一个工具作用于同一目录下（按符号链接解析后）的文件：批准
+`src/a.ts` 覆盖 `src/b.ts`，但不覆盖 `src/sub/c.ts`、上级目录或另一个工具。对
+`env`（L3）工具，以及命中 `ask` 规则的任何调用，根本不提供会话选项。
+
 只有当提示同时把将要写入的那条规则原文展示出来时，第三个选项才会出现；展示的
 规则就是落盘的规则。是否提出这条规则由 core 决定；没拿到规则的前端不会提供这个
 选项，否则它就得自己编造要持久化的内容。
@@ -681,20 +793,20 @@ global/settings 层可以包含两种 action。
 配置。这是同一个信任域：服务端只监听 127.0.0.1 且要求 bearer token，所以能回答
 这个提示的人，本来就是启动它的那个账号。它比你手写时能写的范围更窄，这是刻意的：
 
-- **只针对 shell 命令**（`run_command`、`task_kill`）。命令是一年后你仍然认得的
-  身份，而且 allow 规则按 token 边界匹配它，所以 `pnpm test` 永远不会覆盖
-  `pnpm test-all`。其他规则主体没有这个锚点：URL 规则是有意用无锚点前缀匹配的
-  —— 手写一条文档域名规则正是靠它覆盖子路径 —— 而对一条由模型恰好请求的某个
-  URL 生成的规则来说，这就太宽了。路径被排除是出于相邻的理由：路径是一个内容
-  会变化的位置，授权却比它的内容活得更久，而要放开编辑，`acceptEdits` 才是那个
-  显式的方式。
+- **只针对 shell 命令**（`run_command`、`run_tests`、`task_kill`）。命令是一年后
+  你仍然认得的身份，而且 allow 规则按 token 边界匹配它，所以 `pnpm test` 永远不会
+  覆盖 `pnpm test-all`。其他规则主体的锚点更弱：URL 前缀规则有意覆盖其所指位置下
+  的所有子路径，而对一条由模型恰好请求的某个 URL 生成的规则来说，这就太宽了。
+  路径被排除是出于相邻的理由：路径是一个内容会变化的位置，授权却比它的内容活得
+  更久，而要放开编辑，`acceptEdits` 才是那个显式的方式。
 - **绝不针对复合命令。** `pnpm test && curl … | sh` 不会被提供，因为 allow
   规则永远不会匹配含 shell 控制语法的命令：这条规则会保存下来、看起来像一次
   授权、却永远不会生效。
+- **绝不针对含 `*` 的命令。** 它会被读回为通配符，授权范围超出你批准的那条命令。
 - **绝不针对 `dangerous`。** 这类调用在任何提示之前就已被拒绝。
 
 规则始终写入你自己的 `~/.seekforge/config.json`，而不是项目的 —— 仓库层只能
-贡献 `deny` 规则，写在那里的 allow 规则会保存成功、然后在每次加载时被剥离。
+贡献 `deny` 与 `ask` 规则，写在那里的 allow 规则会保存成功、然后在每次加载时被剥离。
 确认提示会写出文件路径，因为一条比本次运行活得更久的授权，必须是你能找到并
 删除的。如果写入失败（配置无法解析、home 只读），批准会降级为会话级、运行
 继续，并且失败会被报告而不是被吞掉。
@@ -1066,7 +1178,7 @@ description: House style
 | 字段 | 合并策略 |
 | --- | --- |
 | `mcpServers` | 按服务器键合并，且**区分来源**。仓库层（`.seekforge/config.json`、`config.local.json`，以及两者中的 profile）可以新增服务器名，但绝不能覆盖用户级层已定义的名字；它们的条目一律失去 `trusted`，以及任何比 `write` 更宽松的 `permission`/`toolPermissions`。只有完整的用户级条目才能启用自动连接。这一点在每个界面上都成立——CLI、TUI、`seekforge serve`，以及经由服务器的 Desktop——因为四者走的是同一套分层代数，而层的来源是其类型的一部分。目前只有 CLI 会把这类收窄打印出来，其余界面只执行、不提示。 |
-| `permissionRules` | 按高优先级在前拼接，但仓库层只能贡献有效的 `deny` 规则。 |
+| `permissionRules` | 按高优先级在前拼接，但仓库层只能贡献有效的 `deny` 与 `ask` 规则。 |
 | `hooks` | 在可信层间按阶段拼接：global → settings。仓库 hook 会被忽略。 |
 
 如果更高的层为这些字段提供了错误的运行时形态，该值会被忽略，
@@ -1112,7 +1224,8 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 `modelPricing`、`inlineImages`、`verifyCommand`、`autoVerify`、`lintCommand`、`autoLint`、
 `editFormat`、`finalizeReview`、`guardNoProgress`、
 `memoryAutoApproveConfidence`、`memoryMaintenance`、`permissionRules`、
-`mcpServers`、`hooks` —— **不可**通过 `config set` 设置。必须直接编辑 JSON
+`sandboxNetwork`、`additionalDirectories`、`mcpServers`、`hooks` —— **不可**通过
+`config set` 设置。必须直接编辑 JSON
 配置文件、在 Desktop/Server 支持时通过其界面配置，或通过专用子命令管理
 （MCP 服务器用 `seekforge mcp add|list|remove`）。
 

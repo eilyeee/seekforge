@@ -4915,3 +4915,76 @@ a flaky verifier, not a bad bound.
 - **Caught:** by reading the call chain from a validator to its consumer while
   merging five copies of the validator. Neither `scripts/` gate can see this
   class: the value is a number of the right type and the code compiles.
+
+## 425. A URL prefix is not a host boundary
+
+`GET https://docs.example.com` as a string prefix also matches
+`https://docs.example.com.evil.net/…` and `https://docs.example.com@evil.net/…`
+(the second one's host is `evil.net`; everything before `@` is userinfo). A
+separator check does not save it: `:` and `@` are both legal right after the
+host, and they mean opposite things.
+
+- **Do:** parse both sides and compare components — scheme, host and port, then
+  the path on a `/` boundary. Keep the plain string prefix only for a rule that
+  names no host (`GET https://`), where there is nothing to parse.
+- **Do:** match domains by label (`host === d || host.endsWith("." + d)`), and
+  never apply a subdomain test to an IP literal: `10.0.0.1` "ends with"
+  `.0.0.1`.
+- **Do:** for deny/ask, accept either the structural or the raw match, and treat
+  an unparseable URL as a match.
+- **Do:** when a decision is made on a *name* and the connection is made
+  later, resolve once and connect to what was resolved; otherwise the name can
+  be re-pointed in between. A name admitted only by a wildcard must not land on
+  loopback or link-local addresses — whoever can create a subdomain chooses
+  where it points.
+- **Caught (review):** the `sandboxNetwork` proxy approved a host name and then
+  handed the name to `net.connect`, which resolved it again with no address
+  check.
+- **Caught:** `packages/core/src/tools/permissions.ts` — web_fetch and
+  browser_navigate allow rules were an unanchored `startsWith` on `GET <url>`.
+  Now `rule-match.ts::urlCommandMatches`; the sandbox allowlist and `domain:`
+  rules share `network-policy.ts`.
+
+## 426. A secret-path check must be anchored where the secret is, not where the walk starts
+
+`search_text` skipped `isSensitiveRelPath(rel)` files, with `rel` relative to
+the directory being searched. Searching `.seekforge` made its `config.json` an
+ordinary `config.json`, and the result carried the API key; so did searching the
+file itself (`rel` was its basename).
+
+- **Do:** compute the path from the root that owns the secret rule (the
+  workspace, or the granted directory) before testing it, and test nested
+  copies (`pkg/.seekforge/config.json`) too when a tree can contain projects.
+- **Caught:** `packages/core/src/tools/builtins/fs.ts` (`search_text`), now via
+  `sandbox.ts::isSensitiveNestedPath` on the path relative to the owning root.
+
+## 427. Grants of different kinds need different namespaces
+
+The session allowlist held command prefixes and bare tool names in one array,
+and the command matcher prefix-matched every entry. Approving `write_file` for
+the session therefore also approved `run_command("write_file …")`, and a
+command literally named after a tool approved that tool.
+
+- **Do:** give each grant kind a representation the other matchers cannot
+  produce or accept (here, a NUL separator: a command containing NUL cannot be
+  spawned, is never recorded, and is skipped by the command matcher).
+- **Do:** scope a remembered grant to what the prompt showed. A file-tool grant
+  is now the tool plus the physical directory of the approved path — a bare
+  tool name approved every later path, including `.github/workflows/`.
+- **Caught:** `packages/core/src/tools/permissions.ts` (`sessionToken`,
+  `sessionAllowed`).
+
+## 428. Every tool that executes a command is a shell tool for policy
+
+`run_tests` runs the command it is given through the same executor as
+`run_command`, but the rule matcher and the session allowlist special-cased
+only `run_command`/`task_kill`. For `run_tests`, an allow rule was an unanchored
+prefix that also matched compound lines (`pnpm test; touch pwned`), and "don't
+ask again" remembered the bare tool name — approving every later test command,
+whatever it was.
+
+- **Do:** derive the policy class from what the tool does (executes a shell
+  line), from one set, and use that set everywhere the class matters: rule
+  matching, compound-command refusal, session tokens, durable rules.
+- **Caught:** `packages/core/src/tools/rule-match.ts`
+  (`SHELL_COMMAND_TOOLS`, `SHELL_EXECUTING_TOOLS`).

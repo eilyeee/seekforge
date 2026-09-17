@@ -38,7 +38,7 @@
 
 import type { PermissionRule } from "@seekforge/shared";
 import type { Readable, Writable } from "node:stream";
-import { createDefaultDispatcher, type SandboxLevel, type ToolContext } from "../tools/index.js";
+import { createDefaultDispatcher, type SandboxLevel, type SandboxProfile, type ToolContext } from "../tools/index.js";
 import type { HookConfig } from "../hooks/index.js";
 import { createBoundedLineReader, MAX_MCP_MESSAGE_BYTES } from "./framing.js";
 import { SEEKFORGE_VERSION } from "../version.js";
@@ -101,8 +101,11 @@ export type ServeMcpOptions = {
    * non-zero exit blocks it — the same contract every other frontend has.
    */
   hooks?: HookConfig;
-  /** OS-level command sandbox (config `sandbox`); "off"/absent = no wrapper. */
-  sandbox?: SandboxLevel;
+  /**
+   * OS-level command sandbox (config `sandbox`); "off"/absent = no wrapper. A
+   * profile from sandboxForRun carries the `sandboxNetwork` allowlist.
+   */
+  sandbox?: SandboxLevel | SandboxProfile;
 };
 
 export type McpServerHandle = {

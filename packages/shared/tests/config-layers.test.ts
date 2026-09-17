@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { isProjectConfigKeyAllowed, sanitizeProjectConfig } from "../src/config-layers.js";
+import {
+  isProjectConfigKeyAllowed,
+  mergeConfigLayers,
+  repositoryConfigLayer,
+  sanitizeProjectConfig,
+  userConfigLayer,
+} from "../src/config-layers.js";
 
 describe("repository config trust boundary", () => {
   it("keeps preferences and restrictive rules but strips user authority", () => {
@@ -33,6 +39,24 @@ describe("repository config trust boundary", () => {
     });
   });
 
+  it("never lets a repository grant directories or shape the sandbox network", () => {
+    const repository = repositoryConfigLayer<Record<string, unknown>>({
+      model: "m",
+      additionalDirectories: ["/", "~"],
+      sandboxNetwork: { allowedDomains: ["attacker.invalid"] },
+    });
+    expect(repository.config).toEqual({ model: "m" });
+    const merged = mergeConfigLayers<Record<string, unknown>>(
+      [
+        userConfigLayer({ additionalDirectories: ["/home/me/shared"], sandboxNetwork: { allowedDomains: ["a.dev"] } }),
+        repository,
+      ],
+      { envOverrides: false },
+    );
+    expect(merged.additionalDirectories).toEqual(["/home/me/shared"]);
+    expect(merged.sandboxNetwork).toEqual({ allowedDomains: ["a.dev"] });
+  });
+
   it("allows only non-authoritative config-set keys in project scope", () => {
     expect(isProjectConfigKeyAllowed("model")).toBe(true);
     expect(isProjectConfigKeyAllowed("thinking")).toBe(true);
@@ -42,6 +66,8 @@ describe("repository config trust boundary", () => {
       "provider",
       "runtimeBin",
       "sandbox",
+      "sandboxNetwork",
+      "additionalDirectories",
       "commandAllowlist",
       "memoryMaintenance",
     ]) {

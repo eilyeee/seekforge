@@ -20,11 +20,15 @@ import {
   acquireLspServerLease,
   createBackgroundTasks,
   digestCommandOutput,
+  resolveAdditionalDirectories,
+  resolveSandboxNetwork,
   runShellCommand,
+  sandboxForRun,
   TEST_COMMAND_TIMEOUT_MS,
   truncateHeadTail,
   type BackgroundTasks,
   type SandboxLevel,
+  type SandboxProfile,
   type ToolContext,
   type ToolDispatcher,
 } from "../tools/index.js";
@@ -198,9 +202,17 @@ export type AgentCoreDeps = {
   runtime?: RuntimeClient;
   /**
    * OS-level sandbox for run_command (seatbelt on darwin, bwrap on linux).
-   * "off" or absent = no wrapper. Inherited by nested subagent runs.
+   * "off" or absent = no wrapper. Inherited by nested subagent runs. A profile
+   * carries a domain allowlist (see buildAgentCoreDeps' sandboxNetwork).
    */
-  sandbox?: SandboxLevel;
+  sandbox?: SandboxLevel | SandboxProfile;
+  /**
+   * User-granted directories outside the project that the file tools may read
+   * and write (CLI --add-dir, TUI /add-dir, user-config additionalDirectories).
+   * Validated per run against the project; writable inside the OS sandbox when
+   * its level allows writes. Never populated from repository config.
+   */
+  additionalDirectories?: string[];
   /** Extra command prefixes the user allows to auto-run (L2). */
   commandAllowlist?: string[];
   /** Fine-grained allow/deny rules, project rules first (first match wins). */
@@ -407,6 +419,14 @@ const MAX_STREAMED_CHUNKS_PER_CALL = 200;
 /** Appends a user-supplied system-prompt suffix (CLI --append-system-prompt). */
 function appendUserPrompt(base: string, append?: string): string {
   return append?.trim() ? `${base}\n\n${append.trim()}` : base;
+}
+
+function additionalDirectoriesPrompt(directories: readonly string[]): string | undefined {
+  if (directories.length === 0) return undefined;
+  return [
+    "Besides the workspace, the user granted the file tools access to these directories. Refer to files in them by absolute path; the same permission rules apply:",
+    ...directories.map((directory) => `- ${directory}`),
+  ].join("\n");
 }
 
 export function createAgentCore(deps: AgentCoreDeps): AgentCore {
@@ -630,6 +650,37 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         });
         yield emit({ type: "session.created", sessionId });
 
+        // Additional directories are re-validated against THIS project on every
+        // run, and the sandbox's allowlist proxy is started before any command
+        // can need it, so a background task gets a concrete endpoint.
+        const additional = resolveAdditionalDirectories(deps.additionalDirectories ?? [], input.projectPath);
+        if (depth === 0 && additional.rejected.length > 0) {
+          yield emit({
+            type: "notice",
+            level: "warn",
+            message: `ignored additional directories (missing, not a directory, or inside the project): ${additional.rejected.join(", ")}`,
+          });
+        }
+        const promptAppendix =
+          [additionalDirectoriesPrompt(additional.directories), input.appendSystemPrompt?.trim()]
+            .filter((part) => part !== undefined && part !== "")
+            .join("\n\n") || undefined;
+        const requestedSandbox = sandboxForRun(deps.sandbox, { writablePaths: additional.directories });
+        const runSandbox = await resolveSandboxNetwork(requestedSandbox);
+        if (
+          depth === 0 &&
+          typeof requestedSandbox === "object" &&
+          typeof requestedSandbox.network === "object" &&
+          typeof runSandbox === "object" &&
+          runSandbox.network === "deny"
+        ) {
+          yield emit({
+            type: "notice",
+            level: "warn",
+            message: "the sandbox network proxy could not start; sandboxed commands have no network access this run",
+          });
+        }
+
         // sessionStart/userPromptSubmit fire once for the TOP-LEVEL run only
         // (like sessionEnd); nested subagent runs (depth > 0) skip them. They
         // fire BEFORE the task message is built so that userPromptSubmit hook
@@ -724,7 +775,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                     ...(relevantFiles ? { relevantFiles } : {}),
                     ...(deps.editFormat ? { editFormat: deps.editFormat } : {}),
                   }),
-                  input.appendSystemPrompt,
+                  promptAppendix,
                 ),
             };
           }
@@ -756,7 +807,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               ...(relevantFiles ? { relevantFiles } : {}),
               ...(deps.editFormat ? { editFormat: deps.editFormat } : {}),
             }),
-            input.appendSystemPrompt,
+            promptAppendix,
           );
           messages = [
             { role: "system", content: systemPrompt },
@@ -841,7 +892,8 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           log: (entry) => trace.toolCall(entry),
           runtime: deps.runtime,
           hooks: deps.hooks,
-          sandbox: deps.sandbox,
+          ...(runSandbox !== undefined ? { sandbox: runSandbox } : {}),
+          ...(additional.directories.length > 0 ? { additionalDirectories: additional.directories } : {}),
           background: deps.background ?? createBackgroundTasks(),
           signal: runSignal,
           checkpoint: (path, before) => {
@@ -1260,7 +1312,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                   let gateResult: ReturnType<typeof classifyAutoGateResult>;
                   try {
                     const r = await runShellCommand(autoGate.command, input.projectPath, TEST_COMMAND_TIMEOUT_MS, {
-                      sandbox: deps.sandbox,
+                      sandbox: runSandbox,
                       workspace: input.projectPath,
                       signal: runSignal,
                     });

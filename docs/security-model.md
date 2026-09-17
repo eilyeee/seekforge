@@ -37,53 +37,95 @@ and runs in a fixed order:
 
 1. **Deny rules first.** The first matching `deny` rule blocks the call at *every*
    level, including readonly — never prompted, never run
-   (`permissions.ts:150`).
-2. **Readonly (L0) auto-allows** only after deny rules have had their say
-   (`permissions.ts:160`).
-3. **`ask` mode** forbids everything above L0 (`permissions.ts:164`).
-4. **Denylist absoluteness.** An L4 `dangerous` call is refused unconditionally;
-   an `allow` rule can never rescue it (`permissions.ts:173`).
-5. **Allow rules**, then the **session allowlist**, then a fresh confirmation
-   (`permissions.ts:185`, `:193`, `:197`).
-6. **The session allowlist covers L1/L2 only.** An `env` (L3) approval is never
-   remembered, because the token it would store is a bare tool name and cannot
-   carry what the user actually approved — remembering `browser_click` would
-   grant every later selector, and `web_fetch` every later URL, from one
+   (`denyBeforePrompt`).
+2. **`ask` mode** forbids everything above L0, and an L4 `dangerous` call is
+   refused unconditionally — no rule, answer or approval mode can rescue it.
+3. **Ask rules.** A matching `ask` rule prompts even for a read-only call, and
+   outranks allow rules, the session allowlist and every approval mode
+   (including `auto`). It never rescues a denied call, and the answer covers
+   only that call: the prompt offers neither "don't ask again" nor "always".
+4. **Readonly (L0) auto-allows** once deny and ask rules have had their say.
+5. **Allow rules**, then the **session allowlist**, then a fresh confirmation.
+6. **The session allowlist covers L1/L2 only, and only what was shown.** An
+   `env` (L3) approval is never remembered, because the token it would store
+   cannot carry what the user actually approved — remembering `browser_click`
+   would grant every later selector, and `web_fetch` every later URL, from one
    keypress. L3 confirms on every call; only an explicit allow rule, which names
-   its subject, can widen it.
+   its subject, can widen it. Shell tools (`run_command`, `run_tests`,
+   `task_kill`) remember the command prefix. File tools remember the tool plus
+   the **physical directory** of the approved path: "don't ask again" on
+   `src/a.ts` covers the other files directly in `src/`, not `src/sub/`, not the
+   parent, and not a symlinked directory inside `src/`. (It used to remember the
+   bare tool name, which covered every path for the rest of the run.) Grants of
+   different kinds live in separate namespaces, so a command grant can never
+   stand in for a tool grant.
+7. **A refusal can carry the user's reason.** When the frontend returns
+   `{ allow: false, feedback }`, core appends the text (trimmed, at most 2,000
+   characters) to the denial the model reads — `The user said: …` — so the
+   next attempt can follow it. It is guidance in a tool result, not an
+   instruction channel: §5 still applies.
 
 ### Boundary matching (no prefix smuggling)
 
+Rule matching lives in `packages/core/src/tools/rule-match.ts`. Its one
+asymmetry: an `allow` rule must never match more than it says, while `deny` and
+`ask` rules may match more — over-matching them fails closed.
+
 Allow rules and the session allowlist match on a *separator boundary*, not a raw
 `startsWith`, so `npm run build` cannot auto-approve `npm run build-all` or
-`npm run build; rm -rf .`, and `src/foo` cannot grant `src/foobar.ts`:
+`npm run build; rm -rf .`, and `src/foo` cannot grant `src/foobar.ts`
+(`rule-match.ts::boundaryPrefix`, `permissions.ts::sessionAllowed`). Deny rules
+deliberately keep the *broad* prefix test.
 
-- Rule boundary matching: `permissions.ts::boundaryPrefix` (`permissions.ts:111`),
-  applied in `ruleMatches` (`permissions.ts:134`, path form `:138`).
-- Session allowlist boundary matching: `permissions.ts::sessionAllowed`
-  (`permissions.ts:45`).
-- Deny rules deliberately keep the *broad* prefix test — over-matching a deny
-  fails closed (`permissions.ts:125`).
+- **Tool names** match exactly, or as a `*` glob (`mcp__github__*`, `browser_*`).
+- **Commands** are whitespace-normalized on both sides, so extra spaces cannot
+  slip a command past a rule (the classifier normalizes identically, see §3). A
+  `*` in `match` is a wildcard. An allow wildcard is anchored at both ends
+  (`npm run *` matches `npm run build` and `npm run`, never `npm runx`), must
+  name its program (a wildcard in the first word matches nothing, so
+  `* --version` cannot approve every command), and never matches a line with
+  shell control syntax. Deny and ask rules — plain or wildcard — are tested
+  against the whole line **and** against each command a compound line or
+  command substitution would run, with leading `NAME=value` assignments
+  stripped and a path-qualified program reduced to its name, so
+  `cd x && GIT_TRACE=1 /usr/bin/git push` still meets a deny on `git push *`.
+- **URLs.** web_fetch and browser_navigate classify as `GET <url>`. A URL
+  prefix rule is compared structurally — same scheme, same host and port, and a
+  path that continues the rule's path at a `/` — so `GET https://docs.example.com`
+  does not approve `https://docs.example.com.evil.net/` or
+  `https://docs.example.com@evil.net/`. A rule that names no host
+  (`GET https://`) keeps its plain prefix meaning. `domain:example.com` matches
+  that host and its subdomains on a label boundary, never an IP by suffix. A
+  deny or ask URL rule also matches an unparseable URL.
+- **Paths** are compared relative to the workspace when they lie inside it —
+  so an absolute path cannot dodge a relative deny — and in two forms: as
+  written (lexically normalized, which defeats `src/../x`) and as it physically
+  resolves (symlinks followed). A deny or ask rule that matches either form
+  applies; an allow rule must match both, so a symlink inside an allowed
+  directory does not carry the grant elsewhere. A `match` containing `*` or `?`
+  is a glob (`src/**`, `**/*.env`, `docs/*.md`; `**` spans directories, `*` and
+  `?` stay within one); `[` and `{` are literal, so a Next.js `app/[id]` rule
+  means that directory. A deny or ask glob also covers the directory it names.
 
-Commands are whitespace-normalized on both sides before matching, so extra
-spaces cannot slip a command past a rule (`permissions.ts::normalizeWhitespace`,
-`permissions.ts:92`; classifier normalizes identically, see §3).
-
-For `run_command`, matching a prefix is still insufficient when the submitted
-string contains unquoted shell control syntax. Compound commands, pipelines,
-redirects, command substitutions, and multiline shell programs never use an
-allow rule, configured allowlist, or remembered session approval; they return to
-the normal raw-command confirmation path.
+For shell tools that execute (`run_command`, `run_tests`), matching a rule is
+still insufficient when the submitted string contains unquoted shell control
+syntax. Compound commands, pipelines, redirects, command substitutions, and
+multiline shell programs never use an allow rule, configured allowlist, or
+remembered session approval; they return to the normal raw-command confirmation
+path. `run_tests` used to be matched like a URL tool — an unanchored prefix, a
+session grant for the bare tool name — although it runs the command it is given.
 
 ### Repository configuration is not user authority
 
 `.seekforge/config.json`, `.seekforge/config.local.json`, and their profiles are
 untrusted repository input. Before layering, SeekForge keeps only ordinary
-preferences, restrictive `deny` rules, and MCP definitions with trust removed.
-Repository values cannot route a user API key, execute hooks/status/runtime or
-verification commands, add allow rules/allowlists, weaken sandboxing, raise
-budgets, or mark an MCP server trusted. Those capabilities require global user
-config, environment variables, or an explicitly selected settings file.
+preferences, restrictive `deny` and `ask` rules, and MCP definitions with trust
+removed. Repository values cannot route a user API key, execute
+hooks/status/runtime or verification commands, add allow rules/allowlists,
+change the sandboxing (`sandbox`, `sandboxNetwork`), grant access to directories
+outside the project (`additionalDirectories`), raise budgets, or mark an MCP
+server trusted. Those capabilities require global user config, environment
+variables, CLI flags, or an explicitly selected settings file.
 
 ---
 
@@ -167,10 +209,39 @@ symlink escapes, `..`, and absolute paths outside the root are all rejected:
   policy is applied to `@path` task expansion before content reaches the model.
 - Writes additionally refuse anything under `.git/`: `resolveForWrite`
   (`sandbox.ts:83`).
+- `search_text` judges a secret by its path from the root it belongs to, not
+  from where the walk starts: searching `.seekforge` itself used to present its
+  `config.json` as an ordinary `config.json` and return the API key. Nested
+  copies (`pkg/.seekforge/config.json`, `vendor/x/.git/config`) are skipped too.
+
+**Additional directories.** The user may grant directories outside the project
+(`--add-dir`, `/add-dir`, or `additionalDirectories` in user config — never
+repository config). `sandbox.ts::toolPathRoot` re-roots a file-tool path whose
+physical location lies in one of them, choosing the deepest granted root; every
+other path stays with the workspace and its resolvers refuse it exactly as
+before, so a session without grants is unchanged.
+
+- The same permission levels, prompts, rules and approval modes apply
+  (`acceptEdits` included); the prompt shows the raw path.
+- Containment is realpath-based per root, so a symlink or dangling symlink that
+  leaves every granted root is still `outside_workspace`.
+- A granted directory is often a parent of several projects, so its secret-file
+  rules apply at every depth (`other/.seekforge/config.json`,
+  `other/.git/config`) and writes are refused anywhere under a `.git`
+  directory. A path that physically lies in the workspace keeps the workspace's
+  own rules even when a granted directory contains the workspace.
+- Directories are re-validated against the project on every run (they must
+  exist, be directories, and lie outside the project) and pinned to their
+  physical path; rejected entries are reported as a warning notice.
+- A Runtime-backed session sends such a call to the Runtime with the granted
+  directory as its workspace, so the Runtime's own containment still applies.
+- Rewind restores workspace files only: a change in a granted directory is
+  checkpointed under its absolute path and reported as skipped.
+- `run_command`'s `cwd`, the git, LSP and repo-map tools stay workspace-only.
 
 **OS-level command sandbox** (`packages/core/src/tools/os-sandbox.ts`, opt-in)
 wraps `/bin/sh -c` so shell commands cannot write outside the workspace, and can
-also cut off the network:
+also cut off the network or narrow it to a domain allowlist:
 
 - Levels `off` / `read-only` / `workspace-write` / `restricted`;
   `read-only` keeps the workspace read-only while allowing temporary files,
@@ -187,6 +258,50 @@ also cut off the network:
   kernels match against the resolved path — an unresolved `/tmp/ws` was never
   hit by its own `read-only` deny rule while the broad `/private/tmp` allowance
   applied, leaving that level fully writable.
+- Additional directories are writable inside the sandbox when the level allows
+  writes (`workspace-write`, `restricted`), and stay read-only under
+  `read-only` (`sandboxForRun`, `SandboxProfile.writablePaths`).
+- **Domain allowlist** (`sandboxNetwork`, `network-proxy.ts`). Commands get
+  `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` (both cases) pointing at a local proxy
+  that the process starts on first use, bound to `127.0.0.1` on a random port.
+  It forwards `CONNECT` tunnels and absolute-form `http://` requests only to
+  hosts the allowlist names (`example.com` exactly, `*.example.com` for strict
+  subdomains; `deniedDomains` win), deciding on the requested host name, then
+  resolving it once and connecting only to the addresses it resolved — a name
+  cannot be re-pointed between the check and the connection. A name matched
+  only by a wildcard is refused when it resolves to a loopback, unspecified or
+  link-local address (the cloud metadata endpoint included), because anyone who
+  can create `x.example.com` can point it at this machine; a name listed exactly
+  is trusted to resolve anywhere, and private ranges stay reachable because
+  corporate registries live there. The kernel refuses everything else: seatbelt denies all
+  network except an outbound connection to the proxy's loopback port; bwrap
+  unshares the network namespace, which cannot reach the host at all, so a
+  small forwarder started inside the namespace (the host's `node`, visible on
+  the read-only root) listens on the namespace's own `127.0.0.1:<port>`, pipes
+  each connection to the proxy's private unix socket, and only then runs the
+  command. A client that ignores the proxy variables simply has no network.
+  An allowlist is only ever a narrowing: `restricted` keeps no network at all,
+  an allowlist without a level implies `workspace-write`, and an explicit `off`
+  turns the whole mechanism off. If the proxy cannot start, the run gets no
+  network and a warning notice. A malformed allowlist refuses to build the
+  agent rather than leaving the network open.
+- A refused connection answers `403 Blocked by SeekForge sandbox` with an
+  `X-SeekForge-Sandbox: blocked` header. The proxy logs it, and the command
+  result gains a line naming the blocked `host:port`; a failing command whose
+  run hit a refusal (or whose output shows a resolver or tunnel failure while
+  the network is restricted) gets the usual one-time "retry WITHOUT sandbox?"
+  offer, naming the blocked hosts.
+- macOS commands cannot bind or reach any other loopback port under an
+  allowlist (as under `restricted`); on Linux the namespace has its own
+  loopback, so local test servers keep working there. `localhost` is never
+  proxied (`NO_PROXY`); the proxy reaches the host's own loopback only for a
+  name or address the allowlist lists exactly.
+- If the SeekForge process itself runs behind an `http://` proxy
+  (`http_proxy`/`https_proxy`/`all_proxy`, either case, honoring `no_proxy`),
+  the allowlist proxy forwards allowed traffic through it, with its
+  credentials, so an allowlist does not cut off a network that only works
+  through a proxy; name resolution is then the upstream's. Loopback
+  destinations always go direct; SOCKS upstreams are not chained.
 - There is no Windows implementation and none is planned; see the README's known
   limitations for why a partial mechanism under the same name would be worse
   than failing closed.
