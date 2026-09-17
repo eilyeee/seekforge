@@ -5142,3 +5142,22 @@ esbuild emitted `React.createElement` with no `React` in scope and the published
   vitest: both defects passed every unit test.
 - **Caught:** `apps/cli/src/commands/update.ts::defaultUpdateDeps` and
   `apps/cli/tsup.config.ts`, while making bare `seekforge` launch the bundled TUI.
+
+## 437. A review screen is a terminal sink for the text it asks you to review
+
+An approval flow exists because the text on screen was written by someone you
+do not trust yet. Printing that text as it came — a server name, a command, a
+URL, an error a server returned — hands its author the terminal: an escape
+sequence can clear or repaint the prompt, retitle the window or write the
+clipboard before any decision is made. Length clipping is not sanitizing.
+
+- **Do:** blank C0/C1 control characters at the one component every such row
+  and message passes through, and again in the helpers that build the lines;
+  keep structured previews (JSON) escaped. Quote any of that text you put into
+  a line meant to be pasted into a shell, and put it after `--` when it could
+  read as an option: quoting only changes how the shell splits the line, not
+  how the program parses a token that starts with `-`.
+- **Caught:** TUI `/mcp` rendered a repository `.mcp.json` server's name,
+  command/URL and a server's error verbatim on the screen that asks you to
+  approve it, and copied `seekforge mcp login <name>` with the name unquoted
+  (a name such as `-y` was read as an option).

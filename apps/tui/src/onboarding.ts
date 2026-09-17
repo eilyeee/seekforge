@@ -10,9 +10,29 @@ import { writeStateFile } from "./state-file.js";
  * IO is testable against a tmpdir homeDir.
  */
 
-/** True when no API key is configured anywhere (env/project/global). */
-export function needsOnboarding(config: { apiKey?: string }): boolean {
-  return !config.apiKey;
+/**
+ * True when no API key is configured anywhere (env/project/global) and no
+ * `apiKeyHelper` is there to supply one — a key the wizard saves would never
+ * be used beside a helper, which replaces the file key.
+ */
+export function needsOnboarding(config: { apiKey?: string; apiKeyHelper?: string }): boolean {
+  return !config.apiKey && !config.apiKeyHelper;
+}
+
+/** What the launcher does about the API key before the screen is taken. */
+export type KeySetup = { kind: "ready" } | { kind: "wizard" } | { kind: "helper-failed"; message: string };
+
+/**
+ * `helperError` is the config merge's report of a failed `apiKeyHelper`. A
+ * configured helper that failed is reported as that failure — the wizard
+ * would save a key the helper then overrides.
+ */
+export function keySetup(config: { apiKey?: string; apiKeyHelper?: string }, helperError?: string): KeySetup {
+  if (config.apiKey) return { kind: "ready" };
+  if (config.apiKeyHelper) {
+    return helperError !== undefined ? { kind: "helper-failed", message: helperError } : { kind: "ready" };
+  }
+  return { kind: "wizard" };
 }
 
 /**

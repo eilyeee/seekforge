@@ -1,14 +1,15 @@
 /**
  * Workspace file index + frecency for the @ file picker. The scan is a BFS
- * so shallow files surface first (the most likely @-targets), skipping the
- * same directories the tools ignore plus any dot-directory and symlinks.
+ * so shallow files surface first (the most likely @-targets), skipping what
+ * the file tools skip — `.gitignore`d paths through core's WorkspaceIgnore, on
+ * top of the fixed directory set — plus any dot-directory and symlinks.
  * Frecency (frequency + recency, à la DeepSeek-TUI file_frecency) persists
  * to .seekforge/tui-frecency.json so repeat picks bubble to the top.
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { DEFAULT_IGNORE_DIRS } from "@seekforge/core";
+import { DEFAULT_IGNORE_DIRS, WorkspaceIgnore } from "@seekforge/core";
 import { fuzzyScore } from "./fuzzy.js";
 import { readStateFile, writeStateFile } from "./state-file.js";
 
@@ -16,17 +17,24 @@ const DEFAULT_SCAN_LIMIT = 5000;
 const MAX_FRECENCY_ENTRIES = 500;
 const DEFAULT_RANK_LIMIT = 10;
 
+type IgnoreFrame = ReturnType<WorkspaceIgnore["frameFor"]>;
+
 /**
  * BFS over the workspace: shallow files first, workspace-relative paths with
- * "/" separators. Skips DEFAULT_IGNORE_DIRS members, dot-directories, and
- * symlinks; stops at `limit` files (default 5000).
+ * "/" separators. Skips DEFAULT_IGNORE_DIRS members, dot-directories,
+ * symlinks, and whatever the workspace's `.gitignore` files (root and nested)
+ * and `.git/info/exclude` ignore; stops at `limit` files (default 5000).
  */
 export function scanWorkspaceFiles(root: string, opts?: { limit?: number }): string[] {
   const limit = opts?.limit ?? DEFAULT_SCAN_LIMIT;
+  const ignore = WorkspaceIgnore.forWorkspace(root);
   const files: string[] = [];
-  const queue: string[] = [""]; // workspace-relative directories
+  // Workspace-relative directories with their parent's ignore rules; a
+  // directory's own .gitignore is read only when the scan reaches it.
+  const queue: Array<{ rel: string; parent?: IgnoreFrame }> = [{ rel: "" }];
   while (queue.length > 0 && files.length < limit) {
-    const rel = queue.shift() as string;
+    const { rel, parent } = queue.shift() as { rel: string; parent?: IgnoreFrame };
+    const frame = parent === undefined ? ignore.frameFor(rel) : ignore.descend(parent, rel);
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(path.join(root, rel), { withFileTypes: true });
@@ -39,8 +47,10 @@ export function scanWorkspaceFiles(root: string, opts?: { limit?: number }): str
       const childRel = rel === "" ? entry.name : `${rel}/${entry.name}`;
       if (entry.isDirectory()) {
         if (DEFAULT_IGNORE_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
-        queue.push(childRel);
+        if (ignore.ignores(frame, childRel, true)) continue;
+        queue.push({ rel: childRel, parent: frame });
       } else if (entry.isFile()) {
+        if (ignore.ignores(frame, childRel, false)) continue;
         files.push(childRel);
         if (files.length >= limit) break;
       }

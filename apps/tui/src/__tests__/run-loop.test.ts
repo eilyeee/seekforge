@@ -45,7 +45,6 @@ describe("runLoop", () => {
       config: { costBudgetUsd: 2.5 },
       model: "test-model",
       projectPath: "/workspace",
-      mcpToolSpecs: [],
       maxIterations: 8,
       onEvent,
     });
@@ -63,7 +62,6 @@ describe("runLoop", () => {
       config: { costBudgetUsd: 2.5 },
       model: "test-model",
       projectPath: "/workspace",
-      mcpToolSpecs: [],
       maxIterations: 12,
       costBudgetUsd: 0.75,
       requirementMode: "analyze",
@@ -93,7 +91,6 @@ describe("resumeLoop", () => {
       config: {},
       model: "test-model",
       projectPath: "/workspace",
-      mcpToolSpecs: [],
       addedIterations: 3,
       addedCostBudgetUsd: 0.5,
       approveRequirements: true,
@@ -122,7 +119,6 @@ describe("resumeLoop", () => {
         config: {},
         model: "test-model",
         projectPath: "/workspace",
-        mcpToolSpecs: [],
         onEvent: vi.fn(),
       }),
     ).rejects.toThrow("Invalid loop id");

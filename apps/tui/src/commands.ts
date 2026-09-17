@@ -11,6 +11,7 @@
  * case + a handler in app.tsx.
  */
 
+import { isReasoningEffort, REASONING_EFFORTS, type ReasoningEffort } from "@seekforge/shared";
 import { translate } from "./strings.js";
 
 export type CommandSpec = {
@@ -138,9 +139,19 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
     summary: "cross-session todo list (.seekforge/todos.md)",
     group: "context",
   },
-  { name: "add-dir", args: "[path]", summary: "add a read-only directory for @ references", group: "tools" },
+  {
+    name: "add-dir",
+    args: "[path]",
+    summary: "grant a directory outside the project to the file tools and @ references",
+    group: "tools",
+  },
   { name: "model", args: "<name>", summary: "switch model for subsequent messages", group: "run" },
-  { name: "think", args: "[on|off|high|max]", summary: "V4 thinking mode and reasoning effort", group: "run" },
+  {
+    name: "think",
+    args: `[on|off|${REASONING_EFFORTS.join("|")}]`,
+    summary: "thinking mode and reasoning effort",
+    group: "run",
+  },
   {
     name: "remember",
     args: "<fact>",
@@ -170,7 +181,11 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
   { name: "agent-cancel", args: "<dispatch-id>", summary: "cancel one running subagent", group: "tools" },
   { name: "skills", summary: "enable or disable installed skills (interactive)", group: "tools" },
   { name: "plugins", summary: "enable or disable installed plugins (interactive)", group: "tools" },
-  { name: "mcp", summary: "MCP servers: status, reconnect, enable/disable (interactive)", group: "tools" },
+  {
+    name: "mcp",
+    summary: "MCP servers: status, reconnect, enable/disable, approve project servers (interactive)",
+    group: "tools",
+  },
   { name: "prompts", summary: "list MCP prompts (invoke as /mcp:<server>:<prompt>)", group: "tools" },
   { name: "init", summary: "analyze the codebase and write/refresh AGENTS.md", group: "tools" },
   {
@@ -340,6 +355,24 @@ export type ParsedInput =
   /** "!cmd" passthrough: run a shell command locally, outside the agent. */
   | { kind: "bash"; command: string }
   | { kind: "task"; text: string };
+
+/** What `/think <arg>` asks for; an effort level also turns thinking on. */
+export type ThinkRequest =
+  | { kind: "show" }
+  | { kind: "on" }
+  | { kind: "off" }
+  | { kind: "effort"; effort: ReasoningEffort }
+  | { kind: "invalid" };
+
+export const THINK_USAGE = `usage: /think [on|off|${REASONING_EFFORTS.join("|")}]`;
+
+export function parseThinkArg(arg: string | undefined): ThinkRequest {
+  const value = arg?.trim().toLowerCase() ?? "";
+  if (value === "") return { kind: "show" };
+  if (value === "on" || value === "off") return { kind: value };
+  if (isReasoningEffort(value)) return { kind: "effort", effort: value };
+  return { kind: "invalid" };
+}
 
 export function parsePositiveIndex(value: string | undefined): number | null {
   if (value === undefined || !/^[1-9][0-9]*$/.test(value)) return null;

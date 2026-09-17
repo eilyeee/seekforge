@@ -16,6 +16,36 @@ beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "seekforge-files-"));
 });
 
+describe("scanWorkspaceFiles and .gitignore", () => {
+  it("skips what the repository ignores, root and nested, keeping the fixed floor", () => {
+    fs.mkdirSync(path.join(root, ".git", "info"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".git", "info", "exclude"), "local-only.txt\n");
+    fs.writeFileSync(path.join(root, ".gitignore"), "dist/\n*.log\n!keep.log\n");
+    touch("src/app.ts");
+    touch("dist/bundle.js");
+    touch("debug.log");
+    touch("keep.log");
+    touch("local-only.txt");
+    touch("node_modules/pkg/index.js");
+    touch("pkg/.gitignore");
+    fs.writeFileSync(path.join(root, "pkg", ".gitignore"), "generated/\nsecret.txt\n");
+    touch("pkg/index.ts");
+    touch("pkg/generated/out.ts");
+    touch("pkg/secret.txt");
+    touch("other/secret.txt");
+    const files = scanWorkspaceFiles(root);
+    expect(files.sort()).toEqual(
+      [".gitignore", "keep.log", "other/secret.txt", "pkg/.gitignore", "pkg/index.ts", "src/app.ts"].sort(),
+    );
+  });
+
+  it("scans an unversioned directory with only the fixed floor", () => {
+    touch("a.log");
+    touch("node_modules/x.js");
+    expect(scanWorkspaceFiles(root)).toEqual(["a.log"]);
+  });
+});
+
 afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });

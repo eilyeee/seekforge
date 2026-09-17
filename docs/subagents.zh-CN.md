@@ -141,4 +141,4 @@ const dispatchManager = createDispatchManager({ sessionScoped: true });
 
 ## 事件
 
-调度会发出 `subagent.started`、`subagent.step` 以及一个终态事件 `subagent.completed` / `subagent.failed` / `subagent.cancelled`（见[服务器 API](../apps/server/SERVER-API.md)）。定义带有 `color` 时，每个事件都会携带它。进度回报以 `subagent.step` 事件到达，其 `toolName` 为 `agent_report`、`message` 为该行内容；它是模型输出，应作为数据渲染。
+调度会发出 `subagent.started`、`subagent.step` 以及一个终态事件 `subagent.completed` / `subagent.failed` / `subagent.cancelled`（见[服务器 API](../apps/server/SERVER-API.md)）。定义带有 `color` 时，每个事件都会携带它。进度回报以 `subagent.step` 事件到达，其 `toolName` 为 `agent_report`、`message` 为该行内容；它是模型输出，应作为数据渲染。TUI 为每个标签页保留一个会话级管理器（新建、恢复或分叉会话、分离运行以及关闭标签页都会结束它），用定义的颜色绘制每个子智能体行，并在其下以纯文本显示最近的进度回报。

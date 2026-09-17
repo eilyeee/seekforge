@@ -19,7 +19,8 @@ import type { SessionPickerState } from "./session-picker.js";
  */
 
 export type PlanStatus = "pending" | "in_progress" | "done";
-export type PlanItem = { step: string; status: PlanStatus };
+/** One update_plan step; `activeForm` is what an in-progress step shows (older sessions have none). */
+export type PlanItem = { step: string; status: PlanStatus; activeForm?: string };
 
 /** Colored diff line kinds (mirrors apps/desktop/src/lib/diff.ts). */
 export type DiffLineKind = "add" | "del" | "ctx" | "hunk";
@@ -99,6 +100,10 @@ export type ChatItem =
       status: "running" | "done" | "failed" | "cancelled";
       subSessionId?: string;
       steps: string[];
+      /** The definition's display color (a core-validated name or #rrggbb). */
+      color?: string;
+      /** The child's latest agent_report progress lines (model output; newest last). */
+      reports?: string[];
       resultSummary?: string;
       error?: { code: string; message: string };
     }
@@ -355,6 +360,8 @@ function closeStreamingThinking(items: ChatItem[]): ChatItem[] {
 /** Matches nested-subagent step titles emitted by the loop: "[agentId] tool". */
 const NESTED_STEP = /^\[([A-Za-z0-9_-]+)\] (.+)$/;
 const SUBAGENT_STEP_LIMIT = 100;
+/** agent_report lines kept per subagent row (core bounds each line and their number). */
+const SUBAGENT_REPORT_LIMIT = 5;
 
 function subagentIndex(items: ChatItem[], dispatchId: string): number {
   for (let index = items.length - 1; index >= 0; index--) {
@@ -643,12 +650,16 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
             task: e.task,
             status: "running",
             steps: [],
+            ...(e.color !== undefined ? { color: e.color } : {}),
           },
         ],
       };
     }
 
     case "subagent.step": {
+      // Only an agent_report step carries a message: the child's progress line,
+      // shown as that line rather than as one more tool name.
+      const report = e.message;
       const idx = subagentIndex(state.items, e.dispatchId);
       if (idx < 0) {
         return {
@@ -663,7 +674,9 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
               task: e.task,
               status: "running",
               ...(e.subSessionId !== undefined ? { subSessionId: e.subSessionId } : {}),
-              steps: [e.toolName],
+              steps: report === undefined ? [e.toolName] : [],
+              ...(e.color !== undefined ? { color: e.color } : {}),
+              ...(report !== undefined ? { reports: [report] } : {}),
             },
           ],
         };
@@ -673,7 +686,10 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
       items[idx] = {
         ...prior,
         ...(e.subSessionId !== undefined ? { subSessionId: e.subSessionId } : {}),
-        steps: [...prior.steps, e.toolName].slice(-SUBAGENT_STEP_LIMIT),
+        ...(e.color !== undefined ? { color: e.color } : {}),
+        ...(report === undefined
+          ? { steps: [...prior.steps, e.toolName].slice(-SUBAGENT_STEP_LIMIT) }
+          : { reports: [...(prior.reports ?? []), report].slice(-SUBAGENT_REPORT_LIMIT) }),
       };
       return { ...state, items };
     }
@@ -683,6 +699,7 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
     case "subagent.cancelled": {
       const idx = subagentIndex(state.items, e.dispatchId);
       const existing = idx >= 0 ? (state.items[idx] as Extract<ChatItem, { kind: "subagent" }>) : undefined;
+      const color = e.color ?? existing?.color;
       const item: Extract<ChatItem, { kind: "subagent" }> = {
         kind: "subagent",
         id: existing?.id ?? nextId("sa"),
@@ -691,6 +708,8 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
         task: e.task,
         status: e.status,
         steps: existing?.steps ?? [],
+        ...(color !== undefined ? { color } : {}),
+        ...(existing?.reports ? { reports: existing.reports } : {}),
         ...(e.subSessionId !== undefined ? { subSessionId: e.subSessionId } : {}),
         ...(e.type === "subagent.completed" || e.type === "subagent.failed"
           ? { resultSummary: e.resultSummary }

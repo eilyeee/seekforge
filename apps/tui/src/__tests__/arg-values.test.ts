@@ -64,9 +64,10 @@ describe("argCandidates", () => {
     expect(got.every((c) => typeof c.hint === "string" && c.hint.length > 0)).toBe(true);
   });
 
-  it("think offers on/off/high/max", () => {
+  it("think offers on/off and every reasoning effort level", () => {
     const got = argCandidates("think", "", ctx) ?? [];
-    expect(got.map((c) => c.value)).toEqual(["on", "off", "high", "max"]);
+    expect(got.map((c) => c.value)).toEqual(["on", "off", "low", "medium", "high", "max"]);
+    expect(got.every((c) => typeof c.hint === "string" && c.hint.length > 0 && !c.hint.startsWith("arg."))).toBe(true);
   });
 
   it("model lists ctx.models with notes as hints", () => {

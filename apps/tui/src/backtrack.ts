@@ -1,4 +1,6 @@
+import { inertLine } from "./format.js";
 import type { ChatItem } from "./model.js";
+import { t } from "./strings.js";
 
 /**
  * Conversation backtrack helpers (pure). A backtrack rewinds the transcript
@@ -40,4 +42,23 @@ export function backtrackTargets(items: readonly ChatItem[]): BacktrackTarget[] 
 /** Items to keep after backtracking to target: everything before itemIndex. */
 export function truncateItems(items: readonly ChatItem[], target: BacktrackTarget): ChatItem[] {
   return items.slice(0, target.itemIndex);
+}
+
+const MAX_REWIND_WARNINGS = 10;
+const REWIND_WARNING_CHARS = 200;
+
+/**
+ * Transcript lines for a rewind's `warnings`: what the rewound turns' shell
+ * commands changed that no rewind can undo. They name commands the model ran,
+ * so each is shown as one inert line.
+ */
+export function rewindWarningLines(warnings: readonly string[]): string[] {
+  if (warnings.length === 0) return [];
+  const shown = warnings
+    .slice(0, MAX_REWIND_WARNINGS)
+    .map((warning) => `  ${t("rewind.warning")} ${inertLine(warning, REWIND_WARNING_CHARS)}`);
+  if (warnings.length > MAX_REWIND_WARNINGS) {
+    shown.push(`  … ${warnings.length - MAX_REWIND_WARNINGS} ${t("rewind.moreWarnings")}`);
+  }
+  return shown;
 }

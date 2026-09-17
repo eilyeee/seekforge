@@ -221,4 +221,7 @@ Dispatches emit `subagent.started`, `subagent.step` and one terminal
 [server API](../apps/server/SERVER-API.md)). Each carries the definition's
 `color` when it has one. A progress line arrives as a `subagent.step` whose
 `toolName` is `agent_report` and whose `message` is the line; it is model
-output and should be rendered as data.
+output and should be rendered as data. The TUI keeps one session-scoped
+manager per tab (a new, resumed or forked session, a detached run and a closed
+tab each end it), draws each subagent row in its definition's color, and shows
+the latest progress lines under it as plain text.

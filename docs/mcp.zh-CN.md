@@ -366,7 +366,7 @@ CLI 与 TUI 用本次运行自己的配置构建采样 provider，没有 API key
 Web 工作台，经 WebSocket 的确认/提问通道），以及 TUI。TUI 在应用渲染之前就启动了 MCP
 服务器，因此它的 handler 会路由到当前占据屏幕的那次运行；如果请求到达时没有任何运行
 在进行，它会被拒绝，而不是被错投到别处。之后在 TUI 的 `/mcp` 面板中重连的服务器会
-拿到同样的 handler，下一次运行即使用它的新工具。
+拿到同样的 handler，正在运行的 agent 从下一个 provider 轮次起即可使用它的新工具。
 
 #### 列表变更
 
@@ -397,7 +397,8 @@ Web 工作台，经 WebSocket 的确认/提问通道），以及 TUI。TUI 在�
 服务器就会重新变成待批准，直到你批准新的定义。CLI 用 `seekforge mcp approve` / `reject` /
 `reset-project-choices` 管理它们；前端调用同一组 core 函数（`approveProjectMcpServer`、
 `rejectProjectMcpServer`、`resetProjectMcpChoices`、`listProjectMcpServers`），并通过
-registry 的 `reconnect(name)` 让决定在运行中的会话里生效。
+registry 的 `reconnect(name)` 让决定在运行中的会话里生效。在 TUI 中，`/mcp` 会列出待批准和已拒绝的
+项目服务器；按 `a` 原样显示其定义，再按 `y` 批准；按 `x` 拒绝；两者都会在当前会话中立即生效。
 `seekforge mcp add --trust` 会批准它写入的内容，`mcp import` 会把导入的服务器标为受信任（§1.2）。
 
 连接后，受信任或已批准服务器的工具依次使用按原始工具名设置的覆盖、服务器默认值、

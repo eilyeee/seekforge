@@ -110,8 +110,9 @@ VS Code 扩展（`apps/vscode`）是本地 `seekforge serve` 的客户端。它�
 ## IDE 桥
 
 扩展处于活动状态时，会在 `127.0.0.1` 的随机端口上运行一个 HTTP 服务器，使同一台机器上的
-SeekForge 进程能够读取编辑器状态。终端 UI 的 **/ide** 命令通过它获取你的选区、打开的文件与
-诊断信息，并在编辑器中显示 diff 和文件。可通过 `seekforge.ideBridge.enabled` 关闭它。
+SeekForge 进程能够读取编辑器状态。终端 UI 的 `/ide` 命令通过它为你输入的每条提示获取选区、
+打开的文件与诊断信息，并把待批准的编辑以 diff 形式显示在编辑器中（在权限提示上按 `o`）；
+`/ide off` 断开连接。可通过 `seekforge.ideBridge.enabled` 关闭该桥。
 
 ### 发现
 
@@ -134,6 +135,12 @@ SeekForge 进程能够读取编辑器状态。终端 UI 的 **/ide** 命令通�
 锁文件；无法读取的文件要等一分钟后才会删除，以防其所有者仍在写入。由于进程 id 会被复用，
 客户端仍应预期列出的桥可能拒绝连接，并转而尝试下一个。客户端应选择 `workspaceFolders`
 包含其工作目录的那个窗口。
+
+终端 UI 从其 SeekForge 主目录下的 `.seekforge/ide/` 读取锁文件：即你的主目录，设置了
+`SEEKFORGE_HOME` 时则为 `$SEEKFORGE_HOME`。扩展总是写在你的主目录下，因此以不同
+`SEEKFORGE_HOME` 启动的终端 UI 找不到任何桥。只有当锁文件是你拥有、他人不可读的普通文件，
+且所在目录他人不可写时，终端 UI 才会采信它；所属进程已不存在的锁文件会被静默跳过，
+其余被拒绝的文件 `/ide` 都会逐一列出并说明原因。包含当前项目的窗口排在最前面。
 
 ### 请求
 
@@ -159,7 +166,8 @@ SeekForge 进程能够读取编辑器状态。终端 UI 的 **/ide** 命令通�
 `POST /v1/openDiff`，请求体为 `{ "path", "original", "proposed", "title"? }`，会在
 VS Code 的 diff 编辑器中打开两个只读文档，并返回 `{ "ok": true }`。
 `POST /v1/openFile`，请求体为 `{ "path", "line"? }`，会打开该文件（并定位到该行），
-返回 `{ "ok": true }`。`path` 必须是绝对路径；`line` 必须是正整数；`title` 最多 200 个字符。
+返回 `{ "ok": true }`；终端 UI 不调用它，它供其他客户端使用。`path` 必须是绝对路径；
+`line` 必须是正整数；`title` 最多 200 个字符。
 
 错误格式为 `{ "error": "<code>", "message": "…" }`：`400 bad_request`（请求体格式错误、
 相对路径）、`401 unauthorized`、`403 forbidden`、`404 not_found`（未知路由，或文件不存在）、
@@ -184,6 +192,6 @@ VS Code 的 diff 编辑器中打开两个只读文档，并返回 `{ "ok": true 
   或从 VS Code 重启服务器。
 - **"does not host the VS Code workspace"** —— 服务器是为其他文件夹启动的；请以当前文件夹
   作为参数启动它。
-- **终端 UI 的 /ide 列表里什么也没有** —— 确认 `seekforge.ideBridge.enabled` 已开启，且
-  `~/.seekforge/ide/` 中有对应此窗口的文件。**SeekForge: Show Activity Output** 会记录
-  桥的端口和锁文件位置。
+- **终端 UI 的 `/ide` 列表里什么也没有** —— 确认 `seekforge.ideBridge.enabled` 已开启，
+  `~/.seekforge/ide/` 中有对应此窗口的文件，并且 `SEEKFORGE_HOME` 未设置或指向你的主目录。
+  **SeekForge: Show Activity Output** 会记录桥的端口和锁文件位置。

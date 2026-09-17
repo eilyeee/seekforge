@@ -15,6 +15,7 @@ import {
   expandUserCommand,
   loadUserCommands,
   SessionBusyError,
+  type PluginContributions,
   type UserCommand,
 } from "@seekforge/core";
 import { isBuiltinCommandName } from "./commands.js";
@@ -23,12 +24,14 @@ import { captureShellOutput } from "./shell-command.js";
 export type CustomCommand = UserCommand;
 
 /**
- * Project commands first, then user-only ones (project wins on a clash). A
- * file named like a built-in is left out: built-ins keep their names, so a
- * checked-out repository cannot turn `/approve` into its own prompt.
+ * Project commands first, then user-only ones, then the enabled plugins'
+ * `<plugin>:<command>` ones (the first layer wins on a clash). A file named
+ * like a built-in is left out: built-ins keep their names, so a checked-out
+ * repository cannot turn `/approve` into its own prompt. `contributions` is the
+ * session's plugin snapshot, so commands match the skills and hooks it loaded.
  */
-export function loadCustomCommands(workspace: string): CustomCommand[] {
-  return loadUserCommands(workspace).filter((command) => !isBuiltinCommandName(command.name));
+export function loadCustomCommands(workspace: string, contributions?: PluginContributions): CustomCommand[] {
+  return loadUserCommands(workspace, contributions).filter((command) => !isBuiltinCommandName(command.name));
 }
 
 /**

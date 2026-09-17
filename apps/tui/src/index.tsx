@@ -2,7 +2,6 @@ import type React from "react";
 import { createRequire } from "node:module";
 import { render } from "ink";
 import {
-  buildProvider,
   configureBrowserProfile,
   configureSkillSources,
   configureVision,
@@ -18,13 +17,15 @@ import {
 import { App } from "./app.js";
 import { ConfigLoadError, loadConfig, type TuiConfig } from "./config.js";
 import { resolveLaunch, type LaunchState } from "./launch.js";
-import { prepareMcp } from "./agent/factory.js";
+import { buildTuiProvider, prepareMcp } from "./agent/factory.js";
 import { createInteractiveChannelHolder } from "./agent/interactive-channels.js";
 import { loadTheme } from "./theme.js";
-import { detectLocale, setLocale } from "./strings.js";
+import { detectLocale, setLocale, t } from "./strings.js";
 import { setAccent } from "./components/Header.js";
 import { parseTuiArgs, TUI_HELP } from "./cli-args.js";
-import { needsOnboarding, saveGlobalApiKey } from "./onboarding.js";
+import { keySetup, saveGlobalApiKey } from "./onboarding.js";
+import { flushTelemetryBeforeExit } from "./telemetry-exit.js";
+import { apiKeyEnvVar } from "@seekforge/shared/provider-env";
 import { Onboarding } from "./components/Onboarding.js";
 import { checkForUpdate, formatUpdateNotice } from "../../cli/src/version-check.js";
 
@@ -110,6 +111,7 @@ async function main(): Promise<void> {
     );
   } catch (error) {
     process.stdout.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    await flushTelemetryBeforeExit();
     process.exit(1);
   }
 
@@ -121,8 +123,15 @@ async function main(): Promise<void> {
     return;
   }
 
+  // A configured apiKeyHelper that failed is the problem to report: the key
+  // wizard would save a key the helper then overrides.
+  const setup = keySetup(config, launch.apiKeyHelperError);
+  if (setup.kind === "helper-failed") {
+    launchFailure(setup.message, t("launch.helperFailedHint").replace("{env}", apiKeyEnvVar(config.provider)));
+    return;
+  }
   // First run: a key wizard instead of an error message.
-  if (needsOnboarding(config)) {
+  if (setup.kind === "wizard") {
     const key = await runOnboarding();
     if (key === null) {
       process.stderr.write(
@@ -145,32 +154,35 @@ async function main(): Promise<void> {
   // Once Ink owns the terminal a stray stderr line garbles the screen, so
   // later MCP (re)connects keep their warnings for /mcp instead.
   let screenTaken = false;
-  const mcp = await prepareMcp(
-    config,
-    projectPath,
-    {
-      ...(config.apiKey
-        ? {
-            sampling: createMcpSamplingHandler({
-              provider: () =>
-                buildProvider(
-                  {
-                    provider: config.provider,
-                    apiKey: config.apiKey,
-                    baseUrl: config.baseUrl,
-                    modelPricing: config.modelPricing,
-                  },
-                  config.model,
-                ),
-              confirm: (request) => channels.confirm(request),
-              onUsage: (usage) => usageBus.record(usage),
-            }),
-          }
-        : {}),
-      elicitation: createMcpElicitationHandler({ askUser: (question) => channels.askUser(question) }),
-    },
-    { origins: launch.mcpOrigins, quiet: () => screenTaken },
-  );
+  let mcp: Awaited<ReturnType<typeof prepareMcp>>;
+  try {
+    mcp = await prepareMcp(
+      config,
+      projectPath,
+      {
+        ...(config.apiKey
+          ? {
+              sampling: createMcpSamplingHandler({
+                // The run factory's provider mapping, so a sampling call talks
+                // to the same preset, endpoint and key as a run.
+                provider: () => buildTuiProvider(config),
+                confirm: (request) => channels.confirm(request),
+                onUsage: (usage) => usageBus.record(usage),
+              }),
+            }
+          : {}),
+        elicitation: createMcpElicitationHandler({ askUser: (question) => channels.askUser(question) }),
+      },
+      { origins: launch.mcpOrigins, quiet: () => screenTaken },
+    );
+  } catch (error) {
+    // Core's loader refuses an out-of-range mcpToolSearchThreshold (a user-owned key).
+    if (error instanceof RangeError && error.message.includes("mcpToolSearchThreshold")) {
+      launchFailure(error.message, t("launch.configHint"));
+      return;
+    }
+    throw error;
+  }
   const continueSessionId = args.continueLast ? listSessions(projectPath)[0]?.id : launch.resumeSessionId;
 
   let version: string | undefined;
@@ -186,9 +198,8 @@ async function main(): Promise<void> {
       config={config}
       projectPath={projectPath}
       initialModel={model}
-      mcpToolSpecs={mcp.specs}
-      mcpEntries={mcp.entries}
       mcpRegistry={mcp.registry}
+      {...(launch.configWarnings.length > 0 ? { startupNotices: launch.configWarnings } : {})}
       configSources={launch.loadOptions}
       reloadConfig={() => loadConfig(projectPath, launch.loadOptions)}
       {...(launch.approval ? { initialApproval: launch.approval } : {})}
@@ -219,6 +230,7 @@ async function main(): Promise<void> {
     await waitUntilExit();
   } finally {
     mcp.dispose();
+    await flushTelemetryBeforeExit();
   }
 }
 

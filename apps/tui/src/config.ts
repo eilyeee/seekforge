@@ -7,12 +7,15 @@ import type {
   MemoryMaintenanceConfig,
   ModelPricing,
 } from "@seekforge/core";
-import type { HookStage, PermissionRule } from "@seekforge/shared";
+import type { HookStage, PermissionRule, ReasoningEffort } from "@seekforge/shared";
 import {
   type ConfigLayer,
   type ConfigLayerOrigin,
+  type ConfigMergeReport,
+  describeConfigMergeReport,
   mergeConfigLayers,
   mergeConfigLayersWithReport,
+  readProjectMcpJsonLayer,
   repositoryConfigLayer,
   userConfigLayer,
 } from "@seekforge/shared/config-layers";
@@ -25,6 +28,11 @@ import { FileTooLargeError, MAX_CONFIG_FILE_BYTES, readTextFileBounded } from ".
  */
 export type TuiConfig = {
   apiKey?: string;
+  /**
+   * Shell command whose stdout is the API key (user-owned layers only). The
+   * config merge runs it and fills `apiKey`; the provider refreshes the key.
+   */
+  apiKeyHelper?: string;
   model?: string;
   baseUrl?: string;
   /** Provider preset: "deepseek" (default) | "ark" | any preset name. Selects base URL + capabilities. */
@@ -37,6 +45,11 @@ export type TuiConfig = {
   permissionRules?: PermissionRule[];
   /** MCP servers (Claude Code-compatible). */
   mcpServers?: Record<string, McpServerConfig>;
+  /**
+   * Share (0-100, default 10) of the context budget MCP tool definitions may
+   * take before they are deferred behind the tool_search tool.
+   */
+  mcpToolSearchThreshold?: number;
   /** User-owned shell hooks fired around tool calls. */
   hooks?: HookConfig;
   /** TUI accent color (any Ink color name); SEEKFORGE_TUI_ACCENT overrides. */
@@ -72,8 +85,8 @@ export type TuiConfig = {
   inlineImages?: boolean;
   /** DeepSeek V4 thinking mode (default: API default). /think toggles. */
   thinking?: boolean;
-  /** V4 reasoning effort: "high" or "max". */
-  reasoningEffort?: "high" | "max";
+  /** Reasoning effort (low | medium | high | max); each provider sends what its endpoint accepts. /think sets it. */
+  reasoningEffort?: ReasoningEffort;
   /** Context compaction strategy: "llm" summarizes via the model (default mechanical). */
   compaction?: "mechanical" | "llm";
   /** Fraction (0, 1] of the context budget at which compaction starts (default 0.9). User-owned. */
@@ -309,19 +322,22 @@ function profileLayers(name: string, global: TuiConfig, project: TuiConfig): Con
 
 /**
  * Loads the effective config plus where each MCP server name came from.
- * Precedence (low → high): ~/.seekforge/config.json, project
- * .seekforge/config.json, the selected profile, the --settings file, env.
- * Throws ConfigLoadError for an unreadable --settings file or unknown profile.
+ * Precedence (low → high): ~/.seekforge/config.json, the project's `.mcp.json`
+ * (server definitions only), project .seekforge/config.json, the selected
+ * profile, the --settings file, env. Throws ConfigLoadError for an unreadable
+ * --settings file or unknown profile.
  */
 export function resolveTuiConfig(
   projectPath: string,
   opts: ConfigLoadOptions = {},
-): { config: TuiConfig; mcpOrigins: Record<string, ConfigLayerOrigin> } {
+): { config: TuiConfig; mcpOrigins: Record<string, ConfigLayerOrigin>; report: ConfigMergeReport } {
   const global = readJson(userConfigFile(opts.home));
   const project = readJson(projectConfigFile(projectPath));
   const profileName = opts.profile ?? (process.env["SEEKFORGE_PROFILE"] || undefined);
   const layers: ConfigLayer<TuiConfig>[] = [
     userConfigLayer(global),
+    // Claude Code's project server file sits below SeekForge's own project config.
+    readProjectMcpJsonLayer<TuiConfig>(projectPath),
     repositoryConfigLayer(project),
     ...(profileName ? profileLayers(profileName, global, project) : []),
     ...(opts.settingsPath ? [userConfigLayer(readSettingsFile(opts.settingsPath))] : []),
@@ -329,7 +345,17 @@ export function resolveTuiConfig(
   const { config, report } = mergeConfigLayersWithReport<TuiConfig>(layers, { hookStages: HOOK_STAGE_ORDER });
   // A selection mechanism, not effective config.
   delete config.profiles;
-  return { config, mcpOrigins: report.mcpServerOrigins };
+  return { config, mcpOrigins: report.mcpServerOrigins, report };
+}
+
+/**
+ * What the merge narrowed (a repository server shadowed by the user's, trust
+ * fields refused), one line each, without the apiKeyHelper failure — the
+ * launcher reports that one on its own, in place of the key wizard.
+ */
+export function configMergeWarnings(report: ConfigMergeReport): string[] {
+  const { apiKeyHelperError: _reportedSeparately, ...rest } = report;
+  return describeConfigMergeReport(rest).map((line) => line.trimEnd());
 }
 
 export function loadConfig(projectPath: string, opts: ConfigLoadOptions = {}): TuiConfig {

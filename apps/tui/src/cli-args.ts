@@ -27,7 +27,7 @@ export type TuiArgs = {
   permissionMode?: string;
   /** -y / --yes / --dangerously-skip-permissions: start in auto approval. */
   yes?: boolean;
-  /** --add-dir <dir> (repeatable): extra read-only roots for @ references. */
+  /** --add-dir <dir> (repeatable): directories outside the project the file tools and @ references may use. */
   addDirs?: string[];
   /** --settings <file>: a user-owned JSON settings layer. */
   settings?: string;
@@ -167,7 +167,7 @@ Options:
                                 (also: confirm | auto)
   -y, --yes                     start in auto approval (alias: --dangerously-skip-permissions);
                                 dangerous commands are still refused, env-level still asks
-  --add-dir <dir>               extra read-only directory for @ references (repeatable)
+  --add-dir <dir>               a directory the file tools and @ references may use (repeatable)
   --settings <file>             JSON settings file layered over the config files
   --profile <name>              named config profile (also SEEKFORGE_PROFILE)
   --mcp-config <file>           MCP servers from a JSON file, merged over config
