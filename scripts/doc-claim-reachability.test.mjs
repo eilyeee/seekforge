@@ -458,11 +458,17 @@ function serverPathRoots() {
 }
 
 test("every documented `/slash` command and its options exist in the TUI", () => {
+  // The classic REPL (`seekforge chat`) is the other interactive surface the
+  // docs describe; a command it parses is implemented even when the TUI has
+  // no counterpart yet.
+  const repl = readFileSync(join(root, "apps", "cli", "src", "commands", "repl.ts"), "utf8");
   const tui = sourceFiles(join(root, "apps", "tui", "src"))
     .filter((file) => !isTestFile(file.slice(root.length + 1)))
     .map((file) => readFileSync(file, "utf8"))
+    .concat(repl)
     .join("\n");
   assert.ok(tui.length > 10000, "could not read the TUI sources");
+  assert.ok(repl.includes('case "/help"'), "could not read the REPL's slash commands");
   const serverPaths = serverPathRoots();
   assert.ok(serverPaths.has("api"), "could not read the server's URL path roots");
 

@@ -3,6 +3,7 @@ import type { AgentEvent, ConfirmResult, PermissionRequest, TokenUsage } from "@
 import { type Colorizer, colorIsEnabled, makeColorizer } from "./colors.js";
 import { t } from "./i18n.js";
 import { parseIndexList } from "./input-selection.js";
+import { parsePermissionAnswer, permissionPromptText, sessionGrantable } from "./permission-answer.js";
 
 function summarizeArgs(args: unknown, verbose = false): string {
   const text = JSON.stringify(args, null, verbose ? 2 : undefined) ?? "";
@@ -213,22 +214,25 @@ export async function confirmInTerminal(req: PermissionRequest): Promise<Confirm
         req.hunks.map((hunk) => hunk.index),
       );
       if (selected) return { allow: true, selectedHunks: selected };
-      return false;
+      // A refusal may carry a reason ("n: keep the old name"). Every other
+      // answer skips all hunks, as the prompt's [N] default promises.
+      const refusal = parsePermissionAnswer(answer, { sessionGrantable: false });
+      return typeof refusal === "object" && !refusal.allow ? refusal : false;
     } finally {
       rl.close();
     }
   }
-  // Single-hunk or no-hunk request: original y/N prompt.
+  // Single-hunk or no-hunk request: y / a (when grantable) / n[: reason].
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
     const answer = await new Promise<string>((resolve) => {
-      rl.question(t("render.allowPrompt")).then(resolve, () => resolve("n"));
+      rl.question(permissionPromptText(req)).then(resolve, () => resolve("n"));
       rl.once("SIGINT", () => {
         resolve("n");
         process.emit("SIGINT" as never);
       });
     });
-    return answer.trim().toLowerCase() === "y";
+    return parsePermissionAnswer(answer, { sessionGrantable: sessionGrantable(req) });
   } finally {
     rl.close();
   }

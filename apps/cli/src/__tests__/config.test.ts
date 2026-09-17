@@ -4,9 +4,21 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { test } from "vitest";
+import { afterEach, beforeEach, test, vi } from "vitest";
 import { availableProfiles, configParseErrors, loadConfig, unknownConfigKeys } from "../config.js";
 import { configSetCommand } from "../commands/config.js";
+
+// loadConfig layers the global ~/.seekforge/config.json under everything these
+// tests assert on; a developer's own file must not leak into them.
+let isolatedHome = "";
+beforeEach(() => {
+  isolatedHome = mkdtempSync(join(tmpdir(), "sf-config-home-"));
+  vi.stubEnv("HOME", isolatedHome);
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  rmSync(isolatedHome, { recursive: true, force: true });
+});
 
 /**
  * Create a temporary project directory with an optional .seekforge/config.json.

@@ -67,25 +67,26 @@ export DEEPSEEK_API_KEY=sk-...
 
 | Command | What it does |
 | --- | --- |
-| `seekforge` | **interactive session** (REPL): multi-turn conversation, `/help` for slash commands (`/new` `/sessions` `/resume` `/model` `/usage`) |
+| `seekforge` | **interactive session**: in a terminal it opens the TUI (`seekforge-tui`; `-c` and `-m` are passed on); flags the TUI cannot honor yet, `--classic` or `SEEKFORGE_CLASSIC_REPL=1` start the classic REPL instead, and piped input always does — see [interactive sessions](docs/cli-reference.md#interactive-sessions) |
 | `seekforge completion bash\|zsh` | print a static shell completion script to source from your rc file |
 | `seekforge-tui` | **terminal UI** (Ink): full Claude-Code-parity daily driver — command palette + argument pickers, vim mode, steering queue, run detach (Ctrl+B), per-turn backtrack with file restore, thinking display, opt-in OS sandbox, MCP over HTTP, custom commands and skills as slash commands; full list in [apps/tui/README.md](apps/tui/README.md) |
 | `seekforge serve [paths...] [--port 7373]` | local web UI + agent API; pass multiple workspace paths to host them together (127.0.0.1 only, token-protected) |
 | `seekforge run "<task>"` | run a development task; `-y` auto-approves safe writes/commands, `-m` overrides the model, `--json` emits JSONL events for CI, `--plan` plans read-only first and executes after your confirmation. More flags: [`--permission-mode`, `--output-style`, `--fallback-model`, `--settings`, `--system-prompt`, `--append-system-prompt`, `--allowedTools`, `--disallowedTools`, `--add-dir`, `--verbose`](docs/cli-reference.md) |
 | `seekforge ask "<question>"` | read-only Q&A (writes and commands disabled); supports `--add-dir`, `--settings`, `--verbose` and [most run flags](docs/cli-reference.md) |
 | `seekforge models` | list available DeepSeek models, their pricing (cache miss/hit, output per 1M tokens), default (`deepseek-v4-flash`), and deprecated entries |
-| `seekforge chat` | interactive session — the default when no command is given (`-p` for headless print mode) |
+| `seekforge chat` | the classic readline REPL: multi-turn conversation honoring the session flags (`-c`, `--resume`, `--permission-mode`, `--add-dir`, `--mcp-config`, …); `/help` for slash commands (`/new` `/sessions` `/resume` `/rename` `/compact [focus]` `/model` `/usage`), `!<command>` runs a shell command whose output joins your next message |
 | `seekforge resume <session-id> [task]` | continue a session with its full history (keeps its ask/edit mode) |
-| `seekforge sessions` | list sessions with status and cost (subagent runs hidden) |
+| `seekforge sessions` | list sessions with status, cost and name (subagent runs hidden) |
+| `seekforge sessions show <id> [--json]` / `seekforge sessions rename <id> <title>` | describe one session / give it a name (`""` clears it) |
 | `seekforge sessions prune [--older-than <days>] [--keep-last <n>] [--dry-run]` | delete old session traces to keep `.seekforge/sessions/` bounded |
 | `seekforge rewind [session-id] [--dry-run]` | undo all file changes a session made (pre-write checkpoints) |
 | `seekforge replay <session-id>` | re-render a stored session to the terminal (deterministic, no model calls) |
 | `seekforge audit <session-id> [--json] [-o <file>]` | export a reviewable report of what an agent did in a stored session |
 | `seekforge memory add "<fact>" [--type] [--pending]` / `seekforge memory remove <n\|id\|text>` | tell the agent something directly (REPL: `/remember <fact>`) |
 | `seekforge status` | project / config / last-session overview |
-| `seekforge update` | check npm for a newer seekforge version and print the install command |
+| `seekforge update [-y]` | check npm for a newer seekforge; for an npm, pnpm or Volta install, run that manager's upgrade against the official registry after confirmation (otherwise print the command) |
 | `seekforge diff` | show the current git diff |
-| `seekforge doctor` | run environment diagnostics (api key, node, git, runtime, mcp, editor, clipboard) |
+| `seekforge doctor` | run environment diagnostics (api key, node, git, runtime, mcp, editor, clipboard, OS sandbox, proxy, pdftotext) |
 | `seekforge resolve <issue> --max-cost <usd>` | fix a GitHub issue in an isolated worktree and open a draft PR; supports `--wait-ci` and `--dry-run` — see [GitHub workflow](docs/github.md) |
 | `seekforge resolve-review <pr> --max-cost <usd>` | address actionable PR review feedback, verify, commit, and push fixes |
 | `seekforge schedule add\|list\|run\|next\|history\|install\|uninstall\|status` | manage scheduled jobs, history, retries, and the crontab tick — see [Scheduling](docs/scheduling.md) |

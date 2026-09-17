@@ -4244,3 +4244,61 @@ DNS 应答无法改道。以 `--use-env-proxy` 启动 Node（设置了 `HTTPS_PR
   使用这个集合。
 - **发现位置：** `packages/core/src/tools/rule-match.ts`
   （`SHELL_COMMAND_TOOLS`、`SHELL_EXECUTING_TOOLS`）。
+
+## 433. readline 只把一行交给正在等待它的提问
+
+`rl.question()` 只有在已经挂起时才会拿到下一行。在两次提问之间到达的行会作为
+`line` 事件发出，没人监听就丢了。REPL 用 `rl.question()` 循环读取，于是管道输入
+（`printf '/help\n/quit\n' | seekforge`）中，在上一行处理期间到达的行全部丢失，
+脚本化的会话毫无报错地提前结束。
+
+- **正确做法：** 把 `line` 事件排队，让每个提示先读队列——仅限管道输入。
+- **错误做法：** 在终端上排队。那样的话，运行期间敲下的文字会成为下一个权限提示的
+  答案：在提示出现之前敲下的一个 `y`，就会批准一条用户根本没看到的命令。
+- **发现位置：** `apps/cli/src/commands/repl.ts::createLineReader`，在通过管道冒烟
+  测试 REPL 时发现。
+
+## 434. 处于 raw 模式的终端永远不会发出 SIGINT
+
+readline 占用 TTY 时会让它保持 raw 模式，因此 Ctrl+C 到达时是一个字节，而不是信号。
+readline 会把它转成自己的 `SIGINT` 事件；若无人监听，它会**关闭该接口**。REPL 在
+`process` 上监听 SIGINT 来取消运行，这个监听器从未触发；Ctrl+C 反而关掉了
+readline，于是 REPL 在这一回合结束后直接退出，而不是取消它——而它的欢迎语写着
+「Ctrl+C 取消正在运行的任务」。
+
+- **正确做法：** 在要取消的工作持续期间监听 readline 接口（`rl.on("SIGINT")`），
+  同时为非 TTY 输入保留 `process` 监听器。用 `rl.question(prompt, { signal })`
+  撤回挂起的提问，避免被取消的运行留下一个会吞掉下一行的提问。
+- **正确做法：** 在真实伪终端下验证；管道复现不了 raw 模式。
+- **发现位置：** `apps/cli/src/commands/repl.ts::withCancellation`，通过 pty 驱动
+  REPL 时发现。
+
+## 435. `new URL()` 接受了一个字符串，不代表它就是你以为的那种 URL
+
+`new URL("user:pw@proxy")` 能解析成功：scheme 是 `user:`，`pw@proxy` 是路径。一个只
+清空 `username`/`password` 的脱敏函数于是会原样打印出密码。`doctor` 的代理检查正是
+这个形态。
+
+- **正确做法：** 在信任其他字段之前，先把解析出的 `protocol`（以及该值必须具备的其他
+  属性）与预期比对；不符合的一律不输出。
+- **发现位置：** `apps/cli/src/commands/doctor.ts::redactProxyUrl`，由它自己的测试
+  发现。
+
+## 436. 相对源文件的路径，打包后含义就变了
+
+tsup 把 `apps/cli/src/commands/update.ts` 打进 `dist/index.js`（或某个 chunk），
+目录层级少了一层，于是 `createRequire(import.meta.url)("../../package.json")`
+再也解析不到，每个已发布的 `seekforge update` 都拿 `0.0.0` 去和 registry 比较。
+同样的形态还藏着第二个缺陷：该包用**自己的** tsconfig 打包 `../tui/src/index.tsx`，
+而这份 tsconfig 没有 `jsx` 设置，于是 esbuild 生成了作用域里没有 `React` 的
+`React.createElement`，已发布的 `seekforge-tui` 在第一次渲染时就崩溃。
+
+- **正确做法：** 相对于知道自己位置的入口来解析文件（把值传下去），或探测候选路径并
+  显式回退。
+- **正确做法：** 一个包打包另一个包的源码时，要给打包器那个包编译所用的设置（`jsx`、
+  装饰器等）。在 tsx 下加载它们也一样：tsx 使用的是**当前目录**的 tsconfig，要用那个
+  包自己的 tsconfig 导入（`tsImport(…, { tsconfig })`）。
+- **正确做法：** 冒烟测试构建产物，而不只是 tsx 与 vitest 下的源码：这两个缺陷都
+  通过了所有单元测试。
+- **发现位置：** `apps/cli/src/commands/update.ts::defaultUpdateDeps` 与
+  `apps/cli/tsup.config.ts`，在让不带子命令的 `seekforge` 启动打包后的 TUI 时发现。

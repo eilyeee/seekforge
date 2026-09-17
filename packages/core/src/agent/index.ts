@@ -15,6 +15,12 @@ export type RunAgentTaskInput = {
   /** Continue an existing session: replays its messages, appends `task`. */
   resumeSessionId?: string;
   /**
+   * Start a NEW session under this id instead of a generated one (CLI
+   * `--session-id`). Ignored when `resumeSessionId` is set; the run throws when
+   * a session with this id already exists.
+   */
+  sessionId?: string;
+  /**
    * Extra bounded execution slices after `maxAgentTurns` is reached. Each
    * slice continues in-memory in the same session without adding a user turn.
    * Default 0 preserves CLI/SDK limit semantics.
@@ -733,6 +739,7 @@ export {
   deleteSession,
   listSessions,
   loadSessionMessages,
+  isValidSessionId,
   newSessionId,
   pruneSessions,
   readSessionMeta,

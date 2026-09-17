@@ -36,6 +36,15 @@ export type PrintCliOptions = {
   strictMcpConfig?: boolean;
   replayUserMessages?: boolean;
   includePartialMessages?: boolean;
+  sessionId?: string;
+  forkSession?: boolean;
+  agentsJson?: string;
+  systemPromptFile?: string;
+  appendSystemPromptFile?: string;
+  debug?: boolean | string;
+  worktree?: boolean | string;
+  jsonSchema?: string;
+  jsonSchemaFile?: string;
 };
 
 export function parseMaxTurns(value: string | undefined): number | undefined {
@@ -109,6 +118,15 @@ export async function printCommand(inlinePrompt: string | undefined, opts: Print
     strictMcpConfig: opts.strictMcpConfig,
     replayUserMessages: opts.replayUserMessages,
     includePartialMessages: opts.includePartialMessages,
+    sessionId: opts.sessionId,
+    forkSession: opts.forkSession,
+    agentsJson: opts.agentsJson,
+    systemPromptFile: opts.systemPromptFile,
+    appendSystemPromptFile: opts.appendSystemPromptFile,
+    debug: opts.debug,
+    worktree: opts.worktree,
+    jsonSchema: opts.jsonSchema,
+    jsonSchemaFile: opts.jsonSchemaFile,
     ...(streamInput ? { inputFormat: "stream-json" } : {}),
   });
 }

@@ -61,9 +61,23 @@ export async function resolveLoopRepository(path: string): Promise<LoopRepositor
 
 /** Resolve a user-provided name to a unique, safe SeekForge worktree slug. */
 export async function createLoopWorktree(basePath: string, name?: string): Promise<LoopWorktree> {
+  return createPrefixedWorktree(basePath, "loop", name);
+}
+
+/**
+ * A retained worktree for one headless run (`run --worktree`). Its branch is
+ * `seekforge/run-<name>`, so `loop-cleanup` — which only removes Loop
+ * worktrees — never mistakes it for one.
+ */
+export async function createRunWorktree(basePath: string, name?: string): Promise<LoopWorktree> {
+  return createPrefixedWorktree(basePath, "run", name);
+}
+
+async function createPrefixedWorktree(basePath: string, prefix: string, name?: string): Promise<LoopWorktree> {
   basePath = (await resolveLoopRepository(basePath)).basePath;
-  const requestedSuffix = name?.replace(/^loop-/, "") ?? String(Date.now());
-  const baseSlug = worktreeSlug(`loop-${requestedSuffix}`);
+  const requestedSuffix =
+    name === undefined ? String(Date.now()) : name.startsWith(`${prefix}-`) ? name.slice(prefix.length + 1) : name;
+  const baseSlug = worktreeSlug(`${prefix}-${requestedSuffix}`);
   let slug = baseSlug;
   let suffix = 2;
   while (await worktreeBranchExists(basePath, slug)) {
@@ -71,6 +85,23 @@ export async function createLoopWorktree(basePath: string, name?: string): Promi
     suffix++;
   }
   return createWorktree(basePath, slug);
+}
+
+/**
+ * Where `path` sits inside its checkout ("packages/app", or "" at the top), so
+ * a run moved into a fresh worktree starts from the same subdirectory. A spawn
+ * failure keeps its own error; any clean failure means "not a repository".
+ */
+export async function repositoryPrefix(path: string): Promise<string> {
+  const { stdout } = await execFileAsync("git", ["rev-parse", "--show-prefix"], {
+    cwd: path,
+    timeout: 60_000,
+    env: { ...process.env, LC_ALL: "C" },
+  }).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw error;
+    throw new WorktreeGitError("not_a_git_repo", `not a git repository: ${path}`);
+  });
+  return stdout.trim().replace(/\/+$/, "");
 }
 
 export function formatLoopWorktree(worktree: LoopWorktree): string {

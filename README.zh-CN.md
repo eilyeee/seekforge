@@ -64,25 +64,26 @@ export DEEPSEEK_API_KEY=sk-...
 
 | 命令 | 作用 |
 | --- | --- |
-| `seekforge` | **交互会话**（REPL）：多轮对话，`/help` 查看斜杠命令（`/new` `/sessions` `/resume` `/model` `/usage`） |
+| `seekforge` | **交互会话**：在终端中打开 TUI（`seekforge-tui`，会传入 `-c` 与 `-m`）；带有 TUI 暂不支持的 flag、使用 `--classic` 或设置 `SEEKFORGE_CLASSIC_REPL=1` 时改为经典 REPL，管道输入也始终走经典 REPL——见[交互会话](docs/cli-reference.zh-CN.md#交互会话) |
 | `seekforge completion bash\|zsh` | 输出静态 shell 补全脚本，source 进你的 rc 文件 |
 | `seekforge-tui` | **终端 UI**（Ink）：对齐 Claude Code 的日常主力——命令面板 + 参数选择器、vim 模式、转向队列、运行后台化（Ctrl+B）、逐轮回退带文件恢复、思维显示、可选 OS 沙箱、HTTP MCP、自定义命令与技能斜杠化；完整列表见 [apps/tui/README.md](apps/tui/README.md) |
 | `seekforge serve [paths...] [--port 7373]` | 本地 Web UI + agent API；可传多个工作区路径一起托管（仅 127.0.0.1，token 保护） |
 | `seekforge run "<task>"` | 执行一个开发任务；`-y` 自动批准安全的写入/命令，`-m` 覆盖模型，`--json` 输出 JSONL 事件供 CI 使用，`--plan` 先只读规划、确认后执行。更多 flag：[`--permission-mode`、`--output-style`、`--fallback-model`、`--settings`、`--system-prompt`、`--append-system-prompt`、`--allowedTools`、`--disallowedTools`、`--add-dir`、`--verbose`](docs/cli-reference.zh-CN.md) |
 | `seekforge ask "<question>"` | 只读问答（禁用写入与命令）；支持 `--add-dir`、`--settings`、`--verbose` 及[大部分 run flag](docs/cli-reference.zh-CN.md) |
 | `seekforge models` | 列出可用的 DeepSeek 模型、定价（缓存未命中/命中、每 1M token 输出）、默认模型（`deepseek-v4-flash`）与已弃用条目 |
-| `seekforge chat` | 交互式会话——不带子命令时的默认行为（`-p` 为无头打印模式） |
+| `seekforge chat` | 经典 readline REPL：多轮对话，支持会话类 flag（`-c`、`--resume`、`--permission-mode`、`--add-dir`、`--mcp-config` 等）；`/help` 查看斜杠命令（`/new` `/sessions` `/resume` `/rename` `/compact [focus]` `/model` `/usage`），`!<command>` 运行 shell 命令，其输出会附加到下一条消息 |
 | `seekforge resume <session-id> [task]` | 携带完整历史继续一个会话（保持其 ask/edit 模式） |
-| `seekforge sessions` | 列出会话及其状态与费用（子代理运行不显示） |
+| `seekforge sessions` | 列出会话及其状态、费用与名称（子代理运行不显示） |
+| `seekforge sessions show <id> [--json]` / `seekforge sessions rename <id> <title>` | 查看单个会话 / 为会话命名（`""` 清除名称） |
 | `seekforge sessions prune [--older-than <days>] [--keep-last <n>] [--dry-run]` | 删除旧会话 trace，控制 `.seekforge/sessions/` 体积 |
 | `seekforge rewind [session-id] [--dry-run]` | 撤销某会话的全部文件改动（写前检查点） |
 | `seekforge replay <session-id>` | 把已存储的会话确定性地重新渲染到终端（不调用模型） |
 | `seekforge audit <session-id> [--json] [-o <file>]` | 导出一份可复核的报告，说明智能体在该会话里做了什么 |
 | `seekforge memory add "<fact>" [--type] [--pending]` / `seekforge memory remove <n\|id\|text>` | 直接告诉 agent 一条事实（REPL：`/remember <fact>`） |
 | `seekforge status` | 项目 / 配置 / 最近会话概览 |
-| `seekforge update` | 检查 npm 上的新版本并打印安装命令 |
+| `seekforge update [-y]` | 检查 npm 上的新版本；若通过 npm、pnpm 或 Volta 安装，确认后用该包管理器从官方源升级（否则只打印命令） |
 | `seekforge diff` | 显示当前 git diff |
-| `seekforge doctor` | 环境诊断（api key、node、git、runtime、mcp、编辑器、剪贴板） |
+| `seekforge doctor` | 环境诊断（api key、node、git、runtime、mcp、编辑器、剪贴板、OS 沙箱、代理、pdftotext） |
 | `seekforge resolve <issue> --max-cost <usd>` | 在隔离 worktree 中修复一个 GitHub issue 并开草稿 PR；支持 `--wait-ci` 与 `--dry-run`——见 [GitHub 工作流](docs/github.zh-CN.md) |
 | `seekforge resolve-review <pr> --max-cost <usd>` | 处理 PR 评审中可执行的反馈，验证、提交并推送修复 |
 | `seekforge schedule add\|list\|run\|next\|history\|install\|uninstall\|status` | 管理定时任务、历史、重试与 crontab tick——见[定时任务](docs/scheduling.zh-CN.md) |

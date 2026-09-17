@@ -5077,3 +5077,68 @@ whatever it was.
   matching, compound-command refusal, session tokens, durable rules.
 - **Caught:** `packages/core/src/tools/rule-match.ts`
   (`SHELL_COMMAND_TOOLS`, `SHELL_EXECUTING_TOOLS`).
+
+## 433. readline only gives a line to a question that is waiting for it
+
+`rl.question()` receives the next line only if it is already pending. A line
+that arrives between questions is emitted as a `line` event, and with no
+listener it is gone. The REPL looped on `rl.question()`, so piped input
+(`printf '/help\n/quit\n' | seekforge`) lost every line that arrived while the
+previous one was being handled, and scripted sessions ended early with no error.
+
+- **Do:** queue `line` events and let every prompt read the queue first — for
+  piped input only.
+- **Don't:** queue at a terminal. There, text typed during a run would become the
+  answer to the next permission prompt: a `y` typed before the prompt was even
+  shown would approve a command the user never saw.
+- **Caught:** `apps/cli/src/commands/repl.ts::createLineReader`, while
+  smoke-testing the REPL through a pipe.
+
+## 434. A terminal in raw mode never delivers SIGINT
+
+While readline owns a TTY it keeps it in raw mode, so Ctrl+C arrives as a byte,
+not a signal. readline turns it into its own `SIGINT` event, and if nothing
+listens it **closes the interface**. The REPL listened on `process` for SIGINT
+to cancel a run; that listener never fired, and Ctrl+C instead closed readline,
+so the REPL exited after the turn instead of cancelling it — while its welcome
+line said "Ctrl+C cancels a running task".
+
+- **Do:** listen on the readline interface (`rl.on("SIGINT")`) for the duration
+  of the work you want to cancel, and keep the `process` listener for non-TTY
+  input. Withdraw a pending question with `rl.question(prompt, { signal })` so a
+  cancelled run does not leave a question that swallows the next line.
+- **Do:** verify under a real pseudo-terminal; a pipe does not reproduce raw mode.
+- **Caught:** `apps/cli/src/commands/repl.ts::withCancellation`, by driving the
+  REPL through a pty.
+
+## 435. `new URL()` accepting a string does not make it the URL you expected
+
+`new URL("user:pw@proxy")` parses: the scheme is `user:` and `pw@proxy` is the
+path. A redactor that only blanks `username`/`password` then prints the password
+verbatim. `doctor`'s proxy check had exactly that shape.
+
+- **Do:** check the parsed `protocol` (and whatever else the value must have)
+  against what you expect before trusting any other field; withhold anything
+  that does not match.
+- **Caught:** `apps/cli/src/commands/doctor.ts::redactProxyUrl`, by its own test.
+
+## 436. A path relative to a source file changes meaning once it is bundled
+
+tsup moves `apps/cli/src/commands/update.ts` into `dist/index.js` (or a chunk),
+one directory shallower, so `createRequire(import.meta.url)("../../package.json")`
+stopped resolving and every published `seekforge update` compared the registry
+against version `0.0.0`. The same shape hid a second defect: the package bundles
+`../tui/src/index.tsx` with **its own** tsconfig, which has no `jsx` setting, so
+esbuild emitted `React.createElement` with no `React` in scope and the published
+`seekforge-tui` crashed on its first render.
+
+- **Do:** resolve files relative to the entry point that knows where it lives
+  (pass the value down), or probe candidates and fall back explicitly.
+- **Do:** when one package bundles another package's sources, give the bundler
+  the settings that package compiles with (`jsx`, decorators, …). The same
+  applies to loading them under tsx, which uses the tsconfig of the *current
+  directory*: import them with that package's tsconfig (`tsImport(…, { tsconfig })`).
+- **Do:** smoke-test the built artifact, not only the sources under tsx and
+  vitest: both defects passed every unit test.
+- **Caught:** `apps/cli/src/commands/update.ts::defaultUpdateDeps` and
+  `apps/cli/tsup.config.ts`, while making bare `seekforge` launch the bundled TUI.

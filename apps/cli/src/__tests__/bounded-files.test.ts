@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, test } from "vitest";
+import { afterEach, beforeEach, test, vi } from "vitest";
 import { authorizeDir } from "../authorized-dirs.js";
 import { FileTooLargeError, MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "../bounded-file.js";
 import { configParseErrors, loadConfig } from "../config.js";
@@ -10,7 +10,14 @@ import { ConfigParseError, readConfigDoc } from "../mcp-config.js";
 
 const roots: string[] = [];
 
+// loadConfig reads the global ~/.seekforge/config.json; a developer's own file
+// must not leak into what these tests assert.
+beforeEach(() => {
+  vi.stubEnv("HOME", tempRoot("seekforge-cli-home-"));
+});
+
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 

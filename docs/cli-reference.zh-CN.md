@@ -2,15 +2,24 @@
 
 > [English](cli-reference.md) | **简体中文**
 
-`seekforge run`、`seekforge ask` 以及 `-p` 无头模式的 flag 参考。
+`seekforge run`、`seekforge ask`、`-p` 无头模式以及交互会话的 flag 参考。
 
 ## 图例
 
 - **run** — 适用于 `seekforge run "<task>"`
 - **ask** — 适用于 `seekforge ask "<question>"`
 - **-p** — 适用于 `seekforge -p "[prompt]"`（无头单次运行）
-- **chat** — 适用于 `seekforge`（交互式 REPL 会话）
+- **chat** — 适用于交互会话：`seekforge chat`，以及不带子命令的 `seekforge`（见[交互会话](#交互会话)）
 - ✦ — 也可在 config / 项目设置中配置
+
+只对无头运行有意义的 flag（`--output-format`、`--json`、`--input-format`、
+`--replay-user-messages`、`--include-partial-messages`、`--max-duration`、
+`--json-schema`、`--json-schema-file`、`--worktree`）若在不带 `-p` 的
+`seekforge` 上使用，会直接报错，而不是被悄悄忽略。
+
+有两个 flag 的值是可选的——`--debug [filter]` 和 `--worktree [name]`——紧跟其后的
+单词会被当作它们的值。请把它们放在任务之后（`seekforge run "fix it" --debug`），
+或使用 `=` 形式（`--debug=api,tool`）。
 
 ## 通用 flag
 
@@ -22,20 +31,34 @@
 | `-m, --model <model>` ✦ | run, ask, -p, chat | 覆盖模型（`deepseek-v4-flash` / `deepseek-v4-pro`） |
 | `--json` | run, ask, -p | `--output-format stream-json` 的别名（机器模式；提示一律拒绝，需搭配 `-y`） |
 | `--output-format <fmt>` | run, ask, -p | `text`（默认，面向人类）、`json`（Claude 风格的 result 对象）、`stream-json`（JSONL 信封）、`stream-json-raw`（原始事件） |
-| `-c, --continue` | run, ask, -p | 恢复最近一次会话 |
-| `--resume <id>` | run, ask, -p | 恢复指定会话（见 `seekforge sessions`） |
-| `--add-dir <path>` | run, ask, -p | 为 `@` 引用增加只读根目录（可重复） |
-| `--max-turns <n>` | run, ask, -p | 限制 agent 轮次上限 |
-| `--max-cost <usd>` | run, -p | 累计成本达到该预算（USD）即停止运行；平缓取消，追踪记录保留。也可通过配置键 `maxCostUsd` 设置（对所有模式生效） |
-| `--max-duration <seconds>` | run, -p, sandbox-run, remote-run | 墙钟时间达到该预算即停止运行 —— 它是一个定时器，所以即使运行已经完全不再产生事件（命令卡死、MCP 服务器沉默）也照样触发。作用于整次调用，而不是单个回合。平缓取消，追踪记录保留。也可通过配置键 `maxDurationSeconds` 设置 |
+| `-c, --continue` | run, ask, -p, chat | 恢复最近一次会话 |
+| `--resume <id>` | run, ask, -p, chat | 恢复指定会话（见 `seekforge sessions`） |
+| `--fork-session` | run, ask, -p, chat | 与 `--resume`/`--continue` 搭配：先复制该会话，在副本上继续，原会话保持不变 |
+| `--session-id <id>` | run, ask, -p, chat | 用指定 id（而不是自动生成的 id）创建新会话。可用 UUID，也可用字母、数字、`.`、`_`、`-`（最多 128 个字符）。该 id 已存在，或与 `--resume`、`--continue`、`--fork-session` 同用时会被拒绝 |
+| `--add-dir <path>` | run, ask, -p, chat | 为 `@` 引用增加只读根目录（可重复） |
+| `--max-turns <n>` | run, ask, -p, chat | 限制 agent 轮次上限（chat 中按每条消息计） |
+| `--max-cost <usd>` | run, ask, -p, chat | 累计成本达到该预算（USD）即停止运行；平缓取消，追踪记录保留。在 chat 中限制整个会话：正在运行的回合停止，且不再开始新回合。也可通过配置键 `maxCostUsd` 设置（对 run、ask、-p 生效） |
+| `--max-duration <seconds>` | run, ask, -p, sandbox-run, remote-run | 墙钟时间达到该预算即停止运行 —— 它是一个定时器，所以即使运行已经完全不再产生事件（命令卡死、MCP 服务器沉默）也照样触发。作用于整次调用，而不是单个回合。平缓取消，追踪记录保留。也可通过配置键 `maxDurationSeconds` 设置 |
+| `--system-prompt-file <path>` | run, ask, -p, chat | 与 `--system-prompt` 相同，但从文件读取（最多 1 MiB）。不能与 `--system-prompt` 同用 |
+| `--append-system-prompt-file <path>` | run, ask, -p, chat | 与 `--append-system-prompt` 相同，但从文件读取（最多 1 MiB）。不能与 `--append-system-prompt` 同用 |
+| `--agents <json>` | run, ask, -p, chat | 仅本次调用有效的子代理——见[内联子代理](#内联子代理) |
+| `--debug [filter]` | run, ask, -p, chat | 在 stderr 输出内部细节——见[调试输出](#调试输出) |
 | `--settings <file>` | run, ask, -p, chat | JSON 设置文件路径（叠加在项目配置之上、env/CLI flag 之下） |
-| `--profile <name>` ✦ | run, ask, -p, chat | 应用配置文件中名为 `profiles` 的覆盖层；也可用 `SEEKFORGE_PROFILE` 环境变量（flag 优先）。该覆盖层位于 `--settings` 之下一层。作为全局 flag 提供，也可用于 `run` / `ask` / `loop` |
+| `--profile <name>` ✦ | run, ask, -p, chat | 应用配置文件中名为 `profiles` 的覆盖层；也可用 `SEEKFORGE_PROFILE` 环境变量（flag 优先）。该覆盖层位于 `--settings` 之下一层。作为全局 flag 提供，也可用于 `run` / `ask` / `chat` / `loop` |
 
 ## run 专属 flag
+
+`--permission-mode`、`--output-style`、`--fallback-model`、`--system-prompt`、
+`--append-system-prompt`、工具列表、`--dangerously-skip-permissions`、MCP 相关
+flag 以及 `--verbose` 同样适用于交互会话。系统提示词被替换时，`--output-style`
+与 `--append-system-prompt` 会追加到替换后的提示词之后。
 
 | Flag | 说明 |
 | --- | --- |
 | `--plan` | 先做只读规划，确认后在同一会话中执行。agent 也可以用 `exit_plan_mode` 提交计划；批准该确认后，同一次运行会以编辑模式继续（见 [Cookbook → 跨文件重构](cookbook.zh-CN.md#跨文件重构)） |
+| `--worktree [name]` | 创建一个保留的 git worktree（`.seekforge/worktrees/run-<name>`，分支 `seekforge/run-<name>`），并从你当前所在的同一子目录在其中运行。结束时会打印改动所在位置（json 结果中为 `worktree` 字段）；用 `git worktree remove --force <path>` 和 `git branch -D <branch>` 删除。不能与 `--resume`、`--continue`、`--fork-session` 同用。`-p` 也支持 |
+| `--json-schema <schema>` | 结构化输出——见[结构化输出](#结构化输出)。`ask` 与 `-p` 也支持 |
+| `--json-schema-file <path>` | 从文件读取该 schema（最多 256 KiB）。不能与 `--json-schema` 同用 |
 | `--permission-mode <mode>` | `default` / `confirm` — write/execute 时提示；`acceptEdits` — 自动允许工作区内编辑，命令仍提示；`plan` — 确认 + 先规划；`bypassPermissions` / `auto` — 全自动（等同 `-y`）。设置后覆盖 `-y` |
 | `--fallback-model <model>` | 主模型过载时用于重试的模型 |
 | `--output-style <style>` | `default`（不变）、`concise`（极简）、`explanatory`（边答边讲解）、`learning`（留 1–3 处给用户完成），或自定义的 `.seekforge/output-styles/<name>.md`（见 Configuration） |
@@ -49,6 +72,9 @@
 | `--verbose` | 打印完整的工具参数与结果 |
 
 ## ask 专属 flag
+
+`ask` 还接受 `--max-cost`、`--max-duration`、`--mcp-config`、
+`--strict-mcp-config`、`--json-schema` 与 `--json-schema-file`。
 
 | Flag | 说明 |
 | --- | --- |
@@ -75,9 +101,113 @@
 | `--input-format <fmt>` | `text`（默认）或 `stream-json`（stdin 上按行分隔的用户轮次） |
 | `--mcp-config <file>` | 见 run 专属 |
 | `--replay-user-messages` | 与 `-p` + `--input-format stream-json` 搭配：把每个用户轮次作为 stream-json 事件回显 |
+| `--strict-mcp-config` | 见 run 专属 |
+| `--verbose` | 见 run 专属 |
+| `--worktree [name]` | 见 run 专属 |
+| `--json-schema <schema>` / `--json-schema-file <path>` | 见[结构化输出](#结构化输出)；不能与 `--input-format stream-json` 同用 |
 
 管道文本输入上限为 16 MiB。使用 `stream-json` 时，每条 JSONL 记录上限为
 1,000,000 个字符；仍在等待换行的未终止记录也受此限制，超限输入会在无界占用内存前失败。
+
+## 结构化输出
+
+`--json-schema '<schema>'` 要求在运行结束后得到一个符合给定 JSON Schema 的
+JSON 值。SeekForge 会再发起一次模型调用，附上任务、本次运行的摘要、改动的文件、
+执行过的命令以及该 schema，校验回复，并把校验错误反馈回去，最多尝试三次。任务与
+结果是作为数据传给这次调用的，而不是指令。
+
+- `--output-format json` / `stream-json`：该值位于结果的 `structured_output`
+  字段；这些调用的开销计入 `total_cost_usd` 与 `usage`。
+- `--output-format text`：运行结束后以 JSON 打印该值。
+- 若所有尝试都未通过校验，命令以 1 退出，结果中 `subtype` 为
+  `"error_max_structured_output_retries"`、`is_error` 为 `true`，最后一次的校验错误
+  位于 `errors`。
+
+校验器支持 `type`、`enum`、`const`、数值边界与 `multipleOf`、字符串长度与
+`pattern`、`items`/`prefixItems`/`additionalItems`、`contains`、`uniqueItems`、
+数组与对象大小、`properties`、`patternProperties`、`additionalProperties`、
+`propertyNames`、`required`、`allOf`/`anyOf`/`oneOf`/`not`，以及本地 `$ref`
+（`#/$defs/…`、`#/definitions/…`）。使用了该范围之外断言（`if`/`then`/`else`、
+`dependentRequired`、`unevaluatedProperties` 等）或远程 `$ref` 的 schema 会在运行
+开始前被拒绝，而不是只做部分校验。
+
+## 内联子代理
+
+`--agents '<json>'` 定义仅本次调用有效的子代理，格式与 Claude Code 相同——以
+agent id 为键的对象：
+
+```bash
+seekforge -p "review the last commit" --agents '{
+  "reviewer": {"description": "Reviews diffs for bugs", "prompt": "You review code…",
+               "tools": ["read_file", "grep"], "model": "inherit"}
+}'
+```
+
+`description` 与 `prompt` 必填。可选：`tools`（数组或逗号分隔字符串；`[]` 表示
+不给任何工具）、`model`（`inherit` 表示沿用会话模型），以及 SeekForge 自己的
+`name`、`mode`（`ask`/`edit`）、`maxTurns`、`triggers`、`own`、`doNotTouch`、
+`boundary`。`color` 会被接受并忽略。其余字段——`disallowedTools`、
+`permissionMode`、`mcpServers`、`hooks` 等——一律拒绝，因为悄悄丢弃它们会让子代理
+拥有超出作者本意的权限。每个定义的校验方式与 `AGENT.md` 文件完全相同；JSON 上限为
+256 KiB、32 个子代理。本次运行中，内联子代理会替换同 id 的项目、用户、插件或内置
+子代理。
+
+## 调试输出
+
+`--debug` 把内部细节打印到 stderr（不碰 stdout，机器格式仍可解析）：代理自身的
+事件——provider 重试（`api`）、用量（`usage`）、工具调用（`tool`）、权限请求
+（`permission`）、上下文压缩（`context`）、文件改动（`file`）、实时命令输出
+（`command`）、包括 hook 消息在内的通知（`hooks`）、步骤（`step`）、模型消息
+（`model`）、子代理（`subagent`）、会话（`session`）——以及启动细节：生效的配置
+（`config`）、MCP 服务器及其信任状态（`mcp`）、worktree（`worktree`）和结构化输出
+的各次尝试（`structured`）。
+
+`--debug=api,tool` 只显示这些类别；`--debug='!command'`（加引号，避免 shell 处理
+`!`）显示除实时命令输出以外的全部内容。
+
+## 交互会话
+
+在终端中直接运行 `seekforge` 会打开 TUI（与 `seekforge-tui` 是同一个应用），并把
+`-c/--continue` 与 `-m/--model` 传给它。它会先询问目录访问授权，与 REPL 一直以来的
+做法相同。以下情况改为启动经典 readline REPL：
+
+- 运行 `seekforge chat`、传入 `--classic`，或设置 `SEEKFORGE_CLASSIC_REPL=1`；
+- stdin 或 stdout 不是终端（管道输入的行为与以前一致）；
+- 传入了 TUI 暂不支持的 flag（`--resume`、`--permission-mode`、`--add-dir`、
+  `--settings`、`--profile` 或 `SEEKFORGE_PROFILE` 等）。stderr 上会注明是哪些
+  flag；REPL 支持所有这些 flag。
+
+REPL（`seekforge chat`）接受上表中的会话类 flag：`-y`、`-m`、`-c`、`--resume`、
+`--fork-session`、`--session-id`、`--permission-mode`（`plan` 会先以只读方式规划每条
+消息，并在执行前询问）、`--ask`、`--add-dir`、`--mcp-config`、`--strict-mcp-config`、
+系统提示词相关 flag、`--output-style`、工具列表、`--max-turns`、`--max-cost`、
+`--fallback-model`、`--agents`、`--debug`、`--verbose`、`--settings` 与 `--profile`。
+除 `/help` 之外：
+
+| 输入 | 作用 |
+| --- | --- |
+| `!<command>` | 由你自己在工作区运行一条 shell 命令——不弹权限提示，就像在终端里直接输入。输出实时显示；Ctrl+C 可中止。命令、退出码和输出（截断到 16,000 个字符，保留开头与结尾；最多最近 8 条命令）会作为数据（而非指令）附加到你的下一条消息 |
+| `/compact [focus]` | 立即压缩当前会话。不带 focus 时是即时的机械摘要；带 focus 时由配置的 provider 围绕该重点生成摘要（模型调用失败时退回机械摘要） |
+| `/rename <title>` | 为当前会话命名；名称会显示在 `/sessions`、`seekforge sessions` 与 `sessions show` 中 |
+| `/sessions` | 最近的会话及其名称 |
+| `# <fact>` | 将事实保存到项目记忆 |
+
+Ctrl+C 会取消正在运行的回合或 `!` 命令，REPL 保持打开；在提示符处按 Ctrl+C 则与
+Ctrl+D 一样退出。通过管道输入 REPL 的每一行都会依次处理，包括在回合运行期间到达的行。
+
+## 权限提示
+
+终端权限提示始终显示原始命令或路径，接受以下回答：
+
+| 回答 | 含义 |
+| --- | --- |
+| `y` / `yes` | 允许这次调用 |
+| `a` / `always` | 允许，并在本会话剩余时间内允许同类调用——仅在可以授予时提供（`env` 级工具或匹配 `ask` 规则的调用不提供；即使输入也只允许这一次） |
+| `n`、`no` 或回车 | 拒绝 |
+| `n: <原因>`（或 `no <原因>`） | 拒绝并告诉代理原因，以便它的下一次尝试遵循该原因 |
+
+其他任何回答都视为拒绝。多处编辑的 `apply_patch` 的按 hunk 提示同样接受 `y`、
+hunk 序号以及 `n: <原因>`。
 | `--strict-mcp-config` | 见 run 专属 |
 | `--verbose` | 见 run 专属 |
 
@@ -112,9 +242,30 @@
 
 | 命令 | 作用 |
 | --- | --- |
-| `seekforge sessions` | 列出最近会话（id、状态、任务） |
+| `seekforge sessions` | 列出最近会话（id、状态、费用、名称、任务首行） |
+| `seekforge sessions show <id> [--json]` | 查看单个会话：名称、状态与模式、时间戳、消息数、用量、计划以及完整任务 |
+| `seekforge sessions rename <id> <title>` | 为会话命名（`""` 清除名称）。REPL 中的 `/rename` 对当前会话做同样的事 |
 | `seekforge resume <id>` | 继续某个会话（最近一次也可用 `run/ask -c`） |
 | `seekforge replay <session>` | 把存储会话的事件确定性地重新渲染到 stdout——不调用模型、零成本。`--verbose` 显示完整工具参数 / 结果 |
+
+`--fork-session` 在被恢复会话的副本上继续（原会话保留其历史），`--session-id <id>`
+让新会话使用你指定的 id——例如你自己的工具已经在跟踪的某个 UUID。
+
+## 更新
+
+`seekforge update`（别名 `upgrade`）检查 npm registry 上是否有新版本，然后根据
+当前副本所在位置判断它的安装方式：
+
+| 安装方式 | 升级命令 |
+| --- | --- |
+| npm 全局 | `npm install -g seekforge@latest --registry=https://registry.npmjs.org/` |
+| pnpm 全局 | `pnpm add -g seekforge@latest --registry=https://registry.npmjs.org/` |
+| Volta | `volta install seekforge@latest`（带 `npm_config_registry=https://registry.npmjs.org/`） |
+
+它会先打印命令，确认后再运行（`-y` 跳过确认；没有终端且未加 `-y` 时只打印）。
+命令中显式指定了官方 registry，因此即使默认 registry 配成了镜像，也不会装回更旧的
+版本。其他安装方式（npx、yarn、bun，或无法判断的副本）只会给出需要手动执行的命令；
+源码检出则提示用 `git pull` 并重新构建。
 
 ## Server flag
 

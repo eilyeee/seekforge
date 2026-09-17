@@ -160,6 +160,12 @@ export type SessionMeta = {
 };
 
 const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+/** Whether `sessionId` is a name a session directory may have (a UUID qualifies). */
+export function isValidSessionId(sessionId: string): boolean {
+  return SESSION_ID_RE.test(sessionId) && !sessionId.includes("..");
+}
+
 const SESSION_STATUSES = new Set<SessionStatus>([
   "idle",
   "running",

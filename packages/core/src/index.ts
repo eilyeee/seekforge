@@ -25,3 +25,27 @@ export {
   withProviderTelemetry,
   withTelemetrySession,
 } from "./telemetry/index.js";
+export {
+  formatJsonSchemaIssues,
+  jsonSchemaProblems,
+  validateJsonSchema,
+  type JsonSchemaIssue,
+} from "./util/json-schema-validate.js";
+export {
+  buildStructuredOutputMessages,
+  DEFAULT_STRUCTURED_OUTPUT_ATTEMPTS,
+  MAX_STRUCTURED_OUTPUT_ATTEMPTS,
+  parseStructuredJson,
+  produceStructuredOutput,
+  type StructuredOutputInput,
+  type StructuredOutputProvider,
+  type StructuredOutputRequest,
+  type StructuredOutputResult,
+} from "./util/structured-output.js";
+export {
+  clipUserShellOutput,
+  formatUserShellContext,
+  MAX_USER_SHELL_OUTPUT_CHARS,
+  MAX_USER_SHELL_RUNS,
+  type UserShellRun,
+} from "./agent/user-shell-context.js";
