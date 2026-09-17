@@ -51,6 +51,23 @@ afterAll(async () => {
  */
 const OPENAI_PRESETS = Object.entries(PROVIDER_PRESETS).filter(([, preset]) => preset.protocol === undefined);
 
+/**
+ * What a `thinking: true, reasoningEffort: "high"` request becomes per preset.
+ * A preset missing here must send none of these fields: its endpoint has no
+ * known effort parameter, and an unknown field is a 400 on a strict one.
+ */
+const EXPECTED_EFFORT_FIELDS: Record<string, Record<string, unknown>> = {
+  deepseek: { thinking: { type: "enabled" }, reasoning_effort: "high" },
+  openai: { reasoning_effort: "high" },
+  openrouter: { reasoning: { effort: "high" } },
+};
+
+function effortFields(body: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    ["thinking", "reasoning_effort", "reasoning"].filter((key) => key in body).map((key) => [key, body[key]]),
+  );
+}
+
 describe("provider compatibility matrix", () => {
   it.each(OPENAI_PRESETS)("keeps %s request and accounting semantics explicit", (name, preset) => {
     const model = preset.models[0]!;
@@ -67,8 +84,7 @@ describe("provider compatibility matrix", () => {
 
     expect(body).toMatchObject({ model, stream: true, stream_options: { include_usage: true } });
     expect(body.tools).toHaveLength(1);
-    if (name === "deepseek") expect(body.thinking).toEqual({ type: "enabled", reasoning_effort: "high" });
-    else expect(body).not.toHaveProperty("thinking");
+    expect(effortFields(body)).toEqual(EXPECTED_EFFORT_FIELDS[name] ?? {});
 
     const usage = mapUsage(
       { prompt_tokens: 10, completion_tokens: 2, prompt_cache_hit_tokens: 6 },
@@ -132,10 +148,6 @@ describe("provider compatibility matrix", () => {
     expect(request.path).toBe("/v1/chat/completions");
     expect(request.authorization).toBe(`Bearer ${name}-key`);
     expect(request.body).toMatchObject({ model: preset.models[0], stream: true });
-    if (name === "deepseek") {
-      expect(request.body.thinking).toEqual({ type: "enabled", reasoning_effort: "high" });
-    } else {
-      expect(request.body).not.toHaveProperty("thinking");
-    }
+    expect(effortFields(request.body)).toEqual(EXPECTED_EFFORT_FIELDS[name] ?? {});
   });
 });

@@ -92,6 +92,8 @@ function cacheKey(providerIdentity: string, model: string, req: ChatRequest): st
         tools: req.tools ?? null,
         temperature: req.temperature ?? null,
         maxTokens: req.maxTokens ?? null,
+        // Conditional so every key written before the field existed still hits.
+        ...(req.responseFormat !== undefined ? { responseFormat: req.responseFormat } : {}),
       }),
     )
     .digest("hex");
@@ -177,6 +179,7 @@ export function wrapProviderWithCache(provider: ChatProvider, dir: string, opts?
   return {
     model: provider.model,
     ...(provider.cacheIdentity !== undefined ? { cacheIdentity: provider.cacheIdentity } : {}),
+    ...(provider.structuredOutput !== undefined ? { structuredOutput: provider.structuredOutput } : {}),
     async chat(req) {
       if (req.signal?.aborted) throw req.signal.reason;
       const key = cacheKey(provider.cacheIdentity ?? provider.model, provider.model, req);

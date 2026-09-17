@@ -41,6 +41,7 @@
  *     shares buildProvider below instead.
  */
 
+import type { ReasoningEffort } from "@seekforge/shared";
 import type { ChatProvider, ModelPricing, PricingSource, RetryInfo } from "../provider/index.js";
 import { resolveMemoryMaintenanceConfig, type MemoryMaintenanceConfig } from "../memory/index.js";
 import {
@@ -51,6 +52,7 @@ import {
   pricingSourceFor,
   resolveProviderConfig,
 } from "../provider/index.js";
+import { withProviderTelemetry } from "../telemetry/index.js";
 import { createRetryBus, type AgentCoreDeps, type RetryBus } from "./loop.js";
 import { CLAUDE_COMPAT_MODES, type ClaudeCompat } from "./rules.js";
 
@@ -67,8 +69,8 @@ export type ProviderBuildInput = {
   modelPricing?: Record<string, ModelPricing>;
   /** DeepSeek V4 thinking mode; travels with every provider built. */
   thinking?: boolean;
-  /** V4 reasoning effort; travels with every provider built. */
-  reasoningEffort?: "high" | "max";
+  /** Reasoning effort; travels with every provider built. */
+  reasoningEffort?: ReasoningEffort;
   /** Retry-progress callback (a retry bus's onRetry). */
   onRetry?: (info: RetryInfo) => void;
   /** Retry the request on this model when the primary is overloaded. */
@@ -114,7 +116,7 @@ export function resolvedPricingSource(input: ProviderBuildInput & { model?: stri
  * (deliberately narrower) deps skeleton.
  */
 export function buildProvider(input: ProviderBuildInput, model?: string): ChatProvider {
-  return createDeepSeekProvider(
+  const provider = createDeepSeekProvider(
     resolveProviderConfig({
       provider: input.provider,
       apiKey: input.apiKey ?? "",
@@ -128,6 +130,9 @@ export function buildProvider(input: ProviderBuildInput, model?: string): ChatPr
       ...(input.inlineImages !== undefined ? { inlineImages: input.inlineImages } : {}),
     }),
   );
+  // Every provider a frontend builds goes through here, so this is where API
+  // requests are observed (the provider comes back unwrapped when telemetry is off).
+  return withProviderTelemetry(provider);
 }
 
 export type BuildAgentCoreDepsInput = Omit<ProviderBuildInput, "onRetry"> & {

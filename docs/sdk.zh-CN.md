@@ -30,6 +30,15 @@ content、reasoning、工具参数设置更严格的上限，同时验证 usage 
 120 秒 idle 超时和 600 秒总超时；内部嵌入方可通过
 `ProviderConfig.streamIdleTimeoutMs` 与 `streamTimeoutMs` 覆盖。
 
+`ChatRequest.responseFormat`（`{ type: "json_schema", name, schema, strict? }`）
+用于请求 JSON 回复。`provider.structuredOutput` 表明在该 provider 的模型上请求会得到什么：
+`"json_schema"`（解码受 schema 约束——OpenAI 的 `response_format`、Anthropic 的
+`output_config.format`；schema 中每个对象都必须设置 `additionalProperties: false`，
+并在 `required` 中列出全部属性）、`"json_object"`（只保证是合法 JSON——DeepSeek；
+需在提示词里说明 schema），或 `undefined`（不发送该字段）。无论哪种情况都应校验回复。
+`ProviderConfig.reasoningEffort` 接受 `low` / `medium` / `high` / `max`，各端点的映射见
+[配置](configuration.zh-CN.md#reasoningeffort)。
+
 ## 最小示例
 
 ```ts

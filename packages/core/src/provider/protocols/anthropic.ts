@@ -34,7 +34,9 @@ import type {
 } from "@seekforge/shared";
 import type { ModelPricing } from "../constants.js";
 import { isRecord } from "../../util/guards.js";
+import { anthropicEffort } from "../effort.js";
 import { DeepSeekApiError } from "../http.js";
+import { structuredOutputFor } from "../structured-output.js";
 import { priceUsage, ProviderProtocolError, validUsageCount } from "../mapping.js";
 import {
   MAX_SSE_CONTENT_CHARS,
@@ -689,6 +691,9 @@ export const anthropicProtocol: WireProtocol = {
     // `temperature` is deliberately never sent: the current model line rejects
     // sampling parameters outright, so forwarding one would fail every request
     // on exactly the models this preset exists to reach.
+    if (req.responseFormat && structuredOutputFor("anthropic", capabilities, model) === "json_schema") {
+      body.output_config = { format: { type: "json_schema", schema: req.responseFormat.schema } };
+    }
     if (!capabilities.thinking) return body;
     // When thinking is on, this protocol expects the assistant turn's reasoning
     // blocks back alongside the tool results that answer it — see
@@ -700,8 +705,8 @@ export const anthropicProtocol: WireProtocol = {
       body.thinking = thinking.thinking ? { type: "adaptive", display: "summarized" } : { type: "disabled" };
     }
     if (thinking.reasoningEffort) {
-      // Turning thinking off is only accepted at "high" effort or below.
-      body.output_config = { effort: thinking.thinking === false ? "high" : thinking.reasoningEffort };
+      const effort = anthropicEffort(model, thinking.reasoningEffort, thinking.thinking === false);
+      if (effort !== undefined) body.output_config = { ...(body.output_config as object | undefined), effort };
     }
     return body;
   },

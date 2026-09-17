@@ -16,3 +16,12 @@ export { isRecord } from "./util/guards.js";
 export { onAbortOnce } from "./util/abort.js";
 export { killProcessTree } from "./util/process-tree.js";
 export { SEEKFORGE_VERSION } from "./version.js";
+export { type CoreConfig, coreConfigIssues } from "./config.js";
+export {
+  activeTelemetry,
+  describeTelemetry,
+  shutdownTelemetry,
+  telemetryWarnings,
+  withProviderTelemetry,
+  withTelemetrySession,
+} from "./telemetry/index.js";

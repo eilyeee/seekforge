@@ -33,7 +33,8 @@
  *     own variable when it has one — see provider-env.ts — DEEPSEEK_API_KEY
  *     otherwise, so a DeepSeek user who happens to export ARK_API_KEY for
  *     another tool never gets the Ark key sent to the DeepSeek endpoint, and
- *     vice versa) and the SEEKFORGE_RUNTIME_BIN override.
+ *     vice versa), below it the key a user-owned `apiKeyHelper` prints (see
+ *     api-key-helper.ts), and the SEEKFORGE_RUNTIME_BIN override.
  *
  * NODE-ONLY (process.env + the fs-reading layer helper), so it lives behind
  * the "./config-layers" subpath export and is NOT re-exported from index.ts
@@ -41,12 +42,14 @@
  */
 
 import { join } from "node:path";
+import { normalizeApiKeyHelper, resolveApiKeyHelperSync } from "./api-key-helper.js";
 import { readFileBounded } from "./bounded-file-read.js";
 import { apiKeyEnvVar } from "./provider-env.js";
 import {
   HOOK_STAGES,
   type HookEntry,
   type HookStage,
+  isReasoningEffort,
   PERMISSION_LEVEL,
   type PermissionName,
   type PermissionRule,
@@ -62,6 +65,11 @@ export const MAX_CONFIG_FILE_BYTES = 1_000_000;
  */
 export type BaseConfigShape = {
   apiKey?: string;
+  /**
+   * Shell command whose stdout is the API key (see api-key-helper.ts). Taken
+   * from user-owned layers only; the merge runs it to fill `apiKey`.
+   */
+  apiKeyHelper?: string;
   /** Provider preset name; drives the env API-key selection ("deepseek" default). */
   provider?: string;
   runtimeBin?: string;
@@ -103,6 +111,8 @@ export type ConfigMergeReport = {
   mcpShadowed: string[];
   /** Repository entries whose trust-scoped fields were refused. */
   mcpNarrowed: McpEntryNarrowing[];
+  /** Why the configured apiKeyHelper produced no key; the merge then has none. */
+  apiKeyHelperError?: string;
 };
 
 /** Tag a layer the repository cannot write. Nothing is reduced. */
@@ -300,7 +310,7 @@ function downgradeRepositoryLayer(layer: unknown): { config: BaseConfigShape; na
         if (value === "mechanical" || value === "llm") result[key] = value;
         break;
       case "reasoningEffort":
-        if (value === "high" || value === "max") result[key] = value;
+        if (isReasoningEffort(value)) result[key] = value;
         break;
       case "editFormat":
         if (value === "patch" || value === "whole") result[key] = value;
@@ -483,12 +493,21 @@ export function mergeConfigLayersWithReport<T extends BaseConfigShape>(
   let scalars: Record<string, unknown> = {};
   for (const layer of layers) scalars = { ...scalars, ...(layer as Record<string, unknown>) };
   delete scalars.apiKey;
+  delete scalars.apiKeyHelper;
   delete scalars.provider;
   delete scalars.runtimeBin;
   delete scalars.sandbox;
   delete scalars.permissionRules;
   delete scalars.mcpServers;
   delete scalars.hooks;
+
+  // A helper runs a command, so only a layer the repository cannot write may
+  // name one. repositoryConfigLayer already drops the key; checking the origin
+  // here keeps that true for a layer tagged by hand.
+  let apiKeyHelper: string | undefined;
+  for (const layer of tagged) {
+    if (layer.origin === "user") apiKeyHelper = normalizeApiKeyHelper(layer.config.apiKeyHelper) ?? apiKeyHelper;
+  }
 
   let apiKey: string | undefined;
   let provider: string | undefined;
@@ -511,10 +530,25 @@ export function mergeConfigLayersWithReport<T extends BaseConfigShape>(
   // from the highest layer down (a JSON `null` falls through to lower layers,
   // exactly like the historical per-app `a ?? b ?? … ?? "deepseek"` chains).
   let envOverrides: Record<string, unknown> = {};
+  let apiKeyHelperError: string | undefined;
   if (opts.envOverrides !== false) {
+    // The provider's variable still wins, as every env var does; below it the
+    // helper's key replaces a file key. A helper that fails leaves no key at
+    // all rather than the file's — a static key beside a helper is the one the
+    // helper exists to replace.
     const envKey = process.env[apiKeyEnvVar(provider)];
+    let helperKey: string | undefined;
+    if (!envKey && apiKeyHelper !== undefined) {
+      apiKey = undefined;
+      try {
+        helperKey = resolveApiKeyHelperSync(apiKeyHelper);
+      } catch (error) {
+        apiKeyHelperError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    const effectiveKey = envKey || helperKey;
     envOverrides = {
-      ...(envKey ? { apiKey: envKey } : {}),
+      ...(effectiveKey ? { apiKey: effectiveKey } : {}),
       ...(process.env["SEEKFORGE_RUNTIME_BIN"] ? { runtimeBin: process.env["SEEKFORGE_RUNTIME_BIN"] } : {}),
     };
   }
@@ -523,6 +557,7 @@ export function mergeConfigLayersWithReport<T extends BaseConfigShape>(
     config: {
       ...scalars,
       ...(apiKey !== undefined ? { apiKey } : {}),
+      ...(apiKeyHelper !== undefined ? { apiKeyHelper } : {}),
       ...(provider !== undefined ? { provider } : {}),
       ...(runtimeBin !== undefined ? { runtimeBin } : {}),
       ...(sandbox !== undefined ? { sandbox } : {}),
@@ -533,7 +568,7 @@ export function mergeConfigLayersWithReport<T extends BaseConfigShape>(
       ...(hasHooks ? { hooks } : {}),
       ...envOverrides,
     } as T,
-    report: mcp.report,
+    report: apiKeyHelperError === undefined ? mcp.report : { ...mcp.report, apiKeyHelperError },
   };
 }
 
@@ -554,6 +589,9 @@ export function describeConfigMergeReport(report: ConfigMergeReport): string[] {
       `warning: MCP server "${server}" is repository-owned; ignored ${fields.join(", ")} ` +
         `(a repository layer may only make a server stricter)\n`,
     );
+  }
+  if (report.apiKeyHelperError !== undefined) {
+    lines.push(`warning: ${report.apiKeyHelperError}, so no API key is configured\n`);
   }
   return lines;
 }

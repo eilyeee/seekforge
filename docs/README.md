@@ -15,7 +15,10 @@ and quick start; this folder holds the reference docs.
   (`--profile`, `--output-style`, `--permission-mode`, …).
 - [Configuration](configuration.md) — config layers & precedence, profiles,
   permission rules, hooks (incl. the JSON output protocol), output styles,
-  MCP servers, sandbox, and the TUI status line.
+  MCP servers, sandbox, the TUI status line, `apiKeyHelper`, and proxies /
+  custom CAs.
+- [Telemetry](telemetry.md) — opt-in OpenTelemetry export (OTLP/HTTP JSON) of
+  token, cost, tool-decision and session metrics and events.
 - [Hooks](hooks.md) — command / HTTP / prompt hooks at 13 stages, matchers,
   the output protocol, and how hooks meet the permission prompt.
 - [MCP](mcp.md) — Model Context Protocol servers (stdio + Streamable HTTP),

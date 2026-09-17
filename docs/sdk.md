@@ -43,6 +43,16 @@ limits and validated usage integers. Streaming additionally enforces a 120 s
 idle timeout and a 600 s total timeout; internal embedders can override these
 with `ProviderConfig.streamIdleTimeoutMs` and `streamTimeoutMs`.
 
+`ChatRequest.responseFormat` (`{ type: "json_schema", name, schema, strict? }`)
+asks for a JSON reply. `provider.structuredOutput` says what the request will
+get on that provider's model: `"json_schema"` (decoding is constrained — OpenAI
+`response_format`, Anthropic `output_config.format`; every object in the schema
+must set `additionalProperties: false` and list all its properties in
+`required`), `"json_object"` (valid JSON only — DeepSeek; state the schema in the
+prompt), or `undefined` (the field is not sent). Validate the reply either way.
+`ProviderConfig.reasoningEffort` takes `low` / `medium` / `high` / `max`, mapped
+per endpoint as described in [Configuration](configuration.md#reasoningeffort).
+
 ## Minimal example
 
 ```ts

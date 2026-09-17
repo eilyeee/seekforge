@@ -32,7 +32,7 @@ hook 条目会被过滤掉，而低优先级层中的有效值仍然生效。
 以及声明供显式检查的未信任 MCP 服务器。
 
 它们不能提供凭据或凭据目的地（`apiKey`、`provider`、`baseUrl`），不能执行
-启动/运行时命令（`runtimeBin`、hook、`statusLine`、`lintCommand`、
+启动/运行时命令（`apiKeyHelper`、`runtimeBin`、hook、`statusLine`、`lintCommand`、
 `verifyCommand`），不能自动授权操作（`commandAllowlist`、`allow` 权限规则、
 MCP `trusted`），也不能削弱 sandbox、提高消费上限（包括每次请求携带多少上下文：
 `modelContextWindows`、`autoCompactThreshold`）、自动批准记忆、改变审计保留策略，
@@ -59,6 +59,41 @@ DeepSeek API key。优先使用 `DEEPSEEK_API_KEY` 环境变量，让密钥不�
 
 可通过 `config set` 设置？**可以，但必须带 `--global`**。
 `config show` 显示时，该值会被脱敏为仅前 6 个字符。
+
+存放在密码库里、会轮换或会过期的密钥，更适合用 [`apiKeyHelper`](#apikeyhelper)
+提供，而不是写在这里。
+
+### `apiKeyHelper`
+
+一条 shell 命令，其标准输出就是 API key。SeekForge 在第一次需要密钥时运行它，
+把它打印的内容（去掉首尾空白）用于每一次 provider 请求；当这个密钥的存活时间
+超过 `SEEKFORGE_API_KEY_HELPER_TTL_MS`（默认 5 分钟；`0` 表示每次请求前都运行）
+时会再运行一次，provider 返回 401 时也会再运行一次。CLI、TUI、`seekforge serve`
+以及经由 server 的 Desktop 行为一致。
+
+```json
+{ "apiKeyHelper": "op read op://dev/deepseek/credential" }
+```
+
+- **仅限用户级配置。** 它会执行命令，因此只认 `~/.seekforge/config.json`、
+  该文件里的 profile，或 `--settings` 文件；`.seekforge/config.json`、
+  `.seekforge/config.local.json` 及其 profile 中的该键会被忽略。
+- **优先级。** provider 自己的环境变量（`DEEPSEEK_API_KEY`、`ARK_API_KEY`、
+  `ANTHROPIC_API_KEY`）仍然优先，此时不会运行 helper。在它之下，helper 给出的
+  密钥会替代同一配置里的 `apiKey`。helper 失败时就没有任何密钥——不会退回到
+  文件里的那个——CLI 会打印原因。
+- **输出。** stdout 上的单个 token（首尾空白会被去掉；最多 16 KiB）。中间带有
+  空白或控制字符的输出会被拒绝。命令写到 stderr 的内容一概不读。
+- **限制。** 命令通过平台 shell 运行，没有标准输入，10 秒后会被强制结束。
+  一个进程里的第一次运行会等待它完成；之后，配置重新加载时会在后台刷新已过期
+  的密钥，而 provider 请求会等待新密钥。一次失败的运行在 30 秒内会被直接复用报告，
+  不会在每次加载配置时重跑，因此坏掉的 helper 不会拖慢 `seekforge serve` 的每个请求。
+- **绝不记录。** 密钥不会写入追踪、日志或错误信息；错误只说明命令如何失败
+  （退出码、信号、超时）。`config show` 会打印命令本身，所以不要把机密写在命令行里。
+- Docker 与 SSH 运行器只按变量名转发密钥；只配置了 helper 时，容器或远程主机
+  拿不到密钥。
+
+可通过 `config set` 设置？**不可以**——请直接编辑 `~/.seekforge/config.json`。
 
 ### `model`
 
@@ -159,7 +194,7 @@ seekforge config set model claude-opus-5
 | 行为 | 在此预设下 |
 | --- | --- |
 | `thinking` | `true` 请求自适应思考并要求返回摘要推理（否则推理流会是空的）；`false` 关闭思考；不设置则什么都不发，采用模型默认值 —— 另见下方注意事项 |
-| `reasoningEffort` | 作为请求的 effort 级别发送。与 `thinking: false` 同时使用时会被限制为 `high` —— 这是关闭思考时 API 允许的上限 |
+| `reasoningEffort` | 作为 `output_config.effort` 发送（`low` / `medium` / `high` / `max`）。与 `thinking: false` 同时使用时，`max` 会被限制为 `high`——这是关闭思考时 API 允许的上限。Haiku、Sonnet 4.5 以及 Opus/Sonnet 4.0–4.1 不接受 effort，不会发送；Opus 4.5 的 `max` 会发成 `high` |
 | 提示缓存 | 开启，且是这里最大的成本杠杆：该 API 只在请求标出断点的位置缓存，因此 SeekForge 会在系统提示词末尾（其中包含工具定义）和对话末尾各标一个断点。命中缓存的前缀在下一回合按输入价的十分之一计费 |
 | 上下文缓存 token | 会读取。Anthropic 的输入计数只是**未命中缓存的余量**，因此 SeekForge 会把缓存读/写的计数加回去，报告完整的 prompt 规模 |
 | 成本 | 使用内置的 Anthropic 价格表计价 —— 无需 `modelPricing`，`maxCostUsd` 和成本读数即可工作。表中没有公开价格的模型报告为「未知」，而不是 `0` |
@@ -369,8 +404,9 @@ id 或模型家族匹配 —— 带日期或路由前缀的 id（如 `claude-opu
 
 ### `thinking`
 
-控制 DeepSeek V4 思考模式。为 `true` 时，模型在一个可折叠的思考块中展示
-推理过程（绝不会回传到请求中）。为 `false` 或缺省时，采用 API 默认行为。
+控制 DeepSeek V4 思考模式（`deepseek-v4-*`，以及 V4.1 的 `deepseek-flash` /
+`deepseek-pro`）。为 `true` 时，模型在一个可折叠的思考块中展示推理过程（绝不会
+回传到请求中）。为 `false` 时关闭思考；缺省时采用 API 默认行为。
 
 在 REPL 中，`/think on|off|high|max` 可在运行时切换。
 
@@ -382,18 +418,29 @@ id 或模型家族匹配 —— 带日期或路由前缀的 id（如 `claude-opu
 
 ### `reasoningEffort`
 
-V4 推理强度级别。仅在启用思考模式时有意义。
+模型思考的力度：`"low"`、`"medium"`、`"high"` 或 `"max"`。缺省时不发送任何级别，
+由模型采用自己的默认值。没有哪个端点恰好有这四档，所以每个 provider 收到的是它
+所接受的最接近的一档；接受哪些档位未知的模型则什么也收不到：
 
-| 值 | 行为 |
-| --- | --- |
-| `"high"` | 标准推理深度。 |
-| `"max"` | 最大推理深度——更彻底，但更慢也更贵。 |
+| Provider | 发送为 | `low` | `medium` | `high` | `max` |
+| --- | --- | --- | --- | --- | --- |
+| `deepseek`（V4 模型：`deepseek-v4-*`、`deepseek-flash`、`deepseek-pro`） | 顶层 `reasoning_effort` | `low` | `high` | `high` | `max` |
+| `anthropic` | `output_config.effort` | `low` | `medium` | `high` | `max`（见上方 Anthropic 表格） |
+| `openai`，gpt-5.6 系列 | `reasoning_effort` | `low` | `medium` | `high` | `max` |
+| `openai`，gpt-5.2 – gpt-5.5 | `reasoning_effort` | `low` | `medium` | `high` | `xhigh` |
+| `openai`，gpt-5 / gpt-5.1 | `reasoning_effort` | `low` | `medium` | `high` | `high` |
+| `openrouter` | `reasoning.effort`（由路由方按模型换算） | `low` | `medium` | `high` | `xhigh` |
+| `ark`、`ollama`、其他 OpenAI 模型、`-pro` 模型 | 不发送 | | | | |
+
+DeepSeek 自己就会把 `medium` 当作 `high` 运行；发送 `high` 只是如实说明。任何级别
+都会开启 DeepSeek 的思考，因此在 `thinking: false` 时不会向它发送级别（OpenAI
+兼容端点同理）。
 
 ```json
 { "reasoningEffort": "max" }
 ```
 
-可通过 `config set` 设置？**可以** —— 校验取值为 `high` / `max`。
+可通过 `config set` 设置？**可以** —— 按 [`config set` 表格](#set) 中列出的取值校验。
 
 ### `planModel`
 
@@ -1170,7 +1217,8 @@ description: House style
 | **全局配置** | `~/.seekforge/config.json` |
 
 标量键（字符串、布尔值）直接被覆盖——最高层生效。例如，CLI 传了 `--model`
-时，项目配置中设置的 `model` 会被忽略。
+时，项目配置中设置的 `model` 会被忽略。`apiKeyHelper` 只从用户级配置层读取，
+它打印出的密钥排在 provider 密钥环境变量之后。
 
 ### 深合并字段
 
@@ -1246,6 +1294,7 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 | `DEEPSEEK_API_KEY` | `apiKey` | 覆盖所有文件/标志层 |
 | `SEEKFORGE_RUNTIME_BIN` | `runtimeBin` | 覆盖所有文件/标志层 |
 | `SEEKFORGE_PROFILE` | 选择一个 `profiles` 条目 | 在 `--profile` 缺席时使用；选中的叠加层位于 `--settings` 之下 |
+| `SEEKFORGE_API_KEY_HELPER_TTL_MS` | [`apiKeyHelper`](#apikeyhelper) 的密钥用多久后重新运行命令 | 毫秒，默认 `300000`；`0` 表示每次请求前都运行 helper |
 
 `ARK_API_KEY`、`DEEPSEEK_API_KEY` 和 `SEEKFORGE_RUNTIME_BIN` 在
 `loadConfig()` 的末尾应用，因此总是胜过任何文件或标志。`SEEKFORGE_PROFILE`
@@ -1261,6 +1310,39 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 | `SEEKFORGE_DESKTOP_BOOTSTRAP_WORKSPACE` | Desktop 在用户尚未选定项目就启动 `serve` 时，所托管的占位工作区路径。 |
 | `SEEKFORGE_SERVE_CMD` | Desktop 外壳要启动的完整命令行（按空白切分），用来替代在 `PATH` 上解析 `seekforge serve`。它优先于 `PATH` 查找，因此是调试本地构建服务端时的覆盖开关。 |
 | `SEEKFORGE_WORKSPACE` | Desktop 打开的工作区目录，优先于进程的工作目录。 |
+| `SEEKFORGE_ENABLE_TELEMETRY` | 设为 `1`（或 `true`）时开启 OpenTelemetry 导出使用指标与事件。默认关闭；配置它的 `OTEL_*` 变量见 [遥测](telemetry.zh-CN.md)。 |
+
+### 代理与自定义证书颁发机构
+
+provider 请求、HTTP 方式的 MCP 服务器、`web_search`、`image_analyze` 以及遥测导出
+都使用 Node 的 `fetch`。只有当 Node 以 `--use-env-proxy` 或 `NODE_USE_ENV_PROXY=1`
+启动时，它才会遵循 `HTTPS_PROXY`、`HTTP_PROXY` 和 `NO_PROXY`（大小写均可）——
+启动之后再设置都不起作用。因此 `seekforge` 与 `seekforge-tui` 启动器会替你完成：
+只要设置了上述代理变量之一，它们就会原地重启进程（PID、终端、参数都不变），加上
+`--use-env-proxy`，并屏蔽 Node 为此打印的「experimental」警告。
+
+- **Node 版本。** 需要同时具备 `--use-env-proxy`（22.21+ 或 24.5+）和
+  `process.execve`（22.15+ 或 23.11+；Windows 上没有）的 Node。在 Windows 上，
+  或从源码运行（`pnpm --filter seekforge dev`）时，请自行设置
+  `NODE_USE_ENV_PROXY=1`。在更旧的 Node 上代理变量会被忽略、请求直连；
+  `seekforge doctor` 会说明属于哪种情况。
+- **以你的选择为准。** 只要 `NODE_USE_ENV_PROXY` 被设置为任何值（`0` 表示保持直连），
+  或 `NODE_OPTIONS` 里已经有 `--use-env-proxy` / `--no-use-env-proxy`，启动器就什么也不做。
+- **回环地址。** 除非 `NO_PROXY` 另有说明，Node 也会代理 `localhost`，这会把本地的
+  Ollama、MCP 服务器或 OTLP 采集器的请求发给代理。当 `NO_PROXY` 与 `no_proxy`
+  都未设置时，启动器会设置 `NO_PROXY=localhost,127.0.0.1,[::1]`（IPv6 地址必须加方括号）。
+  agent 运行的命令会继承这个 `NO_PROXY`，但不会继承代理标志。
+- **不支持：** `ALL_PROXY` 与 SOCKS 代理；Node 两者都不读取。
+- **`web_fetch` 始终直连。** 它连接的是自己解析并对照私有网段检查过的地址；如果
+  经由代理，代理会重新解析一次域名。在只能经代理出网的环境里，`web_fetch` 会像
+  以前一样失败；`web_search` 可以正常工作。
+- **Desktop 的 sidecar** 是 Bun 二进制，Bun 的 `fetch` 本身就遵循代理变量（同样包括
+  回环地址，除非 `NO_PROXY` 列出了它们）。
+
+对于企业内部或自签名的证书颁发机构，可将 `NODE_EXTRA_CA_CERTS` 指向一个 PEM 证书包，
+或在 `NODE_OPTIONS` 中加入 `--use-system-ca` 以同时信任操作系统的证书库。Node 只在
+启动时读取这两者，启动器的重启会保留它们。当 `NODE_EXTRA_CA_CERTS` 指向不存在的文件时，
+`seekforge doctor` 会给出警告。
 
 ### 导出给 hook 子进程的变量
 

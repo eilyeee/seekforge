@@ -1200,7 +1200,7 @@ describe("per-run model/thinking overrides", () => {
     err = await rx.waitFor((f) => f.type === "error");
     expect(err.code).toBe("bad_frame");
 
-    sendFrame(ws, { type: "start", task: "go", mode: "edit", approvalMode: "auto", reasoningEffort: "low" });
+    sendFrame(ws, { type: "start", task: "go", mode: "edit", approvalMode: "auto", reasoningEffort: "xhigh" });
     err = await rx.waitFor((f) => f.type === "error");
     expect(err.code).toBe("bad_frame");
   });

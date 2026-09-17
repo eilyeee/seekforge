@@ -8,7 +8,7 @@ import {
   mapAnthropicResponse,
   toAnthropicMessages,
 } from "../../src/provider/protocols/anthropic.js";
-import type { ChatMessage } from "@seekforge/shared";
+import type { ChatMessage, ReasoningEffort } from "@seekforge/shared";
 
 /**
  * The Anthropic Messages protocol's half of the compatibility matrix.
@@ -25,8 +25,9 @@ const MODEL = "claude-opus-5";
 const build = (
   messages: ChatMessage[],
   stream = false,
-  thinking: { thinking?: boolean; reasoningEffort?: "high" | "max" } = {},
-): Record<string, unknown> => anthropicProtocol.buildBody(MODEL, { messages }, stream, thinking, CAPABILITIES);
+  thinking: { thinking?: boolean; reasoningEffort?: ReasoningEffort } = {},
+  model = MODEL,
+): Record<string, unknown> => anthropicProtocol.buildBody(model, { messages }, stream, thinking, CAPABILITIES);
 
 describe("anthropic request shape", () => {
   it("posts to /messages with key-and-version headers, never a bearer token", () => {
@@ -99,6 +100,33 @@ describe("anthropic request shape", () => {
     expect(off["output_config"]).toEqual({ effort: "high" });
     const on = build([{ role: "user", content: "x" }], false, { thinking: true, reasoningEffort: "max" });
     expect(on["output_config"]).toEqual({ effort: "max" });
+  });
+
+  it("sends every effort level by name, capping only what thinking-off cannot take", () => {
+    const x: ChatMessage[] = [{ role: "user", content: "x" }];
+    for (const level of ["low", "medium", "high", "max"] as const) {
+      expect(build(x, false, { thinking: true, reasoningEffort: level })["output_config"]).toEqual({ effort: level });
+    }
+    expect(build(x, false, { thinking: false, reasoningEffort: "low" })["output_config"]).toEqual({ effort: "low" });
+    expect(build(x, false, { reasoningEffort: "medium" })["output_config"]).toEqual({ effort: "medium" });
+  });
+
+  it("sends no effort to a model that takes none, and no max to one that lacks it", () => {
+    const x: ChatMessage[] = [{ role: "user", content: "x" }];
+    for (const model of [
+      "claude-haiku-4-5",
+      "claude-sonnet-4-5-20250929",
+      "claude-opus-4-1",
+      "claude-opus-4-20250514",
+    ]) {
+      expect(build(x, false, { thinking: true, reasoningEffort: "low" }, model)).not.toHaveProperty("output_config");
+    }
+    expect(build(x, false, { reasoningEffort: "max" }, "claude-opus-4-5-20251101")["output_config"]).toEqual({
+      effort: "high",
+    });
+    for (const model of ["claude-opus-4-6", "claude-sonnet-4-6", "claude-fable-5", "claude-opus-6"]) {
+      expect(build(x, false, { reasoningEffort: "max" }, model)["output_config"]).toEqual({ effort: "max" });
+    }
   });
 
   it("sends no thinking controls when the preset says the endpoint has none", () => {

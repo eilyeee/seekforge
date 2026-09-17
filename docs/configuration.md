@@ -35,8 +35,8 @@ non-authoritative fields), add `deny` permission rules, and declare untrusted
 MCP servers for explicit inspection.
 
 They cannot supply credentials or credential destinations (`apiKey`,
-`provider`, `baseUrl`), execute startup/runtime commands (`runtimeBin`, hooks,
-`statusLine`, `lintCommand`, `verifyCommand`), auto-authorize actions
+`provider`, `baseUrl`), execute startup/runtime commands (`apiKeyHelper`,
+`runtimeBin`, hooks, `statusLine`, `lintCommand`, `verifyCommand`), auto-authorize actions
 (`commandAllowlist`, `allow` permission rules, MCP `trusted`), weaken the
 sandbox, raise spending limits (including how much context each request carries:
 `modelContextWindows`, `autoCompactThreshold`), auto-approve memory, change audit
@@ -64,6 +64,49 @@ never touches disk — but `config set` accepts it for convenience.
 
 Settable via `config set`? **Yes, with `--global`**.
 When displayed by `config show`, the value is masked to the first 6 characters.
+
+A key that lives in a vault, rotates, or expires is better supplied by
+[`apiKeyHelper`](#apikeyhelper) than written here.
+
+### `apiKeyHelper`
+
+A shell command whose standard output is the API key. SeekForge runs it when it
+first needs a key, uses what it printed (trimmed) for every provider request,
+and runs it again when that key is older than
+`SEEKFORGE_API_KEY_HELPER_TTL_MS` (default 5 minutes; `0` runs it before every
+request) and once more when the provider answers 401. It works the same on the
+CLI, the TUI, `seekforge serve`, and Desktop through the server.
+
+```json
+{ "apiKeyHelper": "op read op://dev/deepseek/credential" }
+```
+
+- **User-owned only.** It runs a command, so it is honored from
+  `~/.seekforge/config.json`, a profile in that file, or a `--settings` file,
+  and ignored in `.seekforge/config.json`, `.seekforge/config.local.json`, and
+  their profiles.
+- **Precedence.** The provider's own variable (`DEEPSEEK_API_KEY`,
+  `ARK_API_KEY`, `ANTHROPIC_API_KEY`) still wins, and the helper is then not
+  run. Below that, the helper's key replaces an `apiKey` in the same config.
+  If the helper fails, there is no key at all — not the file's — and the CLI
+  prints why.
+- **Output.** A single token on stdout (surrounding whitespace is trimmed; at
+  most 16 KiB). Output with whitespace or control characters inside it is
+  rejected. Nothing the command prints on stderr is read.
+- **Limits.** The command runs through the platform shell with no standard
+  input and is killed after 10 seconds. The first run in a process waits for
+  it; after that, a key past its TTL is refreshed in the background when config
+  is reloaded, while provider requests wait for the fresh key. A failed run is
+  reported again for 30 seconds instead of being re-run each time config is
+  loaded, so a broken helper cannot stall every `seekforge serve` request.
+- **Never logged.** The key is not written to traces, logs, or error messages;
+  an error names only how the command failed (exit code, signal, timeout).
+  `config show` prints the command itself, so keep secrets out of the command
+  line.
+- The Docker and SSH runners forward keys by variable name only; a helper-only
+  setup gives a container or remote host no key.
+
+Settable via `config set`? **No** — edit `~/.seekforge/config.json`.
 
 ### `model`
 
@@ -170,7 +213,7 @@ What differs from the OpenAI-compatible presets:
 | Behavior | On this preset |
 | --- | --- |
 | `thinking` | `true` requests adaptive thinking with summarized reasoning (so the reasoning stream is not blank); `false` disables it; unset sends nothing and takes the model's default — see the caveat below |
-| `reasoningEffort` | Sent as the request's effort level. With `thinking: false` it is capped at `high`, which is the most the API accepts while thinking is off |
+| `reasoningEffort` | Sent as `output_config.effort` (`low` / `medium` / `high` / `max`). With `thinking: false`, `max` is capped at `high`, the most the API accepts while thinking is off. Not sent to Haiku, Sonnet 4.5, or Opus/Sonnet 4.0–4.1, which take no effort level; Opus 4.5 gets `high` for `max` |
 | Prompt caching | On, and the largest cost lever here: this API caches only where a request marks a breakpoint, so SeekForge marks the end of the system prompt (which covers the tool definitions) and the end of the conversation. A cached prefix bills at a tenth of the input rate on the next turn |
 | Context-cache tokens | Read. Anthropic reports the *uncached remainder* as its input count, so SeekForge adds the cache read/write counts back to report the whole prompt |
 | Cost | Priced from the built-in Anthropic table — `maxCostUsd` and the cost readout work without `modelPricing`. Cache writes bill at 1.25x input and are counted separately, so the reported cost can be reconstructed from the reported tokens. A model with no published rate here reports "unknown", not `0` |
@@ -408,9 +451,10 @@ costlier requests). Settable via `config set`? **No** — edit the file directly
 
 ### `thinking`
 
-Controls DeepSeek V4 thinking mode. When `true`, the model shows its reasoning
-in a collapsible thought block (never echoed back into requests). When `false`
-or absent, the API default applies.
+Controls DeepSeek V4 thinking mode (`deepseek-v4-*`, and the V4.1 ids
+`deepseek-flash` / `deepseek-pro`). When `true`, the model shows its reasoning
+in a collapsible thought block (never echoed back into requests). When `false`,
+thinking is turned off; when absent, the API default applies.
 
 In the REPL, `/think on|off|high|max` toggles this at runtime.
 
@@ -422,18 +466,31 @@ Settable via `config set`? **Yes** — accepts `true` / `false`.
 
 ### `reasoningEffort`
 
-V4 reasoning effort level. Only meaningful when thinking is enabled.
+How hard the model should think: `"low"`, `"medium"`, `"high"`, or `"max"`.
+Unset sends no level, and the model uses its own default. No endpoint has
+exactly these four, so each provider receives the nearest level it accepts,
+and a model whose accepted levels are unknown receives none:
 
-| Value | Behaviour |
-| --- | --- |
-| `"high"` | Standard reasoning depth. |
-| `"max"` | Maximum reasoning depth — more thorough but slower and more expensive. |
+| Provider | Sent as | `low` | `medium` | `high` | `max` |
+| --- | --- | --- | --- | --- | --- |
+| `deepseek` (V4 models: `deepseek-v4-*`, `deepseek-flash`, `deepseek-pro`) | top-level `reasoning_effort` | `low` | `high` | `high` | `max` |
+| `anthropic` | `output_config.effort` | `low` | `medium` | `high` | `max` (see the Anthropic table above) |
+| `openai`, gpt-5.6 models | `reasoning_effort` | `low` | `medium` | `high` | `max` |
+| `openai`, gpt-5.2 – gpt-5.5 | `reasoning_effort` | `low` | `medium` | `high` | `xhigh` |
+| `openai`, gpt-5 / gpt-5.1 | `reasoning_effort` | `low` | `medium` | `high` | `high` |
+| `openrouter` | `reasoning.effort` (translated per model by the router) | `low` | `medium` | `high` | `xhigh` |
+| `ark`, `ollama`, other OpenAI models, `-pro` models | not sent | | | | |
+
+DeepSeek runs `medium` as `high` itself; sending `high` just says so. Any level
+turns DeepSeek thinking on, so with `thinking: false` no level is sent there
+(nor to OpenAI-compatible endpoints).
 
 ```json
 { "reasoningEffort": "max" }
 ```
 
-Settable via `config set`? **Yes** — validated against `high` / `max`.
+Settable via `config set`? **Yes** — validated against the values listed in the
+[`config set` table](#set).
 
 ### `planModel`
 
@@ -1322,7 +1379,8 @@ priority, highest first:
 
 Scalar keys (strings, booleans) are simply overwritten — the highest layer
 wins. For example, a `model` set in the project config is ignored when
-`--model` is passed on the CLI.
+`--model` is passed on the CLI. `apiKeyHelper` is read from user-owned layers
+only, and the key it prints ranks just below the provider's key variable.
 
 ### Deep-merge fields
 
@@ -1400,6 +1458,7 @@ runtime, allowlist, and sandbox settings are user-owned and require `--global`.
 | `DEEPSEEK_API_KEY` | `apiKey` | Overrides all file/flag layers |
 | `SEEKFORGE_RUNTIME_BIN` | `runtimeBin` | Overrides all file/flag layers |
 | `SEEKFORGE_PROFILE` | selects a `profiles` entry | Used when `--profile` is absent; the chosen overlay slots below `--settings` |
+| `SEEKFORGE_API_KEY_HELPER_TTL_MS` | how long an [`apiKeyHelper`](#apikeyhelper) key is used before the command runs again | Milliseconds, default `300000`; `0` runs the helper before every request |
 
 `ARK_API_KEY`, `DEEPSEEK_API_KEY` and `SEEKFORGE_RUNTIME_BIN` are applied at the
 end of `loadConfig()`, so they always win over any file or flag. `SEEKFORGE_PROFILE`
@@ -1417,6 +1476,45 @@ starts:
 | `SEEKFORGE_DESKTOP_BOOTSTRAP_WORKSPACE` | Placeholder workspace path `serve` hosts when the Desktop starts it before the user has chosen a project. |
 | `SEEKFORGE_SERVE_CMD` | Full command line (split on whitespace) the Desktop shell spawns instead of resolving `seekforge serve` on `PATH`. It wins over the `PATH` lookup, which makes it the debugging override for a locally built server. |
 | `SEEKFORGE_WORKSPACE` | Workspace directory the Desktop opens, taking precedence over the process working directory. |
+| `SEEKFORGE_ENABLE_TELEMETRY` | `1` (or `true`) turns on OpenTelemetry export of usage metrics and events. Off by default; the `OTEL_*` variables that configure it are described in [Telemetry](telemetry.md). |
+
+### Proxies and custom certificate authorities
+
+Provider requests, MCP servers over HTTP, `web_search`, `image_analyze`, and
+telemetry export all use Node's `fetch`, which honors `HTTPS_PROXY`,
+`HTTP_PROXY`, and `NO_PROXY` (either case) only when Node was started with
+`--use-env-proxy` or `NODE_USE_ENV_PROXY=1` — setting either later has no
+effect. The `seekforge` and `seekforge-tui` launchers therefore do it for you:
+when one of those proxy variables is set, they restart the process in place
+(same PID, terminal, and arguments) with `--use-env-proxy`, and silence the
+"experimental" warning Node prints for it.
+
+- **Node versions.** This needs a Node that has both `--use-env-proxy`
+  (22.21+ or 24.5+) and `process.execve` (22.15+ or 23.11+; not on Windows). On
+  Windows, or when running from source (`pnpm --filter seekforge dev`), set
+  `NODE_USE_ENV_PROXY=1` yourself. On an older Node the proxy variables are
+  ignored and requests go direct; `seekforge doctor` says which case applies.
+- **Your choice wins.** If `NODE_USE_ENV_PROXY` is set to anything (`0` keeps
+  requests direct), or `--use-env-proxy` / `--no-use-env-proxy` is already in
+  `NODE_OPTIONS`, the launcher does nothing.
+- **Loopback.** Node proxies `localhost` too unless `NO_PROXY` says otherwise,
+  which would send a local Ollama, MCP server, or OTLP collector to the proxy.
+  When neither `NO_PROXY` nor `no_proxy` is set, the launcher sets
+  `NO_PROXY=localhost,127.0.0.1,[::1]` (IPv6 addresses must be bracketed).
+  Commands the agent runs inherit that `NO_PROXY`, but not the proxy flag.
+- **Not supported:** `ALL_PROXY` and SOCKS proxies; Node reads neither.
+- **`web_fetch` stays direct.** It connects to the address it resolved and
+  checked against private ranges; sending it through a proxy would let the
+  proxy resolve the name again. Behind a proxy that is the only way out,
+  `web_fetch` fails as before; `web_search` works.
+- **The Desktop sidecar** is a Bun binary, and Bun's `fetch` follows the proxy
+  variables on its own (loopback included, unless `NO_PROXY` lists it).
+
+For a corporate or self-signed certificate authority, set
+`NODE_EXTRA_CA_CERTS` to a PEM bundle, or add `--use-system-ca` to
+`NODE_OPTIONS` to trust the operating system's store as well. Node reads both
+only at startup, and the launcher's restart keeps them. `seekforge doctor`
+warns when `NODE_EXTRA_CA_CERTS` names a missing file.
 
 ### Exported to hook subprocesses
 

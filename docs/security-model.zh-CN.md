@@ -49,7 +49,7 @@ Allow 规则与会话放行清单按*分隔符边界*匹配，而不是裸的 `s
 `.seekforge/config.json`、`.seekforge/config.local.json` 及其中的 profile 都是
 不可信仓库输入。分层前，SeekForge 只保留普通偏好、限制性的 `deny` 规则，以及
 移除信任标志后的 MCP 定义。仓库值不能重定向用户 API key，不能执行 hook、状态栏、
-runtime 或验证命令，不能添加 allow 规则/放行清单，不能削弱 sandbox、提高预算，
+runtime、验证命令或 `apiKeyHelper`，不能添加 allow 规则/放行清单，不能削弱 sandbox、提高预算，
 也不能把 MCP 服务器标记为可信。这些能力必须来自全局用户配置、环境变量或用户
 显式选择的 settings 文件。
 

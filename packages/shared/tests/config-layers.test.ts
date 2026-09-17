@@ -49,6 +49,13 @@ describe("repository config trust boundary", () => {
     }
   });
 
+  it("keeps every reasoning-effort level a project may prefer", () => {
+    for (const reasoningEffort of ["low", "medium", "high", "max"]) {
+      expect(sanitizeProjectConfig({ reasoningEffort })).toEqual({ reasoningEffort });
+    }
+    expect(sanitizeProjectConfig({ reasoningEffort: "xhigh" })).toEqual({});
+  });
+
   it("drops malformed preference values and non-object layers", () => {
     expect(sanitizeProjectConfig(null)).toEqual({});
     expect(
