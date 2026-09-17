@@ -20,6 +20,7 @@ import type { RuntimeClient } from "../runtime/index.js";
 import type { BackgroundTasks } from "./background.js";
 import type { HookConfig } from "../hooks/index.js";
 import type { SandboxLevel } from "./os-sandbox.js";
+import type { CheckpointOrigin, ShellCheckpointNote } from "./shell-checkpoint.js";
 
 export type ToolContext = {
   sessionId: string;
@@ -89,9 +90,16 @@ export type ToolContext = {
    * Records a pre-write snapshot for session rewind. Called by write tools
    * BEFORE writing with the workspace-relative path and the file's current
    * content (null when it does not exist). First-write-wins de-duplication
-   * is enforced by the agent loop, not here.
+   * is enforced by the agent loop, not here. run_command calls it AFTER the
+   * command, for the files a git comparison found changed, with `origin`.
    */
-  checkpoint?: (path: string, before: string | null) => void;
+  checkpoint?: (path: string, before: string | null, origin?: CheckpointOrigin) => void;
+  /**
+   * Records what a shell command's checkpoint covered, or why it covered
+   * nothing (outside git, over the limits), so rewind can say what it cannot
+   * undo. Absent = not recorded.
+   */
+  recordShellCheckpoint?: (note: ShellCheckpointNote) => void;
   /**
    * When set, apply_patch should only apply the edits at these indices
    * (per-hunk selection). Set by the dispatcher after the user selected
@@ -146,12 +154,15 @@ export { buildSandboxSpec, composeSandboxProfiles, probeSandboxCapabilities, san
 export type { SandboxCapabilityProbe, SandboxLevel, SandboxProfile, SandboxSpec } from "./os-sandbox.js";
 export { createBackgroundTasks } from "./background.js";
 export type {
+  BackgroundTaskExitNotice,
   BackgroundTasks,
   BackgroundTaskSnapshot,
   BackgroundTaskStatus,
   BackgroundTaskSummary,
   BackgroundTaskEvent,
 } from "./background.js";
+export { SHELL_CHECKPOINT_LIMITS } from "./shell-checkpoint.js";
+export type { CheckpointOrigin, ShellCheckpointNote } from "./shell-checkpoint.js";
 export { applyEdits, closestRegion } from "./edits.js";
 export type { SearchReplaceEdit } from "./edits.js";
 export { zodToJsonSchema } from "./json-schema.js";

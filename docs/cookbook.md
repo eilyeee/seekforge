@@ -118,6 +118,16 @@ seekforge run "rename the User type to Account everywhere" -m deepseek-v4-pro -y
   on the same endpoint. See
   [Configuration → planModel](configuration.md#planmodel).
 - In the TUI use `/plan <task>` for the same plan-confirm-execute flow.
+- A plan run offers the agent an `exit_plan_mode` tool. When its plan is ready it
+  submits the plan through the ordinary permission prompt, which shows the plan
+  verbatim. Approving it switches **the same run** to edit mode — the approval
+  mode you chose (`-y`, `acceptEdits`, confirm) still governs what runs without
+  asking — and the agent starts implementing. Declining keeps the run read-only:
+  feedback typed with the refusal goes back to the agent so it can revise and
+  resubmit; a bare refusal withdraws the tool for the rest of the run, and the
+  agent ends with the plan as its answer. Hosts that cannot ask (`-p` with a
+  machine output format, schedules, triggers) always decline. The session's
+  recorded mode becomes `edit` once a plan is approved.
 
 ---
 
@@ -184,6 +194,18 @@ time are different facts, and only the first one is known.
 - `seekforge replay <session-id>` re-renders the whole session to the terminal;
   `seekforge rewind <session-id>` undoes a session's file changes (`--dry-run`
   first).
+- Rewind also covers what `run_command` changed, on a best-effort basis. In a git
+  work tree, SeekForge records the uncommitted files before each command that can
+  write (keeping the content of up to 500 files, 1 MiB each, 16 MiB in total) and
+  asks git again afterwards: a changed file that was committed and clean is
+  restored from `HEAD`, one that was already dirty is restored from the snapshot,
+  and a file the command created is deleted. It does **not** cover commands run
+  outside a git work tree, over those limits, or with `background: true`;
+  ignored or sensitive files; binary files or files over 1 MiB; changes to git
+  history itself (commits, branch switches, resets — those are reported); and
+  edits by other processes while the command ran, which are attributed to the
+  command. `seekforge rewind` prints a warning for every such gap in the turns it
+  undoes; the notes live in the session's `shell-checkpoints.jsonl`.
 
 ---
 

@@ -225,6 +225,19 @@ Every session is fully replayable and every file change is reversible, from
 - **Pre-write checkpoints** — the full prior content (or "did not exist") of each
   file is snapshotted before the run's first write, per user turn:
   `appendCheckpoint` (`trace.ts:277`), `CheckpointEntry` (`trace.ts:258`).
+- **Shell-command checkpoints (best effort)** — in a git work tree, a
+  `run_command` that can write is bracketed by two git probes
+  (`captureShellBaseline` / `collectShellChanges` in
+  `packages/core/src/tools/shell-checkpoint.ts`): uncommitted files are kept
+  before it (bounded in count and size), and every file it changed becomes a
+  checkpoint afterwards — `HEAD` content for a file that was committed and clean,
+  the snapshot for one that was dirty, "did not exist" for a new one. Sensitive
+  and ignored files are never read, and SeekForge's own `.seekforge/` state is
+  excluded. The probes run with `LC_ALL=C`, `--no-optional-locks` and fsmonitor
+  disabled, so they neither rewrite the index nor start a repository-configured
+  fsmonitor. Commands outside git, over the limits or in the background, binary
+  files, and changes to git history itself are not covered; each gap is recorded
+  in `shell-checkpoints.jsonl` and reported as a rewind warning.
 - **Rewind** — restore the workspace to before the session, or before a specific
   user turn: `rewindSession` (`trace.ts:382`) and `rewindSessionToTurn`
   (`trace.ts:403`). Checkpoint entries whose path resolves outside the workspace

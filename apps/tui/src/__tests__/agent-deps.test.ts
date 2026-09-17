@@ -39,6 +39,17 @@ describe("buildTuiDeps (config -> deps contract)", () => {
     expect(d.permissionRules).toEqual(rules);
   });
 
+  it("context-window settings pass through", () => {
+    const d = deps({
+      ...base,
+      autoCompactThreshold: 0.8,
+      modelContextWindows: { "local-model": 32_768 },
+    } as TuiConfig);
+    expect(d.autoCompactThreshold).toBe(0.8);
+    expect(d.modelContextWindows).toEqual({ "local-model": 32_768 });
+    expect("modelContextWindows" in deps(base)).toBe(false);
+  });
+
   it("forwards the usage bus, so an MCP server's sampling is counted", () => {
     // It travels through a conditional spread, where TypeScript's
     // excess-property check cannot catch a dropped key.

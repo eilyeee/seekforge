@@ -107,6 +107,8 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
         commandAllowlist: config.commandAllowlist,
         sandbox: config.sandbox,
         compaction: config.compaction,
+        autoCompactThreshold: config.autoCompactThreshold,
+        modelContextWindows: config.modelContextWindows,
         planModel: config.planModel ?? config.routing?.planModel,
         escalateOnFailure: config.escalateOnFailure,
         memoryAutoApproveConfidence: config.memoryAutoApproveConfidence,

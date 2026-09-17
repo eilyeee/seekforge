@@ -752,12 +752,15 @@ export {
 } from "./trace.js";
 export {
   appendCheckpoint,
+  appendShellCheckpointNote,
   forkSession,
   readCheckpoints,
+  readShellCheckpointNotes,
   rewindSession,
   rewindSessionToTurn,
   type CheckpointEntry,
   type RewindResult,
+  type ShellCheckpointRecord,
 } from "./session-rewind.js";
 export { astBackendInstalled } from "./repo-map-ast.js";
 export {

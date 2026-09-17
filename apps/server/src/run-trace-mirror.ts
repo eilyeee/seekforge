@@ -29,7 +29,8 @@ import type { RunManager } from "./run-ledger.js";
  * can write whatever it likes inside its own worktree, and copying a directory
  * listing would let it place arbitrary files into the base checkout's session
  * store. Keep in sync with core's session trace writers (`createSessionTrace`,
- * `writeSessionMeta`, `writeCompactionSnapshot`, `appendCheckpoint`).
+ * `writeSessionMeta`, `writeCompactionSnapshot`, `appendCheckpoint`,
+ * `appendShellCheckpointNote`).
  */
 export const SESSION_TRACE_FILES = [
   "session.json",
@@ -37,6 +38,7 @@ export const SESSION_TRACE_FILES = [
   "tool-calls.jsonl",
   "events.jsonl",
   "checkpoints.jsonl",
+  "shell-checkpoints.jsonl",
   "compaction.json",
   "summary.md",
 ] as const;

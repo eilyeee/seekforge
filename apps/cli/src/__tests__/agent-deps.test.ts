@@ -18,6 +18,13 @@ test("sandbox passes through (and 'off' is dropped)", () => {
   assert.equal(deps(base).sandbox, undefined);
 });
 
+test("context-window settings pass through", () => {
+  const d = deps({ ...base, autoCompactThreshold: 0.8, modelContextWindows: { "local-model": 32_768 } });
+  assert.equal(d.autoCompactThreshold, 0.8);
+  assert.deepEqual(d.modelContextWindows, { "local-model": 32_768 });
+  assert.equal("autoCompactThreshold" in deps(base), false);
+});
+
 test("planModel / compaction / escalation / memory settings pass through", () => {
   const d = deps({
     ...base,

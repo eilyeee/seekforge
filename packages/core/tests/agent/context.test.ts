@@ -594,3 +594,51 @@ describe("clearing a tool result that carried an image", () => {
     expect(estimateMessagesTokens(carrying)).toBeGreaterThan(estimateMessagesTokens(withoutImage) + 300);
   });
 });
+
+describe("clearOldToolResults in a single-turn run", () => {
+  it("clears outputs older than the last tool rounds when there is only one user turn", () => {
+    // A headless `-p` run: one task, many tool rounds, nothing else.
+    const messages = conversation(7);
+    const { messages: out, cleared } = clearOldToolResults(messages);
+    expect(cleared).toBe(3);
+    const tools = out.filter((m) => m.role === "tool");
+    expect(tools.slice(0, 3).every((m) => m.content.includes("cleared"))).toBe(true);
+    expect(tools.slice(3).every((m) => m.content === "x".repeat(2000))).toBe(true);
+    // Structure is untouched: same roles, same pairing, nothing removed.
+    expect(out.map((m) => m.role)).toEqual(messages.map((m) => m.role));
+    expect(out.map((m) => m.toolCallId)).toEqual(messages.map((m) => m.toolCallId));
+    expect(out.map((m) => m.toolCalls)).toEqual(messages.map((m) => m.toolCalls));
+  });
+
+  it("clears a parallel round as a whole and leaves provider blocks alone", () => {
+    const calls = [
+      { id: "a", name: "read_file", argumentsJson: '{"path":"a.ts"}' },
+      { id: "b", name: "read_file", argumentsJson: '{"path":"b.ts"}' },
+    ];
+    const providerBlocks = { protocol: "anthropic", blocks: [{ type: "thinking", signature: "s" }] };
+    const messages: ChatMessage[] = [
+      msg("system", "system prompt"),
+      msg("user", "the task"),
+      msg("assistant", "", { toolCalls: calls, providerBlocks } as Partial<ChatMessage>),
+      msg("tool", "a".repeat(1000), { toolCallId: "a" }),
+      msg("tool", "b".repeat(1000), { toolCallId: "b" }),
+      ...conversation(2).slice(2),
+    ];
+    // Keep the last two rounds: the older parallel round is cleared entirely.
+    const { messages: out, cleared } = clearOldToolResults(messages, 2, 2);
+    expect(cleared).toBe(2);
+    expect(out[3]!.content).toContain("read_file output for a.ts");
+    expect(out[4]!.content).toContain("read_file output for b.ts");
+    expect(out[2]).toBe(messages[2]);
+    // With a round budget covering everything, nothing is old.
+    expect(clearOldToolResults(messages, 2, 3).cleared).toBe(0);
+  });
+
+  it("uses whichever rule reaches further back", () => {
+    // Two user turns, the last holding six rounds: the round rule also clears
+    // inside the "recent" user turns.
+    const messages = [...conversation(1), msg("user", "follow-up"), ...conversation(6).slice(2)];
+    // The first turn's result plus the two oldest follow-up rounds.
+    expect(clearOldToolResults(messages).cleared).toBe(3);
+  });
+});

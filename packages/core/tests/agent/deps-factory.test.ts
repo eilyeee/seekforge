@@ -16,4 +16,21 @@ describe("buildAgentCoreDeps", () => {
       memoryAutoApproveConfidence,
     });
   });
+
+  it("passes the context settings through, and only when set", () => {
+    const deps = buildAgentCoreDeps({
+      apiKey: "test",
+      autoCompactThreshold: 0.75,
+      modelContextWindows: { "local-model": 32_768 },
+    });
+    expect(deps).toMatchObject({ autoCompactThreshold: 0.75, modelContextWindows: { "local-model": 32_768 } });
+    const bare = buildAgentCoreDeps({ apiKey: "test" });
+    expect("autoCompactThreshold" in bare).toBe(false);
+    expect("modelContextWindows" in bare).toBe(false);
+  });
+
+  it("rejects malformed context settings before building anything", () => {
+    expect(() => buildAgentCoreDeps({ apiKey: "test", autoCompactThreshold: 0 })).toThrow(/autoCompactThreshold/);
+    expect(() => buildAgentCoreDeps({ apiKey: "test", modelContextWindows: { m: -5 } })).toThrow(/modelContextWindows/);
+  });
 });

@@ -117,6 +117,7 @@ Agent 启动的命令会收到一份移除了凭据环境变量的父环境副�
 
 - **JSONL 会话追踪**位于 `<workspace>/.seekforge/sessions/<id>/`（`messages.jsonl`、`tool-calls.jsonl`、`events.jsonl`、`summary.md`）：`createSessionTrace`（`trace.ts:25`）。会话 id、元数据和回放消息都会在 Core 边界处校验；畸形的 JSONL 会把回放截断到其最长有效前缀。
 - **写前检查点**——每个文件在本次运行首次写入之前，其完整原内容（或“原本不存在”）都会按用户轮次快照保存：`appendCheckpoint`（`trace.ts:277`），`CheckpointEntry`（`trace.ts:258`）。
+- **Shell 命令检查点（尽力而为）**——在 git 工作树中，可能写文件的 `run_command` 会被两次 git 探测包夹（`packages/core/src/tools/shell-checkpoint.ts` 中的 `captureShellBaseline` / `collectShellChanges`）：之前保存未提交文件的内容（有数量与大小上限），之后把改动过的文件写成检查点——原本干净的已跟踪文件取 `HEAD` 内容，原本有改动的文件取快照，新建文件记为「原本不存在」。敏感文件与被忽略的文件从不读取，SeekForge 自己的 `.seekforge/` 状态不计入。探测以 `LC_ALL=C`、`--no-optional-locks` 运行并禁用 fsmonitor，因此不会改写索引，也不会启动仓库配置的 fsmonitor。git 之外、超出上限、后台命令、二进制文件以及 git 历史本身的改动都不覆盖，每一处缺口都会记录到 `shell-checkpoints.jsonl`，并作为 rewind 的警告报告出来。
 - **Rewind**——把工作区恢复到会话开始之前，或某个特定用户轮次之前：`rewindSession`（`trace.ts:382`）和 `rewindSessionToTurn`（`trace.ts:403`）。路径解析到工作区之外的检查点条目会被拒绝，以防检查点文件被篡改（`applyCheckpoints`，`trace.ts:347`）。包含性判断基于 realpath，因此被符号链接替换的父目录无法把恢复 / 删除操作重定向到工作区之外。
 - **对话回退**与文件回退配套：`truncateSessionAtUserTurn`（`trace.ts:224`）把历史截断到某轮之前。
 

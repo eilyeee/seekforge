@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,10 +9,15 @@ import { createDefaultDispatcher } from "../../src/tools/index.js";
 import { createAgentCore } from "../../src/agent/loop.js";
 import {
   appendCheckpoint,
+  appendShellCheckpointNote,
+  forkSession,
   readCheckpoints,
+  readShellCheckpointNotes,
   rewindSession,
   rewindSessionToTurn,
+  type ShellCheckpointRecord,
 } from "../../src/agent/session-rewind.js";
+import { writeSessionMeta } from "../../src/agent/trace.js";
 import { call, makeCtx, makeWorkspace } from "../tools/helpers.js";
 
 const USAGE = { promptTokens: 10, completionTokens: 5, cacheHitTokens: 0, costUsd: 0.001 };
@@ -318,5 +324,143 @@ describe("checkpoint + rewind (agent loop integration)", () => {
     const res = rewindSessionToTurn(ws, sessionId, 1);
     expect(res.restored).toEqual(["a.txt"]);
     expect(readFileSync(join(ws, "a.txt"), "utf8")).toBe("v-run1");
+  });
+});
+
+describe("shell checkpoint notes and rewind warnings", () => {
+  let ws: string;
+  beforeEach(() => {
+    ws = mkdtempSync(join(tmpdir(), "seekforge-shell-notes-"));
+  });
+  afterEach(() => {
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  const note = (turn: number, extra: Partial<ShellCheckpointRecord>): ShellCheckpointRecord => ({
+    ts: "t",
+    turn,
+    command: "make",
+    status: "recorded",
+    ...extra,
+  });
+
+  it("keeps the shell origin of a checkpoint entry", () => {
+    appendCheckpoint(ws, "s1", { ts: "t", path: "gen.txt", before: null, turn: 0, source: "shell", command: "make" });
+    appendCheckpoint(ws, "s1", { ts: "t", path: "a.txt", before: "x" });
+    expect(readCheckpoints(ws, "s1")).toEqual([
+      { ts: "t", path: "gen.txt", before: null, turn: 0, source: "shell", command: "make" },
+      { ts: "t", path: "a.txt", before: "x" },
+    ]);
+  });
+
+  it("reports what a rewind cannot undo, for the turns it rewinds", () => {
+    appendShellCheckpointNote(ws, "s1", note(0, { status: "skipped", reason: "not a git work tree" }));
+    appendShellCheckpointNote(ws, "s1", note(1, { status: "skipped", reason: "not a git work tree" }));
+    appendShellCheckpointNote(ws, "s1", note(1, { status: "skipped", reason: "background command" }));
+    appendShellCheckpointNote(
+      ws,
+      "s1",
+      note(1, {
+        status: "partial",
+        files: [],
+        unrestorable: [{ path: "img.png", reason: "binary file" }],
+        headMoved: { from: "a", to: "b" },
+      }),
+    );
+    appendCheckpoint(ws, "s1", { ts: "t", path: "a.txt", before: "x", turn: 1 });
+
+    expect(rewindSession(ws, "s1", { dryRun: true }).warnings).toEqual([
+      "2 shell commands not checkpointed: not a git work tree",
+      "1 shell command not checkpointed: background command",
+      "changed by shell commands but not restorable: img.png (binary file)",
+      "1 shell command moved git HEAD (commit/checkout/reset); rewind does not undo git history",
+    ]);
+    // A turn rewind only speaks for the turns it undoes.
+    expect(rewindSessionToTurn(ws, "s1", 2, { dryRun: true }).warnings).toEqual([]);
+    expect(rewindSessionToTurn(ws, "s1", 1, { dryRun: true }).warnings[0]).toBe(
+      "1 shell command not checkpointed: not a git work tree",
+    );
+  });
+
+  it("reads notes only up to the first damaged record, and forks carry them", () => {
+    appendShellCheckpointNote(ws, "s1", note(0, {}));
+    const file = join(ws, ".seekforge", "sessions", "s1", "shell-checkpoints.jsonl");
+    appendFileSync(file, '{"command":"x","status":"weird","turn":0}\n');
+    appendShellCheckpointNote(ws, "s1", note(0, { command: "after" }));
+    expect(readShellCheckpointNotes(ws, "s1").map((n) => n.command)).toEqual(["make"]);
+    expect(readShellCheckpointNotes(ws, "missing")).toEqual([]);
+
+    writeFileSync(join(ws, ".seekforge", "sessions", "s1", "messages.jsonl"), "");
+    writeSessionMeta(ws, {
+      id: "s1",
+      task: "t",
+      mode: "edit",
+      status: "completed",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    const forked = forkSession(ws, "s1")!;
+    expect(readShellCheckpointNotes(ws, forked).map((n) => n.command)).toEqual(["make"]);
+  });
+});
+
+describe("shell checkpoints through the agent loop", () => {
+  let ws: string;
+  const git = (...args: string[]) =>
+    execFileSync("git", args, {
+      cwd: ws,
+      encoding: "utf8",
+      env: { ...process.env, LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
+    });
+  beforeEach(() => {
+    ws = mkdtempSync(join(tmpdir(), "seekforge-shell-loop-"));
+    git("init", "-q");
+    git("config", "user.email", "test@example.com");
+    git("config", "user.name", "test");
+    git("config", "commit.gpgsign", "false");
+    writeFileSync(join(ws, "tracked.txt"), "committed\n");
+    writeFileSync(join(ws, ".gitignore"), ".seekforge/\n");
+    git("add", "-A");
+    git("commit", "-q", "-m", "init");
+  });
+  afterEach(() => {
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  it("rewinds what a shell command changed and reports it as changed files", async () => {
+    const agent = createAgentCore({
+      provider: fakeProvider([
+        response({
+          toolCalls: [
+            toolCall("run_command", { command: "printf 'by shell\\n' > tracked.txt && printf 'new\\n' > made.txt" }),
+          ],
+          finishReason: "tool_calls",
+        }),
+        response({
+          toolCalls: [toolCall("run_command", { command: "sleep 0", background: true })],
+          finishReason: "tool_calls",
+        }),
+        response({ content: "done" }),
+      ]),
+      dispatcher: createDefaultDispatcher(),
+      confirm: async () => true,
+    });
+    const events = await collect(
+      agent.runTask({ projectPath: ws, task: "run it", mode: "edit", approvalMode: "auto" }),
+    );
+    const done = events.at(-1);
+    expect(done?.type).toBe("session.completed");
+    expect(done?.type === "session.completed" ? done.report.changedFiles : []).toEqual(["made.txt", "tracked.txt"]);
+    expect(readFileSync(join(ws, "tracked.txt"), "utf8")).toBe("by shell\n");
+
+    const sessionId = sessionIdOf(events);
+    const result = rewindSession(ws, sessionId);
+    expect(result.restored).toEqual(["tracked.txt"]);
+    expect(result.deleted).toEqual(["made.txt"]);
+    expect(result.warnings).toEqual([
+      "1 shell command not checkpointed: background command: its file changes are not checkpointed",
+    ]);
+    expect(readFileSync(join(ws, "tracked.txt"), "utf8")).toBe("committed\n");
+    expect(existsSync(join(ws, "made.txt"))).toBe(false);
   });
 });

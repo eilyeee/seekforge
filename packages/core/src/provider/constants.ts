@@ -149,3 +149,51 @@ export const FALLBACK_PRICING_MODEL = DEFAULT_MODEL;
  * that the price is unknown — see `pricingSourceFor`.
  */
 export const FALLBACK_PRICING_FAMILY = "deepseek";
+
+/**
+ * Context window assumed for a model that is neither overridden nor listed in
+ * MODEL_CONTEXT_WINDOWS. It is DeepSeek V3's 128K, which every model SeekForge
+ * has shipped with accepts, so an unknown model compacts early rather than
+ * sending a request its endpoint rejects.
+ */
+export const DEFAULT_CONTEXT_WINDOW_TOKENS = 131_072;
+
+/**
+ * Input context windows in tokens. A key matches the model id exactly, or as a
+ * prefix ending at a separator (`-`, `.`, `:`, `@`, `[`), so a dated or
+ * versioned id (`claude-opus-5-20260101`, `anthropic.claude-opus-5-v1:0`) finds
+ * its family; the LONGEST matching key wins. A model not covered here gets
+ * DEFAULT_CONTEXT_WINDOW_TOKENS — a smaller guess only compacts earlier, while
+ * an invented larger one sends requests the endpoint rejects, so a model whose
+ * window has not been checked stays out. Users extend it with
+ * `modelContextWindows` (see docs/configuration.md).
+ *
+ * Anthropic: the models overview at
+ * https://platform.claude.com/docs/en/about-claude/models (checked 2026-09-17).
+ * The 1M windows are these models' default, with no beta header. `claude-`
+ * covers the older Claude families, which have 200K.
+ *
+ * DeepSeek: https://api-docs.deepseek.com/quick_start/pricing lists 1M for the
+ * V4 models (`deepseek-flash`, `deepseek-v4-pro`, and the still-accepted
+ * `deepseek-v4-flash`). Verified 2026-09-17. The deprecated V3 aliases keep
+ * their 128K.
+ *
+ * OpenAI models are not listed: their windows could not be verified when this
+ * table was written, so they use the default until someone checks.
+ */
+export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  "claude-": 200_000,
+  "claude-haiku-4-5": 200_000,
+  "claude-opus-4-6": 1_000_000,
+  "claude-opus-4-7": 1_000_000,
+  "claude-opus-4-8": 1_000_000,
+  "claude-opus-5": 1_000_000,
+  "claude-sonnet-4-6": 1_000_000,
+  "claude-sonnet-5": 1_000_000,
+  "claude-fable-5": 1_000_000,
+  "claude-mythos-5": 1_000_000,
+  "deepseek-chat": 131_072,
+  "deepseek-reasoner": 131_072,
+  "deepseek-flash": 1_000_000,
+  "deepseek-v4": 1_000_000,
+};

@@ -7,6 +7,7 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
 import { dirname, sep } from "node:path";
 import { resolveForWrite } from "../tools/sandbox.js";
+import type { ShellCheckpointNote } from "../tools/shell-checkpoint.js";
 import type { SessionLease } from "./session-lease.js";
 import {
   appendLineSync,
@@ -31,10 +32,85 @@ export type CheckpointEntry = {
    * written before per-turn checkpointing; readers treat missing as 0.
    */
   turn?: number;
+  /** "shell": recorded after a run_command, from a git comparison (see tools/shell-checkpoint.ts). */
+  source?: "shell";
+  /** The command that changed the file, when `source` is "shell". */
+  command?: string;
 };
+
+/** One shell command's checkpoint coverage, tagged like a checkpoint entry. */
+export type ShellCheckpointRecord = ShellCheckpointNote & { ts: string; turn: number };
 
 function checkpointsFile(workspace: string, sessionId: string): string {
   return sessionFile(workspace, sessionId, "checkpoints.jsonl");
+}
+
+const SHELL_NOTES_FILE = "shell-checkpoints.jsonl";
+
+/** Appends one shell command's coverage note to <session>/shell-checkpoints.jsonl. */
+export function appendShellCheckpointNote(workspace: string, sessionId: string, record: ShellCheckpointRecord): void {
+  const file = sessionFile(workspace, sessionId, SHELL_NOTES_FILE, true);
+  appendLineSync(file, `${JSON.stringify(record)}\n`);
+}
+
+/** Reads the longest valid prefix of a session's shell coverage notes. */
+export function readShellCheckpointNotes(workspace: string, sessionId: string): ShellCheckpointRecord[] {
+  if (!existsSync(sessionFile(workspace, sessionId, SHELL_NOTES_FILE))) return [];
+  const records: ShellCheckpointRecord[] = [];
+  for (const line of readSessionText(workspace, sessionId, SHELL_NOTES_FILE).split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line) as Partial<ShellCheckpointRecord>;
+      if (
+        typeof parsed.command !== "string" ||
+        (parsed.status !== "recorded" && parsed.status !== "partial" && parsed.status !== "skipped") ||
+        typeof parsed.turn !== "number" ||
+        !Number.isInteger(parsed.turn) ||
+        parsed.turn < 0
+      ) {
+        break;
+      }
+      records.push(parsed as ShellCheckpointRecord);
+    } catch {
+      break;
+    }
+  }
+  return records;
+}
+
+/**
+ * What a rewind of turns >= `fromTurn` cannot undo, one line per cause:
+ * commands whose changes were never checkpointed, files a command changed
+ * that could not be snapshotted, and git history a command moved.
+ */
+function shellRewindWarnings(workspace: string, sessionId: string, fromTurn: number): string[] {
+  const skipped = new Map<string, number>();
+  const unrestorable = new Set<string>();
+  let headMoves = 0;
+  for (const note of readShellCheckpointNotes(workspace, sessionId)) {
+    if (note.turn < fromTurn) continue;
+    if (note.status === "skipped") {
+      const reason = typeof note.reason === "string" ? note.reason : "no reason recorded";
+      skipped.set(reason, (skipped.get(reason) ?? 0) + 1);
+    }
+    for (const entry of Array.isArray(note.unrestorable) ? note.unrestorable : []) {
+      if (typeof entry?.path === "string") unrestorable.add(`${entry.path} (${String(entry.reason)})`);
+    }
+    if (note.headMoved) headMoves++;
+  }
+  const warnings: string[] = [];
+  for (const [reason, count] of skipped) {
+    warnings.push(`${count} shell command${count === 1 ? "" : "s"} not checkpointed: ${reason}`);
+  }
+  if (unrestorable.size > 0) {
+    warnings.push(`changed by shell commands but not restorable: ${[...unrestorable].join(", ")}`);
+  }
+  if (headMoves > 0) {
+    warnings.push(
+      `${headMoves} shell command${headMoves === 1 ? "" : "s"} moved git HEAD (commit/checkout/reset); rewind does not undo git history`,
+    );
+  }
+  return warnings;
 }
 
 /** Appends one pre-write snapshot to <session>/checkpoints.jsonl. */
@@ -62,6 +138,8 @@ export function readCheckpoints(workspace: string, sessionId: string): Checkpoin
         ...(typeof parsed.turn === "number" && Number.isInteger(parsed.turn) && parsed.turn >= 0
           ? { turn: parsed.turn }
           : {}),
+        ...(parsed.source === "shell" ? { source: "shell" as const } : {}),
+        ...(typeof parsed.command === "string" ? { command: parsed.command } : {}),
       });
     } catch {
       // Append-only logs recover only through the first damaged record.
@@ -75,6 +153,11 @@ export type RewindResult = {
   restored: string[];
   deleted: string[];
   skipped: Array<{ path: string; reason: string }>;
+  /**
+   * Side effects of the rewound turns' shell commands that this rewind could
+   * not undo (see readShellCheckpointNotes). Empty when there are none.
+   */
+  warnings: string[];
 };
 
 /** Removes now-empty parent directories of a deleted file, up to (excluding) the workspace root. */
@@ -103,7 +186,7 @@ function applyCheckpoints(
   entries: Iterable<CheckpointEntry>,
   opts: { dryRun?: boolean },
 ): RewindResult {
-  const result: RewindResult = { restored: [], deleted: [], skipped: [] };
+  const result: RewindResult = { restored: [], deleted: [], skipped: [], warnings: [] };
   const wsRoot = resolveForWrite(workspace, ".");
 
   for (const entry of entries) {
@@ -159,7 +242,10 @@ export function rewindSession(
     for (const entry of readCheckpoints(workspace, sessionId)) {
       if (!firstPerPath.has(entry.path)) firstPerPath.set(entry.path, entry);
     }
-    return applyCheckpoints(workspace, firstPerPath.values(), opts);
+    return {
+      ...applyCheckpoints(workspace, firstPerPath.values(), opts),
+      warnings: shellRewindWarnings(workspace, sessionId, 0),
+    };
   });
 }
 
@@ -185,7 +271,10 @@ export function rewindSessionToTurn(
       if ((entry.turn ?? 0) < turnIndex) continue;
       if (!earliestPerPath.has(entry.path)) earliestPerPath.set(entry.path, entry);
     }
-    return applyCheckpoints(workspace, earliestPerPath.values(), opts);
+    return {
+      ...applyCheckpoints(workspace, earliestPerPath.values(), opts),
+      warnings: shellRewindWarnings(workspace, sessionId, turnIndex),
+    };
   });
 }
 
@@ -205,9 +294,10 @@ export function forkSession(workspace: string, sessionId: string, lease?: Sessio
 
     const id = newSessionId();
     writeSessionText(workspace, id, "messages.jsonl", readSessionText(workspace, sessionId, "messages.jsonl"));
-    const srcCheckpoints = sessionFile(workspace, sessionId, "checkpoints.jsonl");
-    if (existsSync(srcCheckpoints)) {
-      writeSessionText(workspace, id, "checkpoints.jsonl", readSessionText(workspace, sessionId, "checkpoints.jsonl"));
+    for (const name of ["checkpoints.jsonl", SHELL_NOTES_FILE]) {
+      if (existsSync(sessionFile(workspace, sessionId, name))) {
+        writeSessionText(workspace, id, name, readSessionText(workspace, sessionId, name));
+      }
     }
 
     const now = new Date().toISOString();

@@ -35,7 +35,7 @@
 
 | Flag | 说明 |
 | --- | --- |
-| `--plan` | 先做只读规划，确认后在同一会话中执行 |
+| `--plan` | 先做只读规划，确认后在同一会话中执行。agent 也可以用 `exit_plan_mode` 提交计划；批准该确认后，同一次运行会以编辑模式继续（见 [Cookbook → 跨文件重构](cookbook.zh-CN.md#跨文件重构)） |
 | `--permission-mode <mode>` | `default` / `confirm` — write/execute 时提示；`acceptEdits` — 自动允许工作区内编辑，命令仍提示；`plan` — 确认 + 先规划；`bypassPermissions` / `auto` — 全自动（等同 `-y`）。设置后覆盖 `-y` |
 | `--fallback-model <model>` | 主模型过载时用于重试的模型 |
 | `--output-style <style>` | `default`（不变）、`concise`（极简）、`explanatory`（边答边讲解）、`learning`（留 1–3 处给用户完成），或自定义的 `.seekforge/output-styles/<name>.md`（见 Configuration） |

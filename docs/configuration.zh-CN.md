@@ -34,7 +34,8 @@ hook 条目会被过滤掉，而低优先级层中的有效值仍然生效。
 它们不能提供凭据或凭据目的地（`apiKey`、`provider`、`baseUrl`），不能执行
 启动/运行时命令（`runtimeBin`、hook、`statusLine`、`lintCommand`、
 `verifyCommand`），不能自动授权操作（`commandAllowlist`、`allow` 权限规则、
-MCP `trusted`），也不能削弱 sandbox、提高消费上限、自动批准记忆或改变审计保留策略。
+MCP `trusted`），也不能削弱 sandbox、提高消费上限（包括每次请求携带多少上下文：
+`modelContextWindows`、`autoCompactThreshold`）、自动批准记忆或改变审计保留策略。
 自动记忆整理也属于用户级设置，因为它可以归档项目事实。这些设置必须来自
 `~/.seekforge/config.json`、环境变量或用户显式选择的 `--settings` 文件。
 项目 MCP 定义仍然可见，也可通过显式管理操作测试；但只有完整条目来自用户配置时，
@@ -303,6 +304,67 @@ seekforge config set commandAllowlist "pnpm test, cargo build" --global
 ```
 
 可通过 `config set` 设置？**可以** —— 校验取值为 `mechanical` / `llm`。
+
+无论采用哪种策略，压缩都按以下方式进行：
+
+- **预算**是本次请求所用模型上下文窗口的 80%，再减去 8,192 token 的输出预留。
+  窗口按模型查找（见 [`modelContextWindows`](#modelcontextwindows)），因此在另一个
+  模型上进行的 plan 运行会按那个模型的窗口计算预算。
+- **压缩从阈值开始** —— 即预算的 `autoCompactThreshold`（默认 90%），而不是等到
+  超出预算本身。
+- **微压缩**把超过 200 个字符（或附带图片）的工具输出替换为一行说明，写明需要重新
+  运行什么。位于最近两个用户回合之前、**或**位于最近四轮工具调用之前的结果都算
+  「旧的」，因此长时间的无头 `-p` 运行（一个用户回合、许多轮工具调用）同样会被
+  清理。消息只会被改写、不会被删除，所以每个工具调用都保有自己的结果。
+- **完整压缩**保留系统提示词、任务和最近的消息，把中段替换为摘要。
+- 完整压缩之后会**恢复工作上下文**：当前计划，以及本次运行最近读取或编辑的至多
+  5 个文件的最新副本（磁盘上的当前内容；每个至多 8,000 个字符、合计至多 24,000
+  个字符，且不超过阈值下剩余空间的一半）。已删除、二进制、敏感（`.env`、密钥、
+  SeekForge 自己的配置）以及工作区之外的文件会被跳过，密钥会被脱敏。这段内容标注
+  为由 harness 提供的数据，不会写入会话 trace。
+- **超出预算本身时**，过大的工具输出会被原地截短；仍然放不下的请求以
+  `context_budget_exceeded` 失败。
+
+### `autoCompactThreshold`
+
+压缩开始时占上下文预算的比例，取值大于 0 且不超过 1，默认 `0.9`。值越小压缩越早
+（请求更小、更便宜，但摘要更多）；`1` 保持旧行为，即只在超出预算本身时才压缩。
+无效值会让 agent 无法启动，并给出指明该键的错误。
+
+```json
+{ "autoCompactThreshold": 0.8 }
+```
+
+用户级设置：仓库配置不能设置它。可通过 `config set` 设置？**不可以** —— 请直接编辑
+文件。
+
+### `modelContextWindows`
+
+以 token 计的上下文窗口，键为 provider 配置所用的**精确**模型 id。用于 SeekForge
+不认识的模型，或让大窗口模型按小于其完整窗口的大小计算预算。
+
+```json
+{ "modelContextWindows": { "qwen3-coder": 262144, "claude-opus-5": 400000 } }
+```
+
+没有对应条目时，窗口来自内置表（`packages/core/src/provider/constants.ts`），按模型
+id 或模型家族匹配 —— 带日期或路由前缀的 id（如 `claude-opus-5-20260101`、
+`us.anthropic.claude-opus-5-v1:0`）会找到其家族：
+
+| 模型 | 窗口 |
+| --- | --- |
+| `claude-opus-4-6`、`-4-7`、`-4-8`、`claude-opus-5`、`claude-sonnet-4-6`、`claude-sonnet-5`、`claude-fable-5*`、`claude-mythos-5*` | 1,000,000 |
+| `claude-haiku-4-5` 及更早的 Claude 模型 | 200,000 |
+| `deepseek-v4-*`、`deepseek-flash` | 1,000,000 |
+| `deepseek-chat`、`deepseek-reasoner` | 131,072 |
+| 其他任何模型（包括窗口尚未核实的 OpenAI 模型） | 131,072 |
+
+大窗口意味着大请求：1M token 的模型要到请求估算达到约 71 万 token 才会压缩，而每个
+回合都会重新发送上下文中的全部内容。如果这样花费大于收益，请在这里调小窗口。取值
+必须是正整数；无效条目会让 agent 无法启动，并给出指明该条目的错误。
+
+用户级设置：仓库配置不能设置它（更大的窗口意味着更大、更贵的请求）。可通过
+`config set` 设置？**不可以** —— 请直接编辑文件。
 
 ### `thinking`
 
@@ -1109,7 +1171,8 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 | `reasoningEffort` | enum | `high` / `max` |
 
 其余的键 —— `planModel`、`escalateOnFailure`、`maxCostUsd`、
-`modelPricing`、`inlineImages`、`verifyCommand`、`autoVerify`、`lintCommand`、`autoLint`、
+`modelPricing`、`modelContextWindows`、`autoCompactThreshold`、`inlineImages`、
+`verifyCommand`、`autoVerify`、`lintCommand`、`autoLint`、
 `editFormat`、`finalizeReview`、`guardNoProgress`、
 `memoryAutoApproveConfidence`、`memoryMaintenance`、`permissionRules`、
 `mcpServers`、`hooks` —— **不可**通过 `config set` 设置。必须直接编辑 JSON

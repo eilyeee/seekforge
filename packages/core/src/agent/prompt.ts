@@ -49,6 +49,8 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
         "For non-trivial tasks, briefly weigh 2-3 candidate approaches and pick one with a one-line rationale before the numbered steps.",
         "Be specific enough that the plan can be executed step by step without re-investigation.",
         "Cite evidence as path:line; never plan around code you have not actually read.",
+        "When the plan is complete and an exit_plan_mode tool is available, submit the plan through it: approval",
+        "switches this run to edit mode so you implement it; a refusal keeps you in plan mode.",
       ].join("\n"),
     );
   } else if (opts.mode === "ask") {

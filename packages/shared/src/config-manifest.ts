@@ -11,6 +11,8 @@ export const COMMON_CONFIG_KEYS = [
   "hooks",
   "sandbox",
   "compaction",
+  "autoCompactThreshold",
+  "modelContextWindows",
   "thinking",
   "reasoningEffort",
   "modelPricing",

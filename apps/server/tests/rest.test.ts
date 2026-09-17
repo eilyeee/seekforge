@@ -1695,6 +1695,7 @@ describe("rewind endpoint", () => {
       restored: ["src/rewind-me.txt"],
       deleted: ["src/created-by-session.txt"],
       skipped: [],
+      warnings: [],
     });
     expect(readFileSync(join(workspace, "src/rewind-me.txt"), "utf8")).toBe("modified by the session\n");
     expect(existsSync(join(workspace, "src/created-by-session.txt"))).toBe(true);
