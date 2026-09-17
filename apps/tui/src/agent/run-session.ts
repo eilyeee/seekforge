@@ -47,6 +47,10 @@ export type RunSessionDeps = {
   onDispatchManager?: (manager: DispatchManager | undefined) => void;
   /** Session usage bus: tokens an MCP server spent through sampling. */
   usageBus?: UsageBus;
+  /** Appended to the system prompt (--append-system-prompt). */
+  appendSystemPrompt?: string;
+  /** Exact tool gate for this run (a custom command's `allowed-tools`). */
+  allowedTools?: string[];
 };
 
 /**
@@ -77,6 +81,7 @@ export async function runSession(task: string, signal: AbortSignal, deps: RunSes
     askUser: deps.askUser,
     dispatchManager,
     ...(deps.usageBus ? { usageBus: deps.usageBus } : {}),
+    ...(deps.allowedTools ? { allowedTools: deps.allowedTools } : {}),
     // The status line's cost and any costBudgetUsd threshold are both 0 forever
     // on an unpriced model, and a reading of $0.0000 is indistinguishable from
     // a run that was free. Fired once per (provider, model) — the agent is
@@ -103,6 +108,7 @@ export async function runSession(task: string, signal: AbortSignal, deps: RunSes
       plan: deps.plan,
       approvalMode: deps.approvalMode,
       resumeSessionId: deps.getSessionId(),
+      ...(deps.appendSystemPrompt ? { appendSystemPrompt: deps.appendSystemPrompt } : {}),
       signal,
     })) {
       buffered.dispatch({ type: "event", event });

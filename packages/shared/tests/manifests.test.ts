@@ -12,7 +12,10 @@ describe("shared manifests", () => {
 
   it("keeps surface-only config keys scoped", () => {
     expect(knownConfigKeys("cli").has("profiles")).toBe(true);
-    expect(knownConfigKeys("tui").has("profiles")).toBe(false);
+    // The TUI honors --profile too; the server has no launch flag for it.
+    expect(knownConfigKeys("tui").has("profiles")).toBe(true);
+    expect(knownConfigKeys("server").has("profiles")).toBe(false);
+    expect(knownConfigKeys("tui").has("maxCostUsd")).toBe(false);
     expect(knownConfigKeys("tui").has("statusLine")).toBe(true);
     expect(knownConfigKeys("server").has("models")).toBe(true);
   });

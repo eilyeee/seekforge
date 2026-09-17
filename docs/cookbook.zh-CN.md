@@ -176,7 +176,7 @@ seekforge mcp remove filesystem
 ```
 
 HTTP（Streamable）服务器可在任一层声明，但受信任服务器必须加入
-`~/.seekforge/config.json` 的 `mcpServers`——参见 [Configuration → mcpServers](configuration.zh-CN.md#mcpservers) 和 [MCP 指南](mcp.zh-CN.md)。在 TUI 中，`/mcp` 列出服务器，`/prompts` 列出 MCP prompt（以 `/mcp:<server>:<prompt>` 形式调用）。
+`~/.seekforge/config.json` 的 `mcpServers`——参见 [Configuration → mcpServers](configuration.zh-CN.md#mcpservers) 和 [MCP 指南](mcp.zh-CN.md)。在 TUI 中，`/mcp` 显示每个服务器的状态与计数，可重连单个服务器（`r`）、启用或停用用户配置中定义的服务器（`e`），并为远程服务器复制 `seekforge mcp login <name>`（`l`）；`/prompts` 列出 MCP prompt（以 `/mcp:<server>:<prompt>` 形式调用）。
 
 **提示：**
 - SeekForge 自己也可以*作为* MCP 服务器运行：`seekforge mcp-serve`（默认只暴露只读工具；对受信任的调用方可加 `--allow-write`）。

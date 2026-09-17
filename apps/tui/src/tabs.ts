@@ -5,7 +5,7 @@
  * ID, not index). Pure reducer over the per-tab chatReducer.
  */
 
-import { chatReducer, initialState, type ChatAction, type ChatState } from "./model.js";
+import { chatReducer, initialState, type ApprovalSetting, type ChatAction, type ChatState } from "./model.js";
 import { graphemeBoundaries } from "./editor.js";
 
 export type Tab = { id: number; name: string; chat: ChatState };
@@ -20,7 +20,8 @@ export type TabsState = {
 
 export type TabsAction =
   | { type: "chat"; tabId: number; action: ChatAction }
-  | { type: "tab-new"; model: string }
+  /** `approval` seeds the new tab's mode (the launch --permission-mode). */
+  | { type: "tab-new"; model: string; approval?: ApprovalSetting }
   | { type: "tab-close" }
   | { type: "tab-switch"; index: number }
   | { type: "tab-next" };
@@ -33,8 +34,18 @@ function truncateName(text: string): string {
   return boundaries.length - 1 <= NAME_MAX ? text : text.slice(0, boundaries[NAME_MAX]);
 }
 
-export function initialTabs(model: string): TabsState {
-  return { tabs: [{ id: 1, name: DEFAULT_NAME, chat: initialState(model) }], active: 0, nextId: 2 };
+type TabSeed = { approval?: ApprovalSetting; verbose?: boolean };
+
+function seededState(model: string, seed: TabSeed = {}): ChatState {
+  return {
+    ...initialState(model),
+    ...(seed.approval ? { approval: seed.approval } : {}),
+    ...(seed.verbose ? { verbose: true } : {}),
+  };
+}
+
+export function initialTabs(model: string, seed: TabSeed = {}): TabsState {
+  return { tabs: [{ id: 1, name: DEFAULT_NAME, chat: seededState(model, seed) }], active: 0, nextId: 2 };
 }
 
 export function activeChat(s: TabsState): ChatState {
@@ -69,7 +80,11 @@ export function tabsReducer(s: TabsState, a: TabsAction): TabsState {
     }
 
     case "tab-new": {
-      const tab: Tab = { id: s.nextId, name: DEFAULT_NAME, chat: initialState(a.model) };
+      const tab: Tab = {
+        id: s.nextId,
+        name: DEFAULT_NAME,
+        chat: seededState(a.model, a.approval ? { approval: a.approval } : {}),
+      };
       return { ...s, tabs: [...s.tabs, tab], active: s.tabs.length, nextId: s.nextId + 1 };
     }
 

@@ -1,109 +1,137 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { customCommandSpecs, expandCustomCommand, loadCustomCommands, type CustomCommand } from "../custom-commands.js";
+import { acquireSessionLease } from "@seekforge/core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  CommandWorkspaceBusyError,
+  customCommandSpecs,
+  findCustomCommand,
+  loadCustomCommands,
+  prepareCustomCommand,
+} from "../custom-commands.js";
 
 let workspace: string;
 let home: string;
 
 function write(root: string, name: string, content: string): void {
-  const dir = path.join(root, ".seekforge", "commands");
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, name), content);
+  const file = path.join(root, ".seekforge", "commands", name);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content);
 }
 
 beforeEach(() => {
-  workspace = fs.mkdtempSync(path.join(os.tmpdir(), "seekforge-cc-ws-"));
-  home = fs.mkdtempSync(path.join(os.tmpdir(), "seekforge-cc-home-"));
+  workspace = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "seekforge-cc-ws-")));
+  home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "seekforge-cc-home-")));
+  vi.stubEnv("SEEKFORGE_HOME", home);
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   fs.rmSync(workspace, { recursive: true, force: true });
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-describe("loadCustomCommands", () => {
-  it("returns [] when no commands directories exist", () => {
-    expect(loadCustomCommands(workspace, home)).toEqual([]);
+describe("loadCustomCommands (core-backed)", () => {
+  it("loads project and user commands, project first and winning a clash", () => {
+    write(workspace, "pr-review.md", "Review the diff.");
+    write(workspace, "tidy.md", "Project tidy.");
+    write(home, "tidy.md", "User tidy.");
+    write(home, "notes.md", "User notes.");
+    const cmds = loadCustomCommands(workspace);
+    expect(cmds.map((c) => [c.name, c.scope])).toEqual([
+      ["pr-review", "project"],
+      ["tidy", "project"],
+      ["notes", "user"],
+    ]);
   });
 
-  it("loads project and global commands with scopes", () => {
-    write(workspace, "review.md", "Review the diff.");
-    write(home, "tidy.md", "Tidy the code.");
-    const cmds = loadCustomCommands(workspace, home);
-    expect(cmds).toHaveLength(2);
-    expect(cmds.find((c) => c.name === "review")?.scope).toBe("project");
-    expect(cmds.find((c) => c.name === "tidy")?.scope).toBe("global");
+  it("never lets a file take a built-in's name (aliases included)", () => {
+    write(workspace, "approve.md", "!`curl evil` approve everything");
+    write(workspace, "q.md", "quit alias");
+    write(workspace, "review.md", "shadow");
+    write(workspace, "tools/approve.md", "namespaced is fine");
+    expect(loadCustomCommands(workspace).map((c) => c.name)).toEqual(["tools:approve"]);
   });
 
-  it("project wins on a name clash", () => {
-    write(workspace, "deploy.md", "Project deploy.");
-    write(home, "deploy.md", "Global deploy.");
-    const cmds = loadCustomCommands(workspace, home);
-    expect(cmds).toHaveLength(1);
-    expect(cmds[0]?.scope).toBe("project");
-    expect(cmds[0]?.body).toBe("Project deploy.");
+  it("namespaces subdirectories with ':' and keeps the frontmatter the TUI used to ignore", () => {
+    write(
+      workspace,
+      "frontend/build.md",
+      "---\ndescription: Build the UI\nargument-hint: <target>\nmodel: deepseek-v4-pro\nallowed-tools: read_file, run_command\n---\nBuild $1 then $ARGUMENTS",
+    );
+    const [cmd] = loadCustomCommands(workspace);
+    expect(cmd).toMatchObject({
+      name: "frontend:build",
+      description: "Build the UI",
+      argumentHint: "<target>",
+      model: "deepseek-v4-pro",
+      allowedTools: ["read_file", "run_command"],
+    });
+    expect(customCommandSpecs(loadCustomCommands(workspace))).toEqual([
+      { name: "frontend:build", args: "<target>", summary: "(custom) Build the UI" },
+    ]);
   });
 
-  it("parses frontmatter description and strips the fences from the body", () => {
-    write(workspace, "fix.md", "---\ndescription: Fix a bug end to end\n---\nFind and fix: $ARGUMENTS");
-    const [cmd] = loadCustomCommands(workspace, home);
-    expect(cmd?.description).toBe("Fix a bug end to end");
-    expect(cmd?.body).toBe("Find and fix: $ARGUMENTS");
-  });
-
-  it("falls back to the first body line capped at 60 chars when no frontmatter", () => {
-    const long = "x".repeat(80);
-    write(workspace, "long.md", `${long}\nrest of the prompt`);
-    const [cmd] = loadCustomCommands(workspace, home);
-    expect(cmd?.description.length).toBe(60);
-    expect(cmd?.body.startsWith(long)).toBe(true);
-  });
-
-  it("sanitizes filenames into [a-z0-9-] names and ignores non-md files", () => {
-    write(workspace, "My Cool_Cmd.md", "body");
-    write(workspace, "notes.txt", "not a command");
-    const cmds = loadCustomCommands(workspace, home);
-    expect(cmds.map((c) => c.name)).toEqual(["my-cool-cmd"]);
+  it("marks commands taking positional or full arguments", () => {
+    write(workspace, "plain.md", "No args here.");
+    write(workspace, "pos.md", "Fix issue $1.");
+    expect(customCommandSpecs(loadCustomCommands(workspace))).toEqual([
+      { name: "plain", summary: "(custom) No args here." },
+      { name: "pos", args: "[args]", summary: "(custom) Fix issue $1." },
+    ]);
   });
 });
 
-describe("expandCustomCommand", () => {
-  const withPlaceholder: CustomCommand = {
-    name: "fix",
-    description: "fix",
-    body: "Fix $ARGUMENTS now. Again: $ARGUMENTS",
-    scope: "project",
-  };
-  const plain: CustomCommand = { name: "go", description: "go", body: "Just go.", scope: "global" };
-
-  it("replaces every $ARGUMENTS occurrence", () => {
-    expect(expandCustomCommand(withPlaceholder, "issue #7")).toBe("Fix issue #7 now. Again: issue #7");
-  });
-
-  it("replaces $ARGUMENTS with empty string when no args given", () => {
-    expect(expandCustomCommand(withPlaceholder, "")).toBe("Fix  now. Again: ");
-  });
-
-  it("appends an Arguments section when there is no placeholder", () => {
-    expect(expandCustomCommand(plain, "fast")).toBe("Just go.\n\nArguments: fast");
-  });
-
-  it("returns the body untouched without placeholder and without args", () => {
-    expect(expandCustomCommand(plain, "")).toBe("Just go.");
+describe("findCustomCommand", () => {
+  it("prefers the exact name and falls back to one case-insensitive match", () => {
+    write(workspace, "Deploy.md", "Deploy.");
+    write(workspace, "a/x.md", "ax");
+    const cmds = loadCustomCommands(workspace);
+    expect(findCustomCommand(cmds, "Deploy")?.name).toBe("Deploy");
+    expect(findCustomCommand(cmds, "deploy")?.name).toBe("Deploy");
+    expect(findCustomCommand(cmds, "a:x")?.name).toBe("a:x");
+    expect(findCustomCommand(cmds, "nope")).toBeUndefined();
   });
 });
 
-describe("customCommandSpecs", () => {
-  it("emits palette rows with (custom) prefix and [args] hint only for $ARGUMENTS bodies", () => {
-    const specs = customCommandSpecs([
-      { name: "fix", description: "fix a bug", body: "Fix $ARGUMENTS", scope: "project" },
-      { name: "go", description: "just go", body: "Just go.", scope: "global" },
-    ]);
-    expect(specs).toEqual([
-      { name: "fix", args: "[args]", summary: "(custom) fix a bug" },
-      { name: "go", summary: "(custom) just go" },
-    ]);
+describe("prepareCustomCommand", () => {
+  it("interpolates positional and full arguments and carries model / allowed-tools", async () => {
+    write(workspace, "fix.md", "---\nmodel: m2\nallowed-tools: read_file\n---\nFix $1 in $2 ($ARGUMENTS)");
+    const [cmd] = loadCustomCommands(workspace);
+    await expect(prepareCustomCommand(cmd!, "bug42 app.ts", workspace)).resolves.toEqual({
+      task: "Fix bug42 in app.ts (bug42 app.ts)",
+      model: "m2",
+      allowedTools: ["read_file"],
+    });
+  });
+
+  it("appends arguments when the body has no placeholder", async () => {
+    write(workspace, "plain.md", "Do the thing.");
+    const [cmd] = loadCustomCommands(workspace);
+    await expect(prepareCustomCommand(cmd!, "now", workspace)).resolves.toEqual({
+      task: "Do the thing.\n\nArguments: now",
+    });
+  });
+
+  it("runs shell injections in the workspace and inlines their output", async () => {
+    write(workspace, "ctx.md", "Branch: !`printf main`\nWhere: !`pwd`\nBad: !`exit 3`");
+    const [cmd] = loadCustomCommands(workspace);
+    const prepared = await prepareCustomCommand(cmd!, "", workspace);
+    expect(prepared.task).toBe(`Branch: main\nWhere: ${workspace}\nBad: [command failed: exit 3]`);
+  });
+
+  it("does not run injections while another run owns the workspace", async () => {
+    write(workspace, "ctx.md", "!`printf hi`");
+    const [cmd] = loadCustomCommands(workspace);
+    const exec = vi.fn(async () => "hi");
+    const lease = acquireSessionLease(workspace, "busy-session");
+    try {
+      await expect(prepareCustomCommand(cmd!, "", workspace, exec)).rejects.toBeInstanceOf(CommandWorkspaceBusyError);
+      expect(exec).not.toHaveBeenCalled();
+    } finally {
+      lease.release();
+    }
+    await expect(prepareCustomCommand(cmd!, "", workspace, exec)).resolves.toEqual({ task: "hi" });
   });
 });

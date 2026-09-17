@@ -1,10 +1,17 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { HookConfig, McpServerConfig, MemoryMaintenanceConfig, ModelPricing } from "@seekforge/core";
 import type { HookStage, PermissionRule } from "@seekforge/shared";
-import { mergeConfigLayers, repositoryConfigLayer, userConfigLayer } from "@seekforge/shared/config-layers";
+import {
+  type ConfigLayer,
+  type ConfigLayerOrigin,
+  mergeConfigLayers,
+  mergeConfigLayersWithReport,
+  repositoryConfigLayer,
+  userConfigLayer,
+} from "@seekforge/shared/config-layers";
 import { classifyConfigKeys, type ConfigKeyVerdict, knownConfigKeys } from "@seekforge/shared/config-manifest";
-import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
+import { FileTooLargeError, MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 
 /**
  * Local copy of the CLI's config type/loader. Apps must not depend on apps,
@@ -96,6 +103,8 @@ export type TuiConfig = {
   autoLint?: boolean;
   /** Edit format: "patch" (default) or "whole" (prefer write_file — for weak/local models). */
   editFormat?: "patch" | "whole";
+  /** Named overlays selected with --profile / SEEKFORGE_PROFILE; stripped from the loaded config. */
+  profiles?: Record<string, Partial<TuiConfig>>;
 };
 
 function readJson(path: string): TuiConfig {
@@ -187,9 +196,122 @@ export function mergeTuiConfig(global: TuiConfig, project: TuiConfig): TuiConfig
   });
 }
 
-export function loadConfig(projectPath: string): TuiConfig {
-  return mergeTuiConfig(
-    readJson(join(homedir(), ".seekforge", "config.json")),
-    readJson(join(projectPath, ".seekforge", "config.json")),
-  );
+/** Launch-time layer selection (`--settings`, `--profile`). */
+export type ConfigLoadOptions = {
+  /** An explicit JSON settings file: user-owned, above every file layer. */
+  settingsPath?: string;
+  /** Named overlay from `profiles` (falls back to SEEKFORGE_PROFILE). */
+  profile?: string;
+  /** Test seam for the user home. */
+  home?: string;
+};
+
+/** A config failure the launcher prints as `message` plus `hint`. */
+export class ConfigLoadError extends Error {
+  constructor(
+    message: string,
+    readonly hint: string,
+  ) {
+    super(message);
+    this.name = "ConfigLoadError";
+  }
+}
+
+export function userConfigFile(home: string = homedir()): string {
+  return join(home, ".seekforge", "config.json");
+}
+
+export function projectConfigFile(projectPath: string): string {
+  return join(projectPath, ".seekforge", "config.json");
+}
+
+function readSettingsFile(settingsPath: string): TuiConfig {
+  const absPath = resolve(settingsPath);
+  let raw: string;
+  try {
+    raw = readTextFileBounded(absPath, MAX_CONFIG_FILE_BYTES);
+  } catch (error) {
+    if (error instanceof FileTooLargeError) {
+      throw new ConfigLoadError(
+        `settings file exceeds ${MAX_CONFIG_FILE_BYTES} bytes: ${absPath}`,
+        "use a smaller file",
+      );
+    }
+    throw new ConfigLoadError(`settings file not readable: ${absPath}`, "check the --settings path");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new ConfigLoadError(
+      `invalid JSON in settings file ${absPath}: ${error instanceof Error ? error.message : String(error)}`,
+      "the --settings file must contain one JSON object",
+    );
+  }
+  if (!isPlainObject(parsed)) {
+    throw new ConfigLoadError(`invalid settings file ${absPath}: expected a JSON object`, 'e.g. { "model": "…" }');
+  }
+  return parsed as TuiConfig;
+}
+
+function profileAt(config: TuiConfig, name: string): TuiConfig | undefined {
+  const profiles = config.profiles as unknown;
+  if (!isPlainObject(profiles)) return undefined;
+  const candidate = profiles[name];
+  return isPlainObject(candidate) ? (candidate as TuiConfig) : undefined;
+}
+
+/**
+ * The selected profile as origin-tagged layers (user profile first, project
+ * profile above it), matching the CLI's resolution: a profile read out of the
+ * repository's config is repository input and is downgraded like the file.
+ */
+function profileLayers(name: string, global: TuiConfig, project: TuiConfig): ConfigLayer<TuiConfig>[] {
+  const layers: ConfigLayer<TuiConfig>[] = [];
+  const fromGlobal = profileAt(global, name);
+  const fromProject = profileAt(project, name);
+  if (fromGlobal) layers.push(userConfigLayer(fromGlobal));
+  if (fromProject) layers.push(repositoryConfigLayer(fromProject));
+  if (layers.length === 0) {
+    const names = new Set<string>();
+    for (const config of [global, project]) {
+      if (isPlainObject(config.profiles)) {
+        for (const [key, value] of Object.entries(config.profiles)) if (isPlainObject(value)) names.add(key);
+      }
+    }
+    throw new ConfigLoadError(
+      `unknown profile "${name}"`,
+      `available profiles: ${names.size > 0 ? [...names].sort().join(", ") : "(none defined)"}`,
+    );
+  }
+  return layers;
+}
+
+/**
+ * Loads the effective config plus where each MCP server name came from.
+ * Precedence (low → high): ~/.seekforge/config.json, project
+ * .seekforge/config.json, the selected profile, the --settings file, env.
+ * Throws ConfigLoadError for an unreadable --settings file or unknown profile.
+ */
+export function resolveTuiConfig(
+  projectPath: string,
+  opts: ConfigLoadOptions = {},
+): { config: TuiConfig; mcpOrigins: Record<string, ConfigLayerOrigin> } {
+  const global = readJson(userConfigFile(opts.home));
+  const project = readJson(projectConfigFile(projectPath));
+  const profileName = opts.profile ?? (process.env["SEEKFORGE_PROFILE"] || undefined);
+  const layers: ConfigLayer<TuiConfig>[] = [
+    userConfigLayer(global),
+    repositoryConfigLayer(project),
+    ...(profileName ? profileLayers(profileName, global, project) : []),
+    ...(opts.settingsPath ? [userConfigLayer(readSettingsFile(opts.settingsPath))] : []),
+  ];
+  const { config, report } = mergeConfigLayersWithReport<TuiConfig>(layers, { hookStages: HOOK_STAGE_ORDER });
+  // A selection mechanism, not effective config.
+  delete config.profiles;
+  return { config, mcpOrigins: report.mcpServerOrigins };
+}
+
+export function loadConfig(projectPath: string, opts: ConfigLoadOptions = {}): TuiConfig {
+  return resolveTuiConfig(projectPath, opts).config;
 }

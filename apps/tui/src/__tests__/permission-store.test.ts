@@ -3,7 +3,19 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { PermissionRule } from "@seekforge/shared";
-import { describeRule, persistPermissionRule, sameRule, userConfigPath } from "../permission-store.js";
+import { acquireSessionLease, SessionBusyError } from "@seekforge/core";
+import {
+  addPermissionRule,
+  describeRule,
+  persistPermissionRule,
+  ProjectAllowRuleError,
+  projectConfigPath,
+  readRulesFile,
+  removePermissionRule,
+  sameRule,
+  setUserMcpServerTrusted,
+  userConfigPath,
+} from "../permission-store.js";
 import { permissionResultForKey } from "../model.js";
 
 /**
@@ -78,6 +90,95 @@ describe("persistPermissionRule", () => {
     expect(sameRule(RULE, { ...RULE })).toBe(true);
     expect(sameRule(RULE, { ...RULE, match: "pnpm build" })).toBe(false);
     expect(sameRule({ action: "allow", tool: "x" }, { action: "allow", tool: "x", match: "" })).toBe(true);
+  });
+});
+
+describe("addPermissionRule / removePermissionRule", () => {
+  function fakeProject(): string {
+    return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "seekforge-proj-")));
+  }
+
+  it("edits the user file and the project file, keeping other keys", () => {
+    const home = fakeHome();
+    const projectPath = fakeProject();
+    fs.mkdirSync(path.join(projectPath, ".seekforge"));
+    fs.writeFileSync(projectConfigPath(projectPath), JSON.stringify({ model: "m", permissionRules: [{ bogus: 1 }] }));
+    const deny: PermissionRule = { action: "deny", tool: "run_command", match: "rm -rf" };
+    expect(addPermissionRule("user", RULE, { projectPath, home })).toBe(userConfigPath(home));
+    expect(addPermissionRule("project", deny, { projectPath, home })).toBe(projectConfigPath(projectPath));
+    addPermissionRule("project", { ...deny }, { projectPath, home });
+    expect(read(home).permissionRules).toEqual([RULE]);
+    const project = JSON.parse(fs.readFileSync(projectConfigPath(projectPath), "utf8")) as Record<string, unknown>;
+    expect(project).toEqual({ model: "m", permissionRules: [{ bogus: 1 }, deny] });
+    expect(readRulesFile(projectConfigPath(projectPath))).toEqual({ rules: [deny] });
+
+    removePermissionRule("project", deny, { projectPath, home });
+    expect(readRulesFile(projectConfigPath(projectPath)).rules).toEqual([]);
+    removePermissionRule("user", RULE, { projectPath, home });
+    expect(read(home)).not.toHaveProperty("permissionRules");
+  });
+
+  it("drops an empty match so the saved rule matches any call", () => {
+    const home = fakeHome();
+    addPermissionRule("user", { action: "ask", tool: "write_file", match: "" }, { projectPath: fakeProject(), home });
+    expect(read(home).permissionRules).toEqual([{ action: "ask", tool: "write_file" }]);
+  });
+
+  it("refuses an allow rule in the project file", () => {
+    const projectPath = fakeProject();
+    expect(() => addPermissionRule("project", RULE, { projectPath, home: fakeHome() })).toThrow(ProjectAllowRuleError);
+    expect(fs.existsSync(projectConfigPath(projectPath))).toBe(false);
+  });
+
+  it("will not touch the project file while a run owns the workspace", () => {
+    const projectPath = fakeProject();
+    const lease = acquireSessionLease(projectPath, "running-session");
+    try {
+      expect(() =>
+        addPermissionRule("project", { action: "deny", tool: "x" }, { projectPath, home: fakeHome() }),
+      ).toThrow(SessionBusyError);
+    } finally {
+      lease.release();
+    }
+  });
+
+  it("reports an unreadable file instead of reading it as empty", () => {
+    const home = fakeHome();
+    fs.mkdirSync(path.join(home, ".seekforge"));
+    fs.writeFileSync(userConfigPath(home), "{ nope");
+    expect(readRulesFile(userConfigPath(home)).error).toBeDefined();
+    expect(() => removePermissionRule("user", RULE, { projectPath: fakeProject(), home })).toThrow();
+    expect(fs.readFileSync(userConfigPath(home), "utf8")).toBe("{ nope");
+  });
+});
+
+describe("setUserMcpServerTrusted", () => {
+  it("flips the trust flag of the user's own entry and keeps the rest of the file", () => {
+    const home = fakeHome();
+    fs.mkdirSync(path.join(home, ".seekforge"));
+    const entry = { command: "npx", args: ["-y", "srv"], env: { TOKEN: "t" } };
+    fs.writeFileSync(userConfigPath(home), JSON.stringify({ model: "m", mcpServers: { srv: entry } }));
+    expect(setUserMcpServerTrusted("srv", true, { home, expected: { ...entry, trusted: false } })).toBe(
+      userConfigPath(home),
+    );
+    expect(read(home)).toEqual({ model: "m", mcpServers: { srv: { ...entry, trusted: true } } });
+    setUserMcpServerTrusted("srv", false, { home });
+    expect(read(home).mcpServers).toEqual({ srv: { ...entry, trusted: false } });
+  });
+
+  it("refuses a name the file does not define, or defines differently from the running entry", () => {
+    const home = fakeHome();
+    fs.mkdirSync(path.join(home, ".seekforge"));
+    fs.writeFileSync(
+      userConfigPath(home),
+      JSON.stringify({ mcpServers: { srv: { command: "npx", env: { TOKEN: "a" } } } }),
+    );
+    expect(() => setUserMcpServerTrusted("other", true, { home })).toThrow(/not defined/);
+    // A --settings file shadows it with a different entry: nothing to flip here.
+    expect(() =>
+      setUserMcpServerTrusted("srv", true, { home, expected: { command: "npx", env: { TOKEN: "b" } } }),
+    ).toThrow(/not defined/);
+    expect(read(home).mcpServers).toEqual({ srv: { command: "npx", env: { TOKEN: "a" } } });
   });
 });
 

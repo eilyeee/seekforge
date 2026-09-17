@@ -1,13 +1,13 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { HookEntry } from "@seekforge/core";
 import { formatDurationCoarse, kfmt } from "./format.js";
 import type { TuiConfig } from "./config.js";
 import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 
 /**
  * Pure formatters for the batch-D slash commands
- * (/status, /config, /permissions, /hooks, /release-notes, /bug).
+ * (/status, /config, /release-notes, /bug). /permissions and /hooks are
+ * interactive panels (manage/).
  * Every formatter returns ready-to-print lines the app dispatches as dim
  * notices (buildBugReport returns one markdown string for the clipboard),
  * so they stay unit-testable without rendering Ink.
@@ -15,12 +15,6 @@ import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 
 const ISSUES_URL = "https://github.com/eilyeee/seekforge/issues";
 const CHANGELOG_URL = "github.com/eilyeee/seekforge/blob/main/CHANGELOG.md";
-
-/** Caps a single-line string to `max` chars with an ellipsis. */
-function cap(text: string, max: number): string {
-  const flat = text.replace(/\s+/g, " ").trim();
-  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
-}
 
 /** Renders [label, value] pairs as a compact aligned two-column block. */
 function alignPairs(pairs: ReadonlyArray<readonly [string, string]>): string[] {
@@ -177,109 +171,6 @@ export function formatConfigLines(config: TuiConfig, paths: { global: string; pr
   lines.push(`global:  ${paths.global}`);
   lines.push(`project: ${paths.project}`);
   lines.push("/config edit opens the global file");
-  return lines;
-}
-
-// ---------------------------------------------------------------------------
-// /permissions
-// ---------------------------------------------------------------------------
-
-export type PermissionSurfaceInput = {
-  rules: ReadonlyArray<{ action: string; tool: string; match?: string }>;
-  /** BUILTIN_COMMAND_ALLOWLIST from @seekforge/core; summarized to ~10. */
-  builtinAllowlist: readonly string[];
-  configAllowlist: readonly string[];
-  /** Entries added at runtime via the permission panel's "a". */
-  sessionAllowlist: readonly string[];
-  sandbox?: string;
-  approval: string;
-};
-
-/** "deny run_command(rm *)" — action tool(match), match omitted when absent. */
-function formatRule(rule: { action: string; tool: string; match?: string }): string {
-  return rule.match !== undefined ? `${rule.action} ${rule.tool}(${rule.match})` : `${rule.action} ${rule.tool}`;
-}
-
-const BUILTIN_PREVIEW = 10;
-
-/**
- * Sections for /permissions: approval mode + sandbox level, the allow/deny
- * rules, then the builtin (summarized), config and session allowlists —
- * each with an explicit empty-state line.
- */
-export function formatPermissionLines(p: PermissionSurfaceInput): string[] {
-  const lines: string[] = [`approval mode: ${p.approval}`, `sandbox: ${p.sandbox ?? "off"}`];
-
-  if (p.rules.length === 0) {
-    lines.push("rules: none configured (permissionRules in config)");
-  } else {
-    lines.push(`rules (${p.rules.length}):`);
-    for (const rule of p.rules) lines.push(`  ${formatRule(rule)}`);
-  }
-
-  const shown = p.builtinAllowlist.slice(0, BUILTIN_PREVIEW);
-  const rest = p.builtinAllowlist.length - shown.length;
-  lines.push(
-    p.builtinAllowlist.length === 0
-      ? "builtin allowlist: (empty)"
-      : `builtin allowlist: ${shown.join(", ")}${rest > 0 ? ` +${rest} more` : ""}`,
-  );
-
-  lines.push(
-    p.configAllowlist.length === 0
-      ? "config allowlist: (none — commandAllowlist in config)"
-      : `config allowlist: ${p.configAllowlist.join(", ")}`,
-  );
-  lines.push(
-    p.sessionAllowlist.length === 0
-      ? 'session allowlist: (none — press "a" on a permission prompt to add)'
-      : `session allowlist: ${p.sessionAllowlist.join(", ")}`,
-  );
-
-  return lines;
-}
-
-// ---------------------------------------------------------------------------
-// /hooks
-// ---------------------------------------------------------------------------
-
-/** HookConfig declaration order; payload table lives in @seekforge/core. */
-const HOOK_STAGE_ORDER = [
-  "preToolUse",
-  "postToolUse",
-  "sessionStart",
-  "userPromptSubmit",
-  "preCompact",
-  "stop",
-  "subagentStop",
-  "notification",
-  "sessionEnd",
-] as const;
-
-/** Stages where a non-zero hook exit blocks the tool call / run. */
-const BLOCKING_STAGES: ReadonlySet<string> = new Set(["preToolUse", "userPromptSubmit"]);
-
-/**
- * One line per configured hook — "preToolUse (blocking): <command>" with the
- * command capped to 60 chars — in stage declaration order; an explainer with
- * a config example when nothing is configured.
- */
-export function formatHookLines(hooks: TuiConfig["hooks"]): string[] {
-  const lines: string[] = [];
-  for (const stage of HOOK_STAGE_ORDER) {
-    const entries: HookEntry[] = hooks?.[stage] ?? [];
-    const blocking = BLOCKING_STAGES.has(stage) ? " (blocking)" : "";
-    for (const entry of entries) {
-      lines.push(`${stage}${blocking}: ${cap(entry.command, 60)}`);
-    }
-  }
-  if (lines.length === 0) {
-    return [
-      "no hooks configured",
-      'add "hooks" to .seekforge/config.json, e.g. { "hooks": { "preToolUse": [{ "command": "./lint-gate.sh" }] } }',
-      "blocking stages (non-zero exit blocks): preToolUse, userPromptSubmit",
-    ];
-  }
   return lines;
 }
 

@@ -47,7 +47,7 @@ export const SURFACE_CONFIG_KEYS = {
     "guardNoProgress",
     "profiles",
   ],
-  tui: ["accent", "bell", "notify", "vim", "statusLine", "costBudgetUsd", "mouse", "llmCache", "routing"],
+  tui: ["accent", "bell", "notify", "vim", "statusLine", "costBudgetUsd", "mouse", "llmCache", "routing", "profiles"],
   server: ["models"],
 } as const;
 

@@ -286,7 +286,8 @@ CLI 与 TUI 用本次运行自己的配置构建采样 provider，没有 API key
 所有有用户可问的形态都接上了：CLI（`seekforge run`、REPL）、本地 server（桌面端与
 Web 工作台，经 WebSocket 的确认/提问通道），以及 TUI。TUI 在应用渲染之前就启动了 MCP
 服务器，因此它的 handler 会路由到当前占据屏幕的那次运行；如果请求到达时没有任何运行
-在进行，它会被拒绝，而不是被错投到别处。
+在进行，它会被拒绝，而不是被错投到别处。之后在 TUI 的 `/mcp` 面板中重连的服务器会
+拿到同样的 handler，下一次运行即使用它的新工具。
 
 `tools/list`、`resources/list` 和 `prompts/list` 会逐页消费每个不透明的
 `nextCursor`。重复出现的 cursor 会被拒绝，发现过程上限为 100 页和 10,000 条，

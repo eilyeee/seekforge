@@ -14,7 +14,7 @@
 | API 密钥环境变量 | `DEEPSEEK_API_KEY`（Ark provider 则为 `ARK_API_KEY`）；也可用 `apiKey` 配置键。 |
 | 项目指令（`CONVENTIONS.md`、`.clinerules`、`CLAUDE.md`、`AGENTS.md`） | `AGENTS.md`（由 `seekforge init` 创建），外加人工筛选的 `.seekforge/memory/project.md` 记忆。 |
 | MCP 服务器 | `mcpServers` 配置 + `seekforge mcp add/list/remove`。见 [MCP](mcp.zh-CN.md)。 |
-| 斜杠命令 / 自定义命令 | 内置斜杠命令 + `.seekforge/commands/` 下的自定义命令。`description:` frontmatter 与 `$ARGUMENTS` 在所有界面都可用；`` !`shell` `` 插值由 CLI REPL（不带子命令的 `seekforge`）与服务端展开，**TUI 不支持**。文件格式见 [TUI README](../apps/tui/README.md#custom-commands)。 |
+| 斜杠命令 / 自定义命令 | 内置斜杠命令 + `.seekforge/commands/` 下的自定义命令。所有界面都经由 Core 读取：`description` / `argument-hint` / `model` / `allowed-tools` frontmatter、`$ARGUMENTS` 与 `$1`..`$9`、子目录形成的 `:` 命名空间，以及调用时的 `` !`shell` `` 插值（CLI REPL、TUI、服务端）。文件格式见 [TUI README](../apps/tui/README.md#custom-commands)。 |
 | 子智能体 / 专家智能体 | `dispatch_agent` 名册 — `seekforge agent list/show/import`，定义存放于 `.seekforge/agents/`。 |
 | 技能 / 可复用流程 | `.seekforge/skills/<id>/SKILL.md` — `seekforge skill create/list/import`。 |
 | 会话历史 / 转录 | `.seekforge/` 下的会话 trace — `seekforge sessions`、`resume`、`replay`、`audit`。 |

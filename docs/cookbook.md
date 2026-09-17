@@ -225,7 +225,9 @@ seekforge mcp remove filesystem
 HTTP (Streamable) servers can be declared in either layer, but trusted servers
 must be added to `~/.seekforge/config.json` under `mcpServers` — see
 [Configuration → mcpServers](configuration.md#mcpservers) and the
-[MCP guide](mcp.md). In the TUI, `/mcp` lists servers and `/prompts` lists MCP
+[MCP guide](mcp.md). In the TUI, `/mcp` shows each server's state and counts,
+reconnects one (`r`), switches a user-defined server on or off (`e`), and
+copies `seekforge mcp login <name>` for a remote one (`l`); `/prompts` lists MCP
 prompts (invoke as `/mcp:<server>:<prompt>`).
 
 **Tips:**

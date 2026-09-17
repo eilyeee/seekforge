@@ -30,41 +30,66 @@ export type KeyStroke = {
 
 export type Scope = "permission" | "overlay" | "composer" | "global";
 
-export type ActionId =
-  // composer
-  | "submit"
-  | "newline"
-  | "history-up"
-  | "history-down"
-  | "cursor-left"
-  | "cursor-right"
-  | "clear-line"
-  | "delete-back"
-  | "delete-forward"
-  | "external-editor"
-  | "history-search"
-  | "path-complete"
-  | "paste-image"
-  // overlay
-  | "overlay-up"
-  | "overlay-down"
-  | "overlay-accept"
-  | "overlay-close"
-  // global
-  | "cancel-or-quit"
-  | "cycle-approval"
-  | "scroll-up"
-  | "scroll-down"
-  | "scroll-latest"
-  | "toggle-verbose"
-  | "detach-run"
-  | "suspend"
-  | "tab-new"
-  | "tab-cycle"
-  | "toggle-sidebar"
-  | "toggle-pager";
+/**
+ * Every action a binding can name, grouped by the scope that executes it. The
+ * keybindings loader validates user files against this list, so an action added
+ * here is rebindable without a second allowlist to forget.
+ */
+export const SCOPE_ACTIONS = {
+  composer: [
+    "submit",
+    "newline",
+    "history-up",
+    "history-down",
+    "cursor-left",
+    "cursor-right",
+    "clear-line",
+    "delete-back",
+    "delete-forward",
+    "external-editor",
+    "history-search",
+    "path-complete",
+    "paste-image",
+  ],
+  overlay: ["overlay-up", "overlay-down", "overlay-accept", "overlay-close"],
+  global: [
+    "cancel-or-quit",
+    "cycle-approval",
+    "scroll-up",
+    "scroll-down",
+    "scroll-latest",
+    "toggle-verbose",
+    "detach-run",
+    "suspend",
+    "tab-new",
+    "tab-cycle",
+    "toggle-sidebar",
+    "toggle-pager",
+    "model-picker",
+    "toggle-thinking",
+  ],
+} as const;
 
-export type Binding = { scope: Scope; key: KeyStroke; action: ActionId };
+export type ActionId = (typeof SCOPE_ACTIONS)[keyof typeof SCOPE_ACTIONS][number];
+
+export const ACTION_IDS: readonly ActionId[] = [
+  ...SCOPE_ACTIONS.composer,
+  ...SCOPE_ACTIONS.overlay,
+  ...SCOPE_ACTIONS.global,
+];
+
+/** The scope whose handler runs `action` (composer actions may also sit in global). */
+export function actionScope(action: ActionId): Exclude<Scope, "permission"> {
+  if ((SCOPE_ACTIONS.overlay as readonly string[]).includes(action)) return "overlay";
+  if ((SCOPE_ACTIONS.composer as readonly string[]).includes(action)) return "composer";
+  return "global";
+}
+
+/**
+ * One binding. `rest` makes it a chord: `key` is the first stroke and `rest`
+ * the strokes after it, e.g. "ctrl+x ctrl+e" = key ctrl+x, rest [ctrl+e].
+ */
+export type Binding = { scope: Scope; key: KeyStroke; action: ActionId; rest?: readonly KeyStroke[] };
 
 export const KEYMAP: ReadonlyArray<Binding> = [
   // Overlay (palette / file picker): navigate, accept, dismiss.
@@ -101,6 +126,10 @@ export const KEYMAP: ReadonlyArray<Binding> = [
   { scope: "global", key: { input: "t", ctrl: true }, action: "tab-cycle" },
   { scope: "global", key: { input: "e", ctrl: true }, action: "toggle-sidebar" },
   { scope: "global", key: { input: "l", ctrl: true }, action: "toggle-pager" },
+  // Alt/Option chords; terminals that send ESC-prefixed Alt are handled by
+  // esc-prefix.ts before the stroke gets here.
+  { scope: "global", key: { input: "p", meta: true }, action: "model-picker" },
+  { scope: "global", key: { input: "t", meta: true }, action: "toggle-thinking" },
 ];
 
 /** Ink useInput key object, structurally (so we don't import ink here). */
@@ -146,11 +175,14 @@ export function toStroke(input: string, key: InkKey): KeyStroke {
                       : key.delete
                         ? "delete"
                         : undefined;
+  // Ink reports every Esc press with meta set (its parser cannot tell a bare
+  // Esc from an Alt prefix), which made no escape binding ever match.
+  const meta = key.meta && !key.escape;
   return {
     input: key.ctrl ? input.toLowerCase() : input,
     ...(key.ctrl ? { ctrl: true } : {}),
     ...(key.shift ? { shift: true } : {}),
-    ...(key.meta ? { meta: true } : {}),
+    ...(meta ? { meta: true } : {}),
     ...(name ? { name } : {}),
   };
 }
@@ -179,10 +211,53 @@ export function resolveAction(
   table: ReadonlyArray<Binding> = KEYMAP,
 ): ActionId | undefined {
   for (const b of table) {
-    if (b.scope === scope && matches(b.key, stroke)) return b.action;
+    if (!b.rest && b.scope === scope && matches(b.key, stroke)) return b.action;
   }
   for (const b of table) {
-    if (b.scope === "global" && matches(b.key, stroke)) return b.action;
+    if (!b.rest && b.scope === "global" && matches(b.key, stroke)) return b.action;
   }
   return undefined;
+}
+
+export type ChordResult = { kind: "action"; action: ActionId } | { kind: "pending" } | { kind: "none" };
+
+/**
+ * Resolves a stroke SEQUENCE against the chord bindings of `scope` (then
+ * global): "action" when it completes one, "pending" while it is a proper
+ * prefix of one, "none" otherwise. Single-stroke bindings are not consulted —
+ * a one-stroke `strokes` only ever answers "pending" or "none".
+ */
+export function resolveChord(
+  scope: Scope,
+  strokes: readonly KeyStroke[],
+  table: ReadonlyArray<Binding> = KEYMAP,
+): ChordResult {
+  let pending = false;
+  for (const wanted of [scope, "global"] as const) {
+    for (const b of table) {
+      if (!b.rest || b.scope !== wanted) continue;
+      const sequence = [b.key, ...b.rest];
+      if (strokes.length > sequence.length) continue;
+      if (!strokes.every((stroke, i) => matches(sequence[i] as KeyStroke, stroke))) continue;
+      if (strokes.length === sequence.length) return { kind: "action", action: b.action };
+      pending = true;
+    }
+  }
+  return pending ? { kind: "pending" } : { kind: "none" };
+}
+
+/** Human-readable key spec ("ctrl+x", "alt+p", "shift+tab") for help and hints. */
+export function formatStroke(stroke: KeyStroke): string {
+  const parts: string[] = [];
+  if (stroke.ctrl) parts.push("ctrl");
+  if (stroke.meta) parts.push("alt");
+  if (stroke.shift) parts.push("shift");
+  // parseKeySpec stores a shifted letter uppercased; print it the way it is typed.
+  parts.push(stroke.name ?? (stroke.shift ? stroke.input.toLowerCase() : stroke.input));
+  return parts.join("+");
+}
+
+/** Every stroke of a binding, formatted ("ctrl+x ctrl+e" for a chord). */
+export function formatBinding(binding: Binding): string {
+  return [binding.key, ...(binding.rest ?? [])].map(formatStroke).join(" ");
 }

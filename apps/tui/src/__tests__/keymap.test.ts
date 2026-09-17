@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { resolveAction, toStroke, type InkKey } from "../keymap.js";
+import {
+  formatBinding,
+  formatStroke,
+  KEYMAP,
+  resolveAction,
+  resolveChord,
+  toStroke,
+  type Binding,
+  type InkKey,
+} from "../keymap.js";
 
 const NO_KEY: InkKey = {
   upArrow: false,
@@ -37,6 +46,17 @@ describe("toStroke", () => {
   it("plain printable input has no name", () => {
     expect(toStroke("x", NO_KEY)).toEqual({ input: "x" });
   });
+
+  it("drops the meta flag Ink sets on every Esc, so escape bindings match", () => {
+    // Ink's useInput reports a bare Esc as { escape: true, meta: true }.
+    const esc = toStroke("", key({ escape: true, meta: true }));
+    expect(esc).toEqual({ input: "", name: "escape" });
+    expect(resolveAction("overlay", esc)).toBe("overlay-close");
+  });
+
+  it("keeps meta for Alt+letter (ESC-prefixed in one read)", () => {
+    expect(toStroke("p", key({ meta: true }))).toEqual({ input: "p", meta: true });
+  });
 });
 
 describe("resolveAction", () => {
@@ -63,5 +83,82 @@ describe("resolveAction", () => {
 
   it("returns undefined for unbound printable input", () => {
     expect(resolveAction("composer", { input: "x" })).toBeUndefined();
+  });
+
+  it("binds Alt+P to the model picker and Alt+T to the thinking toggle", () => {
+    expect(resolveAction("composer", { input: "p", meta: true })).toBe("model-picker");
+    expect(resolveAction("overlay", { input: "t", meta: true })).toBe("toggle-thinking");
+    expect(resolveAction("composer", { input: "p" })).toBeUndefined();
+  });
+
+  it("ignores chord bindings when resolving a single stroke", () => {
+    const table: Binding[] = [
+      {
+        scope: "composer",
+        key: { input: "x", ctrl: true },
+        rest: [{ input: "e", ctrl: true }],
+        action: "external-editor",
+      },
+    ];
+    expect(resolveAction("composer", { input: "x", ctrl: true }, table)).toBeUndefined();
+  });
+});
+
+describe("resolveChord", () => {
+  const table: Binding[] = [
+    ...KEYMAP,
+    {
+      scope: "composer",
+      key: { input: "x", ctrl: true },
+      rest: [{ input: "e", ctrl: true }],
+      action: "external-editor",
+    },
+    { scope: "global", key: { input: "x", ctrl: true }, rest: [{ input: "p" }], action: "toggle-pager" },
+  ];
+
+  it("reports a pending prefix, a completed chord, and a miss", () => {
+    expect(resolveChord("composer", [{ input: "x", ctrl: true }], table)).toEqual({ kind: "pending" });
+    expect(
+      resolveChord(
+        "composer",
+        [
+          { input: "x", ctrl: true },
+          { input: "e", ctrl: true },
+        ],
+        table,
+      ),
+    ).toEqual({
+      kind: "action",
+      action: "external-editor",
+    });
+    expect(resolveChord("composer", [{ input: "x", ctrl: true }, { input: "p" }], table)).toEqual({
+      kind: "action",
+      action: "toggle-pager",
+    });
+    expect(resolveChord("composer", [{ input: "x", ctrl: true }, { input: "q" }], table)).toEqual({ kind: "none" });
+    expect(resolveChord("composer", [{ input: "e", ctrl: true }], table)).toEqual({ kind: "none" });
+  });
+
+  it("does not start chords from overlay bindings when resolving the composer", () => {
+    const overlayOnly: Binding[] = [
+      { scope: "overlay", key: { input: "k", ctrl: true }, rest: [{ input: "k" }], action: "overlay-close" },
+    ];
+    expect(resolveChord("composer", [{ input: "k", ctrl: true }], overlayOnly)).toEqual({ kind: "none" });
+  });
+});
+
+describe("formatStroke / formatBinding", () => {
+  it("prints specs the way parseKeySpec reads them", () => {
+    expect(formatStroke({ input: "p", meta: true })).toBe("alt+p");
+    expect(formatStroke({ input: "", name: "tab", shift: true })).toBe("shift+tab");
+    expect(formatStroke({ input: "A", shift: true })).toBe("shift+a");
+    expect(
+      formatBinding({
+        scope: "composer",
+        key: { input: "x", ctrl: true },
+        rest: [{ input: "e", ctrl: true }],
+        action: "external-editor",
+      }),
+    ).toBe("ctrl+x ctrl+e");
   });
 });

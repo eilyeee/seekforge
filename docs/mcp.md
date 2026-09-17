@@ -331,7 +331,9 @@ Wired in every surface that has a user to ask: the CLI (`seekforge run`, the
 REPL), the local server (the desktop and web workbenches, over the WebSocket
 confirm/question channels), and the TUI. The TUI starts its MCP servers before
 the app renders, so its handlers reach whichever run currently owns the screen;
-a request arriving with no run active is refused rather than misrouted.
+a request arriving with no run active is refused rather than misrouted. A
+server reconnected later from the TUI's `/mcp` panel gets the same handlers, and
+the next run uses its new tools.
 
 `tools/list`, `resources/list`, and `prompts/list` consume every opaque
 `nextCursor`. Repeated cursors are rejected and discovery is capped at 100 pages

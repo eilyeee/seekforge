@@ -16,7 +16,7 @@ the SeekForge feature you already know from another tool.
 | API key env var | `DEEPSEEK_API_KEY` (or `ARK_API_KEY` for the Ark provider); also the `apiKey` config key. |
 | Project instructions (`CONVENTIONS.md`, `.clinerules`, `CLAUDE.md`, `AGENTS.md`) | `AGENTS.md` (created by `seekforge init`), plus curated `.seekforge/memory/project.md` memory. |
 | MCP servers | `mcpServers` config + `seekforge mcp add/list/remove`. See [MCP](mcp.md). |
-| Slash commands / custom commands | Built-in slash commands + custom commands under `.seekforge/commands/`. `description:` frontmatter and `$ARGUMENTS` work on every surface; `` !`shell` `` interpolation is expanded by the CLI REPL (`seekforge` with no command) and the server, **not** by the TUI. See the [TUI README](../apps/tui/README.md#custom-commands) for the file format. |
+| Slash commands / custom commands | Built-in slash commands + custom commands under `.seekforge/commands/`. Every surface reads them through Core: `description` / `argument-hint` / `model` / `allowed-tools` frontmatter, `$ARGUMENTS` and `$1`..`$9`, `:` namespaces from subdirectories, and `` !`shell` `` interpolation when you invoke one (CLI REPL, TUI, server). See the [TUI README](../apps/tui/README.md#custom-commands) for the file format. |
 | Subagents / specialist agents | `dispatch_agent` roster — `seekforge agent list/show/import`, definitions under `.seekforge/agents/`. |
 | Skills / reusable procedures | `.seekforge/skills/<id>/SKILL.md` — `seekforge skill create/list/import`. |
 | Session history / transcripts | Session traces under `.seekforge/` — `seekforge sessions`, `resume`, `replay`, `audit`. |

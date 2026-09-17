@@ -3,20 +3,30 @@
  * ~/.seekforge/keybindings.json and <workspace>/.seekforge/keybindings.json
  * (project wins per scope+action). The file maps scopes to action→key-spec:
  *
- *   { "composer": { "newline": "ctrl+j" }, "global": { "cycle-approval": "shift+tab" } }
+ *   { "composer": { "newline": "ctrl+j", "external-editor": "ctrl+x ctrl+e" },
+ *     "global": { "model-picker": "alt+m" } }
  *
  * Specs are parsed into keymap.ts KeyStroke values and merged over the
  * built-in KEYMAP with mergeKeymap (an override replaces every base binding
- * for the same scope+action). keymap.ts itself stays untouched.
+ * for the same scope+action). A space-separated spec is a chord. Anything the
+ * loader cannot use is reported as a warning instead of being dropped silently.
  */
 
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ActionId, Binding, KeyStroke, Scope } from "./keymap.js";
+import {
+  ACTION_IDS,
+  actionScope,
+  formatStroke,
+  type ActionId,
+  type Binding,
+  type KeyStroke,
+  type Scope,
+} from "./keymap.js";
 import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 
-/** A single user override: bind `key` to `action` within `scope`. */
-export type KeyOverride = { scope: Scope; action: ActionId; key: KeyStroke };
+/** A single user override: bind `key` (followed by `rest`, for a chord) to `action` within `scope`. */
+export type KeyOverride = { scope: Scope; action: ActionId; key: KeyStroke; rest?: KeyStroke[] };
 
 const NAMED_KEYS = new Set([
   "return",
@@ -32,7 +42,9 @@ const NAMED_KEYS = new Set([
   "delete",
 ]);
 
-const MODIFIERS = new Set(["ctrl", "shift", "meta"]);
+const MODIFIERS = new Set(["ctrl", "shift", "meta", "alt", "option"]);
+/** The longest chord a spec may describe. */
+const MAX_CHORD_STROKES = 3;
 
 /**
  * Parses a key spec like "ctrl+j", "shift+tab", "escape", or "x" into a
@@ -52,7 +64,8 @@ export function parseKeySpec(spec: string): KeyStroke | null {
   for (const part of parts) {
     const lower = part.toLowerCase();
     if (MODIFIERS.has(lower)) {
-      if ((lower === "ctrl" && ctrl) || (lower === "shift" && shift) || (lower === "meta" && meta)) return null;
+      const isMeta = lower === "meta" || lower === "alt" || lower === "option";
+      if ((lower === "ctrl" && ctrl) || (lower === "shift" && shift) || (isMeta && meta)) return null;
       if (lower === "ctrl") ctrl = true;
       else if (lower === "shift") shift = true;
       else meta = true;
@@ -84,65 +97,144 @@ export function parseKeySpec(spec: string): KeyStroke | null {
   };
 }
 
+/**
+ * Parses a key sequence: one stroke ("ctrl+e") or a space-separated chord
+ * ("ctrl+x ctrl+e"). Returns null when any stroke is malformed or the chord is
+ * longer than MAX_CHORD_STROKES.
+ */
+export function parseKeySequence(spec: string): KeyStroke[] | null {
+  const parts = spec.trim().split(/\s+/);
+  if (parts.length === 0 || parts.length > MAX_CHORD_STROKES || parts[0] === "") return null;
+  const strokes: KeyStroke[] = [];
+  for (const part of parts) {
+    const stroke = parseKeySpec(part);
+    if (stroke === null) return null;
+    strokes.push(stroke);
+  }
+  return strokes;
+}
+
 const SCOPES: ReadonlySet<string> = new Set(["permission", "overlay", "composer", "global"]);
+const ACTIONS: ReadonlySet<string> = new Set(ACTION_IDS);
 
-const ACTIONS: ReadonlySet<string> = new Set([
-  "submit",
-  "newline",
-  "history-up",
-  "history-down",
-  "cursor-left",
-  "cursor-right",
-  "clear-line",
-  "delete-back",
-  "delete-forward",
-  "external-editor",
-  "history-search",
-  "path-complete",
-  "overlay-up",
-  "overlay-down",
-  "overlay-accept",
-  "overlay-close",
-  "cancel-or-quit",
-  "cycle-approval",
-  "scroll-up",
-  "scroll-down",
-  "scroll-latest",
-]);
+/** What a keybindings file contributed, and every entry it could not use. */
+export type KeybindingsReport = { overrides: KeyOverride[]; warnings: string[] };
 
-function readOverrides(path: string): KeyOverride[] {
+/** Whether `action` runs when bound in `scope` (composer actions also accept global). */
+function scopeRunsAction(scope: Scope, action: ActionId): boolean {
+  const home = actionScope(action);
+  return scope === home || (home === "composer" && scope === "global");
+}
+
+function readOverrides(path: string): KeybindingsReport {
+  let text: string;
+  try {
+    text = readTextFileBounded(path, MAX_CONFIG_FILE_BYTES);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { overrides: [], warnings: [] };
+    return { overrides: [], warnings: [`${path}: unreadable (${(error as Error).message})`] };
+  }
   let raw: unknown;
   try {
-    raw = JSON.parse(readTextFileBounded(path, MAX_CONFIG_FILE_BYTES));
+    raw = JSON.parse(text);
   } catch {
-    return [];
+    return { overrides: [], warnings: [`${path}: not valid JSON — no bindings loaded from it`] };
   }
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return [];
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { overrides: [], warnings: [`${path}: the top level must be an object of scopes`] };
+  }
 
   const overrides: KeyOverride[] = [];
+  const warnings: string[] = [];
   for (const [scope, actions] of Object.entries(raw as Record<string, unknown>)) {
-    if (!SCOPES.has(scope)) continue;
-    if (typeof actions !== "object" || actions === null || Array.isArray(actions)) continue;
+    if (!SCOPES.has(scope)) {
+      warnings.push(`${path}: unknown scope "${scope}" (use composer, overlay or global)`);
+      continue;
+    }
+    if (typeof actions !== "object" || actions === null || Array.isArray(actions)) {
+      warnings.push(`${path}: "${scope}" must map action names to key specs`);
+      continue;
+    }
     for (const [action, spec] of Object.entries(actions as Record<string, unknown>)) {
-      if (!ACTIONS.has(action) || typeof spec !== "string") continue;
-      const key = parseKeySpec(spec);
-      if (key === null) continue;
-      overrides.push({ scope: scope as Scope, action: action as ActionId, key });
+      const where = `${path}: ${scope}.${action}`;
+      if (!ACTIONS.has(action)) {
+        warnings.push(`${where} — unknown action`);
+        continue;
+      }
+      const id = action as ActionId;
+      if (!scopeRunsAction(scope as Scope, id)) {
+        warnings.push(`${where} — this action runs in the "${actionScope(id)}" scope`);
+        continue;
+      }
+      if (typeof spec !== "string") {
+        warnings.push(`${where} — the key spec must be a string`);
+        continue;
+      }
+      const strokes = parseKeySequence(spec);
+      if (strokes === null) {
+        warnings.push(`${where} — cannot parse key spec "${spec}"`);
+        continue;
+      }
+      if (strokes.length > 1 && scope === "overlay") {
+        warnings.push(`${where} — chords are supported in the composer and global scopes only`);
+        continue;
+      }
+      const [key, ...rest] = strokes as [KeyStroke, ...KeyStroke[]];
+      overrides.push({ scope: scope as Scope, action: id, key, ...(rest.length > 0 ? { rest } : {}) });
     }
   }
-  return overrides;
+  return { overrides, warnings };
 }
 
 /**
  * Loads ~/.seekforge/keybindings.json and <workspace>/.seekforge/keybindings.json
- * and merges them (project wins per scope+action). Unknown scopes/actions and
- * unparsable specs are skipped silently; missing files yield [].
+ * and merges them (project wins per scope+action), reporting every entry that
+ * was skipped. Missing files contribute nothing and no warning.
  */
-export function loadKeybindings(workspace: string, homeDir = homedir()): KeyOverride[] {
+export function loadKeybindingsReport(workspace: string, homeDir = homedir()): KeybindingsReport {
   const global = readOverrides(join(homeDir, ".seekforge", "keybindings.json"));
   const project = readOverrides(join(workspace, ".seekforge", "keybindings.json"));
-  const merged = global.filter((g) => !project.some((p) => p.scope === g.scope && p.action === g.action));
-  return [...merged, ...project];
+  const merged = global.overrides.filter(
+    (g) => !project.overrides.some((p) => p.scope === g.scope && p.action === g.action),
+  );
+  return {
+    overrides: [...merged, ...project.overrides],
+    warnings: [...global.warnings, ...project.warnings],
+  };
+}
+
+/** The usable overrides only (see loadKeybindingsReport for the diagnostics). */
+export function loadKeybindings(workspace: string, homeDir = homedir()): KeyOverride[] {
+  return loadKeybindingsReport(workspace, homeDir).overrides;
+}
+
+/**
+ * A chord's first stroke is consumed while the chord is pending, so a
+ * single-stroke binding on the same key in the composer or global scope can
+ * never fire. Reported against the merged table, built-ins included.
+ */
+export function chordShadowWarnings(table: readonly Binding[]): string[] {
+  const warnings: string[] = [];
+  for (const chord of table) {
+    if (!chord.rest) continue;
+    for (const single of table) {
+      if (single.rest || single.scope === "overlay" || !sameStroke(single.key, chord.key)) continue;
+      warnings.push(
+        `keybindings: ${single.scope}.${single.action} (${formatStroke(single.key)}) is shadowed by the chord for ${chord.action}`,
+      );
+    }
+  }
+  return warnings;
+}
+
+function sameStroke(a: KeyStroke, b: KeyStroke): boolean {
+  return (
+    a.input === b.input &&
+    a.name === b.name &&
+    (a.ctrl ?? false) === (b.ctrl ?? false) &&
+    (a.shift ?? false) === (b.shift ?? false) &&
+    (a.meta ?? false) === (b.meta ?? false)
+  );
 }
 
 /**
@@ -162,11 +254,13 @@ export function mergeKeymap(base: readonly Binding[], overrides: ReadonlyArray<K
     } else {
       const o = pending[idx] as KeyOverride;
       pending.splice(idx, 1);
-      result.push({ scope: o.scope, action: o.action, key: o.key });
+      result.push(toBinding(o));
     }
   }
-  for (const o of pending) {
-    result.push({ scope: o.scope, action: o.action, key: o.key });
-  }
+  for (const o of pending) result.push(toBinding(o));
   return result;
+}
+
+function toBinding(o: KeyOverride): Binding {
+  return { scope: o.scope, action: o.action, key: o.key, ...(o.rest ? { rest: o.rest } : {}) };
 }

@@ -15,7 +15,8 @@ import {
   listSessions,
 } from "@seekforge/core";
 import { App } from "./app.js";
-import { loadConfig, type TuiConfig } from "./config.js";
+import { ConfigLoadError, loadConfig, type TuiConfig } from "./config.js";
+import { resolveLaunch, type LaunchState } from "./launch.js";
 import { prepareMcp } from "./agent/factory.js";
 import { createInteractiveChannelHolder } from "./agent/interactive-channels.js";
 import { loadTheme } from "./theme.js";
@@ -50,17 +51,35 @@ async function runOnboarding(): Promise<string | null> {
   });
 }
 
+/** Prints a launch error the way the CLI does, and sets a failing exit code. */
+function launchFailure(message: string, hint?: string, code = 1): void {
+  process.stderr.write(`seekforge-tui: ${message}\n${hint ? `hint: ${hint}\n` : ""}`);
+  process.exitCode = code;
+}
+
 async function main(): Promise<void> {
   const args = parseTuiArgs(process.argv.slice(2));
+  if (args.error !== undefined) {
+    launchFailure(args.error, "seekforge-tui --help lists the accepted options", 2);
+    return;
+  }
   if (args.help) {
     process.stdout.write(`${TUI_HELP}\n`);
     return;
   }
 
   const projectPath = process.cwd();
-  let config: TuiConfig = loadConfig(projectPath);
-  if (args.model) config = { ...config, model: args.model };
-  if (args.vim !== undefined) config = { ...config, vim: args.vim };
+  let launch: LaunchState;
+  try {
+    launch = resolveLaunch(projectPath, args);
+  } catch (error) {
+    if (error instanceof ConfigLoadError) {
+      launchFailure(error.message, error.hint);
+      return;
+    }
+    throw error;
+  }
+  let config: TuiConfig = launch.config;
   setAccent(loadTheme(config.accent).accent);
   setLocale(config.locale ?? detectLocale());
   // The search endpoint is user config only: it is NOT in
@@ -110,9 +129,9 @@ async function main(): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    config = loadConfig(projectPath); // re-load: env precedence still applies
-    if (args.model) config = { ...config, model: args.model };
-    if (args.vim !== undefined) config = { ...config, vim: args.vim };
+    // Re-resolve: env precedence and every launch flag still apply.
+    launch = resolveLaunch(projectPath, args);
+    config = launch.config;
   }
 
   const model = config.model ?? "deepseek-v4-flash";
@@ -121,28 +140,36 @@ async function main(): Promise<void> {
   // the user; both go through the run that is active when it asks.
   const channels = createInteractiveChannelHolder();
   const usageBus = createUsageBus();
-  const mcp = await prepareMcp(config, projectPath, {
-    ...(config.apiKey
-      ? {
-          sampling: createMcpSamplingHandler({
-            provider: () =>
-              buildProvider(
-                {
-                  provider: config.provider,
-                  apiKey: config.apiKey,
-                  baseUrl: config.baseUrl,
-                  modelPricing: config.modelPricing,
-                },
-                config.model,
-              ),
-            confirm: (request) => channels.confirm(request),
-            onUsage: (usage) => usageBus.record(usage),
-          }),
-        }
-      : {}),
-    elicitation: createMcpElicitationHandler({ askUser: (question) => channels.askUser(question) }),
-  });
-  const continueSessionId = args.continueLast ? listSessions(projectPath)[0]?.id : undefined;
+  // Once Ink owns the terminal a stray stderr line garbles the screen, so
+  // later MCP (re)connects keep their warnings for /mcp instead.
+  let screenTaken = false;
+  const mcp = await prepareMcp(
+    config,
+    projectPath,
+    {
+      ...(config.apiKey
+        ? {
+            sampling: createMcpSamplingHandler({
+              provider: () =>
+                buildProvider(
+                  {
+                    provider: config.provider,
+                    apiKey: config.apiKey,
+                    baseUrl: config.baseUrl,
+                    modelPricing: config.modelPricing,
+                  },
+                  config.model,
+                ),
+              confirm: (request) => channels.confirm(request),
+              onUsage: (usage) => usageBus.record(usage),
+            }),
+          }
+        : {}),
+      elicitation: createMcpElicitationHandler({ askUser: (question) => channels.askUser(question) }),
+    },
+    { origins: launch.mcpOrigins, quiet: () => screenTaken },
+  );
+  const continueSessionId = args.continueLast ? listSessions(projectPath)[0]?.id : launch.resumeSessionId;
 
   let version: string | undefined;
   try {
@@ -159,6 +186,13 @@ async function main(): Promise<void> {
       initialModel={model}
       mcpToolSpecs={mcp.specs}
       mcpEntries={mcp.entries}
+      mcpRegistry={mcp.registry}
+      configSources={launch.loadOptions}
+      reloadConfig={() => loadConfig(projectPath, launch.loadOptions)}
+      {...(launch.approval ? { initialApproval: launch.approval } : {})}
+      {...(launch.verbose ? { initialVerbose: true } : {})}
+      {...(launch.extraDirs.length > 0 ? { initialExtraDirs: launch.extraDirs } : {})}
+      {...(launch.appendSystemPrompt ? { appendSystemPrompt: launch.appendSystemPrompt } : {})}
       channels={channels}
       usageBus={usageBus}
       pluginContributions={mcp.pluginContributions}
@@ -169,6 +203,7 @@ async function main(): Promise<void> {
   );
 
   const { waitUntilExit, rerender } = render(appTree());
+  screenTaken = true;
 
   // Non-blocking npm update check: never delays render; re-renders with a dim
   // notice if a newer version is found (mostly instant via the 24h cache).

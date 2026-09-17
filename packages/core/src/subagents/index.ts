@@ -25,6 +25,13 @@ export {
   type ImportAgentOptions,
   type ParsedExternalAgent,
 } from "./import.js";
+export {
+  agentDefinitionRelPath,
+  createAgentDefinition,
+  validateNewAgent,
+  MAX_AGENT_ID_CHARS,
+  type NewAgentDefinition,
+} from "./create.js";
 export { buildSubagentPrompt } from "./prompt.js";
 export {
   AGENT_RESULT_TOOL,

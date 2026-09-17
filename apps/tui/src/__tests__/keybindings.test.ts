@@ -2,8 +2,15 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadKeybindings, mergeKeymap, parseKeySpec } from "../keybindings.js";
-import type { Binding } from "../keymap.js";
+import {
+  chordShadowWarnings,
+  loadKeybindings,
+  loadKeybindingsReport,
+  mergeKeymap,
+  parseKeySequence,
+  parseKeySpec,
+} from "../keybindings.js";
+import { ACTION_IDS, actionScope, KEYMAP, resolveAction, resolveChord, type Binding } from "../keymap.js";
 
 describe("parseKeySpec", () => {
   it.each([
@@ -21,12 +28,34 @@ describe("parseKeySpec", () => {
     ["shift+a", { input: "A", shift: true }],
     // A bare uppercase letter keeps its case so it's bindable at all.
     ["A", { input: "A" }],
+    // alt and option are spellings of meta (what Ink reports for Alt+key).
+    ["alt+p", { input: "p", meta: true }],
+    ["option+t", { input: "t", meta: true }],
   ])("parses %s", (spec, expected) => {
     expect(parseKeySpec(spec)).toEqual(expected);
   });
 
-  it.each(["", "+", "ctrl+", "ctrl", "ctrl+ctrl+j", "ctrl+j+k", "notakey", "ctrl+foo"])("rejects %j", (spec) => {
-    expect(parseKeySpec(spec)).toBeNull();
+  it.each(["", "+", "ctrl+", "ctrl", "ctrl+ctrl+j", "ctrl+j+k", "notakey", "ctrl+foo", "alt+meta+p"])(
+    "rejects %j",
+    (spec) => {
+      expect(parseKeySpec(spec)).toBeNull();
+    },
+  );
+});
+
+describe("parseKeySequence", () => {
+  it("parses a single stroke and a chord", () => {
+    expect(parseKeySequence("ctrl+e")).toEqual([{ input: "e", ctrl: true }]);
+    expect(parseKeySequence("  ctrl+x   ctrl+e ")).toEqual([
+      { input: "x", ctrl: true },
+      { input: "e", ctrl: true },
+    ]);
+  });
+
+  it("rejects malformed strokes and over-long chords", () => {
+    expect(parseKeySequence("ctrl+x nope")).toBeNull();
+    expect(parseKeySequence("a b c d")).toBeNull();
+    expect(parseKeySequence("")).toBeNull();
   });
 });
 
@@ -79,16 +108,107 @@ describe("loadKeybindings", () => {
     expect(overrides).toHaveLength(3);
   });
 
-  it("skips unknown scopes/actions, bad specs, and malformed json silently", () => {
+  it("skips unknown scopes/actions, bad specs, and malformed json — and says so", () => {
     write(home, {
-      composer: { newline: "ctrl+", nonsense: "ctrl+x" },
+      composer: { newline: "ctrl+", nonsense: "ctrl+x", submit: 5 },
       bogus: { submit: "ctrl+x" },
       overlay: "not-an-object",
     });
+    const report = loadKeybindingsReport(workspace, home);
+    expect(report.overrides).toEqual([]);
+    expect(report.warnings).toHaveLength(5);
+    const text = report.warnings.join("\n");
+    expect(text).toMatch(/composer\.newline — cannot parse key spec "ctrl\+"/);
+    expect(text).toMatch(/composer\.nonsense — unknown action/);
+    expect(text).toMatch(/composer\.submit — the key spec must be a string/);
+    expect(text).toMatch(/unknown scope "bogus"/);
+    expect(text).toMatch(/"overlay" must map action names/);
     expect(loadKeybindings(workspace, home)).toEqual([]);
 
     writeFileSync(join(home, ".seekforge", "keybindings.json"), "{ not json");
-    expect(loadKeybindings(workspace, home)).toEqual([]);
+    expect(loadKeybindingsReport(workspace, home)).toEqual({
+      overrides: [],
+      warnings: [expect.stringContaining("not valid JSON")],
+    });
+  });
+
+  it("accepts every keymap action in its own scope", () => {
+    const file: Record<string, Record<string, string>> = { composer: {}, overlay: {}, global: {} };
+    for (const action of ACTION_IDS) {
+      (file[actionScope(action)] as Record<string, string>)[action] = "ctrl+y";
+    }
+    write(home, file);
+    const report = loadKeybindingsReport(workspace, home);
+    expect(report.warnings).toEqual([]);
+    expect(new Set(report.overrides.map((o) => o.action))).toEqual(new Set(ACTION_IDS));
+  });
+
+  it("rebinds the previously dropped global actions", () => {
+    write(home, {
+      global: {
+        "toggle-verbose": "ctrl+y",
+        "detach-run": "alt+b",
+        suspend: "ctrl+x ctrl+z",
+        "tab-new": "alt+n",
+        "tab-cycle": "alt+]",
+        "toggle-sidebar": "alt+e",
+        "toggle-pager": "alt+l",
+      },
+      composer: { "paste-image": "alt+v" },
+    });
+    const table = mergeKeymap(KEYMAP, loadKeybindings(workspace, home));
+    expect(resolveAction("composer", { input: "y", ctrl: true }, table)).toBe("toggle-verbose");
+    expect(resolveAction("composer", { input: "o", ctrl: true }, table)).toBeUndefined();
+    expect(resolveAction("composer", { input: "v", meta: true }, table)).toBe("paste-image");
+    expect(resolveAction("composer", { input: "b", meta: true }, table)).toBe("detach-run");
+    expect(resolveChord("composer", [{ input: "x", ctrl: true }], table)).toEqual({ kind: "pending" });
+    expect(
+      resolveChord(
+        "composer",
+        [
+          { input: "x", ctrl: true },
+          { input: "z", ctrl: true },
+        ],
+        table,
+      ),
+    ).toEqual({
+      kind: "action",
+      action: "suspend",
+    });
+  });
+
+  it("warns when an action is bound in a scope that never runs it", () => {
+    write(home, {
+      overlay: { submit: "ctrl+y" },
+      composer: { "toggle-pager": "ctrl+y" },
+      global: { newline: "alt+j" },
+    });
+    const report = loadKeybindingsReport(workspace, home);
+    // A composer action may sit in global (the composer falls back to it).
+    expect(report.overrides).toEqual([{ scope: "global", action: "newline", key: { input: "j", meta: true } }]);
+    expect(report.warnings).toEqual([
+      expect.stringMatching(/overlay\.submit — this action runs in the "composer" scope/),
+      expect.stringMatching(/composer\.toggle-pager — this action runs in the "global" scope/),
+    ]);
+  });
+
+  it("refuses overlay chords", () => {
+    write(home, { overlay: { "overlay-close": "ctrl+x q" } });
+    expect(loadKeybindingsReport(workspace, home).warnings).toEqual([
+      expect.stringMatching(/chords are supported in the composer and global scopes only/),
+    ]);
+  });
+});
+
+describe("chordShadowWarnings", () => {
+  it("names the single-stroke binding a chord prefix hides", () => {
+    const table = mergeKeymap(KEYMAP, [
+      { scope: "composer", action: "external-editor", key: { input: "e", ctrl: true }, rest: [{ input: "x" }] },
+    ]);
+    expect(chordShadowWarnings(table)).toEqual([
+      expect.stringContaining("global.toggle-sidebar (ctrl+e) is shadowed by the chord for external-editor"),
+    ]);
+    expect(chordShadowWarnings(KEYMAP)).toEqual([]);
   });
 });
 
