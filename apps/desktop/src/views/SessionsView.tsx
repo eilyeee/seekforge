@@ -8,6 +8,7 @@ import { useStore } from "../store";
 import { ChatItems } from "../components/chat/ChatItems";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Markdown } from "../components/Markdown";
+import { RewindWarnings } from "../components/RewindWarnings";
 import { useT } from "../lib/i18n";
 import {
   Badge,
@@ -21,7 +22,7 @@ import {
   Modal,
   type BadgeTone,
 } from "../components/ui";
-import type { NamedSessionMeta, PruneResult, RewindResult } from "../types";
+import type { PruneResult, RewindResult, SessionMeta } from "../types";
 import { LatestRequest } from "./async-coordination";
 import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 
@@ -45,7 +46,6 @@ const STATUS_TONE: Record<SessionStatus, BadgeTone> = {
   cancelled: "neutral",
 };
 
-type SessionMeta = NamedSessionMeta;
 type Detail = { meta: SessionMeta; messages: ChatMessage[]; events: AgentEvent[]; workspaceId: string };
 type RewindPreview = { sessionId: string; result: RewindResult; workspaceId: string };
 type PendingDelete = { session: SessionMeta; workspaceId: string };
@@ -64,6 +64,8 @@ export function SessionsView() {
   const [rewindPreview, setRewindPreview] = useState<RewindPreview | null>(null);
   /** Per-session inline note ("no checkpoints" / result summary). */
   const [rewindNotes, setRewindNotes] = useState<Record<string, string>>({});
+  /** Per-session side effects the last rewind could not undo. */
+  const [rewindWarnings, setRewindWarnings] = useState<Record<string, string[]>>({});
   /** Pending per-row delete confirmation. */
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   /** Open "Prune old…" panel. */
@@ -99,6 +101,7 @@ export function SessionsView() {
     setDetail(null);
     setError(null);
     setRewindNotes({});
+    setRewindWarnings({});
     setPendingDelete(null);
     setPruneOpen(false);
     setAudit(null);
@@ -255,6 +258,7 @@ export function SessionsView() {
             skipped: r.skipped.length,
           }),
         }));
+        setRewindWarnings((w) => ({ ...w, [sessionId]: r.warnings ?? [] }));
       })
       .catch((e: unknown) => {
         if (requests.isCurrent(operation)) {
@@ -414,6 +418,7 @@ export function SessionsView() {
                         <span className="truncate font-mono text-2xs text-tertiary">{s.id}</span>
                         {rewindNotes[s.id] && <span className="font-mono text-2xs text-warn">{rewindNotes[s.id]}</span>}
                       </div>
+                      <RewindWarnings warnings={rewindWarnings[s.id]} className="mt-1.5" />
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-2">
                       <div className="flex items-center gap-3">
@@ -557,6 +562,7 @@ export function SessionsView() {
                 {t("sessions.rewindSkipped", { count: rewindPreview.result.skipped.length })}
               </p>
             )}
+            <RewindWarnings warnings={rewindPreview.result.warnings} />
           </div>
         </ConfirmDialog>
       )}

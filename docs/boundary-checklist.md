@@ -5142,3 +5142,44 @@ esbuild emitted `React.createElement` with no `React` in scope and the published
   vitest: both defects passed every unit test.
 - **Caught:** `apps/cli/src/commands/update.ts::defaultUpdateDeps` and
   `apps/cli/tsup.config.ts`, while making bare `seekforge` launch the bundled TUI.
+
+## 437. Spreading a config object into a response publishes every key added later
+
+`GET /api/config` answered `{...mergedConfig, apiKey: masked}`. It was safe when
+it was written; then the merge learned `apiKeyHelper` (a shell command line),
+and the Desktop endpoint started returning it without a line of the route
+changing. The same spread already carried `hooks` (commands and HTTP headers),
+`lspServers` (commands and env) and the vision and search API keys.
+
+- **Do:** when a response is built from an object other code keeps extending,
+  name what leaves: omit command- and secret-shaped keys explicitly (or build the
+  response from an allowlist), and assert in a test that the secret *values* are
+  absent from the response text, not just that a key is missing.
+- **Caught:** `apps/server/src/config.ts::maskedConfig`.
+
+## 438. An approval must be bound to what the person reviewed
+
+Approving "server `docs`" by name approves whatever the checkout says `docs` is
+at the moment the request lands — which can differ from the definition that was
+on screen when the button was pressed (a `git pull`, an editor save).
+
+- **Do:** send back an identity of what was shown (a digest of the definition)
+  and refuse the decision (409) when the current value no longer matches; the
+  client reloads and asks again.
+- **Caught:** `POST /api/mcp/project-servers/:name/approve` in
+  `apps/server/src/routes/settings.ts`.
+
+## 439. A run's resources outlive the run while detached work still uses them
+
+With a session-scoped subagent manager, a `background: true` dispatch keeps
+running after its parent run ends — and keeps calling the parent's dispatcher,
+whose MCP connections and runtime backend the host disposed in the run's
+`finally`. The dispatch did not fail loudly; its tool calls just started
+erroring.
+
+- **Do:** tie disposal to the owner of the *work*, not the owner of the call
+  stack: release a run's resources once nothing detached from it is still
+  running (and on session/host shutdown), and cover the "finishes later",
+  "session deleted" and "server closed" paths in tests.
+- **Caught:** `apps/server/src/session-dispatch.ts::SessionDispatchRegistry.release`,
+  used by `apps/server/src/ws.ts`.

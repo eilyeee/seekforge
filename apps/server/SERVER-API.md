@@ -1,6 +1,6 @@
 # seekforge serve — Local Agent Server API
 
-Started with `seekforge serve [paths...] [--workspace <p> ...] [--port 7373]`.
+Started with `seekforge serve [paths...] [--workspace <p> ...] [--port 7373] [--token-file <path>]`.
 Hosts **one or more workspaces**: the positional paths and repeated
 `--workspace` flags are deduped and resolved to absolute paths; missing paths
 are warned about and skipped; when none are given it defaults to the cwd.
@@ -12,8 +12,8 @@ The server holds an ordered registry of workspaces, each
 where `id` is a short stable slug of the absolute path and `name` is the
 basename. The **first** workspace is the default.
 
-- `GET /api/workspaces` → `[{id, name, path, placeholder?, removable}]`
-  (ordered; first is the default).
+- `GET /api/workspaces` → `{workspaces: [{id, name, path, placeholder?, removable}], recents: [{path, name}]}`
+  (`workspaces` is ordered; the first is the default).
 - A Tauri GUI launch without a project uses an app-owned default marked
   `placeholder:true`; Desktop filters it from project UI and shows its welcome
   chooser. `removable` is the authoritative stop-hosting capability.
@@ -89,6 +89,15 @@ Threshold and minimum-success-interval gates still apply.
   auth: index.html's subresource requests cannot carry the token, and the
   bundle is not a secret; the UI reads `?token=` from its URL and attaches
   it to API/WS calls. The no-UI info page never includes the token.
+- The token is printed once and otherwise lives only in memory. With
+  `--token-file <path>` (opt-in; `startServer({tokenFile})` for embedders) the
+  server also writes `{"version":1,"port","token","pid","url"}` to that path
+  once it is listening, so a local client that did not start the server (the
+  VS Code extension, a script) can attach. The file is created mode 0600
+  through a temporary file and a rename (a symlink planted at the path is
+  replaced, not followed; parent directories are created 0700), a path that is
+  a directory stops the start, and the file is removed on shutdown — also on a
+  plain process exit — but only while it still holds this server's token.
 - CORS: no `Access-Control-Allow-Origin` header at all (same-origin UI only).
 - The UI (apps/desktop `vite build` output) is served statically from `/`
   when `apps/desktop/dist` exists; otherwise `/` returns a plain info page.
@@ -164,7 +173,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/loop-speculations | persisted speculative runs and winners |
 | GET /api/loop-speculations/:id | one persisted speculative run |
 | POST /api/loop-speculations/:id/promote | explicitly merge the passing winner |
-| GET /api/workspaces | `[{id, name, path, placeholder?, removable}]` (global; ordered, first is the default; includes registered worktrees `wt-<slug>`) |
+| GET /api/workspaces | `{workspaces: [{id, name, path, placeholder?, removable}], recents: [{path, name}]}` (global; `workspaces` is ordered, first is the default, and includes registered worktrees `wt-<slug>`) |
 | DELETE /api/workspaces/recent | clear the recent-workspace list without touching registered workspaces |
 | POST /api/worktrees | body `{name?}` → `{id, path, branch}` — create a worktree session (see "Worktrees"); 400 `not_a_git_repo` |
 | GET /api/worktrees | `[{id, branch, path, dirty, ahead}]` — worktrees of the `?ws=` base workspace |
@@ -175,7 +184,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | PATCH /api/sessions/:id | body `{name}` → `{id, name}` — names a session (core `renameSession`: whitespace collapsed, at most 80 characters kept; `""` clears it and returns `name: null`). The name is stored beside the session, so renaming a running session is safe. 400 non-string name, 404 unknown session |
 | GET /api/sessions/:id/changes | `{files}` — workspace-relative paths the session wrote, from its checkpoint log, once each in first-write order (`[]` when it edited nothing); 404 unknown session. Desktop's "this session's changes" filter |
 | GET /api/diff[?staged=1] | `{diff, truncated, notGit?}` — workspace `git diff` (2 MB cap). The output shape is pinned against user git config (no color, no external diff driver, `a/`/`b/` prefixes, 3 context lines) because the hunk route matches on it |
-| GET /api/files[?q=] | `{files: string[], truncated}` — workspace-relative paths (BFS, shallow first; skips the tools' DEFAULT_IGNORE_DIRS, dot-directories, and symlinks; capped at 2000, `truncated: true` when the cap cut the scan short). `q` is a case-insensitive substring filter on the relative path, applied while scanning. Feeds the web composer's `@` file picker. |
+| GET /api/files[?q=] | `{files: string[], truncated}` — workspace-relative paths (BFS, shallow first; skips the tools' DEFAULT_IGNORE_DIRS, dot-directories and symlinks — a floor no ignore rule can lift — plus whatever the repository's `.gitignore` files and `.git/info/exclude` ignore, through the same matcher the agent's file tools use; capped at 2000, `truncated: true` when the cap cut the scan short). The file browser (`GET /api/tree`) still lists ignored files. `q` is a case-insensitive substring filter on the relative path, applied while scanning. Feeds the web composer's `@` file picker. |
 | GET /api/search?q=`<term>`[&case=1][&regex=1] | `{hits: [{path, line, text, col, len}], truncated, error?}` — project-wide content search over the same ignore-aware file set as `/api/files`. `q` is matched literally by default; `regex=1` treats it as a JS regex; `case=1` makes it case-sensitive (default: case-insensitive). Records the **first** non-empty match per line: `path` (workspace-relative), `line` (1-based), `text` (the matched line, clipped to 240 chars), `col` (0-based match offset within `text`) and `len` (match length). Empty `q` → no hits. **Bounded on every axis:** ≤1500 files scanned, files >500 KB or binary skipped (size checked via stat before reading), ≤200 hits, and a 3 s wall-clock budget; `truncated: true` when any cap (hit limit, time budget, or the file-list cap) cut the search short. In regex mode lines longer than 2000 chars are skipped and the time-box doubles as a ReDoS guard. An invalid regex returns `{hits: [], truncated: false, error: "invalid regex"}` (HTTP 200, not an error response). |
 | GET /api/tree[?path=`<relative>`] | one workspace directory listing for the file browser; directories first, ignored/dot/sensitive entries hidden |
 | GET /api/file?path=`<relative>` | `{path, content, truncated}` for a regular text file confined to the workspace; content is capped at 1 MB, while binary, sensitive, symlinked, and escaping paths are rejected |
@@ -184,18 +193,18 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/raw?path=`<workspace-relative>` | streams the raw image bytes with the matching `Content-Type` (png/jpg/jpeg/gif/webp) so the UI can render real `<img>` thumbnails of uploaded images. **Hard-confined**: `path` must resolve to a regular file *inside* the physical `.seekforge/uploads/` directory of the workspace — traversal (`..`), absolute paths, any symlinked path component, and paths outside `.seekforge/uploads/` are refused. This is deliberately NOT a general file-serving endpoint. Cached `immutable` (upload names are unique). Errors: 400 `bad_request` (missing/escaping/outside-uploads path), 415 `unsupported_media_type` (non-image extension), 404 `not_found` (missing/not a file), 413 `too_large` (over 8 MB). Like all `/api/*` routes the token is required; `<img>` tags pass it via `?token=`. |
 | GET /api/sessions/:id | `{meta: SessionMeta, messages: ChatMessage[], events: AgentEvent[]}`; events let Desktop reconstruct persisted subagent state; `meta.name` is present when the session was named |
 | GET /api/sessions/:id/turns | `[{turn, text, backtrackable}]` — every `role:"user"` message of messages.jsonl in file order, numbered 0..N-1 (the same all-user-messages indexing the core's truncateSessionAtUserTurn / rewindSessionToTurn use). Turn 0 (the original task) has `backtrackable: false`; `[]` when no messages.jsonl exists yet; 404 unknown session |
-| POST /api/sessions/:id/compact | mechanically compact the stored session and return the new message counts |
+| POST /api/sessions/:id/compact | mechanically compact the stored session inside the user's `preCompact` / `postCompact` hooks (reason `manual`; user config plus enabled plugins; prompt hooks use the configured provider). Returns `{droppedTurns, beforeTokens, afterTokens, notices?}` — `notices` are hook messages and hook failures — or `null` when there is nothing to compact (no hook runs then). A `preCompact` refusal changes nothing and answers 409 `{error: {code: "blocked_by_hook", message: reason}, blocked: true, reason, notices}`. The session lease is taken before the first hook and held through the rewrite (409 `session_busy` when the session is running); a client that disconnects cancels the hooks |
 | POST /api/sessions/:id/fork | copy the session into a new id so the original stays intact |
 | GET /api/sessions/:id/audit | reviewable report of what the agent did in this stored session |
-| POST /api/sessions/:id/backtrack | body `{turn: integer, files?: boolean}` — truncates the conversation to just before user turn `turn` (truncateSessionAtUserTurn) and, when `files` is true, restores the file checkpoints of turns >= `turn` (rewindSessionToTurn). Returns `{removedMessages, keptMessages, files}` where `files` is `{restored, deleted, skipped}` counts, or `null` when file restore was not requested. 400 when `turn` is 0 or out of range, 404 unknown session |
+| POST /api/sessions/:id/backtrack | body `{turn: integer, files?: boolean}` — truncates the conversation to just before user turn `turn` (truncateSessionAtUserTurn) and, when `files` is true, restores the file checkpoints of turns >= `turn` (rewindSessionToTurn). Returns `{removedMessages, keptMessages, files}` where `files` is `{restored, deleted, skipped}` counts plus `warnings` (what the restore could not undo, as in POST /api/rewind), or `null` when file restore was not requested. 400 when `turn` is 0 or out of range, 404 unknown session |
 | GET /api/todos | `[{index, text, done}]` — checklist lines of `.seekforge/todos.md` (same format contract as the TUI; 1-based indices count checklist lines only) |
 | POST /api/todos | body `{op: "add", text}` \| `{op: "toggle"\|"remove", index}` — atomically mutates `.seekforge/todos.md` without following project symlinks, preserving every non-checklist line (headings/prose) verbatim; returns the updated todo list. 400 bad op/args, 404 index out of range, 409 while the workspace is active |
 | GET /api/balance | `{balance: {currency, totalBalance} \| null}` — DeepSeek account balance fetched with the server's key. Null-safe: missing key or any fetch failure returns `{balance: null}`, never an error |
 | POST /api/provider/verify | Non-billable first-run credential/connectivity check against the official DeepSeek endpoint. Body `{apiKey}`; returns `{ok:true}` or `{ok:false,reason}` and never persists or echoes the key; workspace configuration cannot redirect the submitted secret |
-| GET /api/mcp/resources | `{resources: [{server, uri, name?}]}` — resources/list of every explicitly trusted MCP server (spawned on demand with the workspace advertised as a filesystem root, then disposed). An untrusted, failed, or unsupported server contributes zero entries |
-| GET /api/mcp/prompts | `{prompts: [{server, name, description?, arguments?}]}` — prompts/list of every explicitly trusted MCP server (spawned on demand, then disposed). An untrusted, failed, or unsupported server contributes zero entries. Mirrors GET /api/mcp/resources |
-| POST /api/mcp/prompts/:server/:name | body `{arguments?: object}` → `{text}` — resolves one prompt from an explicitly trusted MCP server in the selected workspace; 403 untrusted server, 404 unconfigured server, 502 MCP failure |
-| GET /api/skills | `Skill[]` (without `content`) |
+| GET /api/mcp/resources | `{resources: [{server, uri, name?}]}` — resources/list of every MCP server a run would connect: user servers marked `trusted: true` and repository servers approved for this workspace (spawned on demand with the workspace advertised as a filesystem root and that trust, then disposed). Any other, failed, or unsupported server contributes zero entries |
+| GET /api/mcp/prompts | `{prompts: [{server, name, description?, arguments?}]}` — prompts/list of the same servers as GET /api/mcp/resources (spawned on demand, then disposed). Any other, failed, or unsupported server contributes zero entries |
+| POST /api/mcp/prompts/:server/:name | body `{arguments?: object}` → `{text}` — resolves one prompt from a server GET /api/mcp/prompts would list; 403 for any other configured server, 404 unconfigured server, 502 MCP failure |
+| GET /api/skills | `Skill[]` (without `content`); includes `~/.claude/skills` exactly while the user config sets `claudeUserSkills: true` (read on each request, and applied process-wide at startup). `userInvocable: false` marks a skill clients keep out of slash menus |
 | GET /api/skills/diagnostics | `{diagnostics: SkillDiagnostic[]}` for malformed, mismatched, linked, or otherwise unsafe skill installations |
 | GET /api/skills/stats | `{stats: SkillEffectiveness[]}` derived from bounded local selection/outcome telemetry |
 | GET /api/skills/supply-chain | active skill digests, API compatibility, risk/dependency metadata, and loader diagnostics |
@@ -208,7 +217,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/plugins | installed and project-discovered `PluginRecord[]`; project records are always review-only |
 | GET /api/plugins/supply-chain | digest lock, integrity, capability, compatibility, and rollback status for every plugin |
 | POST /api/plugins | body `{id}` → scaffold a project plugin; workspace-coordinated |
-| POST /api/plugins/install | body `{path, force?}` → atomically install a bounded local plugin into the user store, disabled |
+| POST /api/plugins/install | body `{source, force?}` (the older `{path}` is still accepted) — `source` is a local directory (relative paths resolve inside the selected workspace), a git URL (`https://`, `ssh://`, `git@host:path` or `file://`, optionally `#ref`), an `https://` `.tar.gz`/`.tgz`/`.zip` archive, or `<plugin>@<marketplace>`. Core stages the source into a local copy and atomically installs it into the user store, **disabled** until PUT /api/plugins/:id approves its digest. Returns `{manifest, path, digest, updated, origin, originLabel}` (`origin` records the pinned commit or archive sha256, credentials removed from URLs; `originLabel` is its one-line form). 400 for an unsupported or unencrypted (`http://`, `git://`) source or a failed fetch; a client that disconnects cancels the fetch |
 | PUT /api/plugins/:id | body `{enabled}` → approve the current installed digest or disable contributions |
 | POST /api/plugins/:id/rollback | atomically swap to the retained previous version; restored version remains disabled |
 | DELETE /api/plugins/:id | uninstall a user plugin and remove its approval state |
@@ -234,12 +243,12 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/output-styles | `{styles: [{name, kind: "builtin"\|"custom"}]}` — selectable output styles: the in-package built-ins plus every custom `.seekforge/output-styles/*.md` of the workspace |
 | POST /api/commands/expand | body `{name, args}` → `{text}` — expands a custom slash command server-side: interpolates `args` into `$ARGUMENTS` / `$1`..`$9` and runs any ``!`shell` `` injections in the workspace (`/bin/sh -c`, 10 s timeout, 1 MB stdout cap; cwd = workspace), returning the final text. Shell expansion shares the repository/workspace mutation guard and returns 409 while another process owns the workspace. `name` resolves over the project, user and enabled-plugin (`<plugin>:<command>`) command layers (first wins); 400 on missing/empty `name`, 404 `unknown command: <name>` |
 | GET /api/hooks | `{hooks}` — the user-owned hooks block from `~/.seekforge/config.json` (`{}` when none) |
-| PUT /api/hooks | body `{hooks}` — replaces the user-owned `~/.seekforge/config.json` hooks block (other config keys preserved; an empty/omitted hooks block is dropped), returns `{hooks}`. A stage is accepted when it is one of the shared hook stages or already present in the stored block, so an editor round trip keeps stages a newer build added while a new misspelled stage is still refused. Each entry is an object with a non-empty `command` or `type`; `command`/`type` must be non-empty strings and `match`/`pattern` strings when present (empty `match`/`pattern` are dropped); every other field (`url`, `prompt`, `timeout`, …) is kept verbatim. Field names must be identifiers; at most 100 entries per stage. 400 on a refused stage or malformed shape; global updates use the global-config lease every SeekForge writer of that file shares |
+| PUT /api/hooks | body `{hooks}` — replaces the user-owned `~/.seekforge/config.json` hooks block (other config keys preserved; an empty/omitted hooks block is dropped), returns `{hooks}` as stored. The fields the shared hook contract defines (`type`, `match`, `pattern`, `timeout`, `command`, `url`, `headers`, `allowedEnvVars`, `prompt`, `model`) are validated by the same `parseHookEntry` the config loader applies, so the editor cannot save an entry the engine would drop (a command hook without `command`, an http hook without an `http(s)` URL or with credentials in it, an empty prompt, a matcher that could backtrack, a timeout over 600 s); they are stored normalized (trimmed; blank optional strings dropped). Every other field — including a known field that does not apply to the entry's type — is kept verbatim. Tolerance for a newer build is bounded by what is already stored: a stage the shared list does not name, or a `type` it does not know, is accepted only when the stored block already has it (such an entry keeps all its fields after the `match`/`pattern` string checks), so a new misspelling is still refused. Field names must be identifiers; at most 100 entries per stage. 400 names the offending `stage[index]`; global updates use the global-config lease every SeekForge writer of that file shares |
 | GET /api/permission-rules | `{project: Entry[], user: Entry[]}` — the stored `permissionRules` of the workspace `.seekforge/config.json` and of `~/.seekforge/config.json`, each in file order (project rules are evaluated first). `Entry` = `{index, raw, rule?, effective}`: `raw` is the stored value verbatim, `rule` is present when it is a well-formed rule, and `effective` says whether loading that layer keeps it (a project `allow` rule is reported with `effective:false`, because repository config may only tighten) |
 | POST /api/permission-rules | body `{scope:"user"\|"project", rule:{action:"allow"\|"deny"\|"ask", tool, match?}}` — appends a rule (an identical stored rule is not duplicated) and returns the new listing. `tool` is trimmed and required, `match` is trimmed and dropped when empty, unknown rule fields are refused. Project scope refuses `allow` (400): the checkout's config may only deny or ask |
 | PUT /api/permission-rules | body `{scope, index, expected, rule}` — replaces the entry at `index`, only if it still equals `expected` (the `raw` value the editor was filled from); 409 `conflict` otherwise, so a concurrent edit never changes a different rule. Same rule validation as POST |
 | DELETE /api/permission-rules | body `{scope, index, expected}` — removes that entry under the same `expected` guard; an emptied list removes the `permissionRules` key. Entries the editor could not parse are never rewritten by an edit of another entry. User scope takes the global-config lease (a collision is 400 "another SeekForge process…"); project scope shares the repository/workspace guard (409 `session_busy` while a session is active). Malformed config files are refused, not replaced |
-| GET /api/config | config with `apiKey` masked (`sk-xxx****`), plus `{model, baseUrl, runtimeBin, commandAllowlist}` and the engine knobs `{sandbox, compaction, thinking, reasoningEffort}` plus resolved `memoryMaintenance` defaults (always present); `mcpServers` is omitted (env values may be secret — see GET /api/mcp) |
+| GET /api/config | merged config with `apiKey` masked (`sk-xxx****`), plus `{model, baseUrl, runtimeBin, commandAllowlist}` and the engine knobs `{sandbox, compaction, thinking, reasoningEffort}` plus resolved `memoryMaintenance` defaults (always present), and the user-owned `additionalDirectories` / `sandboxNetwork` when set. Nothing that is a secret or runs a command leaves the process: `mcpServers` (env values may be secret — see GET /api/mcp), `hooks` (commands and headers — see GET /api/hooks), `lspServers` and `apiKeyHelper` are omitted (a helper's key is reported masked like any key), and `visionModel.apiKey` / `webSearch.braveApiKey` are masked |
 | GET /api/agents | `AgentDefinition[]` without prompt bodies (id, name, scope, mode, model?, tools?, description, triggers, ...) |
 | GET /api/agents/:id | full definition incl. prompt body (404 unknown) |
 | GET /api/agents/:id/source[?scope=project\|global] | the editable form of one definition: `{id, scope, path, name, description, tools, mode, model, maxTurns, body, extra}` where `tools: null` means every tool and `extra` lists every other frontmatter entry as `{key, value}` with `value` the raw YAML text (continuation lines included). Without `scope` the definition's effective scope is used; builtin and plugin definitions are read-only (400). 404 when that scope has no definition |
@@ -252,8 +261,11 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/mcp | effective global/project servers with transport, scope, shadowing, and masked env/header/OAuth values; when a name exists in both scopes the GLOBAL entry is the effective one and the project entry is reported as ignored (`shadowedProject`); a project entry is always reported untrusted, and its `permission`/`toolPermissions` are shown as the loaders reduce them, not as the file spells them |
 | POST /api/mcp | add/update one scoped stdio or HTTP server; accepts structured `args`, `env`, `headers`, default `permission` (`null` clears it), per-tool `toolPermissions` (empty object clears overrides), and optional refresh-token `oauth`; masked sentinels preserve existing secrets. `trusted:true` requires global scope. The complete read/merge/write is serialized per selected layer; 409 `session_busy` when that layer is owned |
 | DELETE /api/mcp/:name?scope=project\|global | remove one server from the selected config layer; 409 `session_busy` when that layer is owned |
-| POST /api/mcp/:name/test | connect, list tools, dispose, and return `{ok, latencyMs, toolCount}` |
-| POST /api/mcp/:name/tools | spawns the server, lists tools `{tools: {name, description}[]}`, disposes; 404 unconfigured, 502 `{error:{code:"mcp_error"}}` on launch/handshake failure |
+| GET /api/mcp/project-servers | `{servers: [{name, status, transport, digest, definition}]}` — every repository-defined server (`.seekforge/config.json`, `config.local.json`, `.mcp.json`; a name the user's own config defines is the user's and not listed), sorted by name, with the user's standing decision for this workspace: `status` is `pending`, `approved` or `rejected`; `transport` is `stdio`, `http`, `sse` or `invalid`; `digest` identifies the definition; `definition` is the reviewable JSON text (references unexpanded, `trusted` omitted). Never connects anything |
+| POST /api/mcp/project-servers/:name/approve | body `{digest}` — the digest of the definition the user reviewed. Records the approval under the SeekForge home (per workspace, bound to that exact definition: an edit makes it pending again) and returns `{server}`. 400 without a digest, 404 when `:name` is not a repository server, 409 `conflict` when the definition changed since it was listed (list again and review), 409 `session_busy` when another process is recording a decision. An approved server connects in the next run with project trust |
+| POST /api/mcp/project-servers/:name/reject | same body and errors as approve; the server stays unconnected and stops being pending |
+| POST /api/mcp/:name/test | connect, list tools, dispose, and return `{ok, latencyMs, toolCount}`. A server from the user's own config is tested with user trust (its `${VAR}` references expand whether or not it is `trusted` for automatic connection); a repository server only once approved for this workspace, with project trust — a pending or rejected one is 403 `forbidden` and nothing starts |
+| POST /api/mcp/:name/tools | spawns the server with the same trust rule as `test`, lists tools `{tools: {name, description}[]}`, disposes; 403 unapproved repository server, 404 unconfigured, 502 `{error:{code:"mcp_error"}}` on launch/handshake failure |
 | GET /api/security | current repository evidence package (Findings, scans, fixes, threat models, events) |
 | POST /api/security/scan | run a repository scan; optional body `{maxFindings:1..100}` |
 | POST /api/security/threat-model | generate and persist an evidence-backed threat model |
@@ -261,7 +273,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | POST /api/security/findings/:id/fix | body `{maxCostUsd, verifyCommand, lintCommand?}`; runs a cost-bounded edit Agent, exact sandboxed checks, and a fresh scan |
 | GET /api/security/export?format=json\|markdown\|sarif | rendered compliance evidence package and filename |
 | POST /api/rewind | body `{sessionId, dryRun?}` → rewindSession result `{restored, deleted, skipped, warnings}` (`warnings`: shell-command side effects the rewind cannot undo — commands run outside git, over the checkpoint limits or in the background, unrestorable files, moved HEAD); 404 on unknown session or zero checkpoints |
-| PUT /api/config | body `{key, value, global?}` — supports the ordinary CLI config keys plus Server/Desktop structured settings such as `models` and `memoryMaintenance`; nested maintenance fields are strictly validated. Returns 400 on unknown keys or user-owned keys attempted without `global:true`. Project updates share the repository/workspace session guard; global updates use a separate cross-process settings lease; conflicts return 409 `session_busy` |
+| PUT /api/config | body `{key, value, global?}` — supports the ordinary CLI config keys plus Server/Desktop structured settings such as `models` and `memoryMaintenance`; nested maintenance fields are strictly validated. `reasoningEffort` takes `low`, `medium`, `high` or `max` (`""` clears it). Two user-owned keys save only with `global: true` (a repository's config cannot set them): `additionalDirectories` — a string array of absolute (or `~/`) paths to existing directories outside this workspace, stored as their physical paths, `[]` clears — and `sandboxNetwork` — `{allowedDomains, deniedDomains?}` validated and canonicalized by core (host names, IP literals or `*.domain`; an empty `allowedDomains` is a policy that allows no domain), `null` clears. Returns 400 on unknown keys or user-owned keys attempted without `global:true`. Project updates share the repository/workspace session guard; global updates use a separate cross-process settings lease; conflicts return 409 `session_busy` |
 | GET /api/triggers | webhook triggers `{id, task, mode, maxCostUsd, secret:"***", enabled}[]` — secrets always masked |
 | POST /api/triggers | body `{id, task, mode:"ask"\|"edit", maxCostUsd, secret, enabled?}` → `201` masked trigger. `maxCostUsd` and `secret` (≥8 chars) are **required**; 400 on missing/invalid, 409 duplicate id |
 | DELETE /api/triggers/:id | `{deleted: true}`; 404 unknown id |
@@ -375,10 +387,28 @@ workspace. An unknown `ws` id → `{"type":"error","code":"unknown_workspace"}`.
 next model-turn boundary; it does not cancel or resume the child session. Messages
 are trimmed, limited to 4000 characters, and each dispatch has a bounded queue.
 `subagent.cancel` gives that child the distinct `cancelled` terminal state. Both
-frames are bound to the normal Agent run currently owned by this connection;
-unknown, completed, or stale dispatch ids fail closed. They are unavailable for
-an idle connection or an auto-loop run. Extra fields and malformed ids/messages
-return `bad_frame`.
+frames address the dispatches of the session this connection ran last (see
+"Session-scoped subagents" below), during a run or between runs; unknown,
+completed, or stale dispatch ids fail closed (`unknown_dispatch`,
+`dispatch_not_running`). A connection that has not run an Agent session yet
+answers `not_running`; auto-loop runs have no controllable dispatches. Extra
+fields and malformed ids/messages return `bad_frame`.
+
+#### Session-scoped subagents
+
+The server keeps one session-scoped dispatch manager per (workspace, session
+id) and passes it to every run of that session, from any connection. When a run
+ends, its foreground dispatches are cancelled; `background: true` dispatches
+keep running and can still be steered or cancelled. Their terminal
+`subagent.*` event (and their outcome, for the model) arrives in the session's
+next run; while one runs it can no longer ask for permission (every prompt is
+denied). The run's tools — MCP connections and the runtime backend — are
+released only once none of the session's dispatches is still running.
+A socket closing cancels the active run but not the session's background
+dispatches (a reconnect resumes the session). Deleting or pruning the session
+(`DELETE /api/sessions/:id`, `POST /api/sessions/prune`) and server shutdown
+cancel them. At most 64 idle sessions keep their manager (with undelivered
+background results); beyond that the least recently used idle one is dropped.
 
 ### server → client
 
@@ -445,7 +475,10 @@ Every `subagent.*` event may carry `"color"` (a named color or `#rrggbb`, from
 the agent definition; presentation only). A child's progress line arrives as a
 `subagent.step` with `"toolName":"agent_report"` and a `"message"` string —
 model output, to be rendered as data. Persisted-history replay
-(`GET /api/sessions/:id`) keeps only the base fields.
+(`GET /api/sessions/:id`) keeps both: `color` when it is one of core's values
+(`red`, `orange`, `yellow`, `green`, `blue`, `purple`, `pink`, `cyan`, or
+lowercase `#rgb` / `#rrggbb`) and `message` up to 2,000 characters; anything
+else is dropped from the replayed event rather than failing it.
 
 Rules:
 - `start`/`send` while a run is active → `{"type":"error","code":"busy"}`.
@@ -612,10 +645,19 @@ already grants through agent runs and command expansion.
   tests/embedding: `createAgent` (agent-assembly override) and `staticDir`
   (UI root override). `terminal: false` turns the workspace terminal off
   (`/ws/terminal` answers 403 and `GET /api/terminal` reports it unavailable);
-  an embedder serving a read-only or shared surface must pass it.
+  an embedder serving a read-only or shared surface must pass it. `tokenFile`
+  is the embedder form of `--token-file` (see Security). `close()` also
+  cancels session-scoped background subagents and flushes OpenTelemetry
+  export (bounded to 5 s).
 - Dependencies: `ws` only (plus workspace packages). No express.
 - The server constructs AgentCore exactly like the CLI does (provider from
-  config, default dispatcher, runtime when configured, extractMemory for
-  edit mode, commandAllowlist from config), plus the TUI's config
-  passthrough: `sandbox` and `compaction` into createAgentCore, `thinking`
-  and `reasoningEffort` into the provider.
+  config, runtime when configured, extractMemory for edit mode,
+  commandAllowlist from config), plus the TUI's config passthrough: `sandbox`
+  and `compaction` into createAgentCore, `thinking` and `reasoningEffort` into
+  the provider. Its config merge is user config → the checkout's `.mcp.json` →
+  `.seekforge/config.json` (both repository layers are reduced by the shared
+  owner). MCP servers connect only when the shared connection rule allows it
+  (a user server marked `trusted`, a repository server approved for the
+  workspace), and the tools reach the model through core's MCP-aware
+  dispatcher, which follows `tools/list_changed` and defers definitions behind
+  `tool_search` past `mcpToolSearchThreshold`.

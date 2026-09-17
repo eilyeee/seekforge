@@ -175,7 +175,6 @@ export const views = {
       "First-class extension bundles for skills, agents, MCP servers, and hooks. Installed plugins stay disabled until their exact content digest is approved.",
     "plugins.createLabel": "Create a project plugin scaffold",
     "plugins.create": "Create",
-    "plugins.installLabel": "Install a reviewed local plugin directory",
     "plugins.install": "Install",
     "plugins.empty": "No plugins found",
     "plugins.reviewInstall": "Review & install",
@@ -425,8 +424,6 @@ export const views = {
     "settings.compactionMechanical": "mechanical (drop old tool output)",
     "settings.compactionLlm": "llm (summarize via the model)",
     "settings.reasoningDefault": "(API default)",
-    "settings.reasoningHigh": "high",
-    "settings.reasoningMax": "max",
     "settings.modelsHint":
       "The models offered in the chat-box picker. Add any id (other OpenAI-compatible providers too — set baseUrl + apiKey for those).",
     "settings.sandboxHint":
@@ -658,6 +655,55 @@ export const views = {
     "palette.go": "Open {label}",
     "palette.newSession": "New session",
     "palette.openFolder": "Open folder…",
+    // ── Integration: approvals, sandbox access, plugin sources ──
+    "chat.reasoning.low": "low",
+    "chat.reasoning.medium": "medium",
+    "chat.subagent.reports": "progress",
+    "chat.compactNothing": "Nothing to compact yet.",
+    "chat.compactNotices": "Hooks: {notices}",
+    "rewind.warningsTitle": "{count} side effect(s) this rewind cannot undo",
+    "rewind.warningsMore": "…and {count} more",
+    "plugins.installSourceLabel": "Install a plugin: local directory, git URL, https archive or plugin@marketplace",
+    "plugins.installSourcePlaceholder": "/path/to/plugin or https://github.com/org/plugin.git",
+    "plugins.installSourceHint": "Installed plugins start disabled. Review the digest, then Enable to approve it.",
+    "plugins.installedFrom": "Installed {id}@{version} from {origin} — disabled until you enable it.",
+    "plugins.remoteConfirmTitle": "Download and install this plugin?",
+    "plugins.remoteConfirm": "Download & install",
+    "plugins.remoteConfirmBody":
+      "This downloads code from the source below into your user plugin store. It is installed disabled: review it and enable it before any of it runs.",
+    "settings.mcpProjectTitle": "repository servers (need your approval)",
+    "settings.mcpProjectHint":
+      "Servers this checkout defines (.seekforge/config.json, config.local.json, .mcp.json) never start until you approve them. Approval is per workspace, stored under your SeekForge home, and resets when the definition changes.",
+    "settings.mcpProjectEmpty": "This workspace defines no MCP servers.",
+    "settings.mcpProjectStatus.pending": "pending",
+    "settings.mcpProjectStatus.approved": "approved",
+    "settings.mcpProjectStatus.rejected": "rejected",
+    "settings.mcpProjectApprove": "Approve",
+    "settings.mcpProjectReject": "Reject",
+    "settings.mcpProjectApproveTitle": "Approve {name} for this workspace?",
+    "settings.mcpProjectApproveBody":
+      "Approving lets SeekForge start this server automatically in this workspace — the command or endpoint below, exactly as the repository wrote it. Only approve a definition you trust.",
+    "settings.mcpProjectChanged":
+      "The definition of {name} changed after it was shown, so nothing was decided. The list was reloaded — review it again.",
+    "settings.mcpApprovalRequired": "approval required",
+    "settings.mcpNeedsApproval": "approve this repository server in the list below first",
+    "settings.userOwnedTitle": "sandbox access (user config only)",
+    "settings.userOwnedHint":
+      "Saved to your user config (~/.seekforge/config.json) whatever the scope above says. A repository's .seekforge/config.json cannot set these, so a cloned project can neither grant itself a directory nor open the network.",
+    "settings.extraDirsLabel": "additionalDirectories (one path per line)",
+    "settings.extraDirsHint":
+      "Directories outside the project the file tools may also use: absolute (or ~/) paths to existing directories. Saving an empty list clears it.",
+    "settings.extraDirsPlaceholder": "/Users/me/shared-libs",
+    "settings.networkLabel": "sandboxNetwork (domain allowlist for sandboxed commands)",
+    "settings.networkHint":
+      "When on, sandboxed commands reach only the allowed domains (example.com, *.example.com); a denied domain is refused even when allowed. Off leaves network access to the sandbox level.",
+    "settings.networkEnabled": "Restrict sandboxed network access to an allowlist",
+    "settings.networkAllowed": "allowed domains",
+    "settings.networkAllowedPlaceholder": "allowed: registry.npmjs.org, *.github.com",
+    "settings.networkDenied": "denied domains",
+    "settings.networkDeniedPlaceholder": "denied (optional): tracking.example.com",
+    "settings.networkEmptyAllowed":
+      "No allowed domains: sandboxed commands will reach no domain at all. Turn the restriction off to leave network access to the sandbox level instead.",
   },
   zh: {
     // ── ChatView ──────────────────────────────────────────────────
@@ -826,7 +872,6 @@ export const views = {
       "用于组合技能、子智能体、MCP 服务和 Hook 的一级扩展包。安装后默认禁用，只有明确批准当前内容摘要后才会生效。",
     "plugins.createLabel": "创建项目插件脚手架",
     "plugins.create": "创建",
-    "plugins.installLabel": "安装已审核的本地插件目录",
     "plugins.install": "安装",
     "plugins.empty": "暂无插件",
     "plugins.reviewInstall": "审核并安装",
@@ -1074,8 +1119,6 @@ export const views = {
     "settings.compactionMechanical": "mechanical (丢弃旧工具输出)",
     "settings.compactionLlm": "llm (通过模型总结)",
     "settings.reasoningDefault": "(API 默认值)",
-    "settings.reasoningHigh": "high",
-    "settings.reasoningMax": "max",
     "settings.modelsHint":
       "聊天框选择器中提供的模型。添加任意 ID（也可添加其他兼容 OpenAI 的提供商——同时为其设置 baseUrl 和 apiKey）。",
     "settings.sandboxHint": "使用 seatbelt (macOS) / bwrap (Linux) 包裹命令。如果请求但不可用则硬性失败。",
@@ -1301,5 +1344,53 @@ export const views = {
     "palette.go": "打开{label}",
     "palette.newSession": "新建会话",
     "palette.openFolder": "打开文件夹…",
+    // ── Integration: approvals, sandbox access, plugin sources ──
+    "chat.reasoning.low": "低",
+    "chat.reasoning.medium": "中",
+    "chat.subagent.reports": "进展",
+    "chat.compactNothing": "暂无可压缩的内容。",
+    "chat.compactNotices": "钩子：{notices}",
+    "rewind.warningsTitle": "此次回滚无法撤销的 {count} 项副作用",
+    "rewind.warningsMore": "……另有 {count} 项",
+    "plugins.installSourceLabel": "安装插件：本地目录、git URL、https 压缩包或 plugin@marketplace",
+    "plugins.installSourcePlaceholder": "/path/to/plugin 或 https://github.com/org/plugin.git",
+    "plugins.installSourceHint": "新安装的插件默认处于禁用状态。请核对摘要，然后点击“启用”予以批准。",
+    "plugins.installedFrom": "已从 {origin} 安装 {id}@{version}——启用之前保持禁用。",
+    "plugins.remoteConfirmTitle": "下载并安装此插件？",
+    "plugins.remoteConfirm": "下载并安装",
+    "plugins.remoteConfirmBody":
+      "这会从下面的来源下载代码到你的用户插件目录。安装后处于禁用状态：请先审核并启用，其中的任何内容才会运行。",
+    "settings.mcpProjectTitle": "仓库定义的服务器（需要你的批准）",
+    "settings.mcpProjectHint":
+      "此检出定义的服务器（.seekforge/config.json、config.local.json、.mcp.json）在你批准之前永远不会启动。批准按工作区记录，保存在你的 SeekForge 主目录下，定义一旦变化即失效。",
+    "settings.mcpProjectEmpty": "此工作区没有定义 MCP 服务器。",
+    "settings.mcpProjectStatus.pending": "待批准",
+    "settings.mcpProjectStatus.approved": "已批准",
+    "settings.mcpProjectStatus.rejected": "已拒绝",
+    "settings.mcpProjectApprove": "批准",
+    "settings.mcpProjectReject": "拒绝",
+    "settings.mcpProjectApproveTitle": "在此工作区批准 {name}？",
+    "settings.mcpProjectApproveBody":
+      "批准后，SeekForge 会在此工作区自动启动该服务器——即下面由仓库写下的命令或端点，原样执行。只批准你信任的定义。",
+    "settings.mcpProjectChanged": "{name} 的定义在显示之后发生了变化，因此未做任何决定。列表已重新加载——请重新审核。",
+    "settings.mcpApprovalRequired": "需要批准",
+    "settings.mcpNeedsApproval": "请先在下方列表中批准这个仓库服务器",
+    "settings.userOwnedTitle": "沙箱访问（仅限用户配置）",
+    "settings.userOwnedHint":
+      "无论上方选择哪个范围，都会保存到你的用户配置（~/.seekforge/config.json）。仓库的 .seekforge/config.json 无法设置这些项，因此克隆下来的项目既不能给自己授予目录，也不能打开网络。",
+    "settings.extraDirsLabel": "additionalDirectories（每行一个路径）",
+    "settings.extraDirsHint":
+      "文件工具还可以使用的项目外目录：指向已存在目录的绝对路径（或 ~/ 开头）。保存空列表即清除。",
+    "settings.extraDirsPlaceholder": "/Users/me/shared-libs",
+    "settings.networkLabel": "sandboxNetwork（沙箱命令的域名白名单）",
+    "settings.networkHint":
+      "开启后，沙箱中的命令只能访问允许的域名（example.com、*.example.com）；被拒绝的域名即使在允许列表中也会被拒绝。关闭则由沙箱级别决定网络访问。",
+    "settings.networkEnabled": "将沙箱网络访问限制在白名单内",
+    "settings.networkAllowed": "允许的域名",
+    "settings.networkAllowedPlaceholder": "允许：registry.npmjs.org, *.github.com",
+    "settings.networkDenied": "拒绝的域名",
+    "settings.networkDeniedPlaceholder": "拒绝（可选）：tracking.example.com",
+    "settings.networkEmptyAllowed":
+      "没有允许的域名：沙箱命令将无法访问任何域名。若想交由沙箱级别决定网络访问，请关闭此限制。",
   },
 } as { en: Record<string, string>; zh: Record<string, string> };

@@ -1,6 +1,6 @@
 import { constants, type Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { DEFAULT_IGNORE_DIRS } from "@seekforge/core";
+import { DEFAULT_IGNORE_DIRS, WorkspaceIgnore } from "@seekforge/core";
 import {
   closeVerifiedFileAsync,
   openVerifiedFileAsync,
@@ -33,12 +33,22 @@ async function readOpenedFileBounded(
   return Buffer.concat(chunks, total);
 }
 
+type IgnoreFrame = ReturnType<WorkspaceIgnore["frameFor"]>;
+
+/**
+ * Breadth-first walk of the workspace's regular files. DEFAULT_IGNORE_DIRS and
+ * dot-directories are the floor (skipped even when no .gitignore names them);
+ * on top of that, whatever the repository's ignore rules exclude (.gitignore at
+ * every level, .git/info/exclude) is skipped — the same owner the agent's file
+ * tools use, so the @ picker and search offer what the agent would list.
+ */
 async function walkWorkspaceFiles(root: string, limit: number): Promise<FileList> {
   const files: string[] = [];
-  const queue: string[] = [""];
+  const ignore = WorkspaceIgnore.forWorkspace(root);
+  const queue: Array<{ rel: string; frame: IgnoreFrame }> = [{ rel: "", frame: ignore.frameFor("") }];
   let processed = 0;
   while (queue.length > 0) {
-    const rel = queue.shift() as string;
+    const { rel, frame } = queue.shift()!;
     if (++processed % LIST_YIELD_EVERY === 0) await new Promise<void>((r) => setImmediate(r));
     let entries: Dirent[];
     let opened: Awaited<ReturnType<typeof openVerifiedFileAsync>> | undefined;
@@ -58,8 +68,10 @@ async function walkWorkspaceFiles(root: string, limit: number): Promise<FileList
       const childRel = rel === "" ? entry.name : `${rel}/${entry.name}`;
       if (entry.isDirectory()) {
         if (DEFAULT_IGNORE_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
-        queue.push(childRel);
+        if (ignore.ignores(frame, childRel, true)) continue;
+        queue.push({ rel: childRel, frame: ignore.descend(frame, childRel) });
       } else if (entry.isFile()) {
+        if (ignore.ignores(frame, childRel, false)) continue;
         if (files.length >= limit) return { files, truncated: true };
         files.push(childRel);
       }

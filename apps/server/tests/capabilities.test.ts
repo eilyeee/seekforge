@@ -211,7 +211,7 @@ describe("POST /api/sessions/:id/backtrack", () => {
     expect(await jsonOf(res)).toEqual({
       removedMessages: 4,
       keptMessages: 2,
-      files: { restored: 1, deleted: 1, skipped: 0 },
+      files: { restored: 1, deleted: 1, skipped: 0, warnings: [] },
     });
 
     // turn 0's file untouched; turn 1's restored; turn 2's creation undone.

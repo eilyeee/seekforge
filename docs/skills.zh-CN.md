@@ -54,7 +54,7 @@ Claude Code 技能可以原样放入：项目中的 `.claude/skills/<name>/SKILL
 | `model`、`effort` | 宿主能切换时，本次运行余下部分使用的模型；`effort` 会记录但不会在运行中途生效。 |
 | `context: fork`、`agent` | 在子代理中运行技能；`agent` 指定代理（`Explore`/`Plan` 对应 `explorer`/`planner`）。 |
 | `disable-model-invocation` | `true`：只有用户能调用 —— 既不会列入清单，也不会被自动选择。 |
-| `user-invocable` | `false`：在斜杠菜单中隐藏（`GET /api/skills` 以 `userInvocable` 暴露）。 |
+| `user-invocable` | `false`：在斜杠菜单中隐藏——Desktop 的 `/skill:<id>` 面板条目不会列出它——并在 `GET /api/skills` 中以 `userInvocable` 暴露。模型仍可使用该 skill。 |
 | `paths` | glob 列表；只有工作区中有文件匹配时才会提供该技能。 |
 | `triggers`、`tags` | 若存在，作为 SeekForge 自己的选择元数据。 |
 

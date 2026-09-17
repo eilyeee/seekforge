@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { useT } from "../lib/i18n";
 import { useStore } from "../store";
-import type { PluginRecord, PluginStatus, PluginSupplyChainEntry } from "../types";
+import { isRemotePluginSource } from "../lib/plugin-source";
+import type { PluginInstallResult, PluginRecord, PluginStatus, PluginSupplyChainEntry } from "../types";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Badge, Button, Card, EmptyState, IconPlugins, Input, type BadgeTone } from "../components/ui";
 import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 
@@ -24,6 +26,10 @@ export function PluginsView() {
   const [busy, setBusy] = useState<string | null>(null);
   const [newId, setNewId] = useState("");
   const [installPath, setInstallPath] = useState("");
+  /** A remote source awaiting the "this downloads code" confirmation. */
+  const [confirmRemote, setConfirmRemote] = useState<string | null>(null);
+  /** The last install's result (the plugin stays disabled until enabled below). */
+  const [installed, setInstalled] = useState<PluginInstallResult | null>(null);
 
   const refresh = (workspaceId = ws) => {
     const request = requests.beginLatest(workspaceId);
@@ -46,6 +52,8 @@ export function PluginsView() {
     setSupplyChain([]);
     setError(null);
     setBusy(null);
+    setConfirmRemote(null);
+    setInstalled(null);
     refresh(ws);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requests]);
@@ -65,6 +73,18 @@ export function PluginsView() {
       .finally(() => {
         if (requests.isCurrent(request)) setBusy(null);
       });
+  };
+
+  const install = (source: string) => {
+    const operation = requests.capture(ws);
+    if (!operation) return;
+    setInstalled(null);
+    mutate("install", async (workspaceId) => {
+      const result = await api.pluginInstall(source, false, workspaceId);
+      if (!requests.isCurrent(operation)) return;
+      setInstalled(result);
+      setInstallPath("");
+    });
   };
 
   return (
@@ -105,27 +125,38 @@ export function PluginsView() {
               {t("plugins.create")}
             </Button>
           </Card>
-          <Card className="flex items-end gap-2 p-4">
-            <label htmlFor="plugin-install-path" className="min-w-0 flex-1 text-xs text-secondary">
-              {t("plugins.installLabel")}
-              <Input
-                id="plugin-install-path"
-                value={installPath}
-                onChange={(event) => setInstallPath(event.target.value)}
-                placeholder="/path/to/plugin"
-              />
-            </label>
-            <Button
-              disabled={!installPath.trim() || busy !== null}
-              onClick={() =>
-                mutate("install", async (workspaceId) => {
-                  await api.pluginInstall(installPath.trim(), false, workspaceId);
-                  setInstallPath("");
-                })
-              }
-            >
-              {t("plugins.install")}
-            </Button>
+          <Card className="p-4">
+            <div className="flex items-end gap-2">
+              <label htmlFor="plugin-install-path" className="min-w-0 flex-1 text-xs text-secondary">
+                {t("plugins.installSourceLabel")}
+                <Input
+                  id="plugin-install-path"
+                  value={installPath}
+                  onChange={(event) => setInstallPath(event.target.value)}
+                  placeholder={t("plugins.installSourcePlaceholder")}
+                />
+              </label>
+              <Button
+                disabled={!installPath.trim() || busy !== null}
+                onClick={() => {
+                  const source = installPath.trim();
+                  if (isRemotePluginSource(source)) setConfirmRemote(source);
+                  else install(source);
+                }}
+              >
+                {t("plugins.install")}
+              </Button>
+            </div>
+            <p className="mt-2 text-2xs text-tertiary">{t("plugins.installSourceHint")}</p>
+            {installed && (
+              <p className="mt-2 break-words text-xs text-ok" role="status">
+                {t("plugins.installedFrom", {
+                  id: installed.manifest?.id ?? "",
+                  version: installed.manifest?.version ?? "",
+                  origin: installed.originLabel ?? "",
+                })}
+              </p>
+            )}
           </Card>
         </div>
 
@@ -293,6 +324,23 @@ export function PluginsView() {
           </div>
         )}
       </div>
+      {confirmRemote !== null && (
+        <ConfirmDialog
+          title={t("plugins.remoteConfirmTitle")}
+          confirmLabel={t("plugins.remoteConfirm")}
+          onConfirm={() => {
+            const source = confirmRemote;
+            setConfirmRemote(null);
+            install(source);
+          }}
+          onCancel={() => setConfirmRemote(null)}
+        >
+          <p>{t("plugins.remoteConfirmBody")}</p>
+          <p className="mt-2 break-all rounded bg-surface-overlay px-2 py-1 font-mono text-xs text-primary">
+            {confirmRemote}
+          </p>
+        </ConfirmDialog>
+      )}
     </div>
   );
 }

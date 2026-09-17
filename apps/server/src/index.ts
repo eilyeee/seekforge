@@ -28,6 +28,7 @@ import {
   pruneEngineeringGraphStates,
   recoverableEngineeringGraphStates,
   maintainWorkspaceOrchestration,
+  shutdownTelemetry,
   type GraphMaintenanceScheduler,
   type GraphExecutionAdapter,
   type LoopRecoveryScheduler,
@@ -37,6 +38,7 @@ import {
 import { MAX_WS_PAYLOAD_BYTES } from "@seekforge/shared/protocol-limits";
 import { MAX_TIMER_DELAY_MS } from "@seekforge/shared/timers";
 import {
+  configureServerSkillSources,
   createDefaultAgent,
   resumeDefaultLoop,
   runDefaultGraph,
@@ -58,6 +60,8 @@ import { ServerCoordinator } from "./coordinator.js";
 import { RunManager } from "./run-ledger.js";
 import { createStructuredLogger, type StructuredLogger } from "./logger.js";
 import { loadConfig } from "./config.js";
+import { SessionDispatchRegistry } from "./session-dispatch.js";
+import { removeServerTokenFile, writeServerTokenFile } from "./token-file.js";
 
 export type {
   AgentHandle,
@@ -75,6 +79,7 @@ export { readRunEvents, readRunLedger, RunManager } from "./run-ledger.js";
 export type { RunEvent, RunRecord, RunSource, RunStatus } from "./run-ledger.js";
 export { createStructuredLogger } from "./logger.js";
 export type { StructuredLogger } from "./logger.js";
+export { readServerTokenFile, type ServerTokenFile } from "./token-file.js";
 
 // Normally reads @seekforge/server's package version. In a bun --compile
 // binary (the Tauri sidecar) the package.json isn't on the virtual FS, so
@@ -154,6 +159,13 @@ export type StartServerOptions = {
    * serves a read-only or shared surface must pass false.
    */
   terminal?: boolean;
+  /**
+   * Opt-in: write `{version, port, token, pid, url}` to this path (mode 0600,
+   * replaced atomically) once listening, and remove it on close — so another
+   * local client (the VS Code extension) can attach without reading stdout.
+   * Unset, the token exists only in memory and in what the caller prints.
+   */
+  tokenFile?: string;
 };
 
 export type RunningServer = {
@@ -256,6 +268,16 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     };
   });
   const logger = opts.logger ?? createStructuredLogger();
+  const sessionDispatch = new SessionDispatchRegistry();
+
+  // `claudeUserSkills` is user-owned, so any workspace's merged config carries
+  // the same value. Applied now so GET /api/skills reflects it before the first
+  // agent is assembled (each assembly re-applies it).
+  try {
+    configureServerSkillSources(loadConfig(registry.default.path));
+  } catch (error) {
+    logger.log("error", "skills.sources_failed", { error: error instanceof Error ? error.message : String(error) });
+  }
 
   let port = 0; // the real port, known after listen()
   let closing = false;
@@ -298,6 +320,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
         logger,
         requestId,
         terminalEnabled: opts.terminal !== false,
+        sessionDispatch,
       })
         .catch((e: unknown) => {
           // Defense-in-depth: handleApi answers its own errors, but never leave a
@@ -365,6 +388,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
         withRepository: (workspace, operation) => coordinator.withRepository(workspace, operation),
         withAgentMutation: (workspace, signal, operation) =>
           coordinator.withAgentMutation(workspace, signal, operation),
+        sessionDispatch,
       }),
     );
   });
@@ -733,6 +757,24 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     throw new Error("could not determine the listen port");
   }
   port = address.port;
+  let tokenFileWritten: string | undefined;
+  if (opts.tokenFile !== undefined) {
+    try {
+      tokenFileWritten = writeServerTokenFile(opts.tokenFile, { port, token });
+    } catch (error) {
+      memoryMaintenanceScheduler.dispose();
+      loopRecoveryScheduler?.dispose();
+      graphMaintenanceScheduler?.dispose();
+      orchestrationMaintenanceScheduler?.dispose();
+      server.close();
+      throw error;
+    }
+  }
+  // 'exit' handlers must be synchronous: the event loop is gone by then.
+  const removeTokenFileOnExit = (): void => {
+    if (tokenFileWritten) removeServerTokenFile(tokenFileWritten, token);
+  };
+  if (tokenFileWritten) process.once("exit", removeTokenFileOnExit);
   logger.log("info", "server.ready", { port, workspaces: registry.summary.length });
 
   let closePromise: Promise<void> | undefined;
@@ -754,13 +796,42 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       });
       await Promise.allSettled([...triggerRuns].map((run) => run.completion));
       await coordinator.drain();
+      // Background subagents outlive their runs; shutdown ends them and
+      // releases the tools they held.
+      sessionDispatch.disposeAll();
       await closing;
+      if (tokenFileWritten) {
+        process.removeListener("exit", removeTokenFileOnExit);
+        removeServerTokenFile(tokenFileWritten, token);
+      }
+      // Export what telemetry still holds, but never let a slow collector hold
+      // shutdown hostage (each export already carries its own timeout).
+      await boundedTelemetryShutdown(logger);
       logger.log("info", "server.closed", { port });
     })();
     return closePromise;
   };
 
   return { port, token, close };
+}
+
+/** How long server shutdown waits for the telemetry pipeline to flush. */
+export const TELEMETRY_SHUTDOWN_TIMEOUT_MS = 5_000;
+
+async function boundedTelemetryShutdown(logger: StructuredLogger): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), TELEMETRY_SHUTDOWN_TIMEOUT_MS);
+    timer.unref();
+  });
+  try {
+    const outcome = await Promise.race([shutdownTelemetry().then(() => "done" as const), timedOut]);
+    if (outcome === "timeout") logger.log("error", "telemetry.shutdown_timeout", {});
+  } catch (error) {
+    logger.log("error", "telemetry.shutdown_failed", { error: error instanceof Error ? error.message : String(error) });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Signed GitHub trigger calls authenticate in the trigger route using its per-trigger secret. */

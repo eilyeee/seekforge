@@ -2,12 +2,20 @@
  * Pure chat-state reducer: turns the server event stream into renderable
  * chat items. No DOM, no store — unit-tested in events.test.ts.
  */
-import type { AgentError, AgentEvent, FinalReport, SubagentStatus, TokenUsage, ToolResult } from "@seekforge/shared";
+import type {
+  AgentError,
+  AgentEvent,
+  FinalReport,
+  PlanItem,
+  SubagentStatus,
+  TokenUsage,
+  ToolResult,
+} from "@seekforge/shared";
 import { validateTeamPlan, type TeamMemberPlan } from "./team";
 import { addUsage, emptyUsage } from "./usage";
 
-/** update_plan checklist item (mirrors @seekforge/core tools/builtins/plan.ts). */
-export type PlanItem = { step: string; status: "pending" | "in_progress" | "done" };
+/** update_plan checklist item (the shared contract; `activeForm` is optional). */
+export type { PlanItem };
 
 /**
  * Everything the WS delivers inside {"type":"event"} frames: every AgentEvent
@@ -22,6 +30,37 @@ export type StreamEvent =
 /** Max live-output lines kept on a running command row (command.output). */
 export const COMMAND_TAIL_LINES = 5;
 export const SUBAGENT_STEP_LIMIT = 50;
+/** Progress lines (agent_report) kept per subagent card, most recent last. */
+export const SUBAGENT_REPORT_LIMIT = 10;
+/** Longest progress line kept; core already bounds it, this guards a misbehaving server. */
+const SUBAGENT_REPORT_MAX_CHARS = 500;
+/** Longest plan-step label kept (step / activeForm). */
+const PLAN_TEXT_MAX_CHARS = 500;
+/** The harness tool a subagent uses to send a progress line to its parent. */
+export const AGENT_REPORT_TOOL = "agent_report";
+
+const SUBAGENT_NAMED_COLORS: ReadonlySet<string> = new Set([
+  "red",
+  "orange",
+  "yellow",
+  "green",
+  "blue",
+  "purple",
+  "pink",
+  "cyan",
+]);
+
+/**
+ * A subagent's display color, or undefined. Core validates it already; the
+ * value still reaches an inline style here, so only the same closed set
+ * (eight named colors or `#rgb` / `#rrggbb`) is ever accepted.
+ */
+export function subagentColor(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const value = raw.trim().toLowerCase();
+  if (SUBAGENT_NAMED_COLORS.has(value)) return value;
+  return /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/.test(value) ? value : undefined;
+}
 
 export type ChatItem =
   | { kind: "user"; id: number; text: string }
@@ -48,6 +87,10 @@ export type ChatItem =
       task: string;
       status: SubagentStatus;
       steps: string[];
+      /** Progress lines the agent sent with agent_report (model output: plain text only). */
+      reports?: string[];
+      /** Validated display color of the agent definition (see subagentColor). */
+      color?: string;
       subSessionId?: string;
       resultSummary?: string;
       error?: { code: string; message: string };
@@ -171,12 +214,28 @@ export function planItemsFrom(value: unknown): PlanItem[] | null {
   const out: PlanItem[] = [];
   for (const raw of items) {
     if (typeof raw !== "object" || raw === null) return null;
-    const { step, status } = raw as Record<string, unknown>;
+    const { step, status, activeForm } = raw as Record<string, unknown>;
     if (typeof step !== "string") return null;
     if (status !== "pending" && status !== "in_progress" && status !== "done") return null;
-    out.push({ step, status });
+    const active = typeof activeForm === "string" ? activeForm.trim().slice(0, PLAN_TEXT_MAX_CHARS) : "";
+    out.push({ step: step.slice(0, PLAN_TEXT_MAX_CHARS), status, ...(active !== "" ? { activeForm: active } : {}) });
   }
   return out;
+}
+
+/** What a checklist row shows: the present-continuous label while in progress, else the step. */
+export function planItemLabel(item: PlanItem): string {
+  return item.status === "in_progress" && item.activeForm ? item.activeForm : item.step;
+}
+
+function boundedReport(message: string): string {
+  const flat = message.replace(/\s+/g, " ").trim();
+  return flat.length > SUBAGENT_REPORT_MAX_CHARS ? `${flat.slice(0, SUBAGENT_REPORT_MAX_CHARS - 1)}…` : flat;
+}
+
+function colorField(raw: unknown): { color?: string } {
+  const color = subagentColor(raw);
+  return color ? { color } : {};
 }
 
 /** The plan checklist updates in place: one plan item, replaced on each update. */
@@ -331,9 +390,13 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
         task: ev.task,
         status: "running",
         steps: [],
+        ...colorField(ev.color),
       });
 
     case "subagent.step": {
+      // A progress line is not a tool step: it goes to the card's report list.
+      const isReport = ev.toolName === AGENT_REPORT_TOOL;
+      const report = isReport && typeof ev.message === "string" ? boundedReport(ev.message) : "";
       const idx = activeSubagentIndex(state.items, ev.dispatchId);
       if (idx < 0) {
         return push(state, {
@@ -342,7 +405,9 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
           agentId: ev.agentId,
           task: ev.task,
           status: "running",
-          steps: [ev.toolName],
+          steps: isReport ? [] : [ev.toolName],
+          ...(report !== "" ? { reports: [report] } : {}),
+          ...colorField(ev.color),
           ...(ev.subSessionId ? { subSessionId: ev.subSessionId } : {}),
         });
       }
@@ -350,7 +415,9 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
       const items = [...state.items];
       items[idx] = {
         ...item,
-        steps: [...item.steps, ev.toolName].slice(-SUBAGENT_STEP_LIMIT),
+        ...(isReport ? {} : { steps: [...item.steps, ev.toolName].slice(-SUBAGENT_STEP_LIMIT) }),
+        ...(report !== "" ? { reports: [...(item.reports ?? []), report].slice(-SUBAGENT_REPORT_LIMIT) } : {}),
+        ...(item.color === undefined ? colorField(ev.color) : {}),
         ...(ev.subSessionId ? { subSessionId: ev.subSessionId } : {}),
       };
       return { ...state, items };
@@ -361,13 +428,17 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
     case "subagent.cancelled": {
       state = updateTeamDispatch(state, ev);
       const idx = activeSubagentIndex(state.items, ev.dispatchId);
+      const previous = idx >= 0 ? (state.items[idx] as Extract<ChatItem, { kind: "subagent" }>) : undefined;
+      const color = subagentColor(ev.color) ?? previous?.color;
       const base: Omit<Extract<ChatItem, { kind: "subagent" }>, "id"> = {
         kind: "subagent",
         dispatchId: ev.dispatchId,
         agentId: ev.agentId,
         task: ev.task,
         status: ev.status,
-        steps: idx >= 0 ? (state.items[idx] as Extract<ChatItem, { kind: "subagent" }>).steps : [],
+        steps: previous?.steps ?? [],
+        ...(previous?.reports ? { reports: previous.reports } : {}),
+        ...(color ? { color } : {}),
         ...(ev.subSessionId ? { subSessionId: ev.subSessionId } : {}),
         ...(ev.type === "subagent.cancelled" ? { resultSummary: ev.reason } : { resultSummary: ev.resultSummary }),
         ...(ev.type === "subagent.failed" ? { error: ev.error } : {}),

@@ -1,25 +1,40 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { api } from "../lib/api";
+import { REASONING_EFFORTS } from "@seekforge/shared";
+import { ApiError, api } from "../lib/api";
 import { ThemeSwitcher } from "../components/ThemeSwitcher";
 import { useT, useLocale, setLocale, type Locale } from "../lib/i18n";
 import { notificationsEnabled, setNotificationsEnabled } from "../lib/notify";
 import { activeTab, useStore } from "../store";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Badge, Button, Card, IconSettings, Input, Select, TextArea } from "../components/ui";
-import type { ConfigKey, McpPermission, McpPrompt, McpResource, McpServer, McpTool, ServerConfig } from "../types";
+import type {
+  ConfigKey,
+  McpPermission,
+  McpPrompt,
+  McpResource,
+  McpServer,
+  McpTool,
+  ProjectMcpServer,
+  ServerConfig,
+} from "../types";
 import type { WorkspaceAsyncCoordinator } from "./async-coordination";
 import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 import { buildMcpServerDraft, recordOf, rowsOf, type KeyValueRow } from "./mcp-editor-model";
 import { PermissionRulesSection } from "./PermissionRulesSection";
+import { ProjectMcpServersSection } from "./ProjectMcpServersSection";
+import { formatLines, parseDirectoryLines, sandboxNetworkValue } from "./sandbox-settings-model";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
 function useFieldSave(workspaceId: string, requests: WorkspaceAsyncCoordinator<string>) {
   const [states, setStates] = useState<Partial<Record<ConfigKey, SaveState>>>({});
+  /** The server's message for a failed save, shown verbatim (validation lives there). */
+  const [errors, setErrors] = useState<Partial<Record<ConfigKey, string>>>({});
   const save = async (key: ConfigKey, value: unknown, global: boolean): Promise<ServerConfig | null> => {
     const operation = requests.capture(workspaceId);
     if (!operation) return null;
     setStates((s) => ({ ...s, [key]: "saving" }));
+    setErrors((e) => ({ ...e, [key]: undefined }));
     try {
       const config = await api.setConfig(key, value, global || undefined, operation.workspaceId);
       if (!requests.isCurrent(operation)) return null;
@@ -28,12 +43,23 @@ function useFieldSave(workspaceId: string, requests: WorkspaceAsyncCoordinator<s
         if (requests.isCurrent(operation)) setStates((s) => ({ ...s, [key]: "idle" }));
       }, 2000);
       return config;
-    } catch {
-      if (requests.isCurrent(operation)) setStates((s) => ({ ...s, [key]: "error" }));
+    } catch (error) {
+      if (requests.isCurrent(operation)) {
+        setStates((s) => ({ ...s, [key]: "error" }));
+        setErrors((e) => ({ ...e, [key]: error instanceof Error ? error.message : String(error) }));
+      }
       return null;
     }
   };
-  return { states, save, reset: () => setStates({}) };
+  return {
+    states,
+    errors,
+    save,
+    reset: () => {
+      setStates({});
+      setErrors({});
+    },
+  };
 }
 
 function SaveButton({
@@ -116,6 +142,10 @@ function McpSection() {
   const [pendingRemove, setPendingRemove] = useState<McpServer | null>(null);
   const ws = useStore((s) => s.activeWorkspaceId);
   const coordinator = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
+  /** Repository-defined servers and their approval state (null while loading). */
+  const [projectServers, setProjectServers] = useState<ProjectMcpServer[] | null>(null);
+  const [projectError, setProjectError] = useState<string | null>(null);
+  const projectRequests = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
 
   const refresh = (workspaceId = ws) => {
     const operation = coordinator.beginLatest(workspaceId);
@@ -132,6 +162,21 @@ function McpSection() {
       });
   };
 
+  const refreshProject = (workspaceId = ws) => {
+    const operation = projectRequests.beginLatest(workspaceId);
+    if (!operation) return;
+    api
+      .mcpProjectServers(operation.workspaceId)
+      .then((result) => {
+        if (!projectRequests.isCurrent(operation)) return;
+        setProjectServers(result);
+        setProjectError(null);
+      })
+      .catch((e: unknown) => {
+        if (projectRequests.isCurrent(operation)) setProjectError(e instanceof Error ? e.message : String(e));
+      });
+  };
+
   useEffect(() => {
     setServers(null);
     setLoadError(null);
@@ -139,8 +184,28 @@ function McpSection() {
     setConnections({});
     setEditor(null);
     setPendingRemove(null);
+    setProjectServers(null);
+    setProjectError(null);
     void refresh(ws);
+    refreshProject(ws);
   }, [coordinator, ws]);
+
+  /**
+   * A project-scope row may not be started before its definition is approved
+   * (the server answers 403). Unknown when the approval list is unavailable
+   * (an older server): then nothing is gated here and the server decides.
+   */
+  const needsApproval = (server: McpServer): boolean => {
+    if (server.source !== "project" || projectServers === null) return false;
+    const status = projectServers.find((candidate) => candidate.name === server.name)?.status;
+    return status !== undefined && status !== "approved";
+  };
+  const describeMcpError = (error: unknown): string => {
+    const message = error instanceof Error ? error.message : String(error);
+    return error instanceof ApiError && error.status === 403
+      ? `${message} — ${t("settings.mcpNeedsApproval")}`
+      : message;
+  };
 
   const listTools = (name: string) => {
     const operation = coordinator.capture(ws);
@@ -153,7 +218,7 @@ function McpSection() {
       })
       .catch((e: unknown) => {
         if (coordinator.isCurrent(operation)) {
-          setTools((t) => ({ ...t, [name]: { error: String(e) } }));
+          setTools((t) => ({ ...t, [name]: { error: describeMcpError(e) } }));
         }
       });
   };
@@ -185,7 +250,7 @@ function McpSection() {
       })
       .catch((error: unknown) => {
         if (coordinator.isCurrent(operation)) {
-          setConnections((states) => ({ ...states, [name]: { ok: false, error: String(error) } }));
+          setConnections((states) => ({ ...states, [name]: { ok: false, error: describeMcpError(error) } }));
         }
       });
   };
@@ -210,6 +275,7 @@ function McpSection() {
           {servers.map((srv) => {
             const state = tools[srv.name];
             const connection = connections[srv.name];
+            const gated = needsApproval(srv);
             return (
               <Card key={srv.name} className="p-3">
                 <div className="flex flex-wrap items-center gap-2">
@@ -229,16 +295,24 @@ function McpSection() {
                     <Badge tone="neutral">{t("settings.mcpEnv", { count: Object.keys(srv.env).length })}</Badge>
                   )}
                   {srv.shadowedProject && <Badge tone="warn">{t("settings.mcpProjectIgnored")}</Badge>}
+                  {gated && <Badge tone="warn">{t("settings.mcpApprovalRequired")}</Badge>}
                   <Button
                     variant="ghost"
                     size="sm"
                     className="ml-auto"
-                    disabled={connection === "testing"}
+                    disabled={connection === "testing" || gated}
+                    title={gated ? t("settings.mcpNeedsApproval") : undefined}
                     onClick={() => testConnection(srv.name)}
                   >
                     {connection === "testing" ? t("settings.mcpTesting") : t("settings.mcpTest")}
                   </Button>
-                  <Button variant="ghost" size="sm" disabled={state === "loading"} onClick={() => listTools(srv.name)}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={state === "loading" || gated}
+                    title={gated ? t("settings.mcpNeedsApproval") : undefined}
+                    onClick={() => listTools(srv.name)}
+                  >
                     {state === "loading" ? t("settings.mcpListing") : t("settings.mcpListTools")}
                   </Button>
                   <Button variant="ghost" size="sm" onClick={() => setEditor(srv)}>
@@ -284,6 +358,18 @@ function McpSection() {
           })}
         </div>
       )}
+      <ProjectMcpServersSection
+        ws={ws}
+        servers={projectServers}
+        loadError={projectError}
+        coordinator={projectRequests}
+        onUpdated={(updated) =>
+          setProjectServers((list) =>
+            list ? list.map((candidate) => (candidate.name === updated.name ? updated : candidate)) : list,
+          )
+        }
+        onReload={() => refreshProject()}
+      />
       {servers !== null && servers.length > 0 && (
         <>
           <McpResourcesSection ws={ws} />
@@ -1081,7 +1167,7 @@ export function SettingsView() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [global, setGlobal] = useState(true);
-  const { states, save, reset: resetSaveStates } = useFieldSave(ws, requests);
+  const { states, errors: saveErrors, save, reset: resetSaveStates } = useFieldSave(ws, requests);
 
   const [model, setModel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
@@ -1096,6 +1182,11 @@ export function SettingsView() {
   const [compaction, setCompaction] = useState("mechanical");
   const [thinking, setThinking] = useState(false);
   const [reasoningEffort, setReasoningEffort] = useState("");
+  // User-owned sandbox extensions (never settable from a repository).
+  const [extraDirs, setExtraDirs] = useState("");
+  const [networkPolicyOn, setNetworkPolicyOn] = useState(false);
+  const [allowedDomains, setAllowedDomains] = useState("");
+  const [deniedDomains, setDeniedDomains] = useState("");
   // Agent behaviour knobs.
   const [planModel, setPlanModel] = useState("");
   const [escalateOnFailure, setEscalateOnFailure] = useState(false);
@@ -1142,6 +1233,10 @@ export function SettingsView() {
         setCompaction(config.compaction ?? "mechanical");
         setThinking(config.thinking ?? false);
         setReasoningEffort(config.reasoningEffort ?? "");
+        setExtraDirs(formatLines(config.additionalDirectories));
+        setNetworkPolicyOn(config.sandboxNetwork !== undefined && config.sandboxNetwork !== null);
+        setAllowedDomains(formatLines(config.sandboxNetwork?.allowedDomains));
+        setDeniedDomains(formatLines(config.sandboxNetwork?.deniedDomains));
         setPlanModel(config.planModel ?? "");
         setEscalateOnFailure(config.escalateOnFailure ?? false);
         setMemoryAutoApprove(
@@ -1345,8 +1440,7 @@ export function SettingsView() {
                   placeholder={t("settings.reasoningDefault")}
                   options={[
                     { value: "", label: t("settings.reasoningDefault") },
-                    { value: "high", label: t("settings.reasoningHigh") },
-                    { value: "max", label: t("settings.reasoningMax") },
+                    ...REASONING_EFFORTS.map((effort) => ({ value: effort, label: t(`chat.reasoning.${effort}`) })),
                   ]}
                 />
                 <SaveButton
@@ -1366,6 +1460,82 @@ export function SettingsView() {
                     className="accent-accent"
                   />
                 </label>
+              </SettingsRow>
+            </SettingsGroup>
+
+            <SettingsGroup title={t("settings.userOwnedTitle")}>
+              <div className="p-4 pb-0 text-2xs text-tertiary">{t("settings.userOwnedHint")}</div>
+              <SettingsRow label={t("settings.extraDirsLabel")} description={t("settings.extraDirsHint")} stacked>
+                <div className="flex w-full flex-col gap-1.5">
+                  <TextArea
+                    value={extraDirs}
+                    onChange={(e) => setExtraDirs(e.target.value)}
+                    placeholder={t("settings.extraDirsPlaceholder")}
+                    aria-label={t("settings.extraDirsLabel")}
+                    rows={3}
+                    spellCheck={false}
+                    className="w-full resize-y font-mono"
+                  />
+                  {saveErrors.additionalDirectories && (
+                    <p className="font-mono text-xs text-danger">{saveErrors.additionalDirectories}</p>
+                  )}
+                </div>
+                <SaveButton
+                  state={states.additionalDirectories ?? "idle"}
+                  // User scope only: the key is refused in project config.
+                  onClick={() => void save("additionalDirectories", parseDirectoryLines(extraDirs), true)}
+                />
+              </SettingsRow>
+              <SettingsRow label={t("settings.networkLabel")} description={t("settings.networkHint")} stacked>
+                <div className="flex w-full flex-col gap-1.5">
+                  <label className="flex items-center gap-2 text-xs text-secondary">
+                    <input
+                      type="checkbox"
+                      checked={networkPolicyOn}
+                      onChange={(e) => setNetworkPolicyOn(e.target.checked)}
+                      className="accent-accent"
+                    />
+                    {t("settings.networkEnabled")}
+                  </label>
+                  {networkPolicyOn && (
+                    <>
+                      <TextArea
+                        value={allowedDomains}
+                        onChange={(e) => setAllowedDomains(e.target.value)}
+                        placeholder={t("settings.networkAllowedPlaceholder")}
+                        aria-label={t("settings.networkAllowed")}
+                        rows={3}
+                        spellCheck={false}
+                        className="w-full resize-y font-mono"
+                      />
+                      <TextArea
+                        value={deniedDomains}
+                        onChange={(e) => setDeniedDomains(e.target.value)}
+                        placeholder={t("settings.networkDeniedPlaceholder")}
+                        aria-label={t("settings.networkDenied")}
+                        rows={2}
+                        spellCheck={false}
+                        className="w-full resize-y font-mono"
+                      />
+                      {allowedDomains.trim() === "" && (
+                        <p className="text-xs text-warn">{t("settings.networkEmptyAllowed")}</p>
+                      )}
+                    </>
+                  )}
+                  {saveErrors.sandboxNetwork && (
+                    <p className="font-mono text-xs text-danger">{saveErrors.sandboxNetwork}</p>
+                  )}
+                </div>
+                <SaveButton
+                  state={states.sandboxNetwork ?? "idle"}
+                  onClick={() =>
+                    void save(
+                      "sandboxNetwork",
+                      sandboxNetworkValue(networkPolicyOn, allowedDomains, deniedDomains),
+                      true,
+                    )
+                  }
+                />
               </SettingsRow>
             </SettingsGroup>
 

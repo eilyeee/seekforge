@@ -49,3 +49,43 @@ describe("ChatItems task disclosure", () => {
     expect(html).toContain(t("chat.task.completed"));
   });
 });
+
+describe("ChatItems subagent card", () => {
+  it("renders the color accent and progress reports as inert text, and the in-progress plan label", () => {
+    const items: ChatItem[] = [
+      { kind: "user", id: 1, text: "task" },
+      {
+        kind: "subagent",
+        id: 2,
+        dispatchId: "ag-1",
+        agentId: "reviewer",
+        task: "review",
+        status: "running",
+        steps: ["read_file"],
+        reports: ["found <img src=x onerror=alert(1)> in parser"],
+        color: "#12abef",
+      },
+      {
+        kind: "plan",
+        id: 3,
+        items: [
+          { step: "Run the tests", status: "in_progress", activeForm: "Running the tests" },
+          { step: "Ship it", status: "pending", activeForm: "Shipping it" },
+        ],
+      },
+    ];
+    const html = renderToStaticMarkup(
+      createElement(ChatItems, { items, onSubagentCancel: () => {}, onSubagentSteer: () => {} }),
+    );
+    expect(html).toContain('data-agent-color="#12abef"');
+    expect(html).toContain("border-left-color:#12abef");
+    expect(html).toContain(t("chat.subagent.reports"));
+    expect(html).toContain("found &lt;img src=x onerror=alert(1)&gt; in parser");
+    expect(html).not.toContain("<img src=x");
+    // Controls stay available on a running card whatever the tab's run state.
+    expect(html).toContain(t("chat.subagent.cancel"));
+    expect(html).toContain("Running the tests");
+    expect(html).not.toContain("Shipping it");
+    expect(html).toContain("Ship it");
+  });
+});

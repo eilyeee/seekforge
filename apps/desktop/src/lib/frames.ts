@@ -1,4 +1,5 @@
 /** Pure builders for the start/send client frames (plan & approval controls). */
+import { isReasoningEffort, type ReasoningEffort } from "@seekforge/shared";
 import type { ClientFrame, RunOverrides } from "./ws-types";
 import type { ApprovalChoice, ContinuationPreset, StartMode } from "./tabs";
 
@@ -26,7 +27,7 @@ export type HeaderControls = {
   /** null = untouched (config default, field omitted); a boolean once toggled. */
   thinking: boolean | null;
   /** Only sent while thinking is explicitly on. */
-  reasoningEffort: "high" | "max";
+  reasoningEffort: ReasoningEffort;
   /** Output style name; "" or "default" = server default (field omitted). */
   outputStyle: string;
   /** Run-local sandbox; null = project config default. */
@@ -44,7 +45,11 @@ export function overridesOf(controls: HeaderControls): RunOverrides {
   return {
     ...(model !== "" ? { model } : {}),
     ...(controls.thinking !== null ? { thinking: controls.thinking } : {}),
-    ...(controls.thinking === true ? { reasoningEffort: controls.reasoningEffort } : {}),
+    // An effort this build does not know is never sent: the server would
+    // reject the whole frame for it.
+    ...(controls.thinking === true && isReasoningEffort(controls.reasoningEffort)
+      ? { reasoningEffort: controls.reasoningEffort }
+      : {}),
     ...(style !== "" && style !== "default" ? { outputStyle: style } : {}),
     ...(controls.sandbox != null ? { sandbox: controls.sandbox } : {}),
   };

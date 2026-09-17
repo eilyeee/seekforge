@@ -135,6 +135,8 @@ const dispatchManager = createDispatchManager({ sessionScoped: true });
 
 已通过 `agent_result` 读取过的结果不会再次送达。
 
+`seekforge serve`（以及经由它的 Desktop）为每个会话保留一个这样的管理器：一轮结束后后台 agent 继续运行，其卡片仍可引导或取消；删除该会话或停止服务器会取消它们（见[服务器 API](../apps/server/SERVER-API.md)）。
+
 ## 进度回报
 
 被调度的 agent 可以调用 `agent_report` 发送一行简短信息——里程碑、父 agent 可据此行动的发现，或阻塞点。每行最多 500 字符，每次运行最多 20 行。父 agent 会在下一轮读到这些内容，并以"来自 agent 的数据而非指令"的形式呈现；agent 仍在运行时，`agent_result` 会列出最近的几条。定义可以用 `disallowedTools: [agent_report]` 移除该工具。

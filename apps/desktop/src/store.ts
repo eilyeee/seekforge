@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { AgentEvent, ChatMessage } from "@seekforge/shared";
+import type { AgentEvent, ChatMessage, ReasoningEffort } from "@seekforge/shared";
 import { api, ApiError, setTokenProvider, setWorkspaceProvider } from "./lib/api";
 import { truncateChatAtItem } from "./lib/backtrack";
 import { appendUser, initialChatState } from "./lib/events";
@@ -23,6 +23,7 @@ import {
   initialTabsState,
   nextQueuedMessage,
   openTab as openTabPure,
+  reasoningEffortOf,
   removeQueuedMessage,
   routeFrame,
   routeConnectionState,
@@ -40,7 +41,7 @@ import {
 } from "./lib/tabs";
 import { createWsClient, encodeClientFrame, type ClientFrame, type ServerFrame, type WsClient } from "./lib/ws";
 import { emptyUsage } from "./lib/usage";
-import type { NamedSessionMeta, RecentWorkspace, Workspace, WorktreeMergeResult } from "./types";
+import type { RecentWorkspace, SessionMeta, Workspace, WorktreeMergeResult } from "./types";
 
 export type View =
   | "chat"
@@ -210,7 +211,7 @@ type AppStore = {
   /** Chat-header run controls (per tab, sent with each start/send). */
   setModel: (model: string) => void;
   setThinking: (on: boolean) => void;
-  setReasoningEffort: (effort: "high" | "max") => void;
+  setReasoningEffort: (effort: ReasoningEffort) => void;
   setOutputStyle: (style: string) => void;
   setSandbox: (sandbox: ChatTab["sandbox"]) => void;
   setContinuationPreset: (preset: ChatTab["continuationPreset"]) => void;
@@ -293,12 +294,7 @@ type AppStore = {
   ) => void;
   /** Answers the pending ask_user question on the active tab. */
   respondQuestion: (answer: string) => void;
-  continueSession: (
-    meta: NamedSessionMeta,
-    messages: ChatMessage[],
-    workspaceId: string,
-    events?: AgentEvent[],
-  ) => void;
+  continueSession: (meta: SessionMeta, messages: ChatMessage[], workspaceId: string, events?: AgentEvent[]) => void;
 };
 
 /**
@@ -696,7 +692,7 @@ export const useStore = create<AppStore>()((set, get) => {
     setThinking: (on) => set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { thinking: on }) })),
 
     setReasoningEffort: (effort) =>
-      set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { reasoningEffort: effort }) })),
+      set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { reasoningEffort: reasoningEffortOf(effort) }) })),
 
     setOutputStyle: (outputStyle) => set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { outputStyle }) })),
 

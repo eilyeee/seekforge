@@ -8,6 +8,7 @@ import type {
   MemoryCandidate,
   MemoryFact,
   ModelInfo,
+  ProjectMcpServer,
   RewindResult,
   ServerConfig,
   SessionMeta,
@@ -379,8 +380,27 @@ export const mockRewindResults: Record<string, RewindResult> = {
     restored: ["apps/cli/src/index.ts"],
     deleted: ["apps/cli/src/render-json.ts"],
     skipped: [],
+    warnings: ["`pnpm install` ran outside git; its node_modules changes are not undone"],
   },
 };
+
+/** Repository-defined MCP servers (GET /api/mcp/project-servers). */
+export const mockProjectMcpServers: ProjectMcpServer[] = [
+  {
+    name: "repo-docs",
+    status: "pending",
+    transport: "stdio",
+    digest: "a".repeat(64),
+    definition: JSON.stringify({ args: ["-y", "@example/docs-mcp"], command: "npx" }, null, 2),
+  },
+  {
+    name: "repo-search",
+    status: "approved",
+    transport: "http",
+    digest: "b".repeat(64),
+    definition: JSON.stringify({ type: "http", url: "https://search.example/mcp" }, null, 2),
+  },
+];
 
 /** Mock models list mirroring core MODEL_PRICING with metadata. */
 export const mockModels: ModelInfo[] = [

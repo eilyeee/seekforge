@@ -8,8 +8,12 @@ import type {
   GitStatus,
   McpServer,
   MemoryStats,
+  PluginInstallResult,
+  ProjectMcpServer,
   PruneResult,
+  RewindResult,
   ServerConfig,
+  SessionCompactResult,
   SessionMeta,
   Skill,
   TreeResponse,
@@ -226,8 +230,10 @@ describe("mockRequest — commands + session compact", () => {
   it("compacts an existing session", async () => {
     const sessions = (await mockRequest("GET", "/api/sessions")) as SessionMeta[];
     const id = sessions[0]!.id;
-    const res = (await mockRequest("POST", `/api/sessions/${id}/compact`)) as { ok: boolean };
-    expect(res.ok).toBe(true);
+    const res = (await mockRequest("POST", `/api/sessions/${id}/compact`)) as SessionCompactResult;
+    expect(res.droppedTurns).toBeGreaterThan(0);
+    expect(res.afterTokens).toBeLessThan(res.beforeTokens ?? 0);
+    expect(res.notices?.length).toBeGreaterThan(0);
   });
 
   it("404s compacting an unknown session", async () => {
@@ -295,5 +301,94 @@ describe("mockRequest — config new keys", () => {
       minBytes: 4096,
       minIntervalHours: 6,
     });
+  });
+});
+
+describe("mockRequest — integration contracts", () => {
+  it("lists repository MCP servers and decides on the reviewed digest only", async () => {
+    const { servers } = (await mockRequest("GET", "/api/mcp/project-servers")) as { servers: ProjectMcpServer[] };
+    const pending = servers.find((server) => server.status === "pending")!;
+    expect(pending.definition).toContain("command");
+    await expect(
+      mockRequest("POST", `/api/mcp/project-servers/${pending.name}/approve`, { digest: "0".repeat(64) }),
+    ).rejects.toMatchObject({ status: 409, code: "conflict" });
+    const approved = (await mockRequest("POST", `/api/mcp/project-servers/${pending.name}/approve`, {
+      digest: pending.digest,
+    })) as { server: ProjectMcpServer };
+    expect(approved.server.status).toBe("approved");
+    const rejected = (await mockRequest("POST", `/api/mcp/project-servers/${pending.name}/reject`, {
+      digest: pending.digest,
+    })) as { server: ProjectMcpServer };
+    expect(rejected.server.status).toBe("rejected");
+    await expect(
+      mockRequest("POST", "/api/mcp/project-servers/not-a-repo-server/approve", { digest: pending.digest }),
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("installs a plugin from a source (or the legacy path field) disabled, with its provenance", async () => {
+    const remote = (await mockRequest("POST", "/api/plugins/install", {
+      source: "https://github.com/acme/lint-kit.git#v1",
+      force: false,
+    })) as PluginInstallResult;
+    expect(remote.manifest?.id).toBe("lint-kit");
+    expect(remote.originLabel).toContain("git https://github.com/acme/lint-kit.git#v1");
+    const local = (await mockRequest("POST", "/api/plugins/install", { path: "/tmp/plugins/local-kit" })) as {
+      originLabel: string;
+    };
+    expect(local.originLabel).toBe("local /tmp/plugins/local-kit");
+    const listed = (await mockRequest("GET", "/api/plugins")) as Array<{ id: string; status: string }>;
+    expect(listed.find((plugin) => plugin.id === "lint-kit")?.status).toBe("disabled");
+    await expect(mockRequest("POST", "/api/plugins/install", {})).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("saves the user-owned sandbox keys only in user scope", async () => {
+    await expect(
+      mockRequest("PUT", "/api/config", { key: "additionalDirectories", value: ["/tmp/shared"] }),
+    ).rejects.toMatchObject({ status: 400 });
+    let cfg = (await mockRequest("PUT", "/api/config", {
+      key: "additionalDirectories",
+      value: ["/tmp/shared", "~/libs"],
+      global: true,
+    })) as ServerConfig;
+    expect(cfg.additionalDirectories).toEqual(["/tmp/shared", "~/libs"]);
+    await expect(
+      mockRequest("PUT", "/api/config", { key: "additionalDirectories", value: ["relative"], global: true }),
+    ).rejects.toMatchObject({ status: 400 });
+    cfg = (await mockRequest("PUT", "/api/config", {
+      key: "sandboxNetwork",
+      value: { allowedDomains: [], deniedDomains: [] },
+      global: true,
+    })) as ServerConfig;
+    // An empty allowlist is a real policy (no domain), not the absence of one.
+    expect(cfg.sandboxNetwork).toEqual({ allowedDomains: [] });
+    cfg = (await mockRequest("PUT", "/api/config", {
+      key: "sandboxNetwork",
+      value: null,
+      global: true,
+    })) as ServerConfig;
+    expect(cfg.sandboxNetwork).toBeUndefined();
+    cfg = (await mockRequest("PUT", "/api/config", {
+      key: "additionalDirectories",
+      value: [],
+      global: true,
+    })) as ServerConfig;
+    expect(cfg.additionalDirectories).toBeUndefined();
+  });
+
+  it("accepts every shared reasoning effort and clears it with an empty value", async () => {
+    for (const effort of ["low", "medium", "high", "max"]) {
+      const cfg = (await mockRequest("PUT", "/api/config", { key: "reasoningEffort", value: effort })) as ServerConfig;
+      expect(cfg.reasoningEffort).toBe(effort);
+    }
+    await expect(mockRequest("PUT", "/api/config", { key: "reasoningEffort", value: "xhigh" })).rejects.toMatchObject({
+      status: 400,
+    });
+    const cleared = (await mockRequest("PUT", "/api/config", { key: "reasoningEffort", value: "" })) as ServerConfig;
+    expect(cleared.reasoningEffort).toBeNull();
+  });
+
+  it("reports what a rewind cannot undo", async () => {
+    const rewound = (await mockRequest("POST", "/api/rewind", { sessionId: "s-20260610-a1b2" })) as RewindResult;
+    expect(rewound.warnings?.length).toBeGreaterThan(0);
   });
 });

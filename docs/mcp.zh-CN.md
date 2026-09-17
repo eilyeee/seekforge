@@ -256,8 +256,8 @@ settings file  >  .seekforge/config.local.json  >  project .seekforge/config.jso
   「永不询问」的条目，再借你复制到全局配置的动作把它一起带过去。
 
 这一点在每个界面上都成立——CLI、TUI、`seekforge serve`，以及经由服务器的 Desktop
-——因为四者走的是同一套分层代数，而层的来源是其类型的一部分。目前只有 CLI 会把这类
-收窄**打印**出来，其余界面只执行、不提示。
+——因为四者走的是同一套分层代数，而层的来源是其类型的一部分。CLI 会把这类收窄
+**打印**出来，`seekforge serve` 会写进它的日志；TUI 只执行、不提示。
 
 仓库定义根本无法遮蔽全局条目——上面那条规则会忽略它——而单独存在的仓库条目在你批准之前
 始终不会连接；信任不会跨该边界继承。完整的分层模型见
@@ -400,14 +400,22 @@ Web 工作台，经 WebSocket 的确认/提问通道），以及 TUI。TUI 在�
 registry 的 `reconnect(name)` 让决定在运行中的会话里生效。
 `seekforge mcp add --trust` 会批准它写入的内容，`mcp import` 会把导入的服务器标为受信任（§1.2）。
 
+在 **Desktop**（以及 `seekforge serve` 的任何客户端）中，设置 → MCP 会列出检出目录定义的
+服务器、它们的状态和原样定义；「批准」「拒绝」为当前工作区记录同一份决定。服务器会带上你所
+查看定义的摘要，文件若在此期间被改动，决定会被拒绝，因此你不会批准一份没看过的定义
+（REST：`GET /api/mcp/project-servers`、`POST
+/api/mcp/project-servers/:name/approve|reject`）。下一次运行会连接已批准的服务器。
+
 连接后，受信任或已批准服务器的工具依次使用按原始工具名设置的覆盖、服务器默认值、
 MCP 注解（`destructive`/`openWorld` 升到 `env`，`readOnly` 映射为 `readonly`），最后回退
 到 `write`。仓库条目的 `permission` / `toolPermissions` 只能比这更严格（§1.3）。为显式管理
 操作而连接、却不具备上述任一身份的条目始终使用 `env`，不能通过注解降低权限。
 
-Desktop 的服务器测试/工具查看等显式管理操作仍可连接用户主动选择的未信任条目，因为
-用户已经发起了这一次准确的连接；这样的连接不展开任何引用，并使用去除密钥后的环境。
-`seekforge mcp list` 只启动具备身份的条目（见 §1.2）。
+Desktop 的服务器测试/工具查看等显式管理操作，会按条目来源赋予的身份连接你选中的条目。
+来自你自己配置的条目即使没有标记 `trusted`（不自动连接）也属于你，因此测试它时会像受信任
+条目的运行那样展开 `${VAR}` 引用。来自检出目录的条目只有在为本工作区批准后才会启动——待批准
+或已拒绝的条目会被拒绝（`403`），什么也不会运行——与 `seekforge mcp list` 遵循同一规则
+（见 §1.2）。Desktop 的资源与 prompt 列表只连接运行时会连接的那些服务器。
 
 工具结果把文本保留在 `content` 中，保留有界且脱敏的 `structuredContent`，并在
 `attachments` 中描述二进制内容。**图片**部分（PNG、JPEG、GIF、WebP；每个结果最多 8 张、

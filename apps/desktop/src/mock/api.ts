@@ -1,4 +1,5 @@
 /** Mock REST backend: same paths/shapes as SERVER-API.md. */
+import { isReasoningEffort } from "@seekforge/shared";
 import { formatCostUsd } from "@seekforge/shared/format";
 import {
   mockAgents,
@@ -9,6 +10,7 @@ import {
   mockMcpServers,
   mockMcpTools,
   mockModels,
+  mockProjectMcpServers,
   mockProjectMd,
   mockRewindResults,
   mockSessionMessages,
@@ -26,6 +28,7 @@ import type {
   MemoryCandidateType,
   MemoryFact,
   PluginRecord,
+  ProjectMcpServer,
   ServerConfig,
   SecurityEvidencePackage,
   SessionMeta,
@@ -47,6 +50,7 @@ const sessions: SessionMeta[] = mockSessions.map((s) => ({ ...s }));
 // Monotonic counter so each fork yields a fresh, distinct session id.
 let forkSeq = 0;
 const mcpServers: McpServer[] = mockMcpServers.map((s) => ({ ...s }));
+const projectMcpServers: ProjectMcpServer[] = mockProjectMcpServers.map((s) => ({ ...s }));
 const security: SecurityEvidencePackage = {
   schemaVersion: 1,
   generatedAt: new Date().toISOString(),
@@ -762,10 +766,29 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     return plugin;
   }
   if (method === "POST" && path === "/api/plugins/install") {
-    const { path: source } = (body ?? {}) as { path?: string };
-    if (!source) throw mockError(400, "bad_request", "body must be {path: string}");
+    // `source` (local dir, git URL, https archive, plugin@marketplace); `path` is the legacy name.
+    const { source: rawSource, path: legacyPath } = (body ?? {}) as { source?: string; path?: string };
+    const source = rawSource ?? legacyPath;
+    if (!source) throw mockError(400, "bad_request", "body must be {source: string, force?: boolean}");
+    const remote = /^(?:https?:\/\/|git@|git\+)/.test(source);
+    const marketplace = !remote && !source.includes("/") && source.includes("@");
     const project = plugins.find((plugin) => plugin.path === source);
-    const id = project?.id ?? source.split("/").filter(Boolean).pop() ?? "plugin";
+    const id =
+      project?.id ??
+      (marketplace
+        ? source.split("@")[0]
+        : source
+            .replace(/[#?].*$/, "")
+            .replace(/\.(?:git|tar\.gz|tgz|zip)$/, "")
+            .split("/")
+            .filter(Boolean)
+            .pop()) ??
+      "plugin";
+    const originLabel = remote
+      ? `${source.startsWith("https://") && /\.(?:tar\.gz|tgz|zip)$/.test(source) ? "archive" : "git"} ${source}`
+      : marketplace
+        ? `${source} via mock marketplace`
+        : `local ${source}`;
     const existing = plugins.findIndex((plugin) => plugin.id === id && plugin.scope === "global");
     const plugin: PluginRecord = {
       id,
@@ -777,7 +800,14 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     };
     if (existing >= 0) plugins[existing] = plugin;
     else plugins.push(plugin);
-    return { manifest: plugin.manifest, path: plugin.path, digest: plugin.digest, updated: existing >= 0 };
+    return {
+      manifest: plugin.manifest,
+      path: plugin.path,
+      digest: plugin.digest,
+      updated: existing >= 0,
+      origin: remote ? { kind: "git", url: source, commit: "0000000" } : { kind: "local", path: source },
+      originLabel,
+    };
   }
   {
     const pluginMatch = /^\/api\/plugins\/([^/]+)$/.exec(path);
@@ -1004,9 +1034,64 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
 
   if (method === "GET" && path === "/api/config") return { ...config };
   if (method === "PUT" && path === "/api/config") {
-    const { key, value } = (body ?? {}) as { key?: string; value?: unknown };
+    const { key, value, global } = (body ?? {}) as { key?: string; value?: unknown; global?: boolean };
+    // User-owned keys: a repository layer can never set them (server parity).
+    if ((key === "additionalDirectories" || key === "sandboxNetwork") && global !== true) {
+      throw mockError(400, "bad_request", `key "${key}" is user-owned; save it with global=true`);
+    }
     // Accept known keys only, mirroring the server's validation (400 on unknown).
     switch (key) {
+      case "sandbox":
+        if (!["off", "read-only", "workspace-write", "restricted"].includes(String(value))) {
+          throw mockError(400, "bad_request", "sandbox must be one of: off, read-only, workspace-write, restricted");
+        }
+        config.sandbox = String(value) as ServerConfig["sandbox"];
+        break;
+      case "compaction":
+        config.compaction = String(value) === "llm" ? "llm" : "mechanical";
+        break;
+      case "thinking":
+        config.thinking = String(value) === "true";
+        break;
+      case "reasoningEffort": {
+        const effort = String(value ?? "");
+        if (effort === "") config.reasoningEffort = null;
+        else if (isReasoningEffort(effort)) config.reasoningEffort = effort;
+        else throw mockError(400, "bad_request", "reasoningEffort must be one of: low, medium, high, max");
+        break;
+      }
+      case "additionalDirectories": {
+        if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
+          throw mockError(400, "bad_request", "additionalDirectories must be a string[]");
+        }
+        const dirs = value.map((entry) => entry.trim()).filter(Boolean);
+        const relative = dirs.find((entry) => !entry.startsWith("/") && !entry.startsWith("~"));
+        if (relative !== undefined) {
+          throw mockError(400, "bad_request", `additionalDirectories entry must be an absolute path: ${relative}`);
+        }
+        if (dirs.length === 0) delete config.additionalDirectories;
+        else config.additionalDirectories = dirs;
+        break;
+      }
+      case "sandboxNetwork": {
+        if (value === null) {
+          delete config.sandboxNetwork;
+          break;
+        }
+        const policy = value as { allowedDomains?: unknown; deniedDomains?: unknown };
+        const isList = (list: unknown): list is string[] =>
+          Array.isArray(list) && list.every((entry) => typeof entry === "string" && /^(\*\.)?[a-z0-9.-]+$/.test(entry));
+        if (!isList(policy?.allowedDomains) || (policy.deniedDomains !== undefined && !isList(policy.deniedDomains))) {
+          throw mockError(400, "bad_request", "sandboxNetwork domain is not a host name or subdomain wildcard");
+        }
+        config.sandboxNetwork = {
+          allowedDomains: [...policy.allowedDomains],
+          ...(isList(policy.deniedDomains) && policy.deniedDomains.length > 0
+            ? { deniedDomains: [...policy.deniedDomains] }
+            : {}),
+        };
+        break;
+      }
       case "model":
       case "baseUrl":
       case "runtimeBin":
@@ -1147,7 +1232,14 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     return {
       removedMessages: 0,
       keptMessages: messages.length,
-      files: files ? { restored: 1, deleted: 0, skipped: 0 } : null,
+      files: files
+        ? {
+            restored: 1,
+            deleted: 0,
+            skipped: 0,
+            warnings: ["`npm run build` ran outside git; its output is not undone"],
+          }
+        : null,
     };
   }
 
@@ -1205,6 +1297,21 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     return { text: `Use MCP prompt ${server}/${name}.\n\nArguments: ${JSON.stringify(args)}` };
   }
 
+  if (method === "GET" && path === "/api/mcp/project-servers") {
+    return { servers: projectMcpServers.map((s) => ({ ...s })).sort((a, b) => (a.name < b.name ? -1 : 1)) };
+  }
+  m = /^\/api\/mcp\/project-servers\/([^/]+)\/(approve|reject)$/.exec(path);
+  if (method === "POST" && m) {
+    const server = projectMcpServers.find((s) => s.name === decodeURIComponent(m![1]!));
+    if (!server) throw mockError(404, "not_found", `not a repository MCP server: ${m[1]}`);
+    const { digest } = (body ?? {}) as { digest?: unknown };
+    if (typeof digest !== "string" || digest === "") throw mockError(400, "bad_request", "body must be {digest}");
+    if (digest !== server.digest) {
+      throw mockError(409, "conflict", `the definition of ${server.name} changed; review it again`);
+    }
+    server.status = m[2] === "approve" ? "approved" : "rejected";
+    return { server: { ...server } };
+  }
   if (method === "GET" && path === "/api/mcp") return mcpServers.map((s) => ({ ...s }));
   if (method === "POST" && path === "/api/mcp") {
     const { name, scope, command, args, env, url, headers, oauth, trusted } = (body ?? {}) as {
@@ -1379,7 +1486,13 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     const result = sessionId ? mockRewindResults[sessionId] : undefined;
     if (!result) throw mockError(404, "no_checkpoints", "no checkpoints recorded for this session");
     // dryRun and the real run report the same paths in the mock.
-    return { ...result, restored: [...result.restored], deleted: [...result.deleted], skipped: [...result.skipped] };
+    return {
+      ...result,
+      restored: [...result.restored],
+      deleted: [...result.deleted],
+      skipped: [...result.skipped],
+      warnings: [...(result.warnings ?? [])],
+    };
   }
 
   if (method === "GET" && path === "/api/doctor") {
@@ -1485,7 +1598,12 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   if (method === "POST" && m) {
     const meta = sessions.find((s) => s.id === m![1]);
     if (!meta) throw mockError(404, "not_found", "session not found");
-    return { ok: true, sessionId: meta.id, before: 42, after: 12, summary: "Mock compaction summary." };
+    return {
+      droppedTurns: 6,
+      beforeTokens: 42_000,
+      afterTokens: 12_000,
+      notices: ["preCompact: saved a transcript snapshot"],
+    };
   }
 
   // --- Fork a session into a new copy --------------------------------------

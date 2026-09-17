@@ -1,5 +1,5 @@
 import { useT } from "../../lib/i18n";
-import type { PlanItem } from "../../lib/events";
+import { planItemLabel, type PlanItem } from "../../lib/events";
 import { IconSkills } from "../ui";
 
 const STATUS_GLYPH: Record<PlanItem["status"], string> = {
@@ -30,7 +30,7 @@ export function PlanCard({ items }: { items: PlanItem[] }) {
             <span
               className={item.status === "done" ? "text-tertiary line-through decoration-current/40" : "text-secondary"}
             >
-              {item.step}
+              {planItemLabel(item)}
             </span>
           </li>
         ))}

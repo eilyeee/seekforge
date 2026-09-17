@@ -11,9 +11,10 @@ import {
   BUILTIN_SKILLS,
   createPluginScaffold,
   createSkillScaffold,
+  describePluginOrigin,
   importExternalAgent,
   importExternalSkill,
-  installPlugin,
+  installPluginFromSource,
   listEvolutionProposals,
   loadAgentDefinitions,
   loadSkills,
@@ -41,7 +42,8 @@ import {
   writeAgentDefinition,
   type AgentDefinitionScope,
 } from "../agent-definitions.js";
-import { readJsonBody, sendApiError, sendJson } from "../http.js";
+import { loadConfig } from "../config.js";
+import { readJsonBody, requestAbortSignal, sendApiError, sendJson } from "../http.js";
 import type { RouteCtx } from "./context.js";
 
 /** Serializes global agent-definition writes across SeekForge processes. */
@@ -76,6 +78,15 @@ function sendAgentDefinitionError(res: RouteCtx["res"], error: unknown): boolean
     return true;
   }
   return false;
+}
+
+/**
+ * The user-level skill sources as configured now, passed explicitly so a
+ * listing reflects `claudeUserSkills` even when the config changed after the
+ * server applied it process-wide.
+ */
+function skillSources(workspace: string): { claudeUserSkills: boolean } {
+  return { claudeUserSkills: loadConfig(workspace).claudeUserSkills === true };
 }
 
 /** Skills shipped in-package are immutable: refuse to mutate/delete them. */
@@ -130,20 +141,36 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     }
   }
 
+  // Install from a local directory, a repository URL (optionally #ref), an
+  // https archive, or <plugin>@<marketplace>. Core stages every source into a
+  // local copy and installs it DISABLED; enabling it is the separate review.
   if (method === "POST" && path === "/api/plugins/install") {
     const body = await readJsonBody(req, res);
     if (body === undefined) return;
-    const { path: source, force } = (body ?? {}) as { path?: unknown; force?: unknown };
+    const input = (body ?? {}) as { source?: unknown; path?: unknown; force?: unknown };
+    // `path` is the original field name, still accepted.
+    const source = input.source ?? input.path;
+    const { force } = input;
     if (typeof source !== "string" || source.trim() === "" || (force !== undefined && typeof force !== "boolean")) {
-      return sendApiError(res, 400, "bad_request", "body must be {path: string, force?: boolean}");
+      return sendApiError(res, 400, "bad_request", "body must be {source: string, force?: boolean}");
     }
+    const operation = requestAbortSignal(req, res);
     try {
-      return sendJson(res, 200, installPlugin(source, { force: force === true }));
+      const result = await installPluginFromSource(source.trim(), {
+        force: force === true,
+        signal: operation.signal,
+        // A relative local path means one inside the selected workspace.
+        cwd: workspace,
+      });
+      return sendJson(res, 200, { ...result, originLabel: describePluginOrigin(result.origin) });
     } catch (error) {
+      if (res.headersSent) return;
       if (error instanceof SessionBusyError) {
         return sendApiError(res, 409, "session_busy", "another plugin mutation is active");
       }
       return sendApiError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
+    } finally {
+      operation.cleanup();
     }
   }
 
@@ -177,12 +204,14 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     return sendJson(
       res,
       200,
-      loadSkills(workspace).map(({ content: _content, ...rest }) => rest),
+      loadSkills(workspace, undefined, skillSources(workspace)).map(({ content: _content, ...rest }) => rest),
     );
   }
 
   if (method === "GET" && path === "/api/skills/diagnostics") {
-    return sendJson(res, 200, { diagnostics: loadSkillsDetailed(workspace).diagnostics });
+    return sendJson(res, 200, {
+      diagnostics: loadSkillsDetailed(workspace, undefined, skillSources(workspace)).diagnostics,
+    });
   }
 
   if (method === "GET" && path === "/api/skills/stats") {
@@ -257,7 +286,7 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
   }
 
   if (method === "GET" && segs.length === 3 && segs[1] === "skills") {
-    const skill = loadSkills(workspace).find((s) => s.id === segs[2]);
+    const skill = loadSkills(workspace, undefined, skillSources(workspace)).find((s) => s.id === segs[2]);
     if (!skill) return sendApiError(res, 404, "not_found", `skill not found: ${segs[2]}`);
     return sendJson(res, 200, skill);
   }

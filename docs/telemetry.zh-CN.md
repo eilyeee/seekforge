@@ -19,7 +19,8 @@ seekforge run "fix the flaky test"
 ```
 
 它对所有运行 agent 的界面都生效：`seekforge run`/`ask`/REPL、TUI、
-`seekforge serve`（以及经由它的 Desktop），还有定时任务。
+`seekforge serve`（以及经由它的 Desktop），还有定时任务。`seekforge serve` 停止时会导出
+仍未发送的记录，最多等待采集端 5 秒。
 
 ## 环境变量
 

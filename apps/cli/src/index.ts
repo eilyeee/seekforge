@@ -849,6 +849,10 @@ program
   .option("--graph-auto-prune", "prune old terminal Graph records and resources while their workspace is idle")
   .option("--orchestration-auto-maintain", "refresh and observe orchestration state while the workspace is idle")
   .option("--orchestration-auto-rollback", "roll back observed regressions during idle orchestration maintenance")
+  .option(
+    "--token-file <path>",
+    "also write {port, token} to this file (mode 0600, removed on shutdown) so another local client can attach",
+  )
   .description("serve the web UI and agent API for one or more workspaces (127.0.0.1 only)")
   .action(
     async (
@@ -862,6 +866,7 @@ program
         graphAutoPrune?: boolean;
         orchestrationAutoMaintain?: boolean;
         orchestrationAutoRollback?: boolean;
+        tokenFile?: string;
       },
     ) => {
       const port = /^\d+$/.test(opts.port) ? Number(opts.port) : Number.NaN;
@@ -882,6 +887,7 @@ program
         graphAutoPrune: opts.graphAutoPrune,
         orchestrationAutoMaintain: opts.orchestrationAutoMaintain,
         orchestrationAutoRollback: opts.orchestrationAutoRollback,
+        ...(opts.tokenFile !== undefined ? { tokenFile: opts.tokenFile } : {}),
       });
     },
   );

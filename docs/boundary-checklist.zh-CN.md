@@ -4302,3 +4302,37 @@ tsup 把 `apps/cli/src/commands/update.ts` 打进 `dist/index.js`（或某个 ch
   通过了所有单元测试。
 - **发现位置：** `apps/cli/src/commands/update.ts::defaultUpdateDeps` 与
   `apps/cli/tsup.config.ts`，在让不带子命令的 `seekforge` 启动打包后的 TUI 时发现。
+
+## 437. 把配置对象整体展开进响应，会把之后新增的每个键都发布出去
+
+`GET /api/config` 的响应是 `{...mergedConfig, apiKey: masked}`。写下它时是安全的；
+后来合并逻辑学会了 `apiKeyHelper`（一条 shell 命令行），Desktop 端点在路由一行未改的
+情况下就开始返回它。同一个展开早已带出了 `hooks`（命令与 HTTP 头）、`lspServers`
+（命令与环境变量），以及视觉模型和搜索的 API 密钥。
+
+- **正确做法：** 当响应由一个会被其他代码不断扩充的对象构建时，明确列出允许离开进程
+  的内容：显式剔除命令类与密钥类的键（或按白名单构建响应），并在测试中断言密钥的
+  **值**不出现在响应文本里，而不只是断言某个键不存在。
+- **发现位置：** `apps/server/src/config.ts::maskedConfig`。
+
+## 438. 批准必须绑定到用户审阅过的内容
+
+按名字批准「服务器 `docs`」，批准的是请求到达那一刻检出目录里 `docs` 的定义——它可能
+与按下按钮时屏幕上的定义不同（一次 `git pull`、一次编辑器保存）。
+
+- **正确做法：** 把所展示内容的标识（定义的摘要）一并发回；当前值不再匹配时拒绝该决定
+  （409），由客户端重新加载并再次询问。
+- **发现位置：** `apps/server/src/routes/settings.ts` 中的
+  `POST /api/mcp/project-servers/:name/approve`。
+
+## 439. 分离出去的工作仍在使用时，运行的资源要比运行活得久
+
+使用会话级子 agent 管理器时，`background: true` 的调度在父运行结束后继续运行——并且
+继续调用父运行的 dispatcher，而宿主已在运行的 `finally` 里释放了它的 MCP 连接和运行时
+后端。调度不会明显失败，只是它的工具调用开始报错。
+
+- **正确做法：** 把释放绑定到**工作**的所有者，而不是调用栈的所有者：等从该运行分离出去
+  的工作都不再运行时（以及会话/宿主关闭时）再释放运行的资源，并在测试中覆盖「稍后完成」
+  「会话被删除」「服务器关闭」三条路径。
+- **发现位置：** `apps/server/src/session-dispatch.ts::SessionDispatchRegistry.release`，
+  由 `apps/server/src/ws.ts` 使用。

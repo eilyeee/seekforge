@@ -59,6 +59,61 @@ describe("tab-scoped home requests", () => {
   });
 });
 
+describe("integration request shapes", () => {
+  it("sends the reviewed digest for a project MCP decision and the source for a plugin install", async () => {
+    const calls: Array<{ url: string; method: string; body: unknown }> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      calls.push({
+        url: String(input),
+        method: init?.method ?? "GET",
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      });
+      const url = String(input);
+      const payload = url.includes("project-servers/")
+        ? { server: { name: "repo docs", status: "approved", transport: "stdio", digest: "d", definition: "{}" } }
+        : url.includes("project-servers")
+          ? { servers: [] }
+          : {};
+      return new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
+    });
+
+    expect(await api.mcpProjectServers("w1")).toEqual([]);
+    const decided = await api.mcpProjectServerDecide("repo docs", "approve", "d", "w1");
+    expect(decided.status).toBe("approved");
+    await api.pluginInstall("https://github.com/acme/kit.git", true, "w1");
+
+    expect(calls).toEqual([
+      { url: "/api/mcp/project-servers?ws=w1", method: "GET", body: undefined },
+      { url: "/api/mcp/project-servers/repo%20docs/approve?ws=w1", method: "POST", body: { digest: "d" } },
+      {
+        url: "/api/plugins/install?ws=w1",
+        method: "POST",
+        body: { source: "https://github.com/acme/kit.git", force: true },
+      },
+    ]);
+  });
+
+  it("surfaces a hook-blocked compaction as the server's message", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: { code: "blocked_by_hook", message: "tests are running" },
+            blocked: true,
+            reason: "tests are running",
+            notices: [],
+          }),
+          { status: 409, headers: { "content-type": "application/json" } },
+        ),
+    );
+    await expect(api.sessionCompact("s-1", "w1")).rejects.toMatchObject({
+      code: "blocked_by_hook",
+      message: "tests are running",
+      status: 409,
+    });
+  });
+});
+
 describe("captured workspace routing", () => {
   it("keeps view reads and mutations on the explicitly captured workspace", async () => {
     setWorkspaceProvider(() => "new-active-workspace");

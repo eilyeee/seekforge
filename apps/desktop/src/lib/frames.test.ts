@@ -96,6 +96,19 @@ describe("overridesOf (header controls -> frame fields)", () => {
     });
   });
 
+  it("sends every shared reasoning effort, and never one this build does not know", () => {
+    for (const reasoningEffort of ["low", "medium", "high", "max"] as const) {
+      expect(overridesOf({ model: "", thinking: true, reasoningEffort, outputStyle: "" })).toEqual({
+        thinking: true,
+        reasoningEffort,
+      });
+    }
+    const stale = { model: "", thinking: true, reasoningEffort: "xhigh", outputStyle: "" } as unknown as Parameters<
+      typeof overridesOf
+    >[0];
+    expect(overridesOf(stale)).toEqual({ thinking: true });
+  });
+
   it("a non-default output style is sent; default/empty is omitted", () => {
     expect(overridesOf({ model: "", thinking: null, reasoningEffort: "high", outputStyle: "concise" })).toEqual({
       outputStyle: "concise",

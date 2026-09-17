@@ -13,7 +13,6 @@ import type { RawData, WebSocket } from "ws";
 import {
   MAX_LOOP_ITERATIONS,
   MAX_STEER_MESSAGE_LENGTH,
-  createDispatchManager,
   createLoopControl,
   detectThinkingKeyword,
   readSessionMeta,
@@ -37,6 +36,7 @@ import { decodeClientFrame } from "@seekforge/shared/ws-protocol";
 import type { CreateAgentFn, ResumeLoopFn, RunLoopFn } from "./agent.js";
 import { appendGlobalPermissionRule } from "./config.js";
 import { isSafeId } from "./ids.js";
+import { SessionDispatchRegistry } from "./session-dispatch.js";
 import type { WorkspaceRegistry } from "./workspaces.js";
 import {
   SERVER_CAPABILITIES,
@@ -77,6 +77,12 @@ export type ConnectionDeps = {
   withRepository?: <T>(workspace: string, operation: () => Promise<T>) => Promise<T>;
   withAgentMutation?: <T>(workspace: string, signal: AbortSignal, operation: () => Promise<T>) => Promise<T>;
   runManager: RunManager;
+  /**
+   * Session-scoped subagent managers shared by every connection of the server.
+   * Absent (an embedder calling handleConnection directly), the connection
+   * keeps its own and disposes it when the socket closes.
+   */
+  sessionDispatch?: SessionDispatchRegistry;
 };
 
 type RunInput = {
@@ -120,7 +126,12 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
   let closed = false;
   let running = false;
   let controller: AbortController | undefined;
+  // The subagent manager of the session this connection ran last. It outlives
+  // the run: background dispatches keep going, and subagent.cancel /
+  // subagent.steer still reach them between runs.
   let activeDispatchManager: DispatchManager | undefined;
+  const ownDispatchRegistry = deps.sessionDispatch ? undefined : new SessionDispatchRegistry();
+  const dispatchRegistry = deps.sessionDispatch ?? ownDispatchRegistry!;
   let activeLoopControl: LoopControl | undefined;
   let requestCounter = 0;
   let activeRunId: string | undefined;
@@ -378,7 +389,14 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
   };
 
   const run = async (runId: string, input: RunInput, runController: AbortController): Promise<void> => {
-    const dispatchManager = createDispatchManager();
+    // One manager per session, shared by every run of it. A new session's id
+    // is known only at session.created, so its manager is bound then.
+    let boundSessionId = input.resumeSessionId;
+    const dispatchManager =
+      boundSessionId !== undefined
+        ? dispatchRegistry.attach(input.workspace, boundSessionId)
+        : dispatchRegistry.create();
+    const previousDispatchManager = activeDispatchManager;
     activeDispatchManager = dispatchManager;
     let sessionId = input.resumeSessionId ?? "";
     // createAgent is built INSIDE the try: if it (or resolveOutputStyle) throws,
@@ -451,6 +469,10 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       })) {
         if (event.type === "session.created") {
           sessionId = event.sessionId;
+          if (boundSessionId === undefined) {
+            boundSessionId = sessionId;
+            dispatchRegistry.attach(input.workspace, sessionId, dispatchManager);
+          }
           deps.runManager.update(input.workspace, runId, { sessionId });
         } else if (event.type === "usage.updated") {
           deps.runManager.update(input.workspace, runId, { costUsd: event.usage.costUsd });
@@ -487,7 +509,16 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       });
     } finally {
       try {
-        handle?.dispose();
+        // A background dispatch still running keeps this run's tools (MCP
+        // connections, runtime) until it settles; the registry decides when.
+        const ended = handle;
+        dispatchRegistry.release(input.workspace, boundSessionId, () => ended?.dispose());
+        // A run that never got a session has no later run to hand dispatches
+        // to; the connection keeps controlling the session it had before.
+        if (boundSessionId === undefined) {
+          dispatchManager.disposeAll();
+          if (activeDispatchManager === dispatchManager) activeDispatchManager = previousDispatchManager;
+        }
       } catch {
         // Disposal is best-effort; connection state must still be released.
       } finally {
@@ -503,7 +534,6 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         }
         activeRunId = undefined;
         activeWorkspace = undefined;
-        if (activeDispatchManager === dispatchManager) activeDispatchManager = undefined;
         denyAllPending();
         if (!closed) send({ type: "idle" });
       }
@@ -931,8 +961,8 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
 
       case "subagent.cancel": {
         const { dispatchId } = frame;
-        if (!running || !activeDispatchManager) {
-          return fail("not_running", "no controllable agent run is active");
+        if (!activeDispatchManager) {
+          return fail("not_running", "no agent session with subagents on this connection");
         }
         const result = activeDispatchManager.cancel(dispatchId);
         if (!result.ok) return fail(result.code, result.message);
@@ -960,8 +990,8 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
 
       case "subagent.steer": {
         const { dispatchId, message } = frame;
-        if (!running || !activeDispatchManager) {
-          return fail("not_running", "no controllable agent run is active");
+        if (!activeDispatchManager) {
+          return fail("not_running", "no agent session with subagents on this connection");
         }
         const result = activeDispatchManager.steer(dispatchId, message);
         if (!result.ok) return fail(result.code, result.message);
@@ -1029,7 +1059,10 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     }
     subscriptions.clear();
     denyAllPending();
-    activeDispatchManager?.disposeAll();
+    // Session-scoped dispatches outlive the socket (a reconnect resumes the
+    // session); the active run is cancelled below, which ends its foreground
+    // dispatches. A connection-owned registry dies with the connection.
+    ownDispatchRegistry?.disposeAll();
     activeLoopControl?.resume();
     if (activeRunId && activeWorkspace) deps.runManager.cancel(activeWorkspace, activeRunId);
     else controller?.abort();

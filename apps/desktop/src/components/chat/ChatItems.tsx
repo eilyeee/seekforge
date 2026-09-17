@@ -160,10 +160,21 @@ function SubagentBlock({
         : item.status === "cancelled"
           ? "warn"
           : "accent";
+  // item.color passed subagentColor() in the reducer: a closed set of named
+  // colors or a hex literal, so it is safe to place in an inline style.
+  const accent = item.color;
   return (
-    <div className="rounded-lg border border-subtle bg-surface-raised px-3 py-2.5 text-xs">
+    <div
+      className={`rounded-lg border border-subtle bg-surface-raised px-3 py-2.5 text-xs ${accent ? "border-l-4" : ""}`}
+      style={accent ? { borderLeftColor: accent } : undefined}
+      data-agent-color={accent}
+    >
       <div className="flex min-w-0 items-center gap-2">
-        <IconCornerDownRight size={14} className="shrink-0 text-tertiary" />
+        {accent ? (
+          <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: accent }} />
+        ) : (
+          <IconCornerDownRight size={14} className="shrink-0 text-tertiary" />
+        )}
         <span className="truncate font-mono font-semibold text-secondary">{item.agentId}</span>
         <span className="font-mono text-2xs text-tertiary">{item.dispatchId}</span>
         <Badge tone={tone}>{t(`chat.subagent.status.${item.status}`)}</Badge>
@@ -191,6 +202,22 @@ function SubagentBlock({
               {step}
             </span>
           ))}
+        </div>
+      )}
+      {item.reports && item.reports.length > 0 && (
+        <div className="mt-2">
+          <div className="text-2xs uppercase tracking-wider text-tertiary">{t("chat.subagent.reports")}</div>
+          {/* Model output: rendered as plain text, never as markdown/HTML. */}
+          <ul className="mt-1 space-y-0.5">
+            {item.reports.map((report, index) => (
+              <li key={`${index}-${report}`} className="flex items-start gap-1.5 break-words text-secondary">
+                <span aria-hidden className="text-tertiary">
+                  ›
+                </span>
+                <span className="whitespace-pre-wrap">{report}</span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
       {item.resultSummary && (

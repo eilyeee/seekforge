@@ -114,8 +114,10 @@ The event is shown to a model, fenced as data, with an instruction to answer
 - The check runs on the session's provider (or `model`, when routable) and its
   tokens count toward the session's usage and cost — except on `sessionEnd`,
   which runs after the session's totals are final. Surfaces with no model to
-  ask — `seekforge mcp-serve`, and mechanical `/compact` in the TUI, REPL and
-  server — cannot evaluate prompt hooks: there they fail.
+  ask — `seekforge mcp-serve`, and mechanical `/compact` in the TUI and REPL —
+  cannot evaluate prompt hooks: there they fail. The server's manual compaction
+  (`POST /api/sessions/:id/compact`, Desktop's `/compact`) evaluates them with
+  the configured provider.
 
 ## Stages
 
