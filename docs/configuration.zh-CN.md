@@ -629,11 +629,11 @@ TUI 和交互式 REPL 会利用空闲时间调度：启动 30 秒后首次检查
 
 ### `permissionRules`
 
-细粒度的允许/拒绝权限规则，用于增强内置的 5 级权限策略。每条规则是一个对象：
+细粒度的允许/拒绝/询问权限规则，用于增强内置的 5 级权限策略。每条规则是一个对象：
 
 ```typescript
 type PermissionRule = {
-  action: "allow" | "deny";
+  action: "allow" | "deny" | "ask";
   /** Tool name or "*" for any tool. */
   tool: string;
   /**
@@ -644,12 +644,13 @@ type PermissionRule = {
 };
 ```
 
-**求值顺序**：每个 action 类别中第一条匹配的规则生效。deny 规则先于 allow
-规则扫描，因此匹配到的 deny 总是阻止（哪怕是只读工具）。allow 规则永远无法
-越过 ask 模式的阻止，也永远无法解救被归类为 `"dangerous"` 的调用。
+**求值顺序**：每个 action 类别中第一条匹配的规则生效。deny 规则先于 ask
+规则扫描，ask 又先于 allow，因此匹配到的 deny 总是阻止（哪怕是只读工具），
+匹配到的 ask 总是询问。allow 规则永远无法越过 ask 模式的阻止，也永远无法解救
+被归类为 `"dangerous"` 的调用。
 
-来自不同配置层的规则是拼接而非替换。仓库层只能贡献 `deny` 规则；可信的
-global/settings 层可以包含两种 action。
+来自不同配置层的规则是拼接而非替换。仓库层只能贡献 `deny` 与 `ask` 规则；
+可信的 global/settings 层可以包含全部三种 action。
 
 ```json
 {
@@ -660,8 +661,13 @@ global/settings 层可以包含两种 action。
 }
 ```
 
-可通过 `config set` 设置？**不可以** —— 直接编辑文件，或者让权限提示替你写入
-（见下文）。
+可通过 `config set` 设置？**不可以** —— 直接编辑文件、使用桌面端
+**设置 → 权限规则**，或者让权限提示替你写入（见下文）。
+
+桌面端编辑器按求值顺序列出项目配置与 `~/.seekforge/config.json` 中保存的规则，
+并通过服务端（`/api/permission-rules`）逐条新增、编辑或删除。项目作用域只提供
+`deny` 与 `ask`，已存在其中的 `allow` 规则会显示为“已忽略”；每次编辑都会指明
+它要替换的条目，期间在别处发生的修改会让本次编辑被拒绝，而不是被覆盖。
 
 #### 从权限提示保存规则
 
@@ -823,7 +829,9 @@ type HookEntry = {
 ```
 
 hook 条目会在可信配置层间对**所有**阶段按阶段拼接：**global → settings**。
-仓库 hook 不生效；桌面端 Hook 编辑器写入 `~/.seekforge/config.json`。
+仓库 hook 不生效；桌面端 Hook 编辑器写入 `~/.seekforge/config.json`：它直接编辑
+`command`、`match` 与 `pattern`，其余条目字段（以及更新版本新增的阶段）原样保留，
+并以可编辑的 JSON 值展示。
 
 可通过 `config set` 设置？**不可以** —— 直接编辑文件。
 
@@ -1066,7 +1074,7 @@ description: House style
 | 字段 | 合并策略 |
 | --- | --- |
 | `mcpServers` | 按服务器键合并，且**区分来源**。仓库层（`.seekforge/config.json`、`config.local.json`，以及两者中的 profile）可以新增服务器名，但绝不能覆盖用户级层已定义的名字；它们的条目一律失去 `trusted`，以及任何比 `write` 更宽松的 `permission`/`toolPermissions`。只有完整的用户级条目才能启用自动连接。这一点在每个界面上都成立——CLI、TUI、`seekforge serve`，以及经由服务器的 Desktop——因为四者走的是同一套分层代数，而层的来源是其类型的一部分。目前只有 CLI 会把这类收窄打印出来，其余界面只执行、不提示。 |
-| `permissionRules` | 按高优先级在前拼接，但仓库层只能贡献有效的 `deny` 规则。 |
+| `permissionRules` | 按高优先级在前拼接，但仓库层只能贡献有效的 `deny` 与 `ask` 规则。 |
 | `hooks` | 在可信层间按阶段拼接：global → settings。仓库 hook 会被忽略。 |
 
 如果更高的层为这些字段提供了错误的运行时形态，该值会被忽略，

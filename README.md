@@ -144,15 +144,24 @@ explicit confirmation; private addresses refused).
 the **same** agent/API as the CLI, in a light, Codex-style UI (dark mode opt-in;
 language follows en / zh-CN), with every surface in one window:
 
-- **Chat** — multi-tab sessions with a home screen (quick-action starters +
-  recent sessions/skills/agents), streaming tool-run and subagent cards with
-  targeted guidance/cancellation, per-hunk diff
-  approval, plan execution, and a composer with `@` file mentions, `/` commands,
-  image attach/paste, and a thinking toggle.
-- **Sessions · Changes · Skills · Subagents · Memory · Evolution · Settings** —
-  resume sessions, review the working-tree diff, toggle skills, inspect
-  subagents, approve memory candidates, gate self-evolution proposals, and edit
-  config (model list, sandbox, theme, language…).
+- **Chat** — multi-tab sessions (double-click a tab to name it) with a home
+  screen (quick-action starters + recent sessions/skills/agents), streaming
+  tool-run and subagent cards with targeted guidance/cancellation, per-hunk diff
+  approval, plan execution and plan review, denials with a reason the agent
+  reads, and a composer with `@` file mentions, `/` commands, image
+  attach/paste, and a thinking toggle. The composer stays usable during a run:
+  messages typed meanwhile queue above it (editable, removable) and go out as
+  the next turns.
+- **Sessions · Changes · Git · Skills · Subagents · Memory · Evolution · Hooks ·
+  Settings** — resume and rename sessions; stage, unstage or revert whole files
+  or single hunks (filterable to one session's changes); commit, push (never
+  forced) and open a pull request through `gh`; toggle skills; create and edit
+  subagents; approve memory candidates; gate self-evolution proposals; edit
+  hooks; manage permission rules; and edit config (model list, sandbox, theme,
+  language…).
+- **Terminal · Preview** — a bottom dock with a workspace shell (Ctrl+`) and a
+  frame for local dev servers (`localhost` / `127.0.0.1` URLs, suggested from
+  command output).
 - **Todos** — a side panel backed by `.seekforge/todos.md`.
 
 ```bash

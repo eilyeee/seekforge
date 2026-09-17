@@ -19,8 +19,9 @@ vi.mock("react", async (importOriginal) => {
   };
 });
 
-const { PermissionModal } = await import("./PermissionModal");
+const { PermissionModal, isLongDescription, planTextOf } = await import("./PermissionModal");
 const { DiffBlock } = await import("../DiffBlock");
+const { Markdown } = await import("../Markdown");
 // Pin English so assertions are deterministic regardless of the machine locale
 // (Node's navigator.language follows the OS, which detectLocale would honor).
 const { setLocale } = await import("../../lib/i18n");
@@ -268,5 +269,81 @@ describe("PermissionModal — multi-hunk selection", () => {
     // Multi-hunk labels should not appear
     expect(joined).not.toContain("Skip all");
     expect(joined).not.toContain("Apply all");
+  });
+});
+
+describe("PermissionModal — grants, reasons and plans", () => {
+  const envReq: PermissionRequest = {
+    toolName: "web_fetch",
+    permission: "env",
+    description: "Fetch a page",
+    command: "GET https://example.com/doc",
+    sessionGrantable: false,
+  };
+
+  it("hides the session and always options when core will not remember the answer", () => {
+    const withRule: PermissionRequest = {
+      ...envReq,
+      rememberRule: { action: "allow", tool: "web_fetch", match: "GET https://example.com" },
+    };
+    const joined = inspect(withRule).text.join("");
+    expect(joined).not.toContain("Allow for session");
+    expect(joined).not.toContain("Always allow");
+    expect(joined).toContain("Allow once");
+    expect(joined).toContain("GET https://example.com/doc");
+    expect(inspectCalls(withRule).some(([, remember]) => remember !== undefined)).toBe(false);
+  });
+
+  it("offers a reason field that denies through onRespond", () => {
+    const found: Array<Record<string, unknown>> = [];
+    const collect = (node: unknown): void => {
+      if (!node || typeof node !== "object" || !("type" in (node as Record<string, unknown>))) {
+        if (Array.isArray(node)) node.forEach(collect);
+        return;
+      }
+      const el = node as { type: unknown; props: Record<string, unknown> };
+      if (typeof el.type === "function" && (el.type as { name?: string }).name === "DenyWithReason")
+        found.push(el.props);
+      collect(el.props.title);
+      collect(el.props.footer);
+      collect(el.props.children);
+    };
+    const calls: unknown[][] = [];
+    collect(PermissionModal({ request: envReq, onRespond: (...args: unknown[]) => calls.push(args) }));
+    expect(found).toHaveLength(1);
+    expect(found[0]!.label).toBe("Deny with a reason…");
+    (found[0]!.onSubmit as () => void)();
+    expect(calls).toEqual([[false, undefined, undefined, undefined]]);
+  });
+
+  it("renders a plan-approval request as a plan to approve", () => {
+    const planReq: PermissionRequest = {
+      toolName: "exit_plan_mode",
+      permission: "readonly",
+      description: "Approve the plan",
+      preview: { path: "plan.md", diff: "# Plan\n\n1. Parse\n2. Test" },
+    };
+    const { text, types } = inspect(planReq);
+    const joined = text.join("");
+    expect(joined).toContain("Review plan");
+    expect(joined).toContain("Approve plan");
+    expect(joined).toContain("Keep planning");
+    expect(joined).not.toContain("Allow for session");
+    expect(types).not.toContain(DiffBlock);
+    expect(types).toContain(Markdown);
+    expect(planTextOf(planReq)).toBe("# Plan\n\n1. Parse\n2. Test");
+    expect(planTextOf({ ...planReq, preview: undefined })).toBe("Approve the plan");
+    expect(planTextOf(envReq)).toBeNull();
+    const calls = inspectCalls(planReq);
+    expect(calls).toContainEqual([true, undefined, undefined]);
+    expect(calls).toContainEqual([false, undefined, undefined]);
+  });
+
+  it("renders a long description as scrollable Markdown", () => {
+    expect(isLongDescription("short")).toBe(false);
+    expect(isLongDescription("line\nline")).toBe(true);
+    expect(isLongDescription("x".repeat(281))).toBe(true);
+    const { types } = inspect({ ...envReq, description: "## Why\n\nbecause" });
+    expect(types).toContain(Markdown);
   });
 });

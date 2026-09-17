@@ -42,6 +42,8 @@ export type RestContext = {
    * back to its http.request log line. */
   logger?: StructuredLogger;
   requestId?: string;
+  /** False when the host turned the workspace terminal off (startServer `terminal: false`). */
+  terminalEnabled?: boolean;
 };
 
 /** Context for the global (non-workspace-scoped) routes. */

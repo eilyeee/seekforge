@@ -10,6 +10,7 @@ import type { ConfigKey, McpPermission, McpPrompt, McpResource, McpServer, McpTo
 import type { WorkspaceAsyncCoordinator } from "./async-coordination";
 import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 import { buildMcpServerDraft, recordOf, rowsOf, type KeyValueRow } from "./mcp-editor-model";
+import { PermissionRulesSection } from "./PermissionRulesSection";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -1477,6 +1478,8 @@ export function SettingsView() {
                 </label>
               </SettingsRow>
             </SettingsGroup>
+
+            <PermissionRulesSection key={`rules:${ws}`} />
 
             <McpSection key={ws} />
           </div>

@@ -8,6 +8,7 @@ import { HomeWelcome } from "../components/chat/HomeWelcome";
 import { Composer, type ComposerCommand } from "../components/chat/Composer";
 import { LoopPanel } from "../components/chat/LoopPanel";
 import { ModelBar } from "../components/chat/ModelBar";
+import { QueuedMessages } from "../components/chat/QueuedMessages";
 import {
   CommandArgsDialog,
   commandHasShell,
@@ -43,7 +44,9 @@ export function ChatView() {
   const tab = activeTab(tabsState);
   const { sendTask, cancel, steerSubagent, cancelSubagent, newSession, connect } = useStore.getState();
   const { openTab, closeTab, setActiveTab, setMode, setApprovalMode, executePlan, setView } = useStore.getState();
-  const { openWorktreeTab, mergeWorktree, discardWorktree } = useStore.getState();
+  const { openWorktreeTab, mergeWorktree, discardWorktree, renameTab, setDock } = useStore.getState();
+  const { queueMessage, editQueuedMessage, removeQueuedMessage, resumeQueue } = useStore.getState();
+  const dock = useStore((s) => s.dock);
   const {
     setModel,
     setThinking,
@@ -266,7 +269,7 @@ export function ChatView() {
   }, [tab.tabId, tab.chat.items]);
 
   const submit = (task: string) => {
-    if (!task || tab.chat.running) return;
+    if (!task) return;
     // "# fact" saves to project memory instead of sending a task (like Claude Code).
     if (task.startsWith("#")) {
       const fact = task.slice(1).trim();
@@ -276,6 +279,13 @@ export function ChatView() {
         .memoryAddFact(fact, "convention", undefined, undefined, tab.ws)
         .then(() => showToast(t("chat.memorySaved")))
         .catch((err) => showToast(err instanceof Error ? err.message : String(err)));
+      return;
+    }
+    // While a run is active the message waits in the tab's queue and goes out
+    // as the next turn; a full queue keeps the draft.
+    if (tab.chat.running) {
+      if (queueMessage(task)) setDraft("");
+      else showToast(t("chat.queue.full"));
       return;
     }
     // Only clear the draft if the task actually left the client. When the
@@ -358,6 +368,11 @@ export function ChatView() {
         onNewWorktree={newWorktreeSession}
         onMergeWorktree={requestMergeBack}
         onDiscardWorktree={(tabId) => setWorktreeDialog({ kind: "discard", tabId })}
+        onRename={(tabId, name) =>
+          renameTab(tabId, name).catch((e: unknown) =>
+            showToast(t("chat.tab.renameError", { error: e instanceof Error ? e.message : String(e) })),
+          )
+        }
         workspaceName={workspaceName}
       />
 
@@ -386,6 +401,22 @@ export function ChatView() {
               {t("action.cancel")}
             </Button>
           )}
+          <Button
+            size="sm"
+            aria-pressed={dock.open && dock.panel === "terminal"}
+            onClick={() => setDock({ open: !(dock.open && dock.panel === "terminal"), panel: "terminal" })}
+            title={t("dock.terminalToggleTitle")}
+          >
+            {t("dock.terminal")}
+          </Button>
+          <Button
+            size="sm"
+            aria-pressed={dock.open && dock.panel === "preview"}
+            onClick={() => setDock({ open: !(dock.open && dock.panel === "preview"), panel: "preview" })}
+            title={t("dock.previewToggleTitle")}
+          >
+            {t("dock.preview")}
+          </Button>
           <Button
             size="sm"
             onClick={downloadHandoff}
@@ -488,19 +519,29 @@ export function ChatView() {
             onSetOutputStyle={setOutputStyle}
           />
 
+          <QueuedMessages
+            queue={tab.queue}
+            paused={tab.queuePaused}
+            onResume={resumeQueue}
+            onEdit={editQueuedMessage}
+            onRemove={removeQueuedMessage}
+          />
+
           <Composer
             key={tab.tabId}
             value={draft}
             onChange={setDraft}
             onSend={submit}
-            disabled={tab.chat.running}
+            // Stays usable during a run: messages queue for the next turn.
+            disabled={false}
+            queueing={tab.chat.running}
             // Gate sending (button + Enter) while the socket isn't connected so
             // input isn't silently dropped mid-reconnect; typing stays enabled.
             sendBlocked={tab.conn !== "connected"}
             sendBlockedHint={t("chat.composerDisconnected")}
             placeholder={
               tab.chat.running
-                ? t("chat.composerRunningPlaceholder")
+                ? t("chat.composerQueuePlaceholder")
                 : t("chat.composerPlaceholder", { slash: "/", at: "@" })
             }
             commands={composerCommands}

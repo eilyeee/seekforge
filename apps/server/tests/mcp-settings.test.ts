@@ -1,7 +1,8 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { acquireSessionLease } from "@seekforge/core";
+import { GLOBAL_CONFIG_LOCK_ID } from "@seekforge/shared/config-layers";
 import { startServer, type RunningServer } from "../src/index.js";
 import { makeWorkspace, unusedAgentFactory } from "./helpers.js";
 
@@ -45,7 +46,8 @@ afterAll(async () => {
 
 describe("MCP settings scopes and secret preservation", () => {
   it("returns 409 while the global settings lease is owned elsewhere", async () => {
-    const lease = acquireSessionLease(home, "coord-server-global-config");
+    // The lease every writer of ~/.seekforge/config.json takes (CLI, TUI, server).
+    const lease = acquireSessionLease(realpathSync(home), GLOBAL_CONFIG_LOCK_ID);
     try {
       const mcp = await save({ name: "blocked-global", scope: "global", command: "node" });
       expect(mcp.status).toBe(409);

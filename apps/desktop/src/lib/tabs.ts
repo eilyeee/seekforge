@@ -27,6 +27,17 @@ export type PendingQuestion = {
   freeText?: boolean;
 };
 
+/**
+ * A message typed while a run was active. Core has no public mid-run steering
+ * for a top-level run (only nested subagents take guidance between turns), so
+ * a queued message is delivered as the next turn once the run ends — the same
+ * contract as the TUI's queue.
+ */
+export type QueuedMessage = { id: number; text: string };
+
+/** Upper bound on queued messages per tab. */
+export const MAX_QUEUED_MESSAGES = 20;
+
 /** Worktree session binding: the tab's `ws` is the worktree's workspace id. */
 export type TabWorktree = {
   /** Worktree id == its workspace id (`wt-<slug>`). */
@@ -48,6 +59,8 @@ export type ChatTab = {
   tabId: string;
   /** First words of the first task; placeholder until a task is sent. */
   title: string;
+  /** The user named this tab; a first task no longer retitles it. */
+  titleCustom: boolean;
   /**
    * Workspace id this tab is bound to. Set when the tab is opened (from the
    * then-active workspace) and never changes — a tab keeps running its session
@@ -99,6 +112,15 @@ export type ChatTab = {
   activeRunId: string | null;
   /** Highest ledger sequence applied for activeRunId. */
   runSeq: number;
+  /** Messages waiting for the current run to end, oldest first. */
+  queue: QueuedMessage[];
+  /**
+   * The run the queue was waiting on was interrupted by a lost connection, so
+   * nothing is sent until the user resumes the queue.
+   */
+  queuePaused: boolean;
+  /** Monotonic id source for `queue`. */
+  queueSeq: number;
 };
 
 export type TabsState = {
@@ -129,6 +151,7 @@ function makeTab(tabId: string, ws = ""): ChatTab {
   return {
     tabId,
     title: DEFAULT_TAB_TITLE,
+    titleCustom: false,
     ws,
     chat: initialChatState(),
     conn: "disconnected",
@@ -150,6 +173,9 @@ function makeTab(tabId: string, ws = ""): ChatTab {
     loopResetPending: false,
     activeRunId: null,
     runSeq: 0,
+    queue: [],
+    queuePaused: false,
+    queueSeq: 0,
   };
 }
 
@@ -214,6 +240,42 @@ export function updateTab(
   const next = [...state.tabs];
   next[idx] = { ...tab, ...(typeof patch === "function" ? patch(tab) : patch) };
   return { ...state, tabs: next };
+}
+
+/** Appends a message to the tab's queue; false when the tab is full (nothing changes). */
+export function enqueueMessage(state: TabsState, tabId: string, text: string): { state: TabsState; queued: boolean } {
+  const tab = state.tabs.find((candidate) => candidate.tabId === tabId);
+  const trimmed = text.trim();
+  if (!tab || trimmed === "" || tab.queue.length >= MAX_QUEUED_MESSAGES) return { state, queued: false };
+  const id = tab.queueSeq + 1;
+  return {
+    state: updateTab(state, tabId, { queue: [...tab.queue, { id, text: trimmed }], queueSeq: id }),
+    queued: true,
+  };
+}
+
+/** Replaces a queued message's text; an empty text removes it. */
+export function editQueuedMessage(state: TabsState, tabId: string, id: number, text: string): TabsState {
+  const trimmed = text.trim();
+  if (trimmed === "") return removeQueuedMessage(state, tabId, id);
+  return updateTab(state, tabId, (tab) => ({
+    queue: tab.queue.map((message) => (message.id === id ? { ...message, text: trimmed } : message)),
+  }));
+}
+
+export function removeQueuedMessage(state: TabsState, tabId: string, id: number): TabsState {
+  return updateTab(state, tabId, (tab) => ({ queue: tab.queue.filter((message) => message.id !== id) }));
+}
+
+/**
+ * The queued message this tab may send now, or null. Only when the run has
+ * fully ended (the server sends `idle` only after it releases the busy slot),
+ * nothing awaits an answer, and the socket is up.
+ */
+export function nextQueuedMessage(tab: ChatTab): QueuedMessage | null {
+  if (tab.queue.length === 0 || tab.queuePaused || tab.chat.running || tab.activeRunId !== null) return null;
+  if (tab.pendingPermission || tab.pendingQuestion || tab.conn !== "connected") return null;
+  return tab.queue[0] ?? null;
 }
 
 /**
@@ -354,6 +416,8 @@ export function routeConnectionState(state: TabsState, tabId: string, conn: Conn
     if (conn !== "disconnected" || !tab.chat.running) return { conn };
     return {
       conn,
+      // Follow-ups queued for the interrupted run wait for the user to resume.
+      ...(tab.queue.length > 0 ? { queuePaused: true } : {}),
       chat: { ...tab.chat, running: false, retry: null },
       pendingPermission: null,
       pendingQuestion: null,

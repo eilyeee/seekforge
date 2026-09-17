@@ -3,6 +3,7 @@ import { activeTab, useStore } from "./store";
 import { useT } from "./lib/i18n";
 import { Button } from "./components/ui";
 import { CommandPalette } from "./components/CommandPalette";
+import { BottomDock } from "./components/dock/BottomDock";
 import { PermissionModal } from "./components/chat/PermissionModal";
 import { QuestionModal } from "./components/chat/QuestionModal";
 import { Onboarding } from "./components/Onboarding";
@@ -127,6 +128,7 @@ export function App() {
             )}
           </Suspense>
         </div>
+        {!needsWorkspace && <BottomDock />}
       </main>
       {!needsWorkspace && todosOpen && <TodosPanel key={activeWorkspaceId} />}
       {!needsWorkspace && <CommandPalette />}

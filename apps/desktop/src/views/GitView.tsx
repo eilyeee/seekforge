@@ -4,9 +4,10 @@ import { useStore } from "../store";
 import { useT } from "../lib/i18n";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Badge, Button, EmptyState, IconGit, TextArea, type BadgeTone } from "../components/ui";
-import type { GitFile, GitFileStatus, GitStatus } from "../types";
+import type { GitFile, GitFileStatus, GitRemoteInfo, GitStatus } from "../types";
 import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 import { ExclusiveOperation } from "./async-coordination";
+import { GitRemoteBar, PrDialog, PushDialog, type PrInput } from "./GitRemoteActions";
 
 const STATUS_TONE: Record<GitFileStatus, BadgeTone> = {
   modified: "warn",
@@ -27,17 +28,25 @@ export function GitView() {
   const [committing, setCommitting] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [discardTarget, setDiscardTarget] = useState<string | null>(null);
+  const [remote, setRemote] = useState<GitRemoteInfo | null>(null);
+  const [pushOpen, setPushOpen] = useState(false);
+  const [prOpen, setPrOpen] = useState(false);
+  const [prError, setPrError] = useState<string | null>(null);
+  const [prUrl, setPrUrl] = useState<string | null>(null);
+  const [remoteBusy, setRemoteBusy] = useState(false);
   const requests = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
   const writes = useRef(new ExclusiveOperation());
 
   const refresh = (workspaceId = ws) => {
     const request = requests.beginLatest(workspaceId);
     if (!request) return Promise.resolve();
-    return api
-      .gitStatus(request.workspaceId)
-      .then((s) => {
+    // Remote info is best effort: an older server without the route still
+    // gets the status view, just without push/PR.
+    return Promise.all([api.gitStatus(request.workspaceId), api.gitRemote(request.workspaceId).catch(() => null)])
+      .then(([s, r]) => {
         if (!requests.isCurrent(request)) return;
         setStatus(s);
+        setRemote(r);
         setError(null);
       })
       .catch((e: unknown) => {
@@ -53,6 +62,12 @@ export function GitView() {
     setDiscardTarget(null);
     setBusy(false);
     setCommitting(false);
+    setRemote(null);
+    setPushOpen(false);
+    setPrOpen(false);
+    setPrError(null);
+    setPrUrl(null);
+    setRemoteBusy(false);
     void refresh(ws);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ws]);
@@ -112,9 +127,60 @@ export function GitView() {
       });
   };
 
+  const push = (remoteName: string, setUpstream: boolean) => {
+    const branch = remote?.branch;
+    setPushOpen(false);
+    if (!branch) return;
+    const mutation = requests.capture(ws);
+    if (!mutation) return;
+    const write = writes.current.begin();
+    if (!write) return;
+    setRemoteBusy(true);
+    setNote(null);
+    setError(null);
+    api
+      .gitPush(remoteName, branch, setUpstream, mutation.workspaceId)
+      .then((r) => {
+        if (!requests.isCurrent(mutation)) return;
+        setNote(t("git.pushed", { remote: r.remote, branch: r.branch, destination: r.destination }));
+        return refresh(mutation.workspaceId);
+      })
+      .catch((e: unknown) => {
+        if (requests.isCurrent(mutation))
+          setError(t("git.pushError", { error: e instanceof Error ? e.message : String(e) }));
+      })
+      .finally(() => {
+        if (writes.current.end(write) && requests.isCurrent(mutation)) setRemoteBusy(false);
+      });
+  };
+
+  const createPr = (input: PrInput) => {
+    const mutation = requests.capture(ws);
+    if (!mutation) return;
+    setRemoteBusy(true);
+    setPrError(null);
+    api
+      .gitCreatePr(
+        { title: input.title, body: input.body, draft: input.draft, ...(input.base ? { base: input.base } : {}) },
+        mutation.workspaceId,
+      )
+      .then((r) => {
+        if (!requests.isCurrent(mutation)) return;
+        setPrOpen(false);
+        setPrUrl(r.url);
+        setNote(r.url ? null : t("git.prCreated"));
+      })
+      .catch((e: unknown) => {
+        if (requests.isCurrent(mutation)) setPrError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (requests.isCurrent(mutation)) setRemoteBusy(false);
+      });
+  };
+
   const staged = status?.files.filter((f) => f.staged) ?? [];
   const unstaged = status?.files.filter((f) => !f.staged) ?? [];
-  const writePending = busy || committing;
+  const writePending = busy || committing || remoteBusy;
   const canCommit = staged.length > 0 && message.trim() !== "" && !writePending;
 
   return (
@@ -133,6 +199,29 @@ export function GitView() {
         {error && (
           <div className="mb-4 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
             {error}
+          </div>
+        )}
+
+        {remote && !remote.notGit && status && !status.notGit && (
+          <div className="mx-auto mb-6 max-w-2xl space-y-2">
+            <GitRemoteBar
+              info={remote}
+              busy={writePending}
+              onPush={() => setPushOpen(true)}
+              onCreatePr={() => {
+                setPrError(null);
+                setPrOpen(true);
+              }}
+            />
+            {prUrl && (
+              <p className="text-2xs text-ok">
+                {t("git.prCreated")}{" "}
+                <a href={prUrl} target="_blank" rel="noopener noreferrer" className="font-mono underline">
+                  {prUrl}
+                </a>
+              </p>
+            )}
+            {note && status.files.length === 0 && <p className="text-2xs text-ok">{note}</p>}
           </div>
         )}
 
@@ -192,6 +281,18 @@ export function GitView() {
           </div>
         )}
       </div>
+
+      {pushOpen && remote && <PushDialog info={remote} onConfirm={push} onCancel={() => setPushOpen(false)} />}
+
+      {prOpen && remote?.branch && (
+        <PrDialog
+          branch={remote.branch}
+          busy={remoteBusy}
+          error={prError}
+          onSubmit={createPr}
+          onCancel={() => setPrOpen(false)}
+        />
+      )}
 
       {discardTarget !== null && (
         <ConfirmDialog

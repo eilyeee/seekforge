@@ -4,8 +4,13 @@ import type { ServerFrame } from "./ws-types";
 import {
   activeTab,
   closeTab,
+  editQueuedMessage,
+  enqueueMessage,
   initialTabsState,
+  MAX_QUEUED_MESSAGES,
+  nextQueuedMessage,
   openTab,
+  removeQueuedMessage,
   routeFrame,
   switchTab,
   titleFromTask,
@@ -346,5 +351,50 @@ describe("header-control state (model/thinking/effort)", () => {
       thinking: true,
       reasoningEffort: "max",
     });
+  });
+});
+
+describe("queued messages", () => {
+  const ready = (state: TabsState): TabsState => updateTab(state, "t1", { conn: "connected" });
+
+  it("appends trimmed messages with increasing ids and edits or removes them by id", () => {
+    let state = ready(initialTabsState());
+    state = enqueueMessage(state, "t1", " one ").state;
+    state = enqueueMessage(state, "t1", "two").state;
+    expect(enqueueMessage(state, "t1", "   ").queued).toBe(false);
+    expect(enqueueMessage(state, "missing", "x").queued).toBe(false);
+    expect(activeTab(state).queue).toEqual([
+      { id: 1, text: "one" },
+      { id: 2, text: "two" },
+    ]);
+    state = editQueuedMessage(state, "t1", 2, "two!");
+    state = removeQueuedMessage(state, "t1", 1);
+    expect(activeTab(state).queue).toEqual([{ id: 2, text: "two!" }]);
+    // Editing to blank removes; ids are never reused.
+    state = editQueuedMessage(state, "t1", 2, "  ");
+    state = enqueueMessage(state, "t1", "three").state;
+    expect(activeTab(state).queue).toEqual([{ id: 3, text: "three" }]);
+  });
+
+  it("stops at the cap", () => {
+    let state = initialTabsState();
+    for (let i = 0; i < MAX_QUEUED_MESSAGES; i++) state = enqueueMessage(state, "t1", `m${i}`).state;
+    expect(enqueueMessage(state, "t1", "one more")).toEqual({ state, queued: false });
+  });
+
+  it("offers the oldest message only when the tab can take a new turn", () => {
+    const base = enqueueMessage(ready(initialTabsState()), "t1", "next").state;
+    expect(nextQueuedMessage(activeTab(base))).toEqual({ id: 1, text: "next" });
+    const tab = activeTab(base);
+    expect(nextQueuedMessage({ ...tab, chat: { ...tab.chat, running: true } })).toBeNull();
+    expect(nextQueuedMessage({ ...tab, activeRunId: "run-1" })).toBeNull();
+    expect(nextQueuedMessage({ ...tab, conn: "connecting" })).toBeNull();
+    expect(
+      nextQueuedMessage({
+        ...tab,
+        pendingQuestion: { id: "q1", question: "?", options: ["a"] },
+      }),
+    ).toBeNull();
+    expect(nextQueuedMessage(activeTab(ready(initialTabsState())))).toBeNull();
   });
 });

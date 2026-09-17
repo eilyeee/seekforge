@@ -19,9 +19,13 @@ import {
   TextArea,
   type BadgeTone,
 } from "../components/ui";
-import type { AgentInfo, AgentScope } from "../types";
+import type { AgentDefinitionDraft, AgentDefinitionScope, AgentInfo, AgentScope } from "../types";
 import { LatestRequest } from "./async-coordination";
 import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
+import { AgentEditorDialog } from "./AgentEditorDialog";
+import { emptyAgentForm, formFromDefinition, formFromSource, type AgentEditorForm } from "./agent-editor-model";
+
+type EditorState = { intent: "create" | "edit"; initial: AgentEditorForm; path?: string };
 
 const SCOPE_TONE: Record<AgentScope, BadgeTone> = {
   builtin: "neutral",
@@ -59,6 +63,7 @@ export function AgentsView() {
   const [importOpen, setImportOpen] = useState(false);
   const [teamOpen, setTeamOpen] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [editor, setEditor] = useState<EditorState | null>(null);
   const detailRequests = useRef(new LatestRequest());
   // Re-fetch when the active workspace changes (api scopes by ?ws=<active>).
   const ws = useStore((s) => s.activeWorkspaceId);
@@ -87,6 +92,7 @@ export function AgentsView() {
     setImportOpen(false);
     setTeamOpen(false);
     setNote(null);
+    setEditor(null);
     void refresh(ws);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coordinator, ws]);
@@ -109,6 +115,37 @@ export function AgentsView() {
   const closeDetail = () => {
     detailRequests.current.invalidate();
     setDetail(null);
+  };
+
+  const editAgent = (agent: AgentInfo) => {
+    if (agent.scope !== "project" && agent.scope !== "global") return;
+    const operation = coordinator.capture(ws);
+    if (!operation) return;
+    setError(null);
+    api
+      .agentSource(agent.id, agent.scope, operation.workspaceId)
+      .then((source) => {
+        if (coordinator.isCurrent(operation)) {
+          setEditor({ intent: "edit", initial: formFromSource(source), path: source.path });
+        }
+      })
+      .catch((e: unknown) => {
+        if (coordinator.isCurrent(operation)) setError(String(e));
+      });
+  };
+
+  const saveAgent = async (id: string, scope: AgentDefinitionScope, draft: AgentDefinitionDraft) => {
+    const operation = coordinator.capture(ws);
+    if (!operation || !editor) return;
+    const saved =
+      editor.intent === "create"
+        ? await api.agentCreate(id, scope, draft, operation.workspaceId)
+        : await api.agentUpdate(id, scope, draft, operation.workspaceId);
+    if (!coordinator.isCurrent(operation)) return;
+    setEditor(null);
+    setNote(t("agents.editor.saved", { id: saved.id, path: saved.path }));
+    await refresh(operation.workspaceId);
+    if (detail?.id === saved.id) openAgent(saved.id);
   };
 
   // "Ask": seed the chat composer with a delegation prompt for this subagent
@@ -171,12 +208,35 @@ export function AgentsView() {
                 <IconSparkle size={14} />
                 {t("agents.askBtn")}
               </Button>
+              {(detail.scope === "project" || detail.scope === "global") && (
+                <Button size="sm" onClick={() => editAgent(detail)}>
+                  {t("agents.editor.editBtn")}
+                </Button>
+              )}
+              {detail.scope !== "project" && (
+                <Button
+                  size="sm"
+                  onClick={() => setEditor({ intent: "create", initial: formFromDefinition(detail) })}
+                  title={t("agents.editor.overrideHint")}
+                >
+                  {t("agents.editor.overrideBtn")}
+                </Button>
+              )}
               <Button size="sm" onClick={closeDetail}>
                 {t("agents.backBtn")}
               </Button>
             </div>
           </div>
         </div>
+        {editor && (
+          <AgentEditorDialog
+            intent={editor.intent}
+            initial={editor.initial}
+            {...(editor.path ? { path: editor.path } : {})}
+            onSave={saveAgent}
+            onClose={() => setEditor(null)}
+          />
+        )}
       </div>
     );
   }
@@ -190,6 +250,9 @@ export function AgentsView() {
             <p className="mt-1 text-xs text-tertiary">{t("agents.emptyDescription")}</p>
           </div>
           <div className="flex shrink-0 gap-2">
+            <Button size="sm" onClick={() => setEditor({ intent: "create", initial: emptyAgentForm() })}>
+              {t("agents.editor.newBtn")}
+            </Button>
             <Button size="sm" variant="primary" onClick={() => setTeamOpen(true)}>
               {t("agents.teamBtn")}
             </Button>
@@ -283,6 +346,15 @@ export function AgentsView() {
                 if (coordinator.isCurrent(operation)) onError(e);
               });
           }}
+        />
+      )}
+      {editor && (
+        <AgentEditorDialog
+          intent={editor.intent}
+          initial={editor.initial}
+          {...(editor.path ? { path: editor.path } : {})}
+          onSave={saveAgent}
+          onClose={() => setEditor(null)}
         />
       )}
       {teamOpen && agents && (

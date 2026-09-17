@@ -173,6 +173,23 @@ const mockCommands = [
 /** Editable user-owned hooks (mock of /api/hooks). */
 let mockHooks: Record<string, unknown> = {};
 
+/** Stored permission rules per layer (mock of /api/permission-rules). */
+const mockRules: Record<"user" | "project", unknown[]> = {
+  user: [{ action: "allow", tool: "run_command", match: "pnpm test" }],
+  project: [{ action: "deny", tool: "run_command", match: "rm -rf" }],
+};
+const ruleListing = () => {
+  const entries = (scope: "user" | "project") =>
+    mockRules[scope].map((raw, index) => {
+      const rule = raw as { action?: string };
+      return { index, raw, rule: raw, effective: scope === "user" || rule.action !== "allow" };
+    });
+  return { project: entries("project"), user: entries("user") };
+};
+
+/** Session names set through PATCH /api/sessions/:id. */
+const sessionNames = new Map<string, string>();
+
 /** In-memory worktree sessions (mock of the git-backed real server). */
 type MockWorktree = { id: string; branch: string; path: string; dirty: boolean; ahead: number };
 const mockWorktrees: MockWorktree[] = [];
@@ -633,7 +650,9 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   }
   if (method === "GET" && path === "/api/health")
     return { version: "0.2.0-mock", workspace: "/mock/workspace", workspaces: mockWorkspaces };
-  if (method === "GET" && path === "/api/sessions") return sessions.map((s) => ({ ...s }));
+  if (method === "GET" && path === "/api/sessions") {
+    return sessions.map((s) => (sessionNames.has(s.id) ? { ...s, name: sessionNames.get(s.id) } : { ...s }));
+  }
 
   // Prune old sessions (olderThanDays / keepLast, with dry-run preview).
   if (method === "POST" && path === "/api/sessions/prune") {
@@ -662,6 +681,18 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   }
 
   let m = /^\/api\/sessions\/([^/]+)$/.exec(path);
+  if (method === "PATCH" && m) {
+    const id = m[1]!;
+    if (!sessions.some((s) => s.id === id)) throw mockError(404, "not_found", "session not found");
+    const name = String((body as { name?: unknown } | undefined)?.name ?? "")
+      .trim()
+      .slice(0, 80);
+    if (name === "") sessionNames.delete(id);
+    else sessionNames.set(id, name);
+    return { id, name: name === "" ? null : name };
+  }
+  const changes = /^\/api\/sessions\/([^/]+)\/changes$/.exec(path);
+  if (method === "GET" && changes) return { files: mockGit.files.map((f) => f.path).slice(0, 2) };
   if (method === "DELETE" && m) {
     const idx = sessions.findIndex((s) => s.id === m![1]);
     if (idx < 0) throw mockError(404, "not_found", "session not found");
@@ -1024,7 +1055,35 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
       droppedTools: ["UnsupportedTool"],
     };
   }
+  if (method === "POST" && path === "/api/agents") {
+    const input = (body ?? {}) as { id?: string; scope?: string; name?: string };
+    const id = input.id ?? "";
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(id)) throw mockError(400, "bad_request", "invalid id");
+    if (mockAgents.some((a) => a.id === id && a.scope === input.scope)) throw mockError(409, "conflict", "exists");
+    return { ...(body as object), path: `.seekforge/agents/${id}/AGENT.md` };
+  }
+  const source = /^\/api\/agents\/([^/]+)\/source$/.exec(path);
+  if (method === "GET" && source) {
+    const agent = mockAgents.find((a) => a.id === source[1]);
+    if (!agent || agent.scope === "builtin") throw mockError(404, "not_found", "no editable definition");
+    return {
+      id: agent.id,
+      scope: agent.scope,
+      path: `.seekforge/agents/${agent.id}/AGENT.md`,
+      name: agent.name,
+      description: agent.description,
+      tools: agent.tools ?? null,
+      mode: agent.mode,
+      model: agent.model ?? "",
+      maxTurns: agent.maxTurns ?? null,
+      body: agent.body ?? "",
+      extra: agent.triggers.length > 0 ? [{ key: "trigger", value: JSON.stringify(agent.triggers.join(" | ")) }] : [],
+    };
+  }
   m = /^\/api\/agents\/([^/]+)$/.exec(path);
+  if (method === "PUT" && m) {
+    return { ...(body as object), id: m[1], path: `.seekforge/agents/${m[1]}/AGENT.md` };
+  }
   if (method === "GET" && m) {
     const agent = mockAgents.find((a) => a.id === m![1]);
     if (!agent) throw mockError(404, "not_found", "agent not found");
@@ -1271,6 +1330,24 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     };
   }
 
+  if (path === "/api/permission-rules") {
+    const input = (body ?? {}) as { scope?: "user" | "project"; index?: number; rule?: { action?: string } };
+    if (method === "GET") return ruleListing();
+    const scope = input.scope === "project" ? "project" : "user";
+    if (method === "POST") {
+      if (scope === "project" && input.rule?.action === "allow") {
+        throw mockError(400, "bad_request", "project rules may only deny or ask; save allow rules in user scope");
+      }
+      mockRules[scope].push(input.rule);
+    } else if (method === "PUT") mockRules[scope][input.index ?? -1] = input.rule;
+    else if (method === "DELETE") mockRules[scope].splice(input.index ?? -1, 1);
+    return ruleListing();
+  }
+
+  if (method === "GET" && path === "/api/terminal") {
+    return { available: true, shell: "/bin/mock", pty: false, cwd: "/mock/workspace" };
+  }
+
   if (path === "/api/hooks") {
     if (method === "GET") return { hooks: mockHooks };
     if (method === "PUT") {
@@ -1358,6 +1435,35 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     if (!Array.isArray(paths)) throw mockError(400, "bad_request", "body must be {paths: string[]}");
     mockGit.files = mockGit.files.filter((f) => !paths.includes(f.path));
     return { ok: true };
+  }
+  if (method === "POST" && path === "/api/git/hunk") return { ok: true };
+  if (method === "GET" && path === "/api/git/remote") {
+    if (mockGit.notGit) {
+      return {
+        notGit: true,
+        branch: null,
+        remotes: [],
+        upstream: null,
+        ahead: null,
+        behind: null,
+        gh: { available: false },
+      };
+    }
+    return {
+      branch: mockGit.branch,
+      remotes: ["origin"],
+      upstream: { remote: "origin", branch: mockGit.branch },
+      ahead: mockCommitSeq,
+      behind: 0,
+      gh: { available: true },
+    };
+  }
+  if (method === "POST" && path === "/api/git/push") {
+    const { remote, branch } = (body ?? {}) as { remote?: string; branch?: string };
+    return { ok: true, remote, branch, destination: branch, output: "mock push" };
+  }
+  if (method === "POST" && path === "/api/git/pr") {
+    return { ok: true, url: "https://github.com/example/repo/pull/1", output: "mock pr" };
   }
   if (method === "POST" && path === "/api/git/commit") {
     const { message } = (body ?? {}) as { message?: unknown };

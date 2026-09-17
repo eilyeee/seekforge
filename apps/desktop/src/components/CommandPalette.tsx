@@ -79,6 +79,21 @@ export function CommandPalette() {
     const actions: PaletteItem[] = [
       { id: "action:new-session", label: t("palette.newSession"), section: "actions", run: () => openTab() },
       {
+        id: "action:toggle-terminal",
+        label: t("palette.toggleTerminal"),
+        section: "actions",
+        run: () => {
+          const { dock, setDock } = useStore.getState();
+          setDock({ open: !(dock.open && dock.panel === "terminal"), panel: "terminal" });
+        },
+      },
+      {
+        id: "action:open-preview",
+        label: t("palette.openPreview"),
+        section: "actions",
+        run: () => useStore.getState().setDock({ open: true, panel: "preview" }),
+      },
+      {
         id: "action:open-folder",
         label: t("palette.openFolder"),
         section: "actions",

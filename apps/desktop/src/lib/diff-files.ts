@@ -57,6 +57,36 @@ export function splitDiffByFile(diff: string): FileDiff[] {
   return files;
 }
 
+/**
+ * One file's diff split into its header and hunks, for per-hunk actions. Each
+ * hunk is the exact text git printed (from its `@@` line), which is what the
+ * server matches against its own fresh diff before applying anything.
+ * `actionable` is false for diffs a hunk patch cannot express (binary files,
+ * renames, mode-only changes), where only whole-file actions make sense.
+ */
+export function splitFileHunks(fileText: string): { header: string; hunks: string[]; actionable: boolean } {
+  const lines = fileText.split("\n");
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  const header: string[] = [];
+  const hunks: string[][] = [];
+  for (const line of lines) {
+    if (line.startsWith("@@ ")) hunks.push([line]);
+    else if (hunks.length > 0) hunks[hunks.length - 1]!.push(line);
+    else header.push(line);
+  }
+  const renamed = header.some((line) => line.startsWith("rename from ") || line.startsWith("copy from "));
+  return {
+    header: header.join("\n"),
+    hunks: hunks.map((hunk) => hunk.join("\n")),
+    actionable: hunks.length > 0 && !renamed,
+  };
+}
+
+/** Keeps the files a session touched (exact workspace-relative paths). */
+export function filterToPaths<T extends { path: string }>(files: T[], paths: ReadonlySet<string> | null): T[] {
+  return paths === null ? files : files.filter((file) => paths.has(file.path));
+}
+
 export function diffTotals(files: FileDiff[]): { files: number; additions: number; deletions: number } {
   return files.reduce(
     (acc, f) => ({

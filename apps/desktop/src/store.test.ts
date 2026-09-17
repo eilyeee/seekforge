@@ -16,6 +16,9 @@ const workspacesMock = vi.hoisted(() =>
 );
 const configMock = vi.hoisted(() => vi.fn(() => Promise.resolve({})));
 const worktreesMock = vi.hoisted(() => vi.fn(() => Promise.resolve([])));
+const sessionRenameMock = vi.hoisted(() =>
+  vi.fn((id: string, name: string) => Promise.resolve({ id, name: name === "" ? null : name })),
+);
 
 vi.mock("./lib/ws", () => ({
   encodeClientFrame: (frame: ClientFrame): string | null => {
@@ -52,6 +55,7 @@ vi.mock("./lib/api", () => ({
     config: configMock,
     openWorkspace: openWorkspaceMock,
     worktrees: worktreesMock,
+    sessionRename: sessionRenameMock,
   },
   ApiError: MockApiError,
   setTokenProvider: () => {},
@@ -834,5 +838,209 @@ describe("store: async session actions preserve their target identity", () => {
 
     expect(activeTab(useStore.getState().tabs).ws).toBe("workspace-a");
     expect(activeTab(useStore.getState().tabs).chat.sessionId).toBe("session-a");
+  });
+});
+
+describe("store: queued messages", () => {
+  beforeEach(() => {
+    resetStore();
+    useStore.setState({ tabs: initialTabsState() });
+    useStore.getState().connect();
+    lastHandlers!.onState("connected");
+    sent.length = 0;
+  });
+
+  it("queues while a run is active and sends the oldest as the next turn after idle", () => {
+    expect(useStore.getState().sendTask("first")).toBe(true);
+    lastHandlers!.onFrame({ type: "run.accepted", runId: "run-q", status: "queued", seq: 1 });
+    lastHandlers!.onFrame({
+      type: "event",
+      runId: "run-q",
+      seq: 2,
+      sessionId: "sq",
+      event: { type: "session.created", sessionId: "sq" },
+    });
+    expect(useStore.getState().queueMessage("  second  ")).toBe(true);
+    expect(useStore.getState().queueMessage("third")).toBe(true);
+    expect(useStore.getState().queueMessage("   ")).toBe(false);
+    let tab = activeTab(useStore.getState().tabs);
+    expect(tab.queue.map((m) => m.text)).toEqual(["second", "third"]);
+    expect(sent.filter((f) => f.type === "start" || f.type === "send")).toHaveLength(1);
+
+    // Edit and drop entries while waiting.
+    const [second, third] = tab.queue;
+    useStore.getState().editQueuedMessage(second!.id, "second, edited");
+    useStore.getState().removeQueuedMessage(third!.id);
+
+    lastHandlers!.onFrame({
+      type: "event",
+      runId: "run-q",
+      seq: 3,
+      sessionId: "sq",
+      event: {
+        type: "session.completed",
+        report: {
+          summary: "ok",
+          changedFiles: [],
+          commandsRun: [],
+          verification: "",
+          usage: { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 },
+        },
+      },
+    });
+    // A terminal event alone is not enough: the server is still busy until idle.
+    expect(sent.filter((f) => f.type === "send")).toHaveLength(0);
+    lastHandlers!.onFrame({ type: "idle" });
+    const follow = sent.filter((f) => f.type === "send");
+    expect(follow).toEqual([expect.objectContaining({ type: "send", sessionId: "sq", task: "second, edited" })]);
+    tab = activeTab(useStore.getState().tabs);
+    expect(tab.queue).toEqual([]);
+    expect(tab.chat.running).toBe(true);
+  });
+
+  it("keeps a message queued when it cannot be sent, and sends it after reconnecting", () => {
+    useStore.getState().sendTask("first");
+    useStore.getState().queueMessage("later");
+    acceptSend = false;
+    lastHandlers!.onFrame({ type: "idle" });
+    expect(activeTab(useStore.getState().tabs).queue.map((m) => m.text)).toEqual(["later"]);
+    acceptSend = true;
+    lastHandlers!.onState("disconnected");
+    lastHandlers!.onState("connected");
+    expect(sent.at(-1)).toMatchObject({ type: "start", task: "later" });
+    expect(activeTab(useStore.getState().tabs).queue).toEqual([]);
+  });
+
+  it("holds the queue when the run it followed is interrupted by a lost connection", () => {
+    useStore.getState().sendTask("first");
+    useStore.getState().queueMessage("later");
+    lastHandlers!.onState("disconnected");
+    expect(activeTab(useStore.getState().tabs)).toMatchObject({ queuePaused: true });
+    lastHandlers!.onState("connected");
+    expect(sent.filter((f) => f.type === "start")).toHaveLength(1);
+    useStore.getState().resumeQueue();
+    expect(sent.at(-1)).toMatchObject({ type: "start", task: "later" });
+    expect(activeTab(useStore.getState().tabs)).toMatchObject({ queue: [], queuePaused: false });
+  });
+
+  it("does not drain while a permission prompt is open", () => {
+    useStore.getState().sendTask("first");
+    useStore.getState().queueMessage("later");
+    lastHandlers!.onFrame({
+      type: "permission.request",
+      requestId: "p9",
+      request: { toolName: "run_command", permission: "execute", description: "run", command: "ls" },
+    });
+    expect(activeTab(useStore.getState().tabs).queue).toHaveLength(1);
+    expect(sent.filter((f) => "task" in f && f.task === "later")).toHaveLength(0);
+  });
+
+  it("caps the queue", () => {
+    useStore.getState().sendTask("first");
+    for (let i = 0; i < 20; i++) expect(useStore.getState().queueMessage(`m${i}`)).toBe(true);
+    expect(useStore.getState().queueMessage("overflow")).toBe(false);
+  });
+});
+
+describe("store: tab names", () => {
+  beforeEach(() => {
+    resetStore();
+    sessionRenameMock.mockClear();
+    useStore.setState({ tabs: initialTabsState("ws-a") });
+    useStore.getState().connect();
+    lastHandlers!.onState("connected");
+  });
+
+  it("keeps a name given before the first task and hands it to the new session", async () => {
+    await useStore.getState().renameTab("t1", "  Parser   work ");
+    expect(sessionRenameMock).not.toHaveBeenCalled();
+    useStore.getState().sendTask("fix the tokenizer");
+    expect(activeTab(useStore.getState().tabs).title).toBe("Parser work");
+    lastHandlers!.onFrame({
+      type: "event",
+      sessionId: "s-new",
+      event: { type: "session.created", sessionId: "s-new" },
+    });
+    expect(sessionRenameMock).toHaveBeenCalledWith("s-new", "Parser work", "ws-a");
+    // A later turn resumes the same session; it must not re-apply the tab name
+    // over a rename made elsewhere.
+    lastHandlers!.onFrame({ type: "idle" });
+    useStore.getState().sendTask("and the lexer");
+    lastHandlers!.onFrame({
+      type: "event",
+      sessionId: "s-new",
+      event: { type: "session.created", sessionId: "s-new" },
+    });
+    expect(sessionRenameMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("renames the bound session and restores the derived title when cleared", async () => {
+    useStore.getState().sendTask("refactor the loop");
+    lastHandlers!.onFrame({ type: "event", sessionId: "s1", event: { type: "session.created", sessionId: "s1" } });
+    await useStore.getState().renameTab("t1", "Loop refactor");
+    expect(sessionRenameMock).toHaveBeenLastCalledWith("s1", "Loop refactor", "ws-a");
+    expect(activeTab(useStore.getState().tabs)).toMatchObject({ title: "Loop refactor", titleCustom: true });
+    await useStore.getState().renameTab("t1", "");
+    expect(sessionRenameMock).toHaveBeenLastCalledWith("s1", "", "ws-a");
+    expect(activeTab(useStore.getState().tabs)).toMatchObject({ title: "refactor the loop", titleCustom: false });
+  });
+
+  it("leaves the title alone when the server refuses the rename", async () => {
+    useStore.getState().sendTask("task");
+    lastHandlers!.onFrame({ type: "event", sessionId: "s2", event: { type: "session.created", sessionId: "s2" } });
+    sessionRenameMock.mockRejectedValueOnce(new Error("nope"));
+    await expect(useStore.getState().renameTab("t1", "Named")).rejects.toThrow("nope");
+    expect(activeTab(useStore.getState().tabs).titleCustom).toBe(false);
+  });
+
+  it("continues a named session under its name", () => {
+    useStore.getState().continueSession(
+      {
+        id: "s9",
+        task: "long task text",
+        mode: "edit",
+        status: "completed",
+        createdAt: "",
+        updatedAt: "",
+        name: "Named",
+      },
+      [],
+      "ws-a",
+    );
+    expect(activeTab(useStore.getState().tabs)).toMatchObject({ title: "Named", titleCustom: true });
+  });
+});
+
+describe("store: refusal reasons", () => {
+  beforeEach(() => {
+    resetStore();
+    useStore.setState((s) => ({
+      tabs: updateTab(s.tabs, s.tabs.activeTabId, {
+        pendingPermission: {
+          requestId: "p5",
+          request: { toolName: "write_file", permission: "write", description: "Write", path: "a.txt" },
+        },
+      }),
+    }));
+    useStore.getState().connect();
+  });
+
+  it("sends a trimmed reason with a denial", () => {
+    useStore.getState().respondPermission(false, undefined, undefined, "  put it in docs/ ");
+    expect(sent.find((f) => f.type === "permission.response")).toEqual({
+      type: "permission.response",
+      requestId: "p5",
+      approved: false,
+      feedback: "put it in docs/",
+    });
+  });
+
+  it("drops a blank reason and never sends one with an approval", () => {
+    useStore.getState().respondPermission(true, undefined, undefined, "ignored");
+    expect(sent.find((f) => f.type === "permission.response")).toEqual({
+      type: "permission.response",
+      requestId: "p5",
+      approved: true,
+    });
   });
 });

@@ -686,12 +686,12 @@ settings directly. It is intentionally not accepted by CLI `config set`.
 
 ### `permissionRules`
 
-Fine-grained allow/deny permission rules that augment the built-in 5-level
+Fine-grained allow/deny/ask permission rules that augment the built-in 5-level
 permission policy. Each rule is an object:
 
 ```typescript
 type PermissionRule = {
-  action: "allow" | "deny";
+  action: "allow" | "deny" | "ask";
   /** Tool name or "*" for any tool. */
   tool: string;
   /**
@@ -703,13 +703,14 @@ type PermissionRule = {
 ```
 
 **Evaluation order**: First matching rule of each action category wins. Deny
-rules are scanned before allow rules, so a matching deny always blocks (even
-readonly tools). Allow rules never override ask-mode blocking and never rescue
+rules are scanned before ask rules, and ask rules before allow rules, so a
+matching deny always blocks (even readonly tools) and a matching ask always
+prompts. Allow rules never override ask-mode blocking and never rescue
 `"dangerous"`-classified calls.
 
 Rules from different config layers are concatenated rather than replaced.
-Repository layers contribute `deny` rules only; trusted global/settings layers
-may contain both actions.
+Repository layers contribute `deny` and `ask` rules only; trusted
+global/settings layers may contain all three actions.
 
 ```json
 {
@@ -720,8 +721,16 @@ may contain both actions.
 }
 ```
 
-Settable via `config set`? **No** — edit the file directly, or let the
-permission prompt write one for you (below).
+Settable via `config set`? **No** — edit the file directly, use Desktop
+**Settings → Permissions**, or let the permission prompt write one for you
+(below).
+
+The Desktop editor lists the stored rules of the project config and of
+`~/.seekforge/config.json` in evaluation order and adds, edits, or deletes one
+rule at a time through the server (`/api/permission-rules`). Project scope
+offers only `deny` and `ask`, and an `allow` rule already stored there is shown
+as ignored; every edit names the entry it replaces, so an edit made elsewhere in
+the meantime is refused rather than overwritten.
 
 #### Saving a rule from the permission prompt
 
@@ -895,7 +904,9 @@ prevents the tool call or run from proceeding. All other stages are advisory
 
 Hook entries are concatenated per stage across trusted config layers for **all**
 stages: **global → settings**. Repository hooks are inert. The Desktop hook
-editor writes `~/.seekforge/config.json`.
+editor writes `~/.seekforge/config.json`; it edits `command`, `match`, and
+`pattern` directly and keeps every other entry field (and any stage a newer
+build added) verbatim, showing those fields as editable JSON values.
 
 Settable via `config set`? **No** — edit the file directly.
 
@@ -1188,7 +1199,7 @@ Three fields merge across layers rather than replace:
 | Field | Merge strategy |
 | --- | --- |
 | `mcpServers` | Per-server key merge, **provenance-aware**. Repository layers (`.seekforge/config.json`, `config.local.json`, and profiles in either) may introduce new server names but never override a name a user-owned layer defines; their entries always lose `trusted` and any `permission`/`toolPermissions` looser than `write`. Only a complete user-owned entry can enable automatic connection. This holds on every surface — CLI, TUI, `seekforge serve`, and Desktop through the server — because all four merge through the same layer algebra, which takes each layer's origin as part of its type. Only the CLI prints the narrowing; the others enforce it silently. |
-| `permissionRules` | Concatenated higher-precedence first, but repository layers contribute only valid `deny` rules. |
+| `permissionRules` | Concatenated higher-precedence first, but repository layers contribute only valid `deny` and `ask` rules. |
 | `hooks` | Per-stage concatenation across trusted layers: global → settings. Repository hooks are ignored. |
 
 If a higher layer supplies the wrong runtime shape for one of these fields, that

@@ -40,6 +40,7 @@ import * as sessionRoutes from "./routes/sessions.js";
 import * as securityRoutes from "./routes/security.js";
 import * as settingsRoutes from "./routes/settings.js";
 import * as skillsAgentsRoutes from "./routes/skills-agents.js";
+import * as terminalRoutes from "./routes/terminal.js";
 import * as triggerRoutes from "./routes/triggers.js";
 import * as workspaceRoutes from "./routes/workspaces.js";
 import { WorktreeError } from "./worktrees.js";
@@ -71,6 +72,7 @@ const ROUTE_GROUPS: ReadonlyArray<(ctx: RouteCtx) => Promise<boolean>> = [
   orchestrationRoutes.handle,
   securityRoutes.handle,
   settingsRoutes.handle,
+  terminalRoutes.handle,
 ];
 
 export async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL, ctx: RestContext): Promise<void> {

@@ -30,4 +30,12 @@ describe("filterSessions", () => {
   it("matches nothing when no session fits", () => {
     expect(filterSessions(sessions, "zzz")).toEqual([]);
   });
+
+  it("matches a user-chosen name", () => {
+    const named = [
+      { id: "s-1", task: "do the thing", name: "Release prep" },
+      { id: "s-2", task: "other" },
+    ];
+    expect(filterSessions(named, "release").map((s) => s.id)).toEqual(["s-1"]);
+  });
 });

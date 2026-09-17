@@ -25,22 +25,26 @@ import {
   resolveProviderPreset,
   verifyProviderAccess,
   SessionBusyError,
-  type HookConfig,
-  type HookEntry,
   type McpClientEntry,
   type McpServerConfig,
 } from "@seekforge/core";
 import {
+  ConfigValueError,
+  globalConfigLeaseRoot,
+  listPermissionRules,
   loadConfig,
   maskedConfig,
+  mutatePermissionRules,
+  parsePermissionRuleInput,
   readProjectFile,
   seekforgeHome,
   setConfigValue,
   writeProjectFileAtomic,
+  type PermissionRuleScope,
 } from "../config.js";
 import { readFileBounded } from "@seekforge/shared/bounded-file-read";
-import { MAX_CONFIG_FILE_BYTES, sanitizeProjectConfig } from "@seekforge/shared/config-layers";
-import { PERMISSION_LEVEL, type PermissionName } from "@seekforge/shared";
+import { GLOBAL_CONFIG_LOCK_ID, MAX_CONFIG_FILE_BYTES, sanitizeProjectConfig } from "@seekforge/shared/config-layers";
+import { compareByCodePoints, HOOK_STAGES, PERMISSION_LEVEL, type PermissionName } from "@seekforge/shared";
 import { readJsonBody, requestAbortSignal, sendApiError, sendJson } from "../http.js";
 import { runShellCommand } from "../shell-command.js";
 import { addTodo, loadTodos, removeTodo, toggleTodo } from "@seekforge/shared/todos";
@@ -53,9 +57,21 @@ type ConfigDoc = { mcpServers?: Record<string, McpServerConfig>; [k: string]: un
 type McpScope = "global" | "project";
 
 const MASKED_SECRET = "********";
-const GLOBAL_CONFIG_LOCK_ID = "coord-server-global-config";
 
 class ConfigMutationError extends Error {}
+
+class PermissionRuleConflict extends Error {}
+
+/** Key-order-independent JSON, so "the entry is unchanged" does not depend on how it was built. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) =>
+    item !== null && typeof item === "object" && !Array.isArray(item)
+      ? Object.fromEntries(
+          Object.entries(item as Record<string, unknown>).sort(([a], [b]) => compareByCodePoints(a, b)),
+        )
+      : item,
+  );
+}
 
 function isMcpServerConfig(value: unknown): value is McpServerConfig {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -96,7 +112,9 @@ async function withSettingsMutation<T>(
   operation: () => T,
 ): Promise<T> {
   if (scope === "global") {
-    const lease = acquireSessionLease(seekforgeHome(), GLOBAL_CONFIG_LOCK_ID);
+    // The same lease the CLI, the TUI and appendGlobalPermissionRule take, so a
+    // settings write here cannot silently drop an edit one of them made.
+    const lease = acquireSessionLease(globalConfigLeaseRoot(), GLOBAL_CONFIG_LOCK_ID);
     try {
       return operation();
     } finally {
@@ -226,49 +244,62 @@ function sanitizedMcpServer(name: string, cfg: McpServerConfig, source: McpScope
   };
 }
 
-const HOOK_STAGES = [
-  "preToolUse",
-  "postToolUse",
-  "sessionStart",
-  "userPromptSubmit",
-  "preCompact",
-  "stop",
-  "subagentStop",
-  "notification",
-  "sessionEnd",
-] as const;
+type StoredHooks = Record<string, Record<string, unknown>[]>;
 
-/** Validates a hooks object from PUT /api/hooks into a clean HookConfig. */
-function validateHooks(input: unknown): { hooks: HookConfig } | { error: string } {
-  if (input === null || typeof input !== "object") return { error: "hooks must be an object" };
-  const out: HookConfig = {};
+const HOOK_FIELD_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+const MAX_HOOK_ENTRIES_PER_STAGE = 100;
+
+/**
+ * Validates a hooks object from PUT /api/hooks. The fields this build knows are
+ * checked; everything else on an entry is kept verbatim, and a stage is
+ * accepted when the shared stage list names it or the stored config already
+ * has it. An editor round trip therefore never strips a hook type, timeout or
+ * stage a newer loader understands, while a brand-new misspelled stage is
+ * still refused.
+ */
+function validateHooks(input: unknown, storedStages: ReadonlySet<string>): { hooks: StoredHooks } | { error: string } {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) return { error: "hooks must be an object" };
+  const out: StoredHooks = {};
   for (const [stage, entries] of Object.entries(input as Record<string, unknown>)) {
-    if (!(HOOK_STAGES as readonly string[]).includes(stage)) {
+    if (!(HOOK_STAGES as readonly string[]).includes(stage) && !storedStages.has(stage)) {
       return { error: `unknown hook stage: ${stage}` };
     }
     if (!Array.isArray(entries)) return { error: `${stage} must be an array` };
-    const list: HookEntry[] = [];
+    if (entries.length > MAX_HOOK_ENTRIES_PER_STAGE) {
+      return { error: `${stage} has more than ${MAX_HOOK_ENTRIES_PER_STAGE} entries` };
+    }
+    const list: Record<string, unknown>[] = [];
     for (const e of entries) {
-      if (e === null || typeof e !== "object") return { error: `${stage} entries must be objects` };
-      const { command, match, pattern } = e as Record<string, unknown>;
-      if (typeof command !== "string" || command.trim() === "") {
+      if (e === null || typeof e !== "object" || Array.isArray(e)) return { error: `${stage} entries must be objects` };
+      const entry = e as Record<string, unknown>;
+      const badKey = Object.keys(entry).find((key) => !HOOK_FIELD_NAME_RE.test(key));
+      if (badKey !== undefined) return { error: `${stage} entry has an invalid field name: ${badKey}` };
+      const { command, match, pattern, type } = entry;
+      if (command !== undefined && (typeof command !== "string" || command.trim() === "")) {
+        return { error: `${stage} entry command must be a non-empty string` };
+      }
+      if (type !== undefined && (typeof type !== "string" || type.trim() === "")) {
+        return { error: `${stage} entry type must be a non-empty string` };
+      }
+      if (command === undefined && type === undefined) {
         return { error: `${stage} entry needs a non-empty command` };
       }
       if (match !== undefined && typeof match !== "string") return { error: `${stage} match must be a string` };
       if (pattern !== undefined && typeof pattern !== "string") return { error: `${stage} pattern must be a string` };
-      list.push({
-        command,
-        ...(match !== undefined && match !== "" ? { match } : {}),
-        ...(pattern !== undefined && pattern !== "" ? { pattern } : {}),
-      });
+      const kept: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(entry)) {
+        if ((key === "match" || key === "pattern") && value === "") continue;
+        kept[key] = value;
+      }
+      list.push(kept);
     }
-    if (list.length > 0) out[stage as keyof HookConfig] = list;
+    if (list.length > 0) out[stage] = list;
   }
   return { hooks: out };
 }
 
 /** Writes user-owned hooks into the global config, preserving other keys. */
-function writeHooks(workspace: string, hooks: HookConfig): void {
+function writeHooks(workspace: string, hooks: StoredHooks): void {
   try {
     const doc = readConfigDoc(workspace, "global", true);
     if (Object.keys(hooks).length === 0) delete doc.hooks;
@@ -798,6 +829,60 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     });
   }
 
+  // Permission rules editor. Rules are listed per stored layer in file order
+  // (project rules are evaluated first); edits address one entry by index and
+  // must name the entry they expect there, so a concurrent edit of the same
+  // file fails with 409 instead of changing a different rule.
+  if (path === "/api/permission-rules" && method === "GET") {
+    return sendJson(res, 200, listPermissionRules(workspace));
+  }
+  if (path === "/api/permission-rules" && (method === "POST" || method === "PUT" || method === "DELETE")) {
+    const body = await readJsonBody(req, res);
+    if (body === undefined) return;
+    const input = (body ?? {}) as { scope?: unknown; index?: unknown; expected?: unknown; rule?: unknown };
+    if (input.scope !== "user" && input.scope !== "project") {
+      return sendApiError(res, 400, "bad_request", 'scope must be "user" or "project"');
+    }
+    const scope: PermissionRuleScope = input.scope;
+    if (
+      method !== "POST" &&
+      (typeof input.index !== "number" || !Number.isSafeInteger(input.index) || input.index < 0)
+    ) {
+      return sendApiError(res, 400, "bad_request", "index must be a non-negative integer");
+    }
+    let rule: ReturnType<typeof parsePermissionRuleInput> | undefined;
+    try {
+      rule = method === "DELETE" ? undefined : parsePermissionRuleInput(input.rule, scope);
+    } catch (error) {
+      if (error instanceof ConfigValueError) return sendApiError(res, 400, "bad_request", error.message);
+      throw error;
+    }
+    const index = input.index as number;
+    const apply = () =>
+      mutatePermissionRules(workspace, scope, (rules) => {
+        if (method === "POST") {
+          if (!rules.some((existing) => canonicalJson(existing) === canonicalJson(rule))) rules.push(rule);
+          return;
+        }
+        if (index >= rules.length || canonicalJson(rules[index]) !== canonicalJson(input.expected)) {
+          throw new PermissionRuleConflict();
+        }
+        if (method === "PUT") rules[index] = rule;
+        else rules.splice(index, 1);
+      });
+    try {
+      if (scope === "user") apply();
+      else await withSettingsMutation(rest, workspace, "project", apply);
+      return sendJson(res, 200, listPermissionRules(workspace));
+    } catch (error) {
+      if (error instanceof PermissionRuleConflict) {
+        return sendApiError(res, 409, "conflict", "the rule list changed since it was loaded; reload and retry");
+      }
+      if (settingsBusy(res, error)) return;
+      throw error;
+    }
+  }
+
   if (method === "GET" && path === "/api/config") {
     return sendJson(res, 200, maskedConfig(workspace));
   }
@@ -811,7 +896,11 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     const body = await readJsonBody(req, res);
     if (body === undefined) return;
     const hooksInput = body !== null && typeof body === "object" ? (body as { hooks?: unknown }).hooks : undefined;
-    const result = validateHooks(hooksInput);
+    const stored = readConfigDoc(workspace, "global").hooks;
+    const storedStages = new Set(
+      stored !== null && typeof stored === "object" && !Array.isArray(stored) ? Object.keys(stored) : [],
+    );
+    const result = validateHooks(hooksInput, storedStages);
     if ("error" in result) {
       return sendApiError(res, 400, "bad_request", result.error);
     }

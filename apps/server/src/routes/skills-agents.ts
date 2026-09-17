@@ -3,8 +3,10 @@
  * agent definitions + import, and the self-evolution proposal review flow.
  */
 
-import { join } from "node:path";
+import { realpathSync } from "node:fs";
+import { join, resolve } from "node:path";
 import {
+  acquireSessionLease,
   applyProposal,
   BUILTIN_SKILLS,
   createPluginScaffold,
@@ -31,8 +33,50 @@ import {
   setPluginEnabled,
   SessionBusyError,
 } from "@seekforge/core";
+import {
+  AgentDefinitionError,
+  assertAgentId,
+  parseAgentDraft,
+  readAgentDefinitionSource,
+  writeAgentDefinition,
+  type AgentDefinitionScope,
+} from "../agent-definitions.js";
 import { readJsonBody, sendApiError, sendJson } from "../http.js";
 import type { RouteCtx } from "./context.js";
+
+/** Serializes global agent-definition writes across SeekForge processes. */
+const GLOBAL_AGENTS_LOCK_ID = "seekforge-global-agents";
+
+function agentScopeOf(value: unknown): AgentDefinitionScope | undefined {
+  return value === "project" || value === "global" ? value : undefined;
+}
+
+async function withAgentDefinitionMutation<T>(
+  rest: RouteCtx["rest"],
+  workspace: string,
+  scope: AgentDefinitionScope,
+  operation: () => T,
+): Promise<T> {
+  if (scope === "project") return rest.coordinator.withRepository(workspace, async () => operation());
+  const lease = acquireSessionLease(realpathSync(resolve(seekforgeHome())), GLOBAL_AGENTS_LOCK_ID);
+  try {
+    return operation();
+  } finally {
+    lease.release();
+  }
+}
+
+function sendAgentDefinitionError(res: RouteCtx["res"], error: unknown): boolean {
+  if (error instanceof AgentDefinitionError) {
+    sendApiError(res, error.status, error.code, error.message);
+    return true;
+  }
+  if (error instanceof SessionBusyError) {
+    sendApiError(res, 409, "session_busy", "another SeekForge process is updating agent definitions");
+    return true;
+  }
+  return false;
+}
 
 /** Skills shipped in-package are immutable: refuse to mutate/delete them. */
 function isBuiltinSkill(id: string): boolean {
@@ -295,6 +339,60 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       return sendJson(res, 200, { ok: true, dir, agent, droppedTools });
     } catch (err) {
       return sendApiError(res, 400, "bad_request", err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // Editable source of one project/global definition (the Desktop agent form).
+  // Without ?scope the definition's own effective scope is used.
+  if (method === "GET" && segs.length === 4 && segs[1] === "agents" && segs[3] === "source") {
+    const id = segs[2]!;
+    const requested = url.searchParams.get("scope");
+    let scope = agentScopeOf(requested);
+    if (requested !== null && scope === undefined) {
+      return sendApiError(res, 400, "bad_request", 'scope must be "project" or "global"');
+    }
+    if (scope === undefined) {
+      const effective = loadAgentDefinitions(workspace).find((d) => d.id === id);
+      if (!effective) return sendApiError(res, 404, "not_found", `agent not found: ${id}`);
+      scope = agentScopeOf(effective.scope);
+      if (scope === undefined) {
+        return sendApiError(
+          res,
+          400,
+          "bad_request",
+          `agent "${id}" is read-only here; create a project agent with the same id to override it`,
+        );
+      }
+    }
+    try {
+      return sendJson(res, 200, readAgentDefinitionSource(workspace, scope, id));
+    } catch (error) {
+      if (sendAgentDefinitionError(res, error)) return;
+      throw error;
+    }
+  }
+
+  // Create (POST /api/agents) or update (PUT /api/agents/:id) one definition.
+  if (
+    (method === "POST" && path === "/api/agents") ||
+    (method === "PUT" && segs.length === 3 && segs[1] === "agents")
+  ) {
+    const body = await readJsonBody(req, res);
+    if (body === undefined) return;
+    const input = (body ?? {}) as Record<string, unknown>;
+    const scope = agentScopeOf(input.scope);
+    if (scope === undefined) return sendApiError(res, 400, "bad_request", 'scope must be "project" or "global"');
+    const id = method === "POST" ? input.id : segs[2];
+    try {
+      assertAgentId(id);
+      const draft = parseAgentDraft(input);
+      const saved = await withAgentDefinitionMutation(rest, workspace, scope, () =>
+        writeAgentDefinition(workspace, scope, id, draft, method === "POST" ? "create" : "update"),
+      );
+      return sendJson(res, method === "POST" ? 201 : 200, saved);
+    } catch (error) {
+      if (sendAgentDefinitionError(res, error)) return;
+      throw error;
     }
   }
 

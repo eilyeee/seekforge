@@ -3,6 +3,9 @@ import type { AgentEvent, ChatMessage, TokenUsage } from "@seekforge/shared";
 import { isMock } from "../mock";
 import type {
   AccountBalance,
+  AgentDefinitionDraft,
+  AgentDefinitionScope,
+  AgentDefinitionSource,
   AgentImportResult,
   AgentInfo,
   BacktrackResult,
@@ -12,8 +15,9 @@ import type {
   DoctorReport,
   EvolutionProposal,
   FileContent,
+  GitHunkAction,
+  GitRemoteInfo,
   GitStatus,
-  HooksConfig,
   LoopHistoryEntry,
   LoopPruneResult,
   LoopStateSummary,
@@ -28,6 +32,10 @@ import type {
   MemoryStats,
   MemoryGovernanceReport,
   ModelInfo,
+  NamedSessionMeta,
+  PermissionRuleEntry,
+  PermissionRuleLayers,
+  PermissionRuleScope,
   PruneResult,
   PluginRecord,
   PluginSupplyChainEntry,
@@ -37,11 +45,11 @@ import type {
   SecurityFinding,
   SecurityFix,
   ServerConfig,
-  SessionMeta,
   SessionTurn,
   Skill,
   SkillSupplyChainEntry,
   SkillScope,
+  TerminalAvailability,
   Todo,
   ThreatModel,
   TreeResponse,
@@ -51,6 +59,8 @@ import type {
   WorktreeMergeResult,
   WorktreeStatus,
 } from "../types";
+import type { StoredHooks } from "../views/hooks-editor-model";
+import type { PermissionRule } from "@seekforge/shared";
 
 let tokenProvider: () => string = () => "";
 
@@ -97,7 +107,7 @@ function abortError(): Error {
 }
 
 async function request<T>(
-  method: "GET" | "POST" | "PUT" | "DELETE",
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
   body?: unknown,
   signal?: AbortSignal,
@@ -185,9 +195,9 @@ export const api = {
   },
 
   // Workspace-scoped: `?ws=<active>` is appended centrally via withWorkspace.
-  sessions: (ws?: string) => request<SessionMeta[]>("GET", withWorkspace("/api/sessions", ws)),
+  sessions: (ws?: string) => request<NamedSessionMeta[]>("GET", withWorkspace("/api/sessions", ws)),
   session: (id: string, ws?: string) =>
-    request<{ meta: SessionMeta; messages: ChatMessage[]; events: AgentEvent[] }>(
+    request<{ meta: NamedSessionMeta; messages: ChatMessage[]; events: AgentEvent[] }>(
       "GET",
       withWorkspace(`/api/sessions/${encodeURIComponent(id)}`, ws),
     ),
@@ -547,6 +557,48 @@ export const api = {
   agents: (ws?: string) => request<AgentInfo[]>("GET", withWorkspace("/api/agents", ws)),
   agent: (id: string, ws?: string) =>
     request<AgentInfo>("GET", withWorkspace(`/api/agents/${encodeURIComponent(id)}`, ws)),
+  /** Editable source of a project/global definition (builtin agents are refused). */
+  agentSource: (id: string, scope?: AgentDefinitionScope, ws?: string) =>
+    request<AgentDefinitionSource>(
+      "GET",
+      withWorkspace(`/api/agents/${encodeURIComponent(id)}/source${scope ? `?scope=${scope}` : ""}`, ws),
+    ),
+  agentCreate: (id: string, scope: AgentDefinitionScope, draft: AgentDefinitionDraft, ws?: string) =>
+    request<AgentDefinitionSource>("POST", withWorkspace("/api/agents", ws), { id, scope, ...draft }),
+  agentUpdate: (id: string, scope: AgentDefinitionScope, draft: AgentDefinitionDraft, ws?: string) =>
+    request<AgentDefinitionSource>("PUT", withWorkspace(`/api/agents/${encodeURIComponent(id)}`, ws), {
+      scope,
+      ...draft,
+    }),
+  permissionRules: (ws?: string) => request<PermissionRuleLayers>("GET", withWorkspace("/api/permission-rules", ws)),
+  permissionRuleAdd: (scope: PermissionRuleScope, rule: PermissionRule, ws?: string) =>
+    request<PermissionRuleLayers>("POST", withWorkspace("/api/permission-rules", ws), { scope, rule }),
+  permissionRuleUpdate: (scope: PermissionRuleScope, entry: PermissionRuleEntry, rule: PermissionRule, ws?: string) =>
+    request<PermissionRuleLayers>("PUT", withWorkspace("/api/permission-rules", ws), {
+      scope,
+      index: entry.index,
+      expected: entry.raw,
+      rule,
+    }),
+  permissionRuleDelete: (scope: PermissionRuleScope, entry: PermissionRuleEntry, ws?: string) =>
+    request<PermissionRuleLayers>("DELETE", withWorkspace("/api/permission-rules", ws), {
+      scope,
+      index: entry.index,
+      expected: entry.raw,
+    }),
+  terminal: (ws?: string) => request<TerminalAvailability>("GET", withWorkspace("/api/terminal", ws)),
+  /**
+   * WebSocket URL of a workspace terminal. The token rides in the query string
+   * (a browser WebSocket cannot send an Authorization header), exactly like /ws.
+   */
+  terminalUrl: (ws: string, cols: number, rows: number): string => {
+    const proto = window.location.protocol === "https:" ? "wss" : "ws";
+    const params = new URLSearchParams({ cols: String(cols), rows: String(rows) });
+    if (ws) params.set("ws", ws);
+    const token = tokenProvider();
+    if (token) params.set("token", token);
+    return `${proto}://${window.location.host}/ws/terminal?${params.toString()}`;
+  },
   evolution: (ws?: string) => request<EvolutionProposal[]>("GET", withWorkspace("/api/evolution", ws)),
   evolutionAction: (id: string, action: "accept" | "reject", ws?: string) =>
     request<EvolutionProposal>("POST", withWorkspace(`/api/evolution/${encodeURIComponent(id)}/${action}`, ws)),
@@ -810,6 +862,23 @@ export const api = {
     request<{ ok: boolean }>("POST", withWorkspace("/api/git/discard", ws), { paths }),
   gitCommit: (message: string, ws?: string) =>
     request<{ ok: boolean; commit: string }>("POST", withWorkspace("/api/git/commit", ws), { message }),
+  /** `hunk` is the hunk text exactly as /api/diff printed it. */
+  gitHunk: (path: string, hunk: string, action: GitHunkAction, ws?: string) =>
+    request<{ ok: true }>("POST", withWorkspace("/api/git/hunk", ws), { path, hunk, action }),
+  gitRemote: (ws?: string) => request<GitRemoteInfo>("GET", withWorkspace("/api/git/remote", ws)),
+  gitPush: (remote: string, branch: string, setUpstream: boolean, ws?: string) =>
+    request<{ ok: true; remote: string; branch: string; destination: string; output: string }>(
+      "POST",
+      withWorkspace("/api/git/push", ws),
+      { remote, branch, ...(setUpstream ? { setUpstream: true } : {}) },
+    ),
+  gitCreatePr: (input: { title: string; body: string; draft: boolean; base?: string }, ws?: string) =>
+    request<{ ok: true; url: string | null; output: string }>("POST", withWorkspace("/api/git/pr", ws), {
+      title: input.title,
+      body: input.body,
+      draft: input.draft,
+      ...(input.base ? { base: input.base } : {}),
+    }),
 
   // Custom slash commands surfaced in the composer (workspace-scoped).
   commands: (ws?: string) => request<CommandsResponse>("GET", withWorkspace("/api/commands", ws)),
@@ -820,9 +889,9 @@ export const api = {
   outputStyles: (ws?: string) =>
     request<{ styles: { name: string; kind: "builtin" | "custom" }[] }>("GET", withWorkspace("/api/output-styles", ws)),
   /** User-owned hooks config (the editable global config layer). */
-  hooks: (ws?: string) => request<{ hooks: HooksConfig }>("GET", withWorkspace("/api/hooks", ws)),
-  saveHooks: (hooks: HooksConfig, ws?: string) =>
-    request<{ hooks: HooksConfig }>("PUT", withWorkspace("/api/hooks", ws), { hooks }),
+  hooks: (ws?: string) => request<{ hooks: StoredHooks }>("GET", withWorkspace("/api/hooks", ws)),
+  saveHooks: (hooks: StoredHooks, ws?: string) =>
+    request<{ hooks: StoredHooks }>("PUT", withWorkspace("/api/hooks", ws), { hooks }),
 
   // Manual session compaction (workspace-scoped). Result is treated as opaque.
   sessionCompact: (id: string, ws?: string) =>
@@ -832,6 +901,18 @@ export const api = {
   // the new id so the caller can open the forked copy (workspace-scoped).
   forkSession: (id: string, ws?: string) =>
     request<{ id: string }>("POST", withWorkspace(`/api/sessions/${encodeURIComponent(id)}/fork`, ws)),
+  /** Name a session; an empty name clears it. */
+  sessionRename: (id: string, name: string, ws?: string) =>
+    request<{ id: string; name: string | null }>(
+      "PATCH",
+      withWorkspace(`/api/sessions/${encodeURIComponent(id)}`, ws),
+      {
+        name,
+      },
+    ),
+  /** Workspace-relative files the session wrote (from its checkpoints). */
+  sessionChanges: (id: string, ws?: string) =>
+    request<{ files: string[] }>("GET", withWorkspace(`/api/sessions/${encodeURIComponent(id)}/changes`, ws)),
 
   // Reviewable session audit (workspace-scoped): a rendered markdown timeline plus
   // the structured audit payload (treated as opaque). 404 for an unknown id.

@@ -6,6 +6,7 @@
  * (Authorization header, or ?token= for WS upgrade / initial page load).
  */
 
+import type { ChildProcess } from "node:child_process";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import { createRequire } from "node:module";
@@ -51,6 +52,7 @@ import { resolveStaticRoot, serveStatic } from "./static.js";
 import { createWorkspaceRegistry } from "./workspaces.js";
 import { WorktreeManager } from "./worktrees.js";
 import { handleConnection } from "./ws.js";
+import { handleTerminalConnection } from "./terminal.js";
 import type { TriggerRunHandle } from "./trigger-run.js";
 import { ServerCoordinator } from "./coordinator.js";
 import { RunManager } from "./run-ledger.js";
@@ -147,6 +149,11 @@ export type StartServerOptions = {
   orchestrationAutoRollback?: boolean;
   orchestrationMaintenanceInitialDelayMs?: number;
   orchestrationMaintenanceIntervalMs?: number;
+  /**
+   * Offer the workspace terminal (/ws/terminal). Default true; an embedder that
+   * serves a read-only or shared surface must pass false.
+   */
+  terminal?: boolean;
 };
 
 export type RunningServer = {
@@ -251,6 +258,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   const logger = opts.logger ?? createStructuredLogger();
 
   let port = 0; // the real port, known after listen()
+  let closing = false;
 
   const server = createServer((req, res) => {
     // Deliberately no Access-Control-Allow-Origin header (same-origin UI only).
@@ -289,6 +297,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
         runManager,
         logger,
         requestId,
+        terminalEnabled: opts.terminal !== false,
       })
         .catch((e: unknown) => {
           // Defense-in-depth: handleApi answers its own errors, but never leave a
@@ -314,9 +323,10 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   });
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_WS_PAYLOAD_BYTES });
+  const terminals = new Set<ChildProcess>();
   server.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
-    if (url.pathname !== "/ws") {
+    if (url.pathname !== "/ws" && url.pathname !== "/ws/terminal") {
       socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
       socket.destroy();
       return;
@@ -324,6 +334,24 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     if (!isAuthorized(req, token)) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
+      return;
+    }
+    if (url.pathname === "/ws/terminal") {
+      const workspace = registry.resolve(url.searchParams.get("ws"));
+      if (opts.terminal === false || !workspace || closing) {
+        socket.write(`HTTP/1.1 ${workspace ? "403 Forbidden" : "404 Not Found"}\r\n\r\n`);
+        socket.destroy();
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) =>
+        handleTerminalConnection(ws, {
+          cwd: workspace.path,
+          cols: url.searchParams.get("cols"),
+          rows: url.searchParams.get("rows"),
+          track: (exited) => void coordinator.track(exited),
+          active: terminals,
+        }),
+      );
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) =>
@@ -709,6 +737,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
 
   let closePromise: Promise<void> | undefined;
   const close = (): Promise<void> => {
+    closing = true;
     closePromise ??= (async () => {
       memoryMaintenanceScheduler.dispose();
       loopRecoveryScheduler?.dispose();

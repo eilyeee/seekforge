@@ -902,10 +902,13 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       }
 
       case "permission.response": {
-        const { requestId, approved, remember, selectedHunks } = frame;
+        const { requestId, approved, remember, selectedHunks, feedback } = frame;
         const settle = pending.get(requestId);
         if (!settle) return fail("unknown_request", `no pending permission request: ${String(requestId)}`);
-        if (approved && selectedHunks) {
+        if (!approved && feedback !== undefined && feedback.trim() !== "") {
+          // The reason rides along with the denial; core bounds what reaches the model.
+          settle({ allow: false, feedback });
+        } else if (approved && selectedHunks) {
           settle({ allow: true, selectedHunks });
         } else if (approved && (remember === "session" || remember === "always")) {
           // The richer ConfirmResult, so core grows its session allowlist and —

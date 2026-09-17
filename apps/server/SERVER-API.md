@@ -171,8 +171,10 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | POST /api/worktrees/:id/merge | `{merged: true}` \| `{conflict: true, files}` — dirty worktree auto-committed; conflicts abort cleanly |
 | DELETE /api/worktrees/:id | `{deleted: true}` — remove worktree + branch, unregister the workspace |
 | GET /api/project | `{path, name, detect: {languages, packageManager, frameworks, scripts}}` |
-| GET /api/sessions | `SessionMeta[]` (newest first, subagent sessions hidden) |
-| GET /api/diff[?staged=1] | `{diff, truncated}` — workspace `git diff` (2 MB cap) |
+| GET /api/sessions | `SessionMeta[]` (newest first, subagent sessions hidden); an entry carries `name` when the session was named |
+| PATCH /api/sessions/:id | body `{name}` → `{id, name}` — names a session (core `renameSession`: whitespace collapsed, at most 80 characters kept; `""` clears it and returns `name: null`). The name is stored beside the session, so renaming a running session is safe. 400 non-string name, 404 unknown session |
+| GET /api/sessions/:id/changes | `{files}` — workspace-relative paths the session wrote, from its checkpoint log, once each in first-write order (`[]` when it edited nothing); 404 unknown session. Desktop's "this session's changes" filter |
+| GET /api/diff[?staged=1] | `{diff, truncated, notGit?}` — workspace `git diff` (2 MB cap). The output shape is pinned against user git config (no color, no external diff driver, `a/`/`b/` prefixes, 3 context lines) because the hunk route matches on it |
 | GET /api/files[?q=] | `{files: string[], truncated}` — workspace-relative paths (BFS, shallow first; skips the tools' DEFAULT_IGNORE_DIRS, dot-directories, and symlinks; capped at 2000, `truncated: true` when the cap cut the scan short). `q` is a case-insensitive substring filter on the relative path, applied while scanning. Feeds the web composer's `@` file picker. |
 | GET /api/search?q=`<term>`[&case=1][&regex=1] | `{hits: [{path, line, text, col, len}], truncated, error?}` — project-wide content search over the same ignore-aware file set as `/api/files`. `q` is matched literally by default; `regex=1` treats it as a JS regex; `case=1` makes it case-sensitive (default: case-insensitive). Records the **first** non-empty match per line: `path` (workspace-relative), `line` (1-based), `text` (the matched line, clipped to 240 chars), `col` (0-based match offset within `text`) and `len` (match length). Empty `q` → no hits. **Bounded on every axis:** ≤1500 files scanned, files >500 KB or binary skipped (size checked via stat before reading), ≤200 hits, and a 3 s wall-clock budget; `truncated: true` when any cap (hit limit, time budget, or the file-list cap) cut the search short. In regex mode lines longer than 2000 chars are skipped and the time-box doubles as a ReDoS guard. An invalid regex returns `{hits: [], truncated: false, error: "invalid regex"}` (HTTP 200, not an error response). |
 | GET /api/tree[?path=`<relative>`] | one workspace directory listing for the file browser; directories first, ignored/dot/sensitive entries hidden |
@@ -180,7 +182,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | PUT /api/file | body `{path, content}` → `{ok:true}`; creates/replaces a workspace text file after the same confinement checks. Returns 409 `session_busy` while an Agent session owns the workspace, preventing editor writes from racing Agent changes |
 | POST /api/upload | body `{name, dataBase64}` — saves a pasted/dropped image to `.seekforge/uploads/img-<stamp>.<ext>` and returns `{path}` (workspace-relative; core `image_analyze` consumes it). Only the extension of `name` is used (png/jpg/jpeg/gif/webp); decoded size capped at 4 MB; `dataBase64` may carry a data-URL prefix. Errors: 400 `bad_request` (bad JSON/fields/extension/base64), 413 `too_large`. |
 | GET /api/raw?path=`<workspace-relative>` | streams the raw image bytes with the matching `Content-Type` (png/jpg/jpeg/gif/webp) so the UI can render real `<img>` thumbnails of uploaded images. **Hard-confined**: `path` must resolve to a regular file *inside* the physical `.seekforge/uploads/` directory of the workspace — traversal (`..`), absolute paths, any symlinked path component, and paths outside `.seekforge/uploads/` are refused. This is deliberately NOT a general file-serving endpoint. Cached `immutable` (upload names are unique). Errors: 400 `bad_request` (missing/escaping/outside-uploads path), 415 `unsupported_media_type` (non-image extension), 404 `not_found` (missing/not a file), 413 `too_large` (over 8 MB). Like all `/api/*` routes the token is required; `<img>` tags pass it via `?token=`. |
-| GET /api/sessions/:id | `{meta: SessionMeta, messages: ChatMessage[], events: AgentEvent[]}`; events let Desktop reconstruct persisted subagent state |
+| GET /api/sessions/:id | `{meta: SessionMeta, messages: ChatMessage[], events: AgentEvent[]}`; events let Desktop reconstruct persisted subagent state; `meta.name` is present when the session was named |
 | GET /api/sessions/:id/turns | `[{turn, text, backtrackable}]` — every `role:"user"` message of messages.jsonl in file order, numbered 0..N-1 (the same all-user-messages indexing the core's truncateSessionAtUserTurn / rewindSessionToTurn use). Turn 0 (the original task) has `backtrackable: false`; `[]` when no messages.jsonl exists yet; 404 unknown session |
 | POST /api/sessions/:id/compact | mechanically compact the stored session and return the new message counts |
 | POST /api/sessions/:id/fork | copy the session into a new id so the original stays intact |
@@ -224,17 +226,29 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/git/status | `{notGit?, branch, files}` — working-tree status with the paths the UI stages/discards by |
 | POST /api/git/stage\|unstage\|discard | body `{paths}` — stage, unstage, or discard the named working-tree paths |
 | POST /api/git/commit | body `{message}` → `{ok, commit}` — commits the staged tree and returns the new HEAD |
+| POST /api/git/hunk | body `{path, hunk, action:"stage"\|"unstage"\|"revert"}` → `{ok:true}` — applies ONE hunk: `stage` = `git apply --cached`, `unstage` = `git apply --cached -R` (hunk taken from the staged diff), `revert` = `git apply -R` on the working tree. `hunk` is the hunk text exactly as `/api/diff` printed it; under the same repository/workspace guard as stage/discard, the server recomputes that file's diff and applies its own copy only when one of its hunks still matches, so a stale view can never apply a different change (409 `conflict` otherwise, and when `git apply` refuses). 400 malformed body / `not_a_git_repo`, 409 `session_busy` while a session owns the workspace. Renamed and binary files have no hunk form — use the whole-file routes |
+| GET /api/git/remote | `{notGit?, branch, remotes, upstream, ahead, behind, gh:{available}}` — the checked-out branch (`null` when HEAD is detached), remote names, the branch's configured upstream `{remote, branch}` (or `null`), commits ahead/behind it, and whether the GitHub CLI can be started |
+| POST /api/git/push | body `{remote, branch, setUpstream?}` → `{ok, remote, branch, destination, output}` — pushes the checked-out branch to `remote` as `refs/heads/<branch>:refs/heads/<destination>` (`destination` = the upstream branch when that remote is the upstream, else the same name), with `--set-upstream` when asked. **Never forced**: there is no force option and the refspec cannot carry git's `+`. `branch` must still be the checked-out branch (409 otherwise) and `remote` a configured remote (400). Runs under the repository guard with `GIT_TERMINAL_PROMPT=0` and a 120 s timeout. A ref the remote refuses (non-fast-forward, per `--porcelain`'s `!` flag) is 409 `conflict`; any other failure is 400 `git_error`; both carry git's output |
+| POST /api/git/pr | body `{title, body?, draft?, base?}` → `{ok, url, output}` — runs `gh pr create --title=… --body=… [--draft] [--base=…]` in the workspace (no prompts, no update check, 120 s timeout) and returns the URL gh printed. The branch must already be pushed. 400 when gh is not installed (`gh` absent from `PATH`), when gh fails (its output is relayed), or on a malformed body (single-line title of 1-256 characters; `base` a branch name) |
 | POST /api/sessions/prune | body `{olderThanDays?, keepLast?, dryRun?}` — removes stored sessions; 409 `session_busy` while a session is running |
 | GET /api/output-styles | `{styles: [{name, kind: "builtin"\|"custom"}]}` — selectable output styles: the in-package built-ins plus every custom `.seekforge/output-styles/*.md` of the workspace |
 | POST /api/commands/expand | body `{name, args}` → `{text}` — expands a custom slash command server-side: interpolates `args` into `$ARGUMENTS` / `$1`..`$9` and runs any ``!`shell` `` injections in the workspace (`/bin/sh -c`, 10 s timeout, 1 MB stdout cap; cwd = workspace), returning the final text. Shell expansion shares the repository/workspace mutation guard and returns 409 while another process owns the workspace. `name` resolves over the project + user command layers (project wins); 400 on missing/empty `name`, 404 `unknown command: <name>` |
 | GET /api/hooks | `{hooks}` — the user-owned hooks block from `~/.seekforge/config.json` (`{}` when none) |
-| PUT /api/hooks | body `{hooks}` — replaces the user-owned `~/.seekforge/config.json` hooks block (other config keys preserved; an empty/omitted hooks block is dropped), returns `{hooks}`. Validated against the 9 stages (`preToolUse`, `postToolUse`, `sessionStart`, `userPromptSubmit`, `preCompact`, `stop`, `subagentStop`, `notification`, `sessionEnd`); each entry needs a non-empty `command` plus optional string `match`/`pattern`. 400 on an unknown stage or malformed shape; global updates use the cross-process settings lease |
+| PUT /api/hooks | body `{hooks}` — replaces the user-owned `~/.seekforge/config.json` hooks block (other config keys preserved; an empty/omitted hooks block is dropped), returns `{hooks}`. A stage is accepted when it is one of the shared hook stages or already present in the stored block, so an editor round trip keeps stages a newer build added while a new misspelled stage is still refused. Each entry is an object with a non-empty `command` or `type`; `command`/`type` must be non-empty strings and `match`/`pattern` strings when present (empty `match`/`pattern` are dropped); every other field (`url`, `prompt`, `timeout`, …) is kept verbatim. Field names must be identifiers; at most 100 entries per stage. 400 on a refused stage or malformed shape; global updates use the global-config lease every SeekForge writer of that file shares |
+| GET /api/permission-rules | `{project: Entry[], user: Entry[]}` — the stored `permissionRules` of the workspace `.seekforge/config.json` and of `~/.seekforge/config.json`, each in file order (project rules are evaluated first). `Entry` = `{index, raw, rule?, effective}`: `raw` is the stored value verbatim, `rule` is present when it is a well-formed rule, and `effective` says whether loading that layer keeps it (a project `allow` rule is reported with `effective:false`, because repository config may only tighten) |
+| POST /api/permission-rules | body `{scope:"user"\|"project", rule:{action:"allow"\|"deny"\|"ask", tool, match?}}` — appends a rule (an identical stored rule is not duplicated) and returns the new listing. `tool` is trimmed and required, `match` is trimmed and dropped when empty, unknown rule fields are refused. Project scope refuses `allow` (400): the checkout's config may only deny or ask |
+| PUT /api/permission-rules | body `{scope, index, expected, rule}` — replaces the entry at `index`, only if it still equals `expected` (the `raw` value the editor was filled from); 409 `conflict` otherwise, so a concurrent edit never changes a different rule. Same rule validation as POST |
+| DELETE /api/permission-rules | body `{scope, index, expected}` — removes that entry under the same `expected` guard; an emptied list removes the `permissionRules` key. Entries the editor could not parse are never rewritten by an edit of another entry. User scope takes the global-config lease (a collision is 400 "another SeekForge process…"); project scope shares the repository/workspace guard (409 `session_busy` while a session is active). Malformed config files are refused, not replaced |
 | GET /api/config | config with `apiKey` masked (`sk-xxx****`), plus `{model, baseUrl, runtimeBin, commandAllowlist}` and the engine knobs `{sandbox, compaction, thinking, reasoningEffort}` plus resolved `memoryMaintenance` defaults (always present); `mcpServers` is omitted (env values may be secret — see GET /api/mcp) |
 | GET /api/agents | `AgentDefinition[]` without prompt bodies (id, name, scope, mode, model?, tools?, description, triggers, ...) |
 | GET /api/agents/:id | full definition incl. prompt body (404 unknown) |
+| GET /api/agents/:id/source[?scope=project\|global] | the editable form of one definition: `{id, scope, path, name, description, tools, mode, model, maxTurns, body, extra}` where `tools: null` means every tool and `extra` lists every other frontmatter entry as `{key, value}` with `value` the raw YAML text (continuation lines included). Without `scope` the definition's effective scope is used; builtin and plugin definitions are read-only (400). 404 when that scope has no definition |
+| POST /api/agents | body `{id, scope:"project"\|"global", name, description, tools, mode, model, maxTurns, body, extra}` → `201` source — creates `.seekforge/agents/<id>/AGENT.md` (project) or `~/.seekforge/agents/<id>/AGENT.md` (global). `id` is lowercase letters, digits and dashes (max 64), never a path; 409 when the definition exists. The rendered file is validated with core's parser before it is written and must load through core's loader afterwards (otherwise the previous state is restored and 400 returned). `extra` values are raw YAML: continuation lines must be indented, `- ` list items or comments, and may not repeat a form key |
+| PUT /api/agents/:id | body `{scope, …same fields}` → source — updates an existing definition (404 when absent). Form keys are rewritten in place; `extra` entries whose text is unchanged keep their original lines byte-for-byte, removed ones are dropped, new ones are appended, and comments are kept. Project writes share the repository guard; global writes take a cross-process lease (409 `session_busy` on collision) |
 | POST /api/agents/import | import a subagent definition from a supplied path into the workspace roster |
 | GET /api/evolution | `EvolutionProposal[]` (pending first, newest first within each group) |
 | POST /api/evolution/:id/accept\|reject\|apply | updated proposal (apply returns `{proposal, changedPath}`); 404 unknown id, 409 on wrong-state transitions and apply failures (e.g. skill_exists) |
+| GET /api/terminal | `{available, shell?, pty?, reason?, cwd}` — whether this server offers the workspace terminal (`/ws/terminal`), the shell it would start, and whether it runs under a real PTY |
 | GET /api/mcp | effective global/project servers with transport, scope, shadowing, and masked env/header/OAuth values; when a name exists in both scopes the GLOBAL entry is the effective one and the project entry is reported as ignored (`shadowedProject`); a project entry is always reported untrusted, and its `permission`/`toolPermissions` are shown as the loaders reduce them, not as the file spells them |
 | POST /api/mcp | add/update one scoped stdio or HTTP server; accepts structured `args`, `env`, `headers`, default `permission` (`null` clears it), per-tool `toolPermissions` (empty object clears overrides), and optional refresh-token `oauth`; masked sentinels preserve existing secrets. `trusted:true` requires global scope. The complete read/merge/write is serialized per selected layer; 409 `session_busy` when that layer is owned |
 | DELETE /api/mcp/:name?scope=project\|global | remove one server from the selected config layer; 409 `session_busy` when that layer is owned |
@@ -321,6 +335,7 @@ edit the same workspace concurrently; read-only ask runs remain parallel.
                    "continuation": {"maxSlices": 4, "noProgressLimit": 5}?,
                    "model": "..."?, "thinking": true?, "reasoningEffort": "high"|"max"?} // the session's own (plan -> execute)
 {"type": "permission.response", "requestId": "p1", "approved": true}
+{"type": "permission.response", "requestId": "p1", "approved": false, "feedback": "use pnpm, not npm"}  // feedback optional, deny only
 {"type": "question.answer", "id": "q1", "answer": "Option A"} // answer a pending question.request
 {"type": "loop", "task": "...", "verifyCommand": "pnpm test", "maxIterations": 8?, "budget": 0.5?,
                  "verificationPlan": [{"id":"types","command":"pnpm typecheck","required":true,"timeoutMs":120000}]?,
@@ -436,6 +451,15 @@ Rules:
   treated as denied). A malformed response is `bad_frame`; if its `requestId`
   can be recovered, the pending request is denied immediately so malformed
   `selectedHunks` can never widen a partial approval.
+- `permission.response.feedback` (optional, a string of at most 4000
+  characters) is the user's reason for a refusal. With `approved: false` and a
+  non-blank value the server answers core with `{allow: false, feedback}`, and
+  core appends the (further clipped) reason to the denial the model reads; on
+  an approval, or when blank, it is ignored. Older servers ignore the field and
+  older clients never send it.
+- A client may queue messages typed during a run (Desktop does): it sends the
+  next one as an ordinary `send` after `idle`. The server still accepts only
+  one running session per connection; nothing about the busy rule changes.
 `question.request.freeText` is optional. When present the user may type an
 answer instead of picking one of `options`; `options` is never empty, so a
 client that ignores the flag still renders an answerable prompt.
@@ -460,6 +484,37 @@ client that ignores the flag still renders an answerable prompt.
 - Socket close while running → the run is cancelled (AbortController).
 - Socket close or parent completion cancels remaining child dispatches and clears
   their steering queues/listeners.
+
+## Terminal WebSocket (path /ws/terminal?token=...&ws=<id>&cols=&rows=)
+
+One socket is one shell in the selected workspace (cwd = the workspace path;
+`ws` defaults to the first workspace, an unknown id is 404). The upgrade needs
+the same bearer token as `/ws` (401 otherwise) and is refused with 403 when the
+host started the server with `terminal: false`, or while the server is closing.
+At most 8 terminals run per server.
+
+The shell (`$SHELL`, else bash/zsh/sh; login + interactive for bash, zsh, fish
+and ksh) runs under the system `script` utility, so it gets a real PTY without a
+native dependency; where `script` is missing it runs on plain pipes and `ready`
+reports `pty: false`. `cols`/`rows` (2-500 / 2-300, default 100×30) size the PTY
+at start; later `resize` frames are applied best effort with `stty` on the PTY
+device. Closing the socket — or the server — sends SIGHUP to the shell's whole
+process group (SIGKILL two seconds later), and server shutdown waits for it.
+
+```jsonc
+// client → server (UTF-8 JSON text; binary frames are refused)
+{"type": "input", "data": "ls -la\r"}          // at most 64000 characters
+{"type": "resize", "cols": 120, "rows": 40}
+// server → client
+{"type": "ready", "shell": "/bin/zsh", "cwd": "/path/to/workspace", "pty": true}
+{"type": "output", "data": "..."}               // raw terminal output (ANSI included), batched
+{"type": "exit", "code": 0, "signal": null}     // then the socket closes
+{"type": "error", "code": "bad_frame"|"unavailable"|"too_many_terminals"|"spawn_failed", "message": "..."}
+```
+
+Output is paused while the socket's send buffer is above 8 MB. The terminal is
+a shell with the server account's privileges — the same trust the bearer token
+already grants through agent runs and command expansion.
 
 ## Orchestration intelligence
 
@@ -549,7 +604,9 @@ client that ignores the flag still renders an answerable prompt.
   `workspace` shorthand (back-compat). `port: 0` binds an ephemeral port (the
   real one is reported back). Two additional optional opts exist for
   tests/embedding: `createAgent` (agent-assembly override) and `staticDir`
-  (UI root override).
+  (UI root override). `terminal: false` turns the workspace terminal off
+  (`/ws/terminal` answers 403 and `GET /api/terminal` reports it unavailable);
+  an embedder serving a read-only or shared surface must pass it.
 - Dependencies: `ws` only (plus workspace packages). No express.
 - The server constructs AgentCore exactly like the CLI does (provider from
   config, default dispatcher, runtime when configured, extractMemory for
