@@ -7,6 +7,7 @@ import {
   configureLspServers,
   createAgentCore,
   createDefaultDispatcher,
+  createMcpAwareDispatcher,
   createRuntimeClient,
   loadPluginContributions,
   loadSkills,
@@ -20,11 +21,11 @@ import {
   type ChatProvider,
   type BackgroundTasks,
   type DispatchManager,
-  type McpClientEntry,
+  type HookConfig,
+  type McpRegistry as CoreMcpRegistry,
   type PluginContributions,
   type ProviderBuildInput,
   type RuntimeClient,
-  type ToolSpec,
   type McpServerRequestHandlers,
   type UsageBus,
 } from "@seekforge/core";
@@ -46,8 +47,17 @@ export type TuiAgentOptions = {
   extractMemory: boolean;
   /** Specialist agents the loop may dispatch via dispatch_agent. */
   subagents?: AgentDefinition[];
-  /** Extra tools from MCP servers (see prepareMcp). */
-  mcpToolSpecs?: ToolSpec[];
+  /**
+   * The session's live MCP registry (see prepareMcp). The run's dispatcher is
+   * built over it, so a reconnect or a server's tools/list_changed reaches the
+   * running loop and large tool lists are deferred behind tool_search.
+   */
+  mcpRegistry?: CoreMcpRegistry;
+  /**
+   * Directories granted for this session only (--add-dir, /add-dir), joined
+   * with the user config's `additionalDirectories`.
+   */
+  extraDirectories?: readonly string[];
   /** Request-local plugin snapshot shared by skills, agents, hooks, and MCP. */
   pluginContributions?: PluginContributions;
   /** Shared background-task manager: tasks survive across turns (app owns it). */
@@ -132,7 +142,7 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
         commandAllowlist: config.commandAllowlist,
         sandbox: config.sandbox,
         sandboxNetwork: config.sandboxNetwork,
-        additionalDirectories: config.additionalDirectories,
+        additionalDirectories: mergeDirectories(config.additionalDirectories, opts.extraDirectories),
         compaction: config.compaction,
         autoCompactThreshold: config.autoCompactThreshold,
         modelContextWindows: config.modelContextWindows,
@@ -155,7 +165,9 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
         ...(opts.onPricingUnavailable ? { onPricingUnavailable: opts.onPricingUnavailable } : {}),
       },
     ),
-    dispatcher: createDefaultDispatcher(opts.mcpToolSpecs ?? []),
+    // Never both: the MCP-aware dispatcher already carries every server's
+    // tools, and registering them twice is a duplicate-name error.
+    dispatcher: opts.mcpRegistry ? createMcpAwareDispatcher(opts.mcpRegistry) : createDefaultDispatcher(),
     confirm: opts.confirm,
     ...(opts.persistRule ? { persistRule: opts.persistRule } : {}),
     onModelDelta: opts.onModelDelta,
@@ -167,7 +179,7 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
     subagents: opts.subagents,
     ...(opts.dispatchManager ? { dispatchManager: opts.dispatchManager } : {}),
     ...(opts.usageBus ? { usageBus: opts.usageBus } : {}),
-    hooks: mergePluginHooks(workspace, config.hooks, pluginContributions),
+    hooks: tuiHooks(config, workspace, pluginContributions),
     pluginContributions,
     skillSnapshot: loadSkills(workspace, pluginContributions),
     ...(opts.background ? { background: opts.background } : {}),
@@ -187,11 +199,12 @@ export function createTuiAgent(opts: TuiAgentOptions): TuiAgent {
 }
 
 /**
- * Spawns the configured MCP servers (config + enabled plugins), tracked per
- * server by the returned registry (see mcp-registry.ts). Callers must invoke
- * dispose() when the session ends. `workspacePath` (absolute) is advertised to
- * each server via the roots capability, so servers answer roots/list with the
- * real workspace.
+ * Starts the session's MCP servers (config + enabled plugins) through core's
+ * registry, wrapped in the view `/mcp` reads (see mcp-registry.ts). Callers
+ * must invoke dispose() when the session ends. `workspacePath` (absolute) is
+ * advertised to each server via the roots capability and is the workspace
+ * whose project-server approvals apply. Rejects when `mcpToolSearchThreshold`
+ * is out of range.
  */
 export async function prepareMcp(
   config: TuiConfig,
@@ -200,8 +213,6 @@ export async function prepareMcp(
   opts: { origins?: Record<string, "user" | "repository">; quiet?: () => boolean } = {},
 ): Promise<{
   registry: McpRegistry;
-  specs: ToolSpec[];
-  entries: McpClientEntry[];
   pluginContributions: PluginContributions;
   dispose: () => void;
 }> {
@@ -210,19 +221,34 @@ export async function prepareMcp(
   const servers = mergePluginMcpServers(workspace, config.mcpServers, pluginContributions);
   const registry = await createMcpRegistry({
     servers,
-    // A configured name with no recorded origin survived the merge as the
-    // user's own; names only a plugin contributes stay "plugin".
+    // Without a merge report, a configured name counts as the user's own —
+    // which still connects only with `trusted: true`, a flag no repository
+    // layer can carry. Names only a plugin contributes stay "plugin".
     origins:
       opts.origins ?? Object.fromEntries(Object.keys(config.mcpServers ?? {}).map((name) => [name, "user" as const])),
+    workspace,
     ...(workspacePath ? { roots: [workspacePath] } : {}),
     ...(serverRequestHandlers ? { handlers: serverRequestHandlers } : {}),
+    ...(config.mcpToolSearchThreshold !== undefined ? { toolSearchThreshold: config.mcpToolSearchThreshold } : {}),
     ...(opts.quiet ? { quiet: opts.quiet } : {}),
   });
-  return {
-    registry,
-    specs: registry.specs(),
-    entries: registry.entries(),
-    pluginContributions,
-    dispose: () => registry.dispose(),
-  };
+  return { registry, pluginContributions, dispose: () => registry.dispose() };
+}
+
+/** The config's hooks plus the enabled plugins' — what a run fires, and what /compact fires. */
+export function tuiHooks(
+  config: Pick<TuiConfig, "hooks">,
+  workspace: string,
+  pluginContributions: PluginContributions,
+): HookConfig | undefined {
+  return mergePluginHooks(workspace, config.hooks, pluginContributions);
+}
+
+/** Config directories first, then the session's, without repeats; undefined when there are none. */
+export function mergeDirectories(
+  configured: readonly string[] | undefined,
+  session: readonly string[] | undefined,
+): string[] | undefined {
+  const merged = [...new Set([...(configured ?? []), ...(session ?? [])])];
+  return merged.length > 0 ? merged : undefined;
 }

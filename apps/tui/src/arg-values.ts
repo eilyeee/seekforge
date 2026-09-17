@@ -6,6 +6,9 @@
  * interprets it. No fs, no side effects.
  */
 
+import { REASONING_EFFORTS } from "@seekforge/shared";
+import { t } from "./strings.js";
+
 export type ArgCandidate = { value: string; hint?: string };
 
 /** Data the app gathers lazily when the picker opens. */
@@ -92,10 +95,9 @@ export function argCandidates(command: string, argSoFar: string, ctx: ArgContext
       ];
     case "think":
       return [
-        { value: "on", hint: "enable thinking mode" },
-        { value: "off", hint: "disable thinking mode" },
-        { value: "high", hint: "thinking with high reasoning effort" },
-        { value: "max", hint: "thinking with maximum reasoning effort" },
+        { value: "on", hint: t("arg.think.on") },
+        { value: "off", hint: t("arg.think.off") },
+        ...REASONING_EFFORTS.map((effort) => ({ value: effort, hint: t(`arg.think.${effort}`) })),
       ];
     case "model":
       return ctx.models.map((m) => ({ value: m.id, hint: m.note }));

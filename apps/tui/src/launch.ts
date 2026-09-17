@@ -11,7 +11,13 @@ import { normalizeExtraDir } from "@seekforge/shared/workspace-dirs";
 import { resolve } from "node:path";
 import { FileTooLargeError, MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 import { initialApprovalFor, type TuiArgs } from "./cli-args.js";
-import { ConfigLoadError, resolveTuiConfig, type ConfigLoadOptions, type TuiConfig } from "./config.js";
+import {
+  ConfigLoadError,
+  configMergeWarnings,
+  resolveTuiConfig,
+  type ConfigLoadOptions,
+  type TuiConfig,
+} from "./config.js";
 import type { ApprovalSetting } from "./model.js";
 
 export type LaunchState = {
@@ -25,6 +31,10 @@ export type LaunchState = {
   extraDirs: string[];
   appendSystemPrompt?: string;
   verbose: boolean;
+  /** What the config merge narrowed, one line each (shown once the screen is up). */
+  configWarnings: string[];
+  /** Why the configured apiKeyHelper produced no key. */
+  apiKeyHelperError?: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -103,5 +113,9 @@ export function resolveLaunch(projectPath: string, args: TuiArgs, seams: { home?
     extraDirs,
     ...(args.appendSystemPrompt ? { appendSystemPrompt: args.appendSystemPrompt } : {}),
     verbose: args.verbose === true,
+    configWarnings: configMergeWarnings(resolved.report),
+    ...(resolved.report.apiKeyHelperError !== undefined
+      ? { apiKeyHelperError: resolved.report.apiKeyHelperError }
+      : {}),
   };
 }

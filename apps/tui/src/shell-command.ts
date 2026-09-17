@@ -1,6 +1,27 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { formatUserShellContext, MAX_USER_SHELL_RUNS, type UserShellRun } from "@seekforge/core";
 
 export const MAX_SHELL_OUTPUT_BYTES = 4_000_000;
+
+/** `!` commands each tab ran since its last message, oldest first. */
+export type PendingShellRuns = Map<number, UserShellRun[]>;
+
+/** Remembers one `!` run for the tab's next message (only the most recent ones are kept). */
+export function queueShellRun(pending: PendingShellRuns, tabId: number, run: UserShellRun): void {
+  const runs = [...(pending.get(tabId) ?? []), run];
+  pending.set(tabId, runs.slice(-MAX_USER_SHELL_RUNS));
+}
+
+/**
+ * Takes the tab's pending runs for the message being sent: the block core
+ * frames them in (data, not instructions) and how many it carries. Empty
+ * block when there were none; the tab's list is cleared either way.
+ */
+export function takeShellContext(pending: PendingShellRuns, tabId: number): { block: string; count: number } {
+  const runs = pending.get(tabId) ?? [];
+  pending.delete(tabId);
+  return { block: formatUserShellContext(runs), count: Math.min(runs.length, MAX_USER_SHELL_RUNS) };
+}
 const FORCE_KILL_DELAY_MS = 250;
 
 export type ShellCommandResult = { output: string; exitCode: number };

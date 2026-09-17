@@ -1,6 +1,7 @@
 import type React from "react";
 import { Box, Text } from "ink";
 import { clipLine } from "@seekforge/shared/format";
+import { stripControls } from "../format.js";
 import { agentRowDetail, agentRowLine, type AgentDraft } from "../manage/agents.js";
 import { hookRowLine, hooksEmptyNote } from "../manage/hooks.js";
 import type { ManageView } from "../manage/index.js";
@@ -64,7 +65,7 @@ function viewContent(view: ManageView): { title: string; lines: string[]; detail
       return {
         title: t("manage.mcp.title"),
         lines: view.servers.map(mcpServerLine),
-        detail: server ? mcpServerDetail(server) : [t("manage.mcp.none")],
+        detail: server ? mcpServerDetail(server, view) : [t("manage.mcp.none")],
         footer: t("manage.mcp.footer"),
       };
     }
@@ -97,7 +98,13 @@ function viewContent(view: ManageView): { title: string; lines: string[]; detail
   }
 }
 
-/** The interactive /permissions, /mcp, /agents, /hooks, /skills and /plugins overlays. */
+/**
+ * The interactive /permissions, /mcp, /agents, /hooks, /skills and /plugins
+ * overlays. Rows, details and messages carry text other parties wrote (a
+ * repository's MCP server names and commands, hook commands, agent
+ * descriptions, a server's error), so none of it reaches the terminal with its
+ * control characters.
+ */
 export function ManageOverlay({ view }: { view: ManageView }): React.ReactElement {
   const { title, lines, detail, footer } = viewContent(view);
   const { start, end } = listWindow(lines.length, view.index, 10);
@@ -119,7 +126,7 @@ export function ManageOverlay({ view }: { view: ManageView }): React.ReactElemen
         return (
           <Text key={absolute} color={selected ? ACCENT : undefined} dimColor={!selected} wrap="truncate-end">
             {selected ? "❯ " : "  "}
-            {line}
+            {stripControls(line)}
           </Text>
         );
       })}
@@ -127,13 +134,13 @@ export function ManageOverlay({ view }: { view: ManageView }): React.ReactElemen
       {!draft
         ? detail.map((line, i) => (
             <Text key={`d${i}`} dimColor wrap="truncate-end">
-              {clipLine(line, 200)}
+              {clipLine(stripControls(line), 200)}
             </Text>
           ))
         : null}
       {view.message ? (
         <Text color={view.message.tone === "error" ? "red" : view.message.tone === "ok" ? "green" : undefined}>
-          {view.message.text}
+          {stripControls(view.message.text)}
         </Text>
       ) : null}
       <Text dimColor>{footer}</Text>

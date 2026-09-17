@@ -9,10 +9,8 @@ import {
   addMemoryFact,
   approveMemoryCandidate,
   backfillFactKeywords,
-  buildProvider,
   buildSessionAudit,
   renderSessionAuditMarkdown,
-  compactSessionNow,
   createLoopControl,
   discoverLoopVerificationPlan,
   createBackgroundTasks,
@@ -43,7 +41,6 @@ import {
   setPluginEnabled,
   setSkillEnabled,
   SessionBusyError,
-  llmCompactSessionNow,
   listGitWorktrees,
   listLoopStates,
   loadLoopState,
@@ -69,7 +66,6 @@ import {
   type McpPromptRef,
   type LoopControl,
   type PluginContributions,
-  type ToolSpec,
   type UsageBus,
 } from "@seekforge/core";
 import type { ConfirmResult, PermissionRequest } from "@seekforge/shared";
@@ -86,12 +82,14 @@ import { ghostSuggestion } from "./suggestion.js";
 import { stashList, stashPop, stashPush } from "./stash.js";
 import { THEME_PRESETS, loadTheme, themePickerLines } from "./theme.js";
 import { buildHandoff, handoffPath, listHandoffs } from "./handoff.js";
-import { formatUsageDetail, kfmt } from "./format.js";
+import { formatUsageDetail, inertLine, kfmt } from "./format.js";
 import {
   COMMANDS,
   commandRequiresIdle,
   parseInput,
   parsePositiveIndex,
+  parseThinkArg,
+  THINK_USAGE,
   type CommandSpec,
   type SlashCommand,
 } from "./commands.js";
@@ -146,7 +144,9 @@ import {
 } from "./permission-store.js";
 import { t } from "./strings.js";
 import { runSession } from "./agent/run-session.js";
-import { buildTuiProvider } from "./agent/factory.js";
+import { buildTuiProvider, tuiHooks } from "./agent/factory.js";
+import { createTabDispatchManagers } from "./agent/tab-dispatch-managers.js";
+import { compactOutcomeNotices, compactStoredSession } from "./compact.js";
 import { resumeLoop, runLoop } from "./agent/run-loop.js";
 import { formatLoopEvent, shouldRenderLoopEvent } from "./loop-format.js";
 import {
@@ -191,7 +191,7 @@ import { appendHistory, createHistoryNav, loadHistory, type HistoryNav } from ".
 import { fuzzyRank } from "./fuzzy.js";
 import { bumpFrecency, loadFrecency, rankFiles, scanWorkspaceFiles, type Frecency } from "./files.js";
 import { sessionAllowPrefix } from "./allowlist.js";
-import { backtrackTargets } from "./backtrack.js";
+import { backtrackTargets, rewindWarningLines } from "./backtrack.js";
 import { formatCandidateLine, pendingCandidates, removeCandidateAt } from "./memory-candidates.js";
 import { classifyUnifiedDiff } from "./diff.js";
 import { configKeysCheck, configParseCheck, createDefaultProbes, formatDoctorLines, runDoctor } from "./doctor.js";
@@ -238,7 +238,7 @@ import { ListOverlay } from "./components/ListOverlay.js";
 import { QuestionPanel } from "./components/QuestionPanel.js";
 import type { InteractiveChannelHolder } from "./agent/interactive-channels.js";
 import { useStatusLine } from "./use-statusline.js";
-import { runShellCommand } from "./shell-command.js";
+import { queueShellRun, runShellCommand, takeShellContext, type PendingShellRuns } from "./shell-command.js";
 import { useTerminalLifecycle } from "./use-terminal-lifecycle.js";
 import { createEscapeJoiner, type EscapeJoiner } from "./esc-prefix.js";
 import { initialPermissionUi, permissionKey, type PermissionUi } from "./permission-keys.js";
@@ -270,10 +270,7 @@ export type AppProps = {
   config: TuiConfig;
   projectPath: string;
   initialModel: string;
-  mcpToolSpecs: ToolSpec[];
   pluginContributions: PluginContributions;
-  /** Live MCP connections (resource listing / @mcp: references). */
-  mcpEntries?: McpClientEntry[];
   /** Resume this session on launch (-c / --continue). */
   initialSessionId?: string;
   /** Package version, shown in the header. */
@@ -287,7 +284,10 @@ export type AppProps = {
   channels?: InteractiveChannelHolder;
   /** Tokens spent outside the loop (an MCP server's sampling call). */
   usageBus?: UsageBus;
-  /** Live per-server MCP connections (/mcp reconnect, enable/disable). */
+  /**
+   * The session's MCP connections: every run's tools, `/mcp` (reconnect,
+   * enable/disable, project approvals), @mcp: resources and MCP prompts.
+   */
   mcpRegistry?: McpRegistry;
   /** The config layers this TUI was launched with (--settings / --profile). */
   configSources?: ConfigLoadOptions;
@@ -297,10 +297,12 @@ export type AppProps = {
   initialApproval?: ApprovalSetting;
   /** Start with verbose transcript rendering (--verbose). */
   initialVerbose?: boolean;
-  /** Extra read-only roots from --add-dir. */
+  /** Directories granted by --add-dir: the file tools and @ references may use them. */
   initialExtraDirs?: string[];
   /** Appended to every run's system prompt (--append-system-prompt). */
   appendSystemPrompt?: string;
+  /** Config merge warnings, shown once on startup. */
+  startupNotices?: string[];
 };
 
 type IdeConnection = { client: IdeClient; lock: IdeCandidate };
@@ -331,9 +333,7 @@ export function App({
   config,
   projectPath,
   initialModel,
-  mcpToolSpecs,
   pluginContributions,
-  mcpEntries = [],
   initialSessionId,
   version,
   updateNotice,
@@ -346,6 +346,7 @@ export function App({
   initialVerbose,
   initialExtraDirs,
   appendSystemPrompt,
+  startupNotices,
 }: AppProps): React.ReactElement {
   const { exit } = useApp();
   const { setRawMode } = useStdin();
@@ -407,13 +408,8 @@ export function App({
   const completionRef = useRef<TabPathCompletion | null>(null);
   const lastEscRef = useRef(0);
 
-  // The MCP servers a run gets: the registry's current connections when the
-  // app owns one (so /mcp reconnects reach the next run), else the props.
-  const liveMcpSpecs = useCallback((): ToolSpec[] => mcpRegistry?.specs() ?? mcpToolSpecs, [mcpRegistry, mcpToolSpecs]);
-  const liveMcpEntries = useCallback(
-    (): McpClientEntry[] => mcpRegistry?.entries() ?? mcpEntries,
-    [mcpRegistry, mcpEntries],
-  );
+  // The live MCP connections (resources, prompts); a reconnect updates them in place.
+  const liveMcpEntries = useCallback((): McpClientEntry[] => mcpRegistry?.entries() ?? [], [mcpRegistry]);
 
   // Mutable refs hold values the async run loop reads after renders.
   const sessionIdRef = useRef<string | undefined>(undefined);
@@ -479,7 +475,9 @@ export function App({
 
   // Custom slash commands (.seekforge/commands/*.md), loaded once.
   const customCommandsRef = useRef<CustomCommand[] | null>(null);
-  if (customCommandsRef.current === null) customCommandsRef.current = loadCustomCommands(projectPath);
+  if (customCommandsRef.current === null) {
+    customCommandsRef.current = loadCustomCommands(projectPath, pluginContributions);
+  }
 
   // Installed skills double as "/skill:<id>" palette commands.
   const skillRowsRef = useRef<ReturnType<typeof loadSkillsWithStatus> | null>(null);
@@ -514,7 +512,8 @@ export function App({
     };
   }, [liveMcpEntries, mcpGeneration]);
 
-  // Extra read-only roots for @ references (/add-dir, --add-dir).
+  // Directories granted for this session (/add-dir, --add-dir): each run's
+  // file tools may use them, and @ references may point into them.
   const extraDirsRef = useRef<string[]>([...(initialExtraDirs ?? [])]);
   // Palette ranking: commands used this session float to the top.
   const usageRef = useRef<CommandUsage>({});
@@ -560,6 +559,12 @@ export function App({
   const bgRef = useRef<BackgroundTasks | null>(null);
   if (bgRef.current === null) bgRef.current = createBackgroundTasks();
 
+  // One session-scoped subagent manager per tab: background dispatches outlive
+  // the run that started them and report to the tab's next run.
+  const [dispatchManagers] = useState(createTabDispatchManagers);
+  // `!` commands the user ran in each tab, carried into that tab's next run.
+  const pendingShellRunsRef = useRef<PendingShellRuns>(new Map());
+
   // Background tasks are process-level but stored per tab (ChatState.bgTasks).
   // A run started in tab A must sync its snapshot back into tab A even after
   // the user switches away, so callers on a run path pass the run's tab id;
@@ -575,10 +580,11 @@ export function App({
     for (const r of runsByTabRef.current.values()) r.controller.abort();
     runsByTabRef.current.clear();
     bgRef.current?.disposeAll();
+    dispatchManagers.disposeAll();
     process.stdout.write(MOUSE_DISABLE);
     clearTerminalTitle();
     exit();
-  }, [exit]);
+  }, [exit, dispatchManagers]);
 
   // Mouse capture is opt-in so native selection remains available by default.
   const { setMouseOn, suspend } = useTerminalLifecycle(config.mouse === true, projectPath, state.running, setRawMode);
@@ -592,6 +598,26 @@ export function App({
   useEffect(() => {
     for (const warning of keymapWarningsRef.current) notice(warning, "error");
   }, [notice]);
+
+  // What the config merge narrowed (a repository MCP server shadowed by one of
+  // yours, trust fields refused), once, on startup.
+  const startupNoticesRef = useRef(startupNotices ?? []);
+  useEffect(() => {
+    for (const warning of startupNoticesRef.current) notice(warning, "error");
+  }, [notice]);
+
+  /**
+   * The tab's conversation moved to another session. Its subagent manager goes
+   * with the old one, so background dispatches never report into the new one;
+   * `fresh` (a new or cleared conversation) also drops pending `!` output.
+   */
+  const endTabSession = useCallback(
+    (tabId: number, fresh = false) => {
+      dispatchManagers.retire(tabId);
+      if (fresh) pendingShellRunsRef.current.delete(tabId);
+    },
+    [dispatchManagers],
+  );
 
   /**
    * Re-reads the launch config layers and applies what a run reads per turn
@@ -831,6 +857,11 @@ export function App({
       const costBefore = tabChat().totalUsage.costUsd;
       if (opts?.echoUser !== false) dispatchTab({ type: "user", text: task });
       dispatchTab({ type: "run-start" });
+      // The tab's session-scoped subagent manager, held while this run lives.
+      const dispatchManager = dispatchManagers.current(runTabId);
+      const releaseDispatchManager = dispatchManagers.acquire(dispatchManager);
+      // `!` commands the user ran in this tab since its last message.
+      const shellContext = takeShellContext(pendingShellRunsRef.current, runTabId);
       try {
         // Inline @mcp:server:uri resource references (max 5 per message).
         const mcpRefs = [...task.matchAll(/@mcp:([A-Za-z0-9_-]+):(\S+)/g)].slice(0, 5);
@@ -873,6 +904,11 @@ export function App({
               }
             }
           }
+        }
+        // What the user's own `!` commands printed, framed as data by core.
+        if (shellContext.block) {
+          task += `\n\n${shellContext.block}`;
+          dispatchTab({ type: "notice", text: t("shell.attached").replace("{n}", String(shellContext.count)) });
         }
         // Named so the MCP clients — built before this component existed — can
         // reach the same prompts through the channel holder while this run owns
@@ -918,8 +954,10 @@ export function App({
             config: runConfigRef.current,
             model: runModel,
             projectPath,
-            mcpToolSpecs: liveMcpSpecs(),
+            ...(mcpRegistry ? { mcpRegistry: mcpRegistry.core } : {}),
             pluginContributions,
+            extraDirectories: [...extraDirsRef.current],
+            dispatchManager,
             ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
             ...(opts?.allowedTools ? { allowedTools: opts.allowedTools } : {}),
             mode: opts?.mode ?? "edit",
@@ -931,11 +969,6 @@ export function App({
               dispatchRun(a);
             },
             getSessionId: () => ownSessionId.current,
-            onDispatchManager: (manager) => {
-              if (!ownsRun(runsByTabRef.current, reservation)) return;
-              if (manager) reservation.dispatchManager = manager;
-              else delete reservation.dispatchManager;
-            },
             ...(usageBus ? { usageBus } : {}),
             confirm: sessionConfirm,
             askUser: sessionAskUser,
@@ -973,6 +1006,7 @@ export function App({
           dispatchTab({ type: "notice", tone: "error", text: `error: ${message}` });
         }
       } finally {
+        releaseDispatchManager();
         // If a permission prompt was still open when the run ended, deny it.
         const stalePerm = takeRunOwned(pendingPermissionByTabRef.current, runTabId, runId);
         if (stalePerm) {
@@ -1008,9 +1042,10 @@ export function App({
     },
     [
       projectPath,
-      liveMcpSpecs,
+      mcpRegistry,
       liveMcpEntries,
       pluginContributions,
+      dispatchManagers,
       syncBg,
       ring,
       config.costBudgetUsd,
@@ -1071,7 +1106,8 @@ export function App({
           config: runConfigRef.current,
           model: modelRef.current,
           projectPath,
-          mcpToolSpecs: liveMcpSpecs(),
+          ...(mcpRegistry ? { mcpRegistry: mcpRegistry.core } : {}),
+          extraDirectories: [...extraDirsRef.current],
           pluginContributions,
           maxIterations: options.maxIterations ?? 8,
           ...(options.costBudgetUsd !== undefined ? { costBudgetUsd: options.costBudgetUsd } : {}),
@@ -1099,7 +1135,10 @@ export function App({
           },
         });
         // Adopt the loop's session so a follow-up message resumes it.
-        if (result.sessionId && ownsThisRun()) dispatchTab({ type: "set-session", sessionId: result.sessionId });
+        if (result.sessionId && ownsThisRun()) {
+          endTabSession(runTabId);
+          dispatchTab({ type: "set-session", sessionId: result.sessionId });
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (ownsThisRun()) lastErrorRef.current = message;
@@ -1121,7 +1160,7 @@ export function App({
         }
       }
     },
-    [projectPath, liveMcpSpecs, pluginContributions, syncBg, ring],
+    [projectPath, mcpRegistry, pluginContributions, syncBg, ring, endTabSession],
   );
 
   const resumeLoopTask = useCallback(
@@ -1153,7 +1192,8 @@ export function App({
           config: runConfigRef.current,
           model: modelRef.current,
           projectPath,
-          mcpToolSpecs: liveMcpSpecs(),
+          ...(mcpRegistry ? { mcpRegistry: mcpRegistry.core } : {}),
+          extraDirectories: [...extraDirsRef.current],
           pluginContributions,
           ...options,
           control: loopControl,
@@ -1163,7 +1203,10 @@ export function App({
               dispatchTab({ type: "notice", text: line.text, tone: line.tone });
           },
         });
-        if (result.sessionId && ownsThisRun()) dispatchTab({ type: "set-session", sessionId: result.sessionId });
+        if (result.sessionId && ownsThisRun()) {
+          endTabSession(runTabId);
+          dispatchTab({ type: "set-session", sessionId: result.sessionId });
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (ownsThisRun()) lastErrorRef.current = message;
@@ -1184,7 +1227,7 @@ export function App({
         }
       }
     },
-    [projectPath, liveMcpSpecs, pluginContributions, syncBg, ring],
+    [projectPath, mcpRegistry, pluginContributions, syncBg, ring, endTabSession],
   );
 
   /** Ctrl+B: detach the ACTIVE tab's run; its chat continues in a fresh session. */
@@ -1212,8 +1255,10 @@ export function App({
       pendingQuestionByTabRef.current.delete(tabId);
       dispatch({ type: "overlay", overlay: null });
     }
+    // The detached run keeps its subagent manager; the tab's next session gets a new one.
+    endTabSession(tabId);
     dispatch({ type: "run-detach", runId: entry.runId, label: "task" });
-  }, [notice, dispatch]);
+  }, [notice, dispatch, endTabSession]);
 
   const submitTask = useCallback(
     (task: string, tabId?: number) => {
@@ -1490,12 +1535,26 @@ export function App({
           }
           show(withMessage(view, `${t("manage.mcp.reconnecting")} ${effect.name}…`, "dim"));
           void mcpRegistry
-            .update(effect.name, { ...current, trusted: effect.enabled })
+            .setTrusted(effect.name, effect.enabled)
             .then(async (status) => {
               await mcpRegistry.refreshCounts().catch(() => {});
               const label = effect.enabled ? t("manage.mcp.enabled") : t("manage.mcp.disabled");
               const tail = status?.error ? ` — ${status.error}` : "";
               showServers(`${label} ${effect.name} (${written})${tail}`, status?.state === "failed" ? "error" : "ok");
+            })
+            .catch((error: unknown) => showServers(errorText(error), "error"));
+          return;
+        }
+        case "decide-project": {
+          if (!mcpRegistry) return;
+          show(withMessage(view, `${t("manage.mcp.reconnecting")} ${effect.name}…`, "dim"));
+          void mcpRegistry
+            .decide(effect.name, effect.decision)
+            .then(async (status) => {
+              await mcpRegistry.refreshCounts().catch(() => {});
+              const label = effect.decision === "approve" ? t("manage.mcp.approved") : t("manage.mcp.rejected");
+              const tail = status?.error ? ` — ${status.error}` : "";
+              showServers(`${label} ${effect.name}${tail}`, status?.state === "failed" ? "error" : "ok");
             })
             .catch((error: unknown) => showServers(errorText(error), "error"));
           return;
@@ -1762,6 +1821,7 @@ export function App({
           break;
         }
         case "new":
+          endTabSession(activeIdRef.current, true);
           dispatch({ type: "new-session" });
           syncBg();
           notice("next message starts a fresh session");
@@ -1779,6 +1839,7 @@ export function App({
               notice(`${t("sessions.renameFailed")} ${err instanceof Error ? err.message : String(err)}`, "error");
             }
           }
+          endTabSession(activeIdRef.current, true);
           dispatch({ type: "clear" });
           syncBg();
           notice(
@@ -1843,6 +1904,7 @@ export function App({
             notice("usage: /resume <session-id> (see /sessions)", "error");
             break;
           }
+          endTabSession(activeIdRef.current);
           dispatch({ type: "set-session", sessionId: command.arg });
           notice(`continuing session ${command.arg} — your next message resumes it`);
           break;
@@ -2140,13 +2202,14 @@ export function App({
           const apply = command.arg === "yes";
           const result = rewindSession(projectPath, sessionId, { dryRun: !apply });
           const total = result.restored.length + result.deleted.length;
-          if (total === 0 && result.skipped.length === 0) {
+          if (total === 0 && result.skipped.length === 0 && result.warnings.length === 0) {
             notice("nothing to rewind — this session made no file changes");
             break;
           }
           for (const p of result.restored.slice(0, 10)) notice(`  ${apply ? "restored" : "would restore"} ${p}`);
           for (const p of result.deleted.slice(0, 10)) notice(`  ${apply ? "deleted" : "would delete"} ${p}`);
           for (const s of result.skipped.slice(0, 10)) notice(`  skipped ${s.path}: ${s.reason}`, "error");
+          for (const line of rewindWarningLines(result.warnings)) notice(line, "error");
           if (!apply && total > 0) notice("run /rewind yes to apply");
           notice("(/rewind restores files; Esc Esc or /backtrack rewinds the conversation)");
           break;
@@ -2262,18 +2325,7 @@ export function App({
               break;
             }
             notice(`asking the model for keywords for ${pendingFacts.length} fact(s)…`);
-            void backfillFactKeywords(
-              buildProvider(
-                {
-                  provider: cfg.provider,
-                  apiKey: cfg.apiKey,
-                  baseUrl: cfg.baseUrl,
-                  modelPricing: cfg.modelPricing,
-                },
-                cfg.model,
-              ),
-              projectPath,
-            )
+            void backfillFactKeywords(buildTuiProvider(cfg), projectPath)
               .then((r) => {
                 notice(
                   `added keywords to ${r.updated} of ${r.missing} fact(s) in ${r.batches} request(s)` +
@@ -2329,6 +2381,7 @@ export function App({
               break;
             }
             runsByTabRef.current.delete(closing);
+            endTabSession(closing, true);
             tabsDispatch({ type: "tab-close" });
           } else if (arg === "next") {
             tabsDispatch({ type: "tab-next" });
@@ -2350,6 +2403,7 @@ export function App({
             notice("fork failed — session not found on disk", "error");
             break;
           }
+          endTabSession(activeIdRef.current);
           dispatch({ type: "set-session", sessionId: forked });
           notice(`forked → ${forked} — next message continues the fork; the original is untouched`);
           break;
@@ -2381,16 +2435,16 @@ export function App({
         }
         case "add-dir": {
           if (!command.arg) {
-            for (const line of formatExtraDirLines(extraDirsRef.current)) notice(line);
+            for (const line of formatExtraDirLines(extraDirsRef.current, config.additionalDirectories)) notice(line);
             break;
           }
           const dir = normalizeExtraDir(command.arg, projectPath);
           if (!dir) {
-            notice("not a directory (or inside the workspace already)", "error");
+            notice(t("addDir.invalid"), "error");
             break;
           }
           if (!extraDirsRef.current.includes(dir)) extraDirsRef.current.push(dir);
-          notice(`added read-only dir: ${dir} — reference its files with @${dir}/…`);
+          notice(t("addDir.added").replaceAll("{dir}", dir));
           break;
         }
         case "terminal-setup":
@@ -2398,26 +2452,22 @@ export function App({
           break;
         case "think": {
           const cfg = runConfigRef.current;
-          const arg = command.arg;
-          if (!arg) {
-            notice(
-              `thinking: ${cfg.thinking === false ? "off" : "on"}${cfg.reasoningEffort ? ` · effort ${cfg.reasoningEffort}` : ""} (V4 models only — /think on|off|high|max)`,
-            );
+          const request = parseThinkArg(command.arg);
+          if (request.kind === "invalid") {
+            notice(THINK_USAGE, "error");
             break;
           }
-          if (arg === "on") cfg.thinking = true;
-          else if (arg === "off") cfg.thinking = false;
-          else if (arg === "high" || arg === "max") {
+          if (request.kind === "effort") {
+            // A level asks for reasoning, so it also turns thinking on.
             cfg.thinking = true;
-            cfg.reasoningEffort = arg;
-          } else {
-            notice("usage: /think [on|off|high|max]", "error");
-            break;
+            cfg.reasoningEffort = request.effort;
+          } else if (request.kind !== "show") {
+            cfg.thinking = request.kind === "on";
           }
-          notice(
-            `thinking ${cfg.thinking === false ? "off" : "on"}${cfg.reasoningEffort ? ` · effort ${cfg.reasoningEffort}` : ""} — applies from the next message` +
-              (modelRef.current.startsWith("deepseek-v4") ? "" : " (needs a deepseek-v4 model: /model)"),
-          );
+          const current =
+            `${t("think.label")} ${cfg.thinking === false ? t("think.off") : t("think.on")}` +
+            (cfg.reasoningEffort ? ` · ${t("think.effort")} ${cfg.reasoningEffort}` : "");
+          notice(request.kind === "show" ? `${current} — ${THINK_USAGE}` : `${current} — ${t("think.nextMessage")}`);
           break;
         }
         case "diff": {
@@ -2558,9 +2608,9 @@ export function App({
             notice("usage: /agent-cancel <dispatch-id>", "error");
             break;
           }
-          const manager = runsByTabRef.current.get(activeIdRef.current)?.dispatchManager;
+          const manager = dispatchManagers.peek(activeIdRef.current);
           if (!manager) {
-            notice("no controllable agent run is active in this tab", "error");
+            notice(t("agents.noManager"), "error");
             break;
           }
           const result = manager.cancel(parts[0]!);
@@ -2576,9 +2626,9 @@ export function App({
             notice("usage: /agent-steer <dispatch-id> <message>", "error");
             break;
           }
-          const manager = runsByTabRef.current.get(activeIdRef.current)?.dispatchManager;
+          const manager = dispatchManagers.peek(activeIdRef.current);
           if (!manager) {
-            notice("no controllable agent run is active in this tab", "error");
+            notice(t("agents.noManager"), "error");
             break;
           }
           const result = manager.steer(dispatchId, message);
@@ -2678,41 +2728,34 @@ export function App({
             break;
           }
           // With a focus argument the middle is summarized by the model
-          // (steered by the focus); without one it stays the instant
-          // deterministic digest.
-          if (command.arg) {
-            const focus = command.arg;
-            notice(`compacting with focus: ${focus} …`);
-            void (async () => {
-              try {
-                // The run factory's provider construction (preset, endpoint,
-                // key selection), then CORE's llmCompactSessionNow loads →
-                // summarizes (focus-steered) → rewrites the session messages.
-                const provider = buildTuiProvider(runConfigRef.current, modelRef.current);
-                const result = await llmCompactSessionNow(projectPath, sessionId, provider, focus);
-                if (!result) {
-                  notice("nothing to compact — the session is still short (or the model call failed)");
-                  return;
-                }
-                notice(
-                  `compacted (LLM, focused): dropped ${result.droppedTurns} earlier messages, ` +
-                    `${kfmt(result.beforeTokens)} → ${kfmt(result.afterTokens)} tokens`,
-                );
-              } catch (err) {
-                notice(`compact failed: ${err instanceof Error ? err.message : String(err)}`, "error");
-              }
-            })();
-            break;
-          }
-          const result = compactSessionNow(projectPath, sessionId);
-          if (!result) {
-            notice("nothing to compact — the session is still short");
-            break;
-          }
-          notice(
-            `compacted: dropped ${result.droppedTurns} earlier messages, ` +
-              `${kfmt(result.beforeTokens)} → ${kfmt(result.afterTokens)} tokens (applies on the next message)`,
-          );
+          // (steered by the focus); without one it stays the deterministic
+          // digest. Either way the hooks a run fires (config + plugins) see it:
+          // preCompact may cancel it, postCompact hears about it.
+          const focus = command.arg;
+          const tell = noticeIn(activeIdRef.current);
+          const cfg = runConfigRef.current;
+          const model = modelRef.current;
+          if (focus) tell(`compacting with focus: ${focus} …`);
+          void compactStoredSession({
+            projectPath,
+            sessionId,
+            ...(focus ? { focus } : {}),
+            hooks: tuiHooks(cfg, projectPath, pluginContributions),
+            // The run factory's provider construction (preset, endpoint, key).
+            provider: (hookModel) => buildTuiProvider(cfg, hookModel ?? model),
+            onHookError: (message) => tell(`${t("compact.hookFailed")} ${inertLine(message, 300)}`, "error"),
+          })
+            .then((outcome) => {
+              for (const line of compactOutcomeNotices(outcome, focus !== undefined)) tell(line.text, line.tone);
+            })
+            .catch((err: unknown) => {
+              tell(
+                err instanceof SessionBusyError
+                  ? t("compact.busy")
+                  : `compact failed: ${err instanceof Error ? err.message : String(err)}`,
+                "error",
+              );
+            });
           break;
         }
         case "usage": {
@@ -2906,7 +2949,7 @@ export function App({
           }
           // Skills are invocable as /skill:<id> [task].
           const skill = findSkillByCommand(
-            attachSkillContent(projectPath, skillRowsRef.current ?? []),
+            attachSkillContent(projectPath, skillRowsRef.current ?? [], pluginContributions),
             (head ?? "").toLowerCase(),
           );
           if (skill) {
@@ -2944,7 +2987,7 @@ export function App({
                   prompt.server,
                   prompt.name,
                   promptArgsFromText(prompt, argText),
-                  mcpEntries,
+                  liveMcpEntries(),
                   reservation.controller.signal,
                 );
                 if (!ownsRun(runsByTabRef.current, reservation) || reservation.controller.signal.aborted) return;
@@ -2992,8 +3035,12 @@ export function App({
     },
     [
       notice,
+      noticeIn,
       projectPath,
       liveMcpEntries,
+      pluginContributions,
+      dispatchManagers,
+      endTabSession,
       openManage,
       runCustomCommand,
       runTask,
@@ -3012,11 +3059,18 @@ export function App({
   // Submit.
   // ---------------------------------------------------------------------
 
-  /** "!cmd" passthrough: the user's own shell command, run locally, blocking. */
+  /**
+   * "!cmd" passthrough: the user's own shell command, run locally. The output
+   * is shown now and carried into the tab's next message, so the agent sees
+   * what the user saw (core frames it as data).
+   */
   const runBash = useCallback(
     async (command: string, tabId: number) => {
       const result = await runShellCommand(command, projectPath);
       tabsDispatch({ type: "chat", tabId, action: { type: "shell", command, ...result } });
+      // A tab closed while the command ran has no next message.
+      if (!tabsStateRef.current.tabs.some((tab) => tab.id === tabId)) return;
+      queueShellRun(pendingShellRunsRef.current, tabId, { command, output: result.output, exitCode: result.exitCode });
     },
     [projectPath],
   );
@@ -3138,6 +3192,7 @@ export function App({
             ? `${fr.restored.length} files restored, ${fr.deleted.length} deleted`
             : "no file changes to revert";
         for (const s of fr.skipped.slice(0, 5)) notice(`  skipped ${s.path}: ${s.reason}`, "error");
+        for (const line of rewindWarningLines(fr.warnings)) notice(line, "error");
       }
       notice(`rewound to turn ${target.turn} (${result.removedMessages} messages dropped; ${fileNote})`);
     },
@@ -3536,12 +3591,14 @@ export function App({
           dispatch({ type: "overlay", overlay: null });
         } else if (outcome.kind === "resume") {
           dispatch({ type: "overlay", overlay: null });
+          endTabSession(activeIdRef.current);
           dispatch({ type: "set-session", sessionId: outcome.id });
           notice(`continuing session ${outcome.id} — your next message resumes it`);
         } else if (outcome.kind === "fork") {
           dispatch({ type: "overlay", overlay: null });
           const forked = forkSession(projectPath, outcome.id);
           if (forked) {
+            endTabSession(activeIdRef.current);
             dispatch({ type: "set-session", sessionId: forked });
             notice(`forked ${outcome.id.slice(0, 12)}… → ${forked} — next message continues the fork`);
           } else {

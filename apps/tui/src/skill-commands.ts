@@ -1,7 +1,8 @@
 /**
- * Skills as invocable slash commands: every ENABLED skill becomes a
- * `/skill:<id>` palette entry whose invocation wraps the skill's SKILL.md
- * content into a task prompt for the agent.
+ * Skills as invocable slash commands: every ENABLED skill the user may invoke
+ * (not `user-invocable: false`) becomes a `/skill:<id>` palette entry whose
+ * invocation wraps the skill's SKILL.md content into a task prompt for the
+ * agent.
  *
  * Content resolution: skills-surface.ts's SkillRow deliberately carries no
  * `content` (it is a listing surface and skills-surface.ts is owned by the
@@ -11,7 +12,7 @@
  * built on, so the join is exact for every enabled skill; disabled skills
  * have no content (they are never invocable anyway).
  */
-import { loadSkills } from "@seekforge/core";
+import { loadSkills, type PluginContributions } from "@seekforge/core";
 import type { SkillRow } from "./skills-surface.js";
 
 /** A /skills row optionally enriched with the full SKILL.md content. */
@@ -47,25 +48,36 @@ function collapse(text: string, max: number): string {
 /**
  * Joins /skills rows with the full skill content from core's loadSkills().
  * Rows without a loaded counterpart (disabled builtins) stay content-less.
+ * `contributions` is the plugin snapshot the rows came from, so both see the
+ * same plugins (and the plugin store is not scanned again).
  */
-export function attachSkillContent(workspace: string, rows: readonly SkillRow[]): SkillCommandRow[] {
-  const contentById = new Map(loadSkills(workspace).map((s) => [s.id, s.content]));
+export function attachSkillContent(
+  workspace: string,
+  rows: readonly SkillRow[],
+  contributions?: PluginContributions,
+): SkillCommandRow[] {
+  const contentById = new Map(loadSkills(workspace, contributions).map((s) => [s.id, s.content]));
   return rows.map((row) => {
     const content = contentById.get(row.id);
     return content === undefined ? { ...row } : { ...row, content };
   });
 }
 
+/** Enabled, and not reserved for the model by `user-invocable: false`. */
+function userInvocable(skill: SkillRow): boolean {
+  return !skill.disabled && skill.userInvocable !== false;
+}
+
 /**
  * One CommandSpec-compatible row per ENABLED skill: name "skill:<id>"
  * (sanitized), args hint "[task]", summary "(skill) " + description capped
  * at 60 chars. Disabled skills are excluded (nothing to invoke), as are
- * skills whose id sanitizes to nothing.
+ * `user-invocable: false` skills and skills whose id sanitizes to nothing.
  */
 export function skillCommandSpecs(skills: readonly SkillRow[]): SkillCommandSpec[] {
   const out: SkillCommandSpec[] = [];
   for (const skill of skills) {
-    if (skill.disabled) continue;
+    if (!userInvocable(skill)) continue;
     const id = sanitizeId(skill.id);
     if (id === "") continue;
     out.push({
@@ -92,12 +104,12 @@ export function expandSkillCommand(skill: SkillCommandRow, args: string): string
 /**
  * Resolves a typed command name ("skill:<id>", no leading slash) back to its
  * skill. Matches against the sanitized id — the same form skillCommandSpecs
- * advertises — and never returns disabled skills. Null when not a skill
- * command or no enabled skill matches.
+ * advertises — and never returns a skill it does not advertise (disabled, or
+ * `user-invocable: false`). Null when not a skill command or nothing matches.
  */
 export function findSkillByCommand(skills: readonly SkillCommandRow[], name: string): SkillCommandRow | null {
   if (!name.startsWith(COMMAND_PREFIX)) return null;
   const id = name.slice(COMMAND_PREFIX.length);
   if (id === "") return null;
-  return skills.find((s) => !s.disabled && sanitizeId(s.id) === id) ?? null;
+  return skills.find((s) => userInvocable(s) && sanitizeId(s.id) === id) ?? null;
 }

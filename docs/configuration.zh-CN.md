@@ -82,7 +82,8 @@ DeepSeek API key。优先使用 `DEEPSEEK_API_KEY` 环境变量，让密钥不�
 - **优先级。** provider 自己的环境变量（`DEEPSEEK_API_KEY`、`ARK_API_KEY`、
   `ANTHROPIC_API_KEY`）仍然优先，此时不会运行 helper。在它之下，helper 给出的
   密钥会替代同一配置里的 `apiKey`。helper 失败时就没有任何密钥——不会退回到
-  文件里的那个——CLI 会打印原因。
+  文件里的那个——CLI 会打印原因；TUI 会打印原因后退出，而不是打开密钥向导（只要配置了
+  helper，TUI 就不会打开该向导）。
 - **输出。** stdout 上的单个 token（首尾空白会被去掉；最多 16 KiB）。中间带有
   空白或控制字符的输出会被拒绝。命令写到 stderr 的内容一概不读。
 - **限制。** 命令通过平台 shell 运行，没有标准输入，10 秒后会被强制结束。

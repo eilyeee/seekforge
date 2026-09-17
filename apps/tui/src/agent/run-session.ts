@@ -1,11 +1,10 @@
 import {
-  createDispatchManager,
   loadAgentDefinitions,
   loadPluginContributions,
   type BackgroundTasks,
   type DispatchManager,
+  type McpRegistry,
   type PluginContributions,
-  type ToolSpec,
 } from "@seekforge/core";
 import type { ApprovalMode, ConfirmResult, PermissionRequest, PermissionRule } from "@seekforge/shared";
 import type { TuiConfig } from "../config.js";
@@ -20,8 +19,11 @@ export type RunSessionDeps = {
   config: TuiConfig;
   model: string;
   projectPath: string;
-  mcpToolSpecs: ToolSpec[];
+  /** The session's live MCP registry; absent means no MCP tools. */
+  mcpRegistry?: McpRegistry;
   pluginContributions?: PluginContributions;
+  /** Directories granted for this TUI session (--add-dir, /add-dir). */
+  extraDirectories?: readonly string[];
   /** ask = read-only investigation; edit = normal. */
   mode: "ask" | "edit";
   /** Plan flavor: read-only run that produces an implementation plan. */
@@ -30,6 +32,11 @@ export type RunSessionDeps = {
   approvalMode: ApprovalMode;
   /** Shared background-task manager (tasks outlive single runs). */
   background: BackgroundTasks;
+  /**
+   * The tab's session-scoped subagent manager (the app owns and disposes it):
+   * background dispatches outlive this run and report to the next one.
+   */
+  dispatchManager: DispatchManager;
   /** Routes the ask_user tool to the TUI question overlay. */
   askUser: (q: { question: string; options: string[]; freeText?: boolean }) => Promise<string>;
   /** Pushes a reducer action (events, deltas, lifecycle) into the UI state. */
@@ -43,8 +50,6 @@ export type RunSessionDeps = {
   persistRule?: (rule: PermissionRule) => Promise<void> | void;
   /** Resolves the current session id for resume chaining. */
   getSessionId: () => string | undefined;
-  /** Binds controls to this exact run; undefined clears them during cleanup. */
-  onDispatchManager?: (manager: DispatchManager | undefined) => void;
   /** Session usage bus: tokens an MCP server spent through sampling. */
   usageBus?: UsageBus;
   /** Appended to the system prompt (--append-system-prompt). */
@@ -62,7 +67,6 @@ export async function runSession(task: string, signal: AbortSignal, deps: RunSes
   // Coalesce per-token deltas and live output into ~20fps dispatches so the
   // transcript doesn't repaint on every chunk (anti-flicker).
   const buffered = createBufferedDispatch(deps.dispatch);
-  const dispatchManager = createDispatchManager();
   const pluginContributions = deps.pluginContributions ?? loadPluginContributions(deps.projectPath);
 
   const { agent, dispose } = createTuiAgent({
@@ -75,11 +79,14 @@ export async function runSession(task: string, signal: AbortSignal, deps: RunSes
     onReasoningDelta: (chunk) => buffered.dispatch({ type: "thinking-delta", chunk }),
     extractMemory: true,
     subagents: loadAgentDefinitions(deps.projectPath, pluginContributions),
-    mcpToolSpecs: deps.mcpToolSpecs,
+    ...(deps.mcpRegistry ? { mcpRegistry: deps.mcpRegistry } : {}),
+    ...(deps.extraDirectories && deps.extraDirectories.length > 0
+      ? { extraDirectories: [...deps.extraDirectories] }
+      : {}),
     pluginContributions,
     background: deps.background,
     askUser: deps.askUser,
-    dispatchManager,
+    dispatchManager: deps.dispatchManager,
     ...(deps.usageBus ? { usageBus: deps.usageBus } : {}),
     ...(deps.allowedTools ? { allowedTools: deps.allowedTools } : {}),
     // The status line's cost and any costBudgetUsd threshold are both 0 forever
@@ -98,7 +105,6 @@ export async function runSession(task: string, signal: AbortSignal, deps: RunSes
 
   // One capture per run: snapshots files around write tools to render diffs.
   const capture = createDiffCapture(deps.projectPath);
-  deps.onDispatchManager?.(dispatchManager);
 
   try {
     for await (const event of agent.runTask({
@@ -117,7 +123,6 @@ export async function runSession(task: string, signal: AbortSignal, deps: RunSes
     }
   } finally {
     buffered.flush();
-    deps.onDispatchManager?.(undefined);
     dispose();
   }
 }

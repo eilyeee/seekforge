@@ -6,14 +6,15 @@
  */
 
 import { scanWorkspaceFiles } from "./files.js";
+import { t } from "./strings.js";
 
 export { expandExtraFileRefs, normalizeExtraDir } from "@seekforge/shared/workspace-dirs";
 
 /**
- * Extra read-only workspace roots for /add-dir. These directories are scanned
- * for the @ file picker and their files can be inlined into tasks via
- * expandExtraFileRefs, but tools never write to them — they only widen what
- * @-references can see.
+ * Directories granted for the session by /add-dir and --add-dir. They reach
+ * core as `additionalDirectories` (joined with the user config's), so the file
+ * tools may read and write there under the workspace's rules; their files can
+ * also be inlined into tasks via expandExtraFileRefs.
  */
 export type ExtraDirs = { dirs: string[] };
 
@@ -39,10 +40,12 @@ export function scanExtraDirs(
   return out;
 }
 
-/** Display lines for /add-dir with no arguments. */
-export function formatExtraDirLines(dirs: readonly string[]): string[] {
-  if (dirs.length === 0) {
-    return ["no extra directories — /add-dir <path> adds one (read-only for @ references)"];
-  }
-  return dirs.map((d) => `↳ ${d}`);
+/**
+ * Display lines for /add-dir with no arguments: the session's directories,
+ * then the user config's `additionalDirectories` (marked), without repeats.
+ */
+export function formatExtraDirLines(dirs: readonly string[], configured: readonly string[] = []): string[] {
+  const fromConfig = configured.filter((dir) => !dirs.includes(dir));
+  if (dirs.length === 0 && fromConfig.length === 0) return [t("addDir.none")];
+  return [...dirs.map((d) => `↳ ${d}`), ...fromConfig.map((d) => `↳ ${d}  ${t("addDir.fromConfig")}`)];
 }

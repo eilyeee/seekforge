@@ -10,7 +10,7 @@ import {
   type LoopVerificationStage,
   type LoopRequirementMode,
   type PluginContributions,
-  type ToolSpec,
+  type McpRegistry,
 } from "@seekforge/core";
 import type { TuiConfig } from "../config.js";
 import { expandFileRefs } from "@seekforge/shared/file-refs";
@@ -20,7 +20,10 @@ export type RunLoopDeps = {
   config: TuiConfig;
   model: string;
   projectPath: string;
-  mcpToolSpecs: ToolSpec[];
+  /** The session's live MCP registry; absent means no MCP tools. */
+  mcpRegistry?: McpRegistry;
+  /** Directories granted for this TUI session (--add-dir, /add-dir). */
+  extraDirectories?: readonly string[];
   pluginContributions?: PluginContributions;
   /** Max run→verify iterations before giving up (caller supplies the default). */
   maxIterations: number;
@@ -69,7 +72,10 @@ export async function runLoop(
     confirm: async () => false,
     extractMemory: true,
     subagents: loadAgentDefinitions(deps.projectPath, pluginContributions),
-    mcpToolSpecs: deps.mcpToolSpecs,
+    ...(deps.mcpRegistry ? { mcpRegistry: deps.mcpRegistry } : {}),
+    ...(deps.extraDirectories && deps.extraDirectories.length > 0
+      ? { extraDirectories: [...deps.extraDirectories] }
+      : {}),
     pluginContributions,
   });
 
@@ -125,7 +131,10 @@ export async function resumeLoop(
     confirm: async () => false,
     extractMemory: true,
     subagents: loadAgentDefinitions(deps.projectPath, pluginContributions),
-    mcpToolSpecs: deps.mcpToolSpecs,
+    ...(deps.mcpRegistry ? { mcpRegistry: deps.mcpRegistry } : {}),
+    ...(deps.extraDirectories && deps.extraDirectories.length > 0
+      ? { extraDirectories: [...deps.extraDirectories] }
+      : {}),
     pluginContributions,
   });
 

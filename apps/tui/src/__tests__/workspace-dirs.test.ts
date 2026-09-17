@@ -165,9 +165,17 @@ describe("formatExtraDirLines", () => {
     expect(formatExtraDirLines(["/a", "/b"])).toEqual(["↳ /a", "↳ /b"]);
   });
 
-  it("has an empty-state hint", () => {
+  it("has an empty-state hint that no longer calls the directories read-only", () => {
     expect(formatExtraDirLines([])).toEqual([
-      "no extra directories — /add-dir <path> adds one (read-only for @ references)",
+      "no extra directories — /add-dir <path> grants one to the file tools and @ references",
     ]);
+  });
+
+  it("marks the config's additionalDirectories and skips ones the session also added", () => {
+    expect(formatExtraDirLines(["/a"], ["/a", "/cfg"])).toEqual([
+      "↳ /a",
+      "↳ /cfg  (additionalDirectories in your config)",
+    ]);
+    expect(formatExtraDirLines([], ["/cfg"])).toEqual(["↳ /cfg  (additionalDirectories in your config)"]);
   });
 });

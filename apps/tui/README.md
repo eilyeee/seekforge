@@ -22,7 +22,7 @@ First run without an API key opens a setup wizard.
 | `-m`, `--model <name>` | model for the session |
 | `--permission-mode <mode>` | tabs start in `default` / `acceptEdits` / `plan` / `bypassPermissions` (also `confirm` / `auto`); Shift+Tab still cycles |
 | `-y`, `--yes`, `--dangerously-skip-permissions` | start in auto approval (`--permission-mode` wins when both are given) |
-| `--add-dir <dir>` | extra read-only root for `@` references; repeatable, same rules as `/add-dir` |
+| `--add-dir <dir>` | a directory outside the project the file tools may read and write (under the workspace's rules) and `@` references may point into; repeatable, same rules as `/add-dir`, joined with `additionalDirectories` from your user config |
 | `--settings <file>` | a JSON settings file, user-owned, layered above the config files |
 | `--profile <name>` | a named `profiles` overlay (also `SEEKFORGE_PROFILE`) |
 | `--mcp-config <file>` | MCP servers from `{ "mcpServers": { … } }` (or a bare map), merged over config |
@@ -37,19 +37,25 @@ for a value that starts with `-`. Anything else — an unknown flag, a stray
 argument — stops the launch with an error instead of being ignored.
 
 `seekforge-tui` launches a full-screen chat in the current working directory.
-A DeepSeek API key is required: set `DEEPSEEK_API_KEY` or write
-`~/.seekforge/config.json` with `{ "apiKey": "…" }`. Config precedence is
-`env > --settings file > --profile overlay > project .seekforge/config.json >
-~/.seekforge/config.json` (the CLI's stack without `config.local.json`), with the
-same repository-trust reductions.
+A DeepSeek API key is required: set `DEEPSEEK_API_KEY`, write
+`~/.seekforge/config.json` with `{ "apiKey": "…" }`, or name an `apiKeyHelper`
+there (a command that prints the key). Without any of them the TUI opens a
+key wizard; with a helper that fails it prints the helper's error and exits
+instead. Config precedence is `env > --settings file > --profile overlay >
+project .seekforge/config.json > project .mcp.json > ~/.seekforge/config.json`
+(the CLI's stack without `config.local.json`), with the same repository-trust
+reductions; what they narrowed is listed once when the TUI starts. On exit the
+TUI waits up to five seconds for opt-in telemetry to flush.
 
 ## Interface
 
 - **Transcript**: user prompts, streamed assistant markdown with
   syntax-highlighted code blocks, tool rows, an in-place plan checklist
-  (☐ ◐ ☑), inline colored diffs for every `apply_patch`/`write_file`, nested
-  structured dispatched-subagent cards with running/done/failed/cancelled
-  states and recent tool steps, and a final report block.
+  (☐ ◐ ☑; an in-progress step shows its `activeForm`), inline colored diffs
+  for every `apply_patch`/`write_file`, nested structured dispatched-subagent
+  cards (in the agent's `color`) with running/done/failed/cancelled states,
+  recent tool steps and the agent's latest `agent_report` progress lines, and
+  a final report block.
   PageUp/PageDown scroll the managed viewport; Esc jumps back to latest.
 - **Composer**: multiline (trailing `\` or Ctrl+J inserts a newline), ↑/↓
   history persisted across sessions, Ctrl+U clears, Ctrl+G (or `/editor`)
@@ -58,9 +64,11 @@ same repository-trust reductions.
   `EDITOR='code --wait'`); they are parsed into argv without invoking a shell.
   The same editor resolution is used by `/memory edit` and `/config edit`.
   Typing `/` opens the command palette; typing
-  `@` opens a fuzzy, frecency-ranked file picker (the picked file's contents
-  are inlined on send); `# <fact>` saves to project memory; `!cmd` runs a
-  local shell command directly (no agent, output inline).
+  `@` opens a fuzzy, frecency-ranked file picker over the files the file tools
+  see (`.gitignore`d paths left out; the picked file's contents are inlined on
+  send); `# <fact>` saves to project memory; `!cmd` runs a local shell command
+  directly (no agent, output inline) and its output joins your next message,
+  framed as data.
 - **Steering**: the composer stays live while the agent works — Enter queues
   follow-up messages that are sent in order after the turn; Esc interrupts
   the run (and clears the queue).
@@ -110,7 +118,7 @@ same repository-trust reductions.
 `/help` (commands and the effective key bindings) `/new` `/clear [name]`
 `/sessions` `/resume <id>` `/rename <title>` `/fork`
 `/plan <task>` `/approve [auto|confirm|plan]` `/rewind [yes]` `/backtrack`
-`/diff` `/review` `/model` (picker) `/think [on|off|high|max]`
+`/diff` `/review` `/model` (picker) `/think [on|off|low|medium|high|max]`
 `/remember <fact>` `/memory [edit]` `/config [edit]` `/status` `/usage`
 `/todo [add|done|rm]` `/add-dir [path]` `/ide [off]`
 `/tasks [kill <id>]` `/agents` `/agent-steer <dispatch-id> <message>`
@@ -151,12 +159,19 @@ survive a running loop rewriting `session.json`.
   write one there and marks existing ones as ignored. User-file edits take the
   same cross-process lease as the prompt's `A`; project-file edits wait for no
   run to own the workspace. Changes apply from the next run.
-- `/mcp` — each server's state (connected, failed with the reason, untrusted,
-  pending) with tool, prompt and resource counts. `r` reconnects one server,
-  `e` switches a server defined in your user config off or on (its `trusted`
-  flag, written to `~/.seekforge/config.json`; switching on asks first, since it
-  lets the server start), and `l` copies `seekforge mcp login <name>` for a
-  remote server. Repository and plugin servers are not switched here.
+- `/mcp` — each server's state (connected, failed with the reason, disabled,
+  pending or rejected for this workspace, invalid) with tool, prompt and
+  resource counts; the connections are core's registry, the same one every run
+  uses, so a change reaches a running agent at its next turn. `r` reconnects
+  one server, `e` switches a server defined in your user config off or on (its
+  `trusted` flag, written to `~/.seekforge/config.json`; switching on asks
+  first, since it lets the server start), and `l` copies
+  `seekforge mcp login <name>` for a remote server. A server the repository
+  defines (`.seekforge/config.json` or `.mcp.json`) is approved or rejected for
+  this workspace instead: `a` shows its definition as written — nothing
+  expanded — and `y` approves it, `x` rejects it; both are recorded where
+  `seekforge mcp approve`/`reject` record them. Plugin servers are switched
+  with their plugin.
 - `/agents` — agents with their scope; `n` walks a short form (id, description,
   tools, mode, model, project or global) and writes
   `.seekforge/agents/<id>/AGENT.md`; `e` or Enter opens an agent's file in
@@ -184,7 +199,23 @@ Background tasks started with `run_command background:true` survive across
 turns (one shared manager per TUI process; killed on exit). When one exits, the
 session that started it is told at its next turn boundary — a notice in the
 transcript and a short note to the agent pointing at `task_output`. `/compact` folds
-the middle of the stored session into a digest immediately. `/init` runs an
+the middle of the stored session into a digest immediately (`/compact <focus>`
+has the model summarize it around that focus); either fires the configured
+and plugin `preCompact` / `postCompact` hooks, and a `preCompact` block
+cancels it.
+
+**Subagents.** Each tab keeps one session-scoped subagent manager, so an agent
+dispatched with `background: true` keeps working after the run that started
+it and reports to the tab's next run; `/agent-steer` and `/agent-cancel` reach
+it between runs. A new, resumed or forked session and a closed tab end the old
+session's agents, as does quitting; a run detached with Ctrl+B keeps its agents
+until it finishes, and the tab starts over with a fresh manager.
+
+**Directories.** `/add-dir <path>` (and `--add-dir`) grants a directory outside
+the project for the rest of the session: from the next message the file tools
+may read and write there under the workspace's rules, and `@` references may
+point into it. `/add-dir` alone lists the session's directories and those from
+`additionalDirectories` in your user config. `/init` runs an
 agent task that writes or refreshes AGENTS.md; `/doctor` checks the
 environment (key, node, git, runtime, MCP, editor, clipboard). Permission
 prompts and run completion trigger an OS notification (macOS/Linux) plus a
@@ -225,6 +256,8 @@ Arguments: $ARGUMENTS
 The frontmatter is stripped from the sent body. The TUI reads command files
 through Core (`packages/core/src/agent/commands.ts`), the same implementation
 as the CLI REPL and the server, so a file behaves the same on every surface.
+Enabled plugins' commands appear as `/<plugin>:<command>`. Skills become
+`/skill:<id>` entries, except those marked `user-invocable: false`.
 
 **Arguments.** `$ARGUMENTS` (every occurrence) is replaced with the full
 argument string; positional `$1`..`$9` take the whitespace-split arguments. If

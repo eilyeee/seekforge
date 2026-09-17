@@ -24,6 +24,8 @@ export type SkillRow = {
   disabled?: boolean;
   selections?: number;
   successRate?: number;
+  /** `user-invocable: false`: the model may load it, the user gets no /skill: command. */
+  userInvocable?: false;
 };
 
 /** Collapses whitespace runs and caps to `max` chars with an ellipsis. */
@@ -48,6 +50,7 @@ export function loadSkillsWithStatus(workspace: string, contributions?: PluginCo
     description: s.description,
     scope: s.scope,
     disabled: false,
+    ...(s.userInvocable === false ? { userInvocable: false as const } : {}),
     ...(stats.get(s.id)?.selections !== undefined ? { selections: stats.get(s.id)!.selections } : {}),
     ...(stats.get(s.id)?.successRate !== undefined ? { successRate: stats.get(s.id)!.successRate } : {}),
   }));

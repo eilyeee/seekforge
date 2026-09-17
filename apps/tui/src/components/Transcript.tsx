@@ -9,6 +9,10 @@ import { ToolRow } from "./ToolRow.js";
 import { PlanCard } from "./PlanCard.js";
 import { ReportCard } from "./ReportCard.js";
 import { DiffCard } from "./DiffCard.js";
+import { agentColor, inertLine } from "../format.js";
+
+/** A subagent's progress line, as shown (core already bounds it at 500). */
+const REPORT_CHARS = 500;
 
 function Item({ item, verbose }: { item: ChatItem; verbose: boolean }): React.ReactElement | null {
   switch (item.kind) {
@@ -81,11 +85,13 @@ function Item({ item, verbose }: { item: ChatItem; verbose: boolean }): React.Re
     case "subagent": {
       const color = item.status === "done" ? "green" : item.status === "running" ? "yellow" : "red";
       const shownSteps = verbose ? item.steps : item.steps.slice(-8);
+      const reports = item.reports ?? [];
+      const shownReports = verbose ? reports : reports.slice(-2);
       return (
         <Box flexDirection="column" marginTop={1}>
           <Text>
             <Text color={color}>●</Text>{" "}
-            <Text color={ACCENT} bold>
+            <Text color={agentColor(item.color) ?? ACCENT} bold>
               [{item.dispatchId}] {item.agentId}
             </Text>{" "}
             <Text color={color}>{item.status}</Text>
@@ -112,6 +118,12 @@ function Item({ item, verbose }: { item: ChatItem; verbose: boolean }): React.Re
               {item.steps.length - shownSteps.length} earlier steps
             </Text>
           ) : null}
+          {shownReports.map((report, index) => (
+            <Text key={`r${index}`} color={agentColor(item.color)} dimColor>
+              {"    ✎ "}
+              {inertLine(report, REPORT_CHARS)}
+            </Text>
+          ))}
           {item.resultSummary ? (
             <Text color={item.status === "done" ? undefined : "red"}>
               {"  "}

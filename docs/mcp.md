@@ -428,7 +428,7 @@ confirm/question channels), and the TUI. The TUI starts its MCP servers before
 the app renders, so its handlers reach whichever run currently owns the screen;
 a request arriving with no run active is refused rather than misrouted. A
 server reconnected later from the TUI's `/mcp` panel gets the same handlers, and
-the next run uses its new tools.
+its new tools reach a running agent from its next provider turn.
 
 #### List changes
 
@@ -467,7 +467,10 @@ URL, one more header — and the server is pending again until you approve the n
 one. `seekforge mcp approve` / `reject` / `reset-project-choices` manage them from
 the CLI; frontends call the same core functions (`approveProjectMcpServer`,
 `rejectProjectMcpServer`, `resetProjectMcpChoices`, `listProjectMcpServers`) and
-apply a decision to a running session with the registry's `reconnect(name)`.
+apply a decision to a running session with the registry's `reconnect(name)`. In
+the TUI, `/mcp` lists pending and rejected project servers; `a` shows the
+definition as written and approves it on `y`, `x` rejects it, and either takes
+effect in the open session.
 `seekforge mcp add --trust` approves what it writes, and `mcp import` marks what
 it imports trusted (§1.2).
 

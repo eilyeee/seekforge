@@ -139,9 +139,10 @@ token is sent to the first and the second is executed.
 
 While the extension is active, it runs an HTTP server on `127.0.0.1` at a
 random port, so a SeekForge process on the same machine can read the editor's
-state. The terminal UI's **/ide** command uses it to pick up your selection,
-open files and diagnostics, and to show diffs and files in the editor. Turn it
-off with `seekforge.ideBridge.enabled`.
+state. The terminal UI's `/ide` command uses it to pick up your selection, open
+files and diagnostics for each prompt you type, and to show a pending edit as a
+diff in the editor (`o` on the permission prompt); `/ide off` disconnects. Turn
+the bridge off with `seekforge.ideBridge.enabled`.
 
 ### Discovery
 
@@ -167,6 +168,15 @@ case its owner is still writing it. Because process ids are reused, a client
 should still expect a listed bridge to refuse the connection and move on to the
 next one. A client should pick the window whose `workspaceFolders` contain
 its working directory.
+
+The terminal UI reads the lock files from `.seekforge/ide/` under its
+SeekForge home: your home directory, or `$SEEKFORGE_HOME` when that is set. The
+extension always writes under your home directory, so a terminal UI started
+with a different `SEEKFORGE_HOME` finds no bridge. It believes a lock file only
+when it is a regular file you own that nobody else can read, in a directory
+nobody else can write to, and it quietly skips one whose process is gone;
+`/ide` names every other file it refused, and why. Windows that contain the
+current project are listed first.
 
 ### Requests
 
@@ -194,8 +204,9 @@ text is capped at 20,000 characters, `openFiles` at 50 entries, and
 `POST /v1/openDiff` with `{ "path", "original", "proposed", "title"? }` opens
 VS Code's diff editor on two read-only documents and returns `{ "ok": true }`.
 `POST /v1/openFile` with `{ "path", "line"? }` opens the file (at that line)
-and returns `{ "ok": true }`. `path` must be absolute; `line` a positive
-integer; `title` at most 200 characters.
+and returns `{ "ok": true }`; the terminal UI does not call it, it is there for
+other clients. `path` must be absolute; `line` a positive integer; `title` at
+most 200 characters.
 
 Errors are `{ "error": "<code>", "message": "…" }`: `400 bad_request` (malformed
 body, relative path), `401 unauthorized`, `403 forbidden`, `404 not_found`
@@ -224,7 +235,8 @@ body, relative path), `401 unauthorized`, `403 forbidden`, `404 not_found`
   token; set it, or restart the server from VS Code.
 - **"does not host the VS Code workspace"** — the server was started for a
   different folder; start it with this folder as an argument.
-- **Nothing in the terminal UI's /ide list** — check that
+- **Nothing in the terminal UI's `/ide` list** — check that
   `seekforge.ideBridge.enabled` is on and that `~/.seekforge/ide/` contains a
-  file for this window. **SeekForge: Show Activity Output** logs the bridge's
-  port and lock file.
+  file for this window (and that `SEEKFORGE_HOME` is unset, or points at your
+  home directory). **SeekForge: Show Activity Output** logs the bridge's port
+  and lock file.

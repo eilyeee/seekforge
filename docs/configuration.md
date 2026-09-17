@@ -91,7 +91,8 @@ CLI, the TUI, `seekforge serve`, and Desktop through the server.
   `ARK_API_KEY`, `ANTHROPIC_API_KEY`) still wins, and the helper is then not
   run. Below that, the helper's key replaces an `apiKey` in the same config.
   If the helper fails, there is no key at all — not the file's — and the CLI
-  prints why.
+  prints why; the TUI prints why and exits instead of opening its key wizard,
+  which it also skips whenever a helper is configured.
 - **Output.** A single token on stdout (surrounding whitespace is trimmed; at
   most 16 KiB). Output with whitespace or control characters inside it is
   rejected. Nothing the command prints on stderr is read.

@@ -1,67 +1,263 @@
-import type { McpClientEntry, McpServerConfig, ToolSpec } from "@seekforge/core";
-import { describe, expect, it, vi } from "vitest";
-import { createMcpRegistry, type McpLoader } from "../agent/mcp-registry.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  createMcpAwareDispatcher,
+  projectMcpServerStatus,
+  type McpClientEntry,
+  type McpRegistry as CoreMcpRegistry,
+  type McpRegistryEvent,
+  type McpServerConfig,
+  type McpServerStatus as CoreStatus,
+} from "@seekforge/core";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMcpRegistry, type McpLoader, type McpRegistry } from "../agent/mcp-registry.js";
 
-type FakeServer = { tools: string[]; fail?: string; prompts?: number; resources?: number; invalid?: boolean };
+/** A stdio MCP server: one tool, `prompts` prompts, and a resource list that fails unless `resources` is given. */
+const SERVER = `
+const rl = require("node:readline").createInterface({ input: process.stdin });
+const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
+const prompts = Number(process.argv[2] || 0);
+rl.on("line", (line) => {
+  let msg;
+  try { msg = JSON.parse(line); } catch { return; }
+  if (msg.id === undefined) return;
+  if (msg.method === "initialize") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: msg.params.protocolVersion,
+      capabilities: { tools: {}, prompts: {} }, serverInfo: { name: "fake", version: "0" } } });
+  } else if (msg.method === "tools/list") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { tools: [
+      { name: "ping", description: "Answers pong.", inputSchema: { type: "object", properties: {} } },
+    ] } });
+  } else if (msg.method === "prompts/list") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { prompts: Array.from({ length: prompts }, (_, i) => ({ name: "p" + i })) } });
+  } else {
+    send({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "no " + msg.method } });
+  }
+});
+`;
 
-function fakeLoader(servers: Record<string, FakeServer>, disposed: string[] = []): McpLoader {
-  return async (map) => {
-    const [name] = Object.keys(map) as [string];
-    const server = servers[name]!;
-    if (server.invalid) {
-      process.stderr.write(`warning: MCP server "${name}" has an invalid permission\n`);
-      return { specs: [], entries: [], dispose: () => {} };
-    }
-    const client = {
-      listTools: vi.fn(async () => {
-        if (server.fail) throw new Error(server.fail);
-        return server.tools.map((tool) => ({ name: tool }));
-      }),
-      listPrompts: vi.fn(async () => Array.from({ length: server.prompts ?? 0 }, (_, i) => ({ name: `p${i}` }))),
-      listResources: vi.fn(async () => {
-        if (server.resources === undefined) throw new Error("no resources");
-        return Array.from({ length: server.resources }, (_, i) => ({ uri: `r${i}` }));
-      }),
-    };
-    const entry = { serverName: name, client, trusted: true } as unknown as McpClientEntry;
-    if (server.fail) process.stderr.write(`warning: MCP server "${name}" unavailable: ${server.fail}\n`);
-    const specs = server.fail
-      ? []
-      : server.tools.map((tool) => ({ name: `mcp__${name}__${tool}` }) as unknown as ToolSpec);
-    return { specs, entries: [entry], dispose: () => disposed.push(name) };
-  };
-}
+let dir: string;
+let serverPath: string;
+let home: string;
+let workspace: string;
+const previousHome = process.env["SEEKFORGE_HOME"];
+const registries: McpRegistry[] = [];
 
-const trusted = (extra: Partial<McpServerConfig> = {}): McpServerConfig => ({
-  command: "node",
-  trusted: true,
+beforeAll(() => {
+  dir = mkdtempSync(join(tmpdir(), "tui-mcp-server-"));
+  serverPath = join(dir, "server.cjs");
+  writeFileSync(serverPath, SERVER);
+});
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+beforeEach(() => {
+  home = mkdtempSync(join(tmpdir(), "tui-mcp-home-"));
+  workspace = mkdtempSync(join(tmpdir(), "tui-mcp-ws-"));
+  process.env["SEEKFORGE_HOME"] = home;
+});
+afterEach(() => {
+  for (const registry of registries.splice(0)) registry.dispose();
+  if (previousHome === undefined) delete process.env["SEEKFORGE_HOME"];
+  else process.env["SEEKFORGE_HOME"] = previousHome;
+  rmSync(home, { recursive: true, force: true });
+  rmSync(workspace, { recursive: true, force: true });
+});
+
+const fake = (prompts = 0, extra: Partial<McpServerConfig> = {}): McpServerConfig => ({
+  command: process.execPath,
+  args: [serverPath, String(prompts)],
   ...extra,
 });
 
-describe("createMcpRegistry", () => {
-  it("tracks each server's state, origin and tools", async () => {
-    const registry = await createMcpRegistry({
-      servers: {
-        good: trusted({ args: ["s.js"] }),
-        empty: trusted(),
-        down: trusted({ url: "https://mcp.example.test/mcp" }),
-        raw: { command: "npx", args: ["-y", "thing"] },
-        plug__x: trusted(),
+async function open(...args: Parameters<typeof createMcpRegistry>): Promise<McpRegistry> {
+  const registry = await createMcpRegistry(...args);
+  registries.push(registry);
+  return registry;
+}
+
+const stateOf = (registry: McpRegistry, name: string) => registry.statuses().find((s) => s.name === name)?.state;
+
+describe("createMcpRegistry over core's registry", () => {
+  it("connects a trusted user server and leaves an untrusted one and a pending repository one alone", async () => {
+    const registry = await open({
+      servers: { mine: fake(0, { trusted: true }), off: fake(), repo: fake() },
+      origins: { mine: "user", off: "user", repo: "repository" },
+      workspace,
+      roots: [workspace],
+    });
+    const statuses = registry.statuses();
+    expect(statuses.map((s) => [s.name, s.state, s.origin, s.transport, s.tools])).toEqual([
+      ["mine", "connected", "user", "stdio", 1],
+      ["off", "disabled", "user", "stdio", 0],
+      ["repo", "pending", "repository", "stdio", 0],
+    ]);
+    expect(statuses[0]?.target).toBe(`${process.execPath} ${serverPath} 0`);
+    // Only a repository server carries the definition the user approves.
+    expect(statuses[0]?.definition).toBeUndefined();
+    expect(JSON.parse(statuses[2]?.definition ?? "{}")).toEqual({ args: [serverPath, "0"], command: process.execPath });
+    expect(registry.entries().map((entry) => entry.serverName)).toEqual(["mine"]);
+    // The run's dispatcher is built over the same core registry.
+    const dispatcher = createMcpAwareDispatcher(registry.core);
+    expect(dispatcher.list().map((tool) => tool.name)).toContain("mcp__mine__ping");
+  }, 20_000);
+
+  it("switches a user server on and off through the trust flag, without touching the caller's config", async () => {
+    const config = fake();
+    const registry = await open({ servers: { mine: config }, origins: { mine: "user" }, workspace });
+    const changes = vi.fn();
+    registry.subscribe(changes);
+    await expect(registry.setTrusted("mine", true)).resolves.toMatchObject({ state: "connected", tools: 1 });
+    expect(registry.entries()).toHaveLength(1);
+    expect(changes).toHaveBeenCalled();
+    await expect(registry.setTrusted("mine", false)).resolves.toMatchObject({ state: "disabled", tools: 0 });
+    expect(registry.entries()).toEqual([]);
+    expect(config.trusted).toBeUndefined();
+    expect(registry.config("mine")?.trusted).toBe(false);
+  }, 20_000);
+
+  it("records a project decision for this workspace and applies it at once", async () => {
+    const config = fake();
+    const registry = await open({ servers: { repo: config }, origins: { repo: "repository" }, workspace });
+    expect(stateOf(registry, "repo")).toBe("pending");
+    await expect(registry.decide("repo", "approve")).resolves.toMatchObject({ state: "connected", tools: 1 });
+    expect(projectMcpServerStatus(workspace, "repo", config)).toBe("approved");
+    await expect(registry.decide("repo", "reject")).resolves.toMatchObject({ state: "rejected", tools: 0 });
+    expect(projectMcpServerStatus(workspace, "repo", config)).toBe("rejected");
+    expect(registry.entries()).toEqual([]);
+  }, 20_000);
+
+  it("refuses the grant that does not fit the server's origin, and unknown names", async () => {
+    const registry = await open({
+      servers: { mine: fake(), repo: fake(), plug__x: fake() },
+      origins: { mine: "user", repo: "repository" },
+      workspace,
+    });
+    // A repository's trust flag means nothing; a user's server is never "approved".
+    await expect(registry.setTrusted("repo", true)).resolves.toBeUndefined();
+    await expect(registry.setTrusted("plug__x", true)).resolves.toBeUndefined();
+    await expect(registry.decide("mine", "approve")).resolves.toBeUndefined();
+    await expect(registry.decide("plug__x", "approve")).resolves.toBeUndefined();
+    await expect(registry.reconnect("missing")).resolves.toBeUndefined();
+    await expect(registry.decide("__proto__", "approve")).resolves.toBeUndefined();
+    expect(registry.statuses().map((s) => [s.name, s.state, s.origin])).toEqual([
+      ["mine", "disabled", "user"],
+      ["repo", "pending", "repository"],
+      ["plug__x", "disabled", "plugin"],
+    ]);
+    expect(projectMcpServerStatus(workspace, "repo", fake())).toBe("pending");
+  });
+
+  it("counts prompts, and forgets the counts of a connection that was replaced", async () => {
+    const registry = await open({
+      servers: { mine: fake(2, { trusted: true }) },
+      origins: { mine: "user" },
+      workspace,
+    });
+    await registry.refreshCounts();
+    expect(registry.statuses()[0]).toMatchObject({ state: "connected", prompts: 2 });
+    // resources/list fails on this server: no count rather than a wrong one.
+    expect(registry.statuses()[0]?.resources).toBeUndefined();
+    await registry.reconnect("mine");
+    expect(registry.statuses()[0]?.prompts).toBeUndefined();
+  }, 20_000);
+
+  it("keeps core's warnings off the screen once it is taken, and restores stderr", async () => {
+    const original = process.stderr.write;
+    const writes: string[] = [];
+    const spy = vi.fn((chunk: string | Uint8Array) => {
+      writes.push(String(chunk));
+      return true;
+    });
+    process.stderr.write = spy as unknown as typeof process.stderr.write;
+    try {
+      const registry = await open({
+        servers: { broken: { command: process.execPath, args: ["-e", "process.exit(3)"], trusted: true } },
+        origins: { broken: "user" },
+        workspace,
+        quiet: () => true,
+      });
+      await registry.reconnect("broken");
+      expect(registry.statuses()[0]).toMatchObject({ state: "failed" });
+      expect(registry.statuses()[0]?.error).toBeTruthy();
+      expect(writes).toEqual([]);
+      expect(process.stderr.write).toBe(spy);
+    } finally {
+      process.stderr.write = original;
+    }
+  }, 20_000);
+
+  it("rejects an out-of-range mcpToolSearchThreshold", async () => {
+    await expect(createMcpRegistry({ servers: {}, origins: {}, workspace, toolSearchThreshold: 150 })).rejects.toThrow(
+      /mcpToolSearchThreshold/,
+    );
+  });
+});
+
+describe("createMcpRegistry with a stand-in core registry", () => {
+  function fakeCore(servers: CoreStatus[], entries: McpClientEntry[] = []) {
+    const listeners = new Set<(event: McpRegistryEvent) => void>();
+    const core = {
+      revision: () => 0,
+      entries: () => entries,
+      toolSpecs: () => [],
+      servers: () => servers,
+      refresh: vi.fn(async () => {}),
+      reconnect: vi.fn(async (name: string) => servers.find((s) => s.name === name) as CoreStatus),
+      subscribe: (listener: (event: McpRegistryEvent) => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
       },
-      origins: { good: "user", empty: "user", down: "user", raw: "repository" },
-      loader: fakeLoader({
-        good: { tools: ["a", "b"] },
-        empty: { tools: [] },
-        down: { tools: [], fail: "connect ECONNREFUSED" },
-        plug__x: { tools: ["z"] },
-      }),
-      quiet: () => true,
+      toolSearchThreshold: 10,
+      dispose: vi.fn(),
+    } satisfies CoreMcpRegistry;
+    const emit = (event: McpRegistryEvent): void => {
+      for (const listener of listeners) listener(event);
+    };
+    return { core, emit };
+  }
+
+  it("hands core the workspace, the origins and the threshold, and copies the definitions", async () => {
+    const { core } = fakeCore([]);
+    const loader = vi.fn<McpLoader>(async () => ({ registry: core, dispose: core.dispose }));
+    const servers = { remote: { url: "https://mcp.example.test/mcp", trusted: true } as McpServerConfig };
+    const registry = await open({
+      servers,
+      origins: { remote: "user" },
+      workspace: "/abs/ws",
+      roots: ["/abs/ws"],
+      toolSearchThreshold: 25,
+      loader,
+    });
+    const [passed, roots, handlers, options] = loader.mock.calls[0]!;
+    expect(passed).toEqual(servers);
+    expect(passed["remote"]).not.toBe(servers.remote);
+    expect(roots).toEqual(["/abs/ws"]);
+    expect(handlers).toBeUndefined();
+    expect(options).toEqual({ workspace: "/abs/ws", origins: { remote: "user" }, toolSearchThreshold: 25 });
+    registry.dispose();
+    registry.dispose();
+    expect(core.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("describes each server with its origin and raw target, and relays core's events", async () => {
+    const { core, emit } = fakeCore([
+      { name: "remote", state: "failed", transport: "http", toolCount: 0, error: "connect ECONNREFUSED" },
+      { name: "legacy", state: "connected", transport: "sse", toolCount: 3 },
+      { name: "odd", state: "invalid", toolCount: 0, error: "unsupported MCP transport type" },
+    ]);
+    const registry = await open({
+      servers: {
+        remote: { url: "https://mcp.example.test/mcp", trusted: true },
+        legacy: { type: "sse", url: "https://legacy.example.test/sse", trusted: true },
+        odd: { type: "websocket" as never, command: "node", args: ["s.js"] },
+      },
+      origins: { remote: "user", legacy: "user" },
+      workspace: "/abs/ws",
+      loader: async () => ({ registry: core, dispose: () => {} }),
     });
     expect(registry.statuses()).toEqual([
-      { name: "good", state: "connected", origin: "user", transport: "stdio", target: "node s.js", tools: 2 },
-      { name: "empty", state: "connected", origin: "user", transport: "stdio", target: "node", tools: 0 },
       {
-        name: "down",
+        name: "remote",
         state: "failed",
         origin: "user",
         transport: "http",
@@ -69,107 +265,29 @@ describe("createMcpRegistry", () => {
         tools: 0,
         error: "connect ECONNREFUSED",
       },
-      { name: "raw", state: "untrusted", origin: "repository", transport: "stdio", target: "npx -y thing", tools: 0 },
-      { name: "plug__x", state: "connected", origin: "plugin", transport: "stdio", target: "node", tools: 1 },
+      {
+        name: "legacy",
+        state: "connected",
+        origin: "user",
+        transport: "sse",
+        target: "https://legacy.example.test/sse",
+        tools: 3,
+      },
+      {
+        name: "odd",
+        state: "invalid",
+        origin: "plugin",
+        target: "node s.js",
+        tools: 0,
+        error: "unsupported MCP transport type",
+      },
     ]);
-    expect(registry.specs().map((s) => s.name)).toEqual(["mcp__good__a", "mcp__good__b", "mcp__plug__x__z"]);
-    expect(registry.entries().map((e) => e.serverName)).toEqual(["good", "empty", "plug__x"]);
-  });
-
-  it("captures loader warnings once the screen is taken, and restores stderr", async () => {
-    const original = process.stderr.write;
-    const registry = await createMcpRegistry({
-      servers: { bad: trusted({ permission: "nope" as never }), down: trusted() },
-      origins: { bad: "user", down: "user" },
-      loader: fakeLoader({ bad: { tools: [], invalid: true }, down: { tools: [], fail: "boom" } }),
-      quiet: () => true,
-    });
-    expect(process.stderr.write).toBe(original);
-    expect(registry.statuses().map((s) => [s.name, s.state, s.error])).toEqual([
-      ["bad", "failed", "has an invalid permission"],
-      ["down", "failed", "boom"],
-    ]);
-  });
-
-  it("reconnects one server and disposes the old connection", async () => {
-    const servers: Record<string, FakeServer> = { a: { tools: [], fail: "down" }, b: { tools: ["t"] } };
-    const disposed: string[] = [];
-    const registry = await createMcpRegistry({
-      servers: { a: trusted(), b: trusted() },
-      origins: { a: "user", b: "user" },
-      loader: fakeLoader(servers, disposed),
-      quiet: () => true,
-    });
     const seen = vi.fn();
-    registry.subscribe(seen);
-    servers["a"] = { tools: ["x"] };
-    await expect(registry.reconnect("a")).resolves.toMatchObject({ state: "connected", tools: 1 });
-    expect(disposed).toEqual(["a"]); // the failed connection was dropped at once
-    expect(registry.specs().map((s) => s.name)).toEqual(["mcp__a__x", "mcp__b__t"]);
-    await registry.reconnect("b");
-    expect(disposed).toEqual(["a", "b"]);
-    expect(seen).toHaveBeenCalled();
-    await expect(registry.reconnect("missing")).resolves.toBeUndefined();
-  });
-
-  it("switches a server off and on through its trust flag", async () => {
-    const disposed: string[] = [];
-    const registry = await createMcpRegistry({
-      servers: { a: trusted() },
-      origins: { a: "user" },
-      loader: fakeLoader({ a: { tools: ["x"] } }, disposed),
-      quiet: () => true,
-    });
-    await expect(registry.update("a", { command: "node", trusted: false })).resolves.toMatchObject({
-      state: "untrusted",
-    });
-    expect(disposed).toEqual(["a"]);
-    expect(registry.specs()).toEqual([]);
-    expect(registry.config("a")).toEqual({ command: "node", trusted: false });
-    await expect(registry.update("a", trusted())).resolves.toMatchObject({ state: "connected" });
-    expect(registry.specs()).toHaveLength(1);
-  });
-
-  it("keeps only the newest of two overlapping reconnects", async () => {
-    let release: (() => void) | undefined;
-    const disposed: string[] = [];
-    let calls = 0;
-    const base = fakeLoader({ a: { tools: ["x"] } }, disposed);
-    const loader: McpLoader = async (...args) => {
-      calls += 1;
-      if (calls === 2) await new Promise<void>((resolve) => (release = resolve));
-      return base(...args);
-    };
-    const registry = await createMcpRegistry({
-      servers: { a: trusted() },
-      origins: { a: "user" },
-      loader,
-      quiet: () => true,
-    });
-    const slow = registry.reconnect("a");
-    const fast = registry.reconnect("a");
-    await fast;
-    release?.();
-    await slow;
-    // Initial + slow connection disposed; the fast one is live.
-    expect(disposed).toEqual(["a", "a"]);
-    expect(registry.statuses()[0]).toMatchObject({ state: "connected" });
-    expect(registry.entries()).toHaveLength(1);
-  });
-
-  it("counts prompts and resources of connected servers", async () => {
-    const registry = await createMcpRegistry({
-      servers: { a: trusted(), b: trusted() },
-      origins: { a: "user", b: "user" },
-      loader: fakeLoader({ a: { tools: ["x"], prompts: 2, resources: 3 }, b: { tools: ["y"], prompts: 1 } }),
-      quiet: () => true,
-    });
-    await registry.refreshCounts();
-    expect(registry.statuses().map((s) => [s.name, s.prompts, s.resources])).toEqual([
-      ["a", 2, 3],
-      ["b", 1, undefined],
-    ]);
-    registry.dispose();
-    expect(registry.specs()).toEqual([]);
+    const unsubscribe = registry.subscribe(seen);
+    emit({ server: "legacy", kind: "tools" });
+    expect(seen).toHaveBeenCalledOnce();
+    unsubscribe();
+    emit({ server: "legacy", kind: "tools" });
+    expect(seen).toHaveBeenCalledOnce();
   });
 });

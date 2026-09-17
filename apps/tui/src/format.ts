@@ -138,3 +138,60 @@ export const PLAN_GLYPH: Record<string, string> = {
 export function planGlyph(status: string): string {
   return PLAN_GLYPH[status] ?? "☐";
 }
+
+/**
+ * The label a plan step shows: its `activeForm` ("Running the tests") while it
+ * is in progress, else the step itself. Sessions written before activeForm
+ * existed have none and keep showing the step.
+ */
+export function planItemLabel(item: { step: string; status: string; activeForm?: string }): string {
+  const active = item.status === "in_progress" && typeof item.activeForm === "string" ? item.activeForm.trim() : "";
+  return active !== "" ? active : item.step;
+}
+
+/**
+ * Core's subagent color names as terminal colors: Ink knows red, yellow,
+ * green, blue and cyan by name; the other three need a stand-in.
+ */
+const AGENT_COLORS: Readonly<Record<string, string>> = {
+  red: "red",
+  orange: "#ff8700",
+  yellow: "yellow",
+  green: "green",
+  blue: "blue",
+  purple: "magenta",
+  pink: "#ff87d7",
+  cyan: "cyan",
+};
+
+/**
+ * The Ink color for a subagent definition's `color` (a name from core's closed
+ * set, or `#rgb` / `#rrggbb`); undefined for anything else, so an unexpected
+ * value renders in the default color instead of reaching the terminal.
+ */
+export function agentColor(color: string | undefined): string | undefined {
+  if (color === undefined) return undefined;
+  const value = color.trim().toLowerCase();
+  if (Object.hasOwn(AGENT_COLORS, value)) return AGENT_COLORS[value];
+  return /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/.test(value) ? value : undefined;
+}
+
+/**
+ * Text someone else wrote (a model's progress report, a hook's message) as one
+ * inert line: control characters — terminal escape sequences included — become
+ * spaces, whitespace collapses, and the result is clipped to `max` characters.
+ */
+export function inertLine(text: string, max: number): string {
+  const flat = stripControls(text).replace(/\s+/g, " ").trim();
+  return clipLine(flat, max);
+}
+
+/**
+ * `text` with every C0/C1 control character (terminal escape sequences
+ * included) turned into a space, leaving layout such as leading indentation
+ * alone. For lines that already are one line but may carry text a repository
+ * or a server chose (an MCP server's name, command or error).
+ */
+export function stripControls(text: string): string {
+  return text.replace(/[\x00-\x1f\x7f-\x9f]/g, " ");
+}

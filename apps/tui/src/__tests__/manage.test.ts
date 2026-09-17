@@ -11,7 +11,8 @@ import { agentRowLine, agentRows, agentsKey, type AgentsView } from "../manage/a
 import { editLine, moveIndex } from "../manage/common.js";
 import { hookRowLine, hookRows, hooksEmptyNote, hooksKey, type HooksView } from "../manage/hooks.js";
 import { manageKey, withMessage } from "../manage/index.js";
-import { mcpKey, mcpServerDetail, mcpServerLine, type McpView } from "../manage/mcp.js";
+import { mcpKey, mcpLoginCommand, mcpServerDetail, mcpServerLine, type McpView } from "../manage/mcp.js";
+import { ManageOverlay } from "../components/ManageOverlay.js";
 import { loadPermissionRows, permissionRowLine, permissionsKey, type PermissionsView } from "../manage/permissions.js";
 import {
   disabledStoreSkills,
@@ -195,9 +196,27 @@ describe("/mcp", () => {
       tools: 0,
       error: "401",
     },
-    { name: "off", state: "untrusted", origin: "user", transport: "stdio", target: "npx off", tools: 0 },
-    { name: "repo", state: "untrusted", origin: "repository", transport: "stdio", target: "sh evil.sh", tools: 0 },
+    { name: "off", state: "disabled", origin: "user", transport: "stdio", target: "npx off", tools: 0 },
+    {
+      name: "repo",
+      state: "pending",
+      origin: "repository",
+      transport: "stdio",
+      target: "sh evil.sh",
+      tools: 0,
+      definition: '{\n  "args": [\n    "evil.sh"\n  ],\n  "command": "sh"\n}',
+    },
     { name: "plug__x", state: "connected", origin: "plugin", transport: "stdio", target: "node p", tools: 1 },
+    {
+      name: "approved",
+      state: "connected",
+      origin: "repository",
+      transport: "sse",
+      target: "https://r.test/sse",
+      tools: 2,
+      definition: "{}",
+    },
+    { name: "declined", state: "rejected", origin: "repository", transport: "stdio", target: "x", tools: 0 },
   ];
   const view: McpView = { kind: "mcp", servers, index: 0 };
   const at = (index: number): McpView => ({ ...view, index });
@@ -209,7 +228,118 @@ describe("/mcp", () => {
       "error: 401",
       "OAuth login: seekforge mcp login remote",
     ]);
-    expect(mcpServerDetail(servers[3]!)[1]).toMatch(/defined by this repository/);
+    expect(mcpServerDetail(servers[3]!)[1]).toMatch(/not yet approved/);
+    expect(mcpServerDetail(servers[2]!)[1]).toMatch(/press e/);
+    expect(mcpServerDetail(servers[6]!)[1]).toMatch(/rejected/);
+    // An sse server is remote too.
+    expect(mcpServerDetail(servers[5]!)).toContain("OAuth login: seekforge mcp login approved");
+    expect(mcpServerLine(servers[3]!)).toBe("? repo  pending  (repository, stdio)");
+    expect(mcpServerLine({ ...servers[0]!, state: "invalid", transport: undefined })).toBe(
+      "! local  invalid  (user, ?)",
+    );
+  });
+
+  it("shows a repository server's definition before approving it, and rejects without asking", () => {
+    const asked = mcpKey(at(3), "a", ch("a")) as { kind: string; view: McpView };
+    expect(asked.kind).toBe("update");
+    expect(asked.view.confirmApprove).toBe("repo");
+    expect(asked.view.message?.tone).toBe("error");
+    expect(mcpServerDetail(servers[3]!, asked.view)).toEqual([
+      expect.stringMatching(/as written/),
+      "{",
+      '  "args": [',
+      '    "evil.sh"',
+      "  ],",
+      '  "command": "sh"',
+      "}",
+    ]);
+    const approved = mcpKey(asked.view, "y", ch("y")) as { kind: string; view: McpView; effect: unknown };
+    expect(approved.kind).toBe("effect");
+    expect(approved.effect).toEqual({ kind: "decide-project", name: "repo", decision: "approve" });
+    expect(approved.view.confirmApprove).toBeUndefined();
+    expect(approved.view.index).toBe(3);
+    // Anything else — Esc included — backs out without deciding.
+    const cancelled = mcpKey(asked.view, "n", ch("n")) as { kind: string; view: McpView };
+    expect(cancelled.kind).toBe("update");
+    expect(cancelled.view.confirmApprove).toBeUndefined();
+    const escaped = mcpKey(asked.view, "", key("escape")) as { kind: string; view: McpView };
+    expect(escaped.kind).toBe("update");
+    expect(escaped.view.confirmApprove).toBeUndefined();
+    expect((mcpKey(asked.view, "", key("down")) as { view: McpView }).view.confirmApprove).toBeUndefined();
+
+    expect(mcpKey(at(3), "x", ch("x"))).toMatchObject({
+      kind: "effect",
+      effect: { kind: "decide-project", name: "repo", decision: "reject" },
+    });
+    // A rejected server can still be approved after review; an approved one can be rejected.
+    expect((mcpKey(at(6), "a", ch("a")) as { view: McpView }).view.confirmApprove).toBe("declined");
+    expect((mcpKey(at(6), "x", ch("x")) as { view: McpView }).view.message?.tone).toBe("dim");
+    expect((mcpKey(at(5), "a", ch("a")) as { view: McpView }).view.message?.tone).toBe("dim");
+    expect(mcpKey(at(5), "x", ch("x"))).toMatchObject({ effect: { kind: "decide-project", decision: "reject" } });
+    // Approval is for repository servers only.
+    expect((mcpKey(view, "a", ch("a")) as { view: McpView }).view.message?.tone).toBe("error");
+    expect((mcpKey(at(4), "x", ch("x")) as { view: McpView }).view.message?.tone).toBe("error");
+    // Reconnecting a server nobody approved says so instead.
+    expect((mcpKey(at(3), "r", ch("r")) as { view: McpView }).view.message?.text).toMatch(/press a/);
+  });
+
+  it("never passes a repository's or server's control characters to the terminal", () => {
+    const hostile: McpServerStatus = {
+      name: "evil\u001b]0;pwned\u0007",
+      state: "pending",
+      origin: "repository",
+      transport: "http",
+      target: "https://x.test/\u001b[2J\u009b31m",
+      tools: 0,
+      error: "boom\u001b[8m hidden",
+      definition: '{\n  "url": "https://x.test/\\u001b[2J"\n}',
+    };
+    const controls = /[\x00-\x1f\x7f-\x9f]/;
+    expect(mcpServerLine(hostile)).not.toMatch(controls);
+    for (const line of mcpServerDetail(hostile)) expect(line).not.toMatch(controls);
+    const asked = mcpKey({ kind: "mcp", servers: [hostile], index: 0 }, "a", ch("a")) as { view: McpView };
+    for (const line of mcpServerDetail(hostile, asked.view)) expect(line).not.toMatch(controls);
+    // The definition keeps its indentation.
+    expect(mcpServerDetail(hostile, asked.view)[2]).toBe('  "url": "https://x.test/\\u001b[2J"');
+    // Whatever a view carries, the overlay renders no control character.
+    const text: string[] = [];
+    const collect = (node: unknown): void => {
+      if (typeof node === "string") text.push(node);
+      else if (Array.isArray(node)) for (const child of node) collect(child);
+      else if (node && typeof node === "object" && "props" in node) {
+        const el = node as { type: unknown; props: Record<string, unknown> };
+        if (typeof el.type === "function") collect((el.type as (p: unknown) => unknown)(el.props));
+        else collect(el.props["children"]);
+      }
+    };
+    collect(
+      ManageOverlay({
+        view: {
+          kind: "mcp",
+          servers: [hostile],
+          index: 0,
+          message: { text: `enabled ${hostile.name} — ${hostile.error}`, tone: "error" },
+        },
+      }),
+    );
+    expect(text.join("")).toContain("evil ]0;pwned");
+    expect(text.join("")).not.toMatch(controls);
+  });
+
+  it("quotes a server name in the copied login command when it is not a plain token", () => {
+    expect(mcpLoginCommand("docs.example-1")).toBe("seekforge mcp login docs.example-1");
+    expect(mcpLoginCommand("x$(touch /tmp/p)")).toBe("seekforge mcp login 'x$(touch /tmp/p)'");
+    expect(mcpLoginCommand("it's")).toBe("seekforge mcp login 'it'\\''s'");
+    // A name that looks like an option comes after the end of options.
+    expect(mcpLoginCommand("-y")).toBe("seekforge mcp login -- -y");
+    expect(mcpLoginCommand("--client-id=$(id)")).toBe("seekforge mcp login -- '--client-id=$(id)'");
+  });
+
+  it("long definitions are cut with a pointer to the full one", () => {
+    const long = { ...servers[3]!, definition: Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n") };
+    const detail = mcpServerDetail(long, { confirmApprove: "repo" });
+    expect(detail).toHaveLength(26);
+    expect(detail.at(-1)).toMatch(/^… 16 .*mcp get/);
   });
 
   it("reconnects, disables, and asks before enabling", () => {
@@ -226,11 +356,12 @@ describe("/mcp", () => {
       effect: { kind: "set-enabled", name: "off", enabled: true },
     });
     expect((mcpKey(asked.view, "x", ch("x")) as { view: McpView }).view.confirmEnable).toBeUndefined();
+    expect(mcpKey(asked.view, "", key("escape"))).toMatchObject({ kind: "update" });
     expect((mcpKey(at(2), "r", ch("r")) as { view: McpView }).view.message?.tone).toBe("error");
   });
 
   it("never switches a repository or plugin server from here", () => {
-    expect((mcpKey(at(3), "e", ch("e")) as { view: McpView }).view.message?.text).toMatch(/repository/);
+    expect((mcpKey(at(3), "e", ch("e")) as { view: McpView }).view.message?.text).toMatch(/a approves/);
     expect((mcpKey(at(4), " ", ch(" ")) as { view: McpView }).view.message?.text).toMatch(/plugin/);
   });
 
