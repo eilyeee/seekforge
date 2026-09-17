@@ -1,6 +1,12 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { HookConfig, McpServerConfig, MemoryMaintenanceConfig, ModelPricing } from "@seekforge/core";
+import type {
+  HookConfig,
+  LspServerConfig,
+  McpServerConfig,
+  MemoryMaintenanceConfig,
+  ModelPricing,
+} from "@seekforge/core";
 import type { HookStage, PermissionRule } from "@seekforge/shared";
 import { mergeConfigLayers, repositoryConfigLayer, userConfigLayer } from "@seekforge/shared/config-layers";
 import { classifyConfigKeys, type ConfigKeyVerdict, knownConfigKeys } from "@seekforge/shared/config-manifest";
@@ -78,6 +84,10 @@ export type TuiConfig = {
    * starts logged out, which is the default because the file IS the login.
    */
   browserProfile?: string;
+  /** Language servers for the lsp_* tools (user config only; see docs/lsp.md). */
+  lspServers?: Record<string, LspServerConfig>;
+  /** Also load Claude Code skills from `~/.claude/skills` (user config only). */
+  claudeUserSkills?: boolean;
   /** Cache identical non-streaming LLM calls on disk (evals/subagents). */
   llmCache?: boolean;
   /** Flat documented key: /plan runs think on this model (e.g. deepseek-v4-pro). Takes precedence over routing.planModel. */

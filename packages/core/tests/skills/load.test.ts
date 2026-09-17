@@ -83,7 +83,7 @@ describe("loadSkillsFromDirs", () => {
     const project = makeTempDir();
     writeSkillDir(project, "bad-json", "{ not json", MD);
     writeSkillDir(project, "no-md", skillJson("no-md"), undefined);
-    writeSkillDir(project, "bad-shape", { id: "bad-shape" }, MD); // missing required fields
+    writeSkillDir(project, "bad-shape", { id: "bad-shape", tags: "not-a-list" }, MD); // wrong field type
     writeSkillDir(project, "good", skillJson("good"), MD);
 
     const skills = loadSkillsFromDirs([{ scope: "project", path: project }]);

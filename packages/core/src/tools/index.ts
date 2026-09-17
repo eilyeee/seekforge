@@ -20,6 +20,7 @@ import type { RuntimeClient } from "../runtime/index.js";
 import type { BackgroundTasks } from "./background.js";
 import type { HookConfig } from "../hooks/index.js";
 import type { SandboxLevel } from "./os-sandbox.js";
+import type { SkillSession } from "../skills/invocation.js";
 
 export type ToolContext = {
   sessionId: string;
@@ -107,6 +108,12 @@ export type ToolContext = {
    * it against a workspace that may have moved on.
    */
   prepared?: unknown;
+  /**
+   * The run's skill session (skills/invocation.ts): the skill snapshot
+   * `invoke_skill` resolves against, and the run-scoped state an activated
+   * skill changes. Absent outside an agent run.
+   */
+  skills?: SkillSession;
 };
 
 export interface ToolDispatcher {
@@ -156,7 +163,8 @@ export { applyEdits, closestRegion } from "./edits.js";
 export type { SearchReplaceEdit } from "./edits.js";
 export { zodToJsonSchema } from "./json-schema.js";
 export { browserBackendInstalled } from "./browser/playwright.js";
-export { lspServerCommands } from "./lsp/client.js";
+export { configureLspServers, lspServerCommands } from "./lsp/client.js";
+export { lspServersSchema, parseLspServerConfig, resolveLspServerTable } from "./lsp/config.js";
 export {
   acquireBrowserLease,
   browserProfileDir,

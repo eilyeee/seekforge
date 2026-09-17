@@ -1,15 +1,17 @@
 /**
  * Custom user-defined slash commands: Markdown files that become invocable
- * commands in the desktop/TUI. Two layers:
+ * commands in the desktop/TUI. Three layers:
  *   project  <workspace>/.seekforge/commands/*.md   (scope "project")
  *   user     ~/.seekforge/commands/*.md             (scope "user")
+ *   plugin   an enabled plugin's command roots      (scope "user", `plugin` set)
  *
  * Subdirectories namespace the command: `frontend/build.md` becomes the command
- * `frontend:build` (path separators → ":"), matching Claude Code.
+ * `frontend:build` (path separators → ":"), matching Claude Code. A plugin's
+ * commands are additionally prefixed with the plugin id (`<plugin>:<name>`).
  *
  * The user layer honors SEEKFORGE_HOME via seekforgeHome() so tests stay
- * deterministic. A name defined in both layers resolves to the project copy
- * (project wins). Never throws — unreadable dirs/files are skipped.
+ * deterministic. A name defined in several layers resolves to the first of
+ * project, user, plugin. Never throws — unreadable dirs/files are skipped.
  */
 
 import { lstatSync, readdirSync, realpathSync } from "node:fs";
@@ -17,13 +19,17 @@ import { join } from "node:path";
 import { seekforgeHome } from "../memory/store.js";
 import { readUtf8FileBoundedSync } from "../util/fs.js";
 import { parseFrontmatter } from "../subagents/frontmatter.js";
+import { loadPluginContributions, type PluginContributions } from "../plugins/index.js";
 
 export type UserCommand = {
   /** Filename without the .md extension. */
   name: string;
   /** Frontmatter `description`, else the first non-empty body line, else "". */
   description: string;
+  /** A plugin's commands are user-installed, so they report "user". */
   scope: "project" | "user";
+  /** The contributing plugin's id, for plugin commands. */
+  plugin?: string;
   /** File contents with any YAML frontmatter stripped. */
   body: string;
   /** Frontmatter `model`: run this command with a specific model. */
@@ -117,9 +123,12 @@ function resolveCommandsDir(base: string): string | undefined {
 }
 
 function loadCommandsDir(base: string, scope: "project" | "user"): UserCommand[] {
-  const out: UserCommand[] = [];
   const root = resolveCommandsDir(base);
-  if (!root) return out;
+  return root ? readCommandsRoot(root, scope, "") : [];
+}
+
+function readCommandsRoot(root: string, scope: "project" | "user", rootPrefix: string): UserCommand[] {
+  const out: UserCommand[] = [];
   const walk = (dir: string, prefix: string): void => {
     let entries: import("node:fs").Dirent[];
     try {
@@ -148,21 +157,43 @@ function loadCommandsDir(base: string, scope: "project" | "user"): UserCommand[]
       out.push(parseCommandFile(name, scope, raw));
     }
   };
-  walk(root, "");
+  walk(root, rootPrefix);
   return out;
 }
 
+/** A plugin's command root; the path was confined to the plugin when contributed. */
+function loadPluginCommandRoot(plugin: string, root: string): UserCommand[] {
+  try {
+    const stat = lstatSync(root);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return [];
+  } catch {
+    return [];
+  }
+  return readCommandsRoot(root, "user", `${plugin}:`).map((command) => ({ ...command, plugin }));
+}
+
 /**
- * Loads custom slash commands from the project and user layers. Project
- * commands shadow user commands on a name clash (de-dup by name, project
- * wins). Returns project commands first, then the user-only commands.
+ * Loads custom slash commands from the project, user and plugin layers. A
+ * name clash resolves to the first layer (de-dup by name). Returns project
+ * commands first, then user-only, then plugin-only commands. `contributions`
+ * defaults to the enabled plugins of this workspace.
  */
-export function loadUserCommands(workspace: string): UserCommand[] {
+export function loadUserCommands(
+  workspace: string,
+  contributions?: Pick<PluginContributions, "commandRoots">,
+): UserCommand[] {
   const project = loadCommandsDir(workspace, "project");
   const user = loadCommandsDir(seekforgeHome(), "user");
-  const seen = new Set(project.map((c) => c.name));
-  const out = [...project];
-  for (const cmd of user) {
+  let roots: PluginContributions["commandRoots"];
+  try {
+    roots = (contributions ?? loadPluginContributions(workspace)).commandRoots;
+  } catch {
+    roots = [];
+  }
+  const plugin = (roots ?? []).flatMap((root) => loadPluginCommandRoot(root.plugin, root.path));
+  const seen = new Set<string>();
+  const out: UserCommand[] = [];
+  for (const cmd of [...project, ...user, ...plugin]) {
     if (seen.has(cmd.name)) continue;
     seen.add(cmd.name);
     out.push(cmd);

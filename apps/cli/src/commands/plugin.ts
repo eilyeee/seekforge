@@ -1,10 +1,14 @@
 import {
+  addMarketplace,
   createPluginScaffold,
+  describePluginOrigin,
   digestPluginDirectory,
-  installPlugin,
+  installPluginFromSource,
+  listMarketplaces,
   listPlugins,
   pluginSupplyChainReport,
-  readPluginManifest,
+  readPluginManifestDetailed,
+  removeMarketplace,
   removePlugin,
   rollbackPlugin,
   setPluginEnabled,
@@ -26,7 +30,9 @@ export function pluginListCommand(json = false): void {
     return;
   }
   for (const plugin of plugins) {
-    console.log(`${plugin.id}\t${plugin.manifest?.version ?? "-"}\t${plugin.scope}\t${plugin.status}`);
+    const format = plugin.format === "claude" ? "\tclaude-code" : "";
+    console.log(`${plugin.id}\t${plugin.manifest?.version ?? "-"}\t${plugin.scope}\t${plugin.status}${format}`);
+    for (const warning of plugin.warnings ?? []) console.log(`  warning: ${warning}`);
   }
 }
 
@@ -41,9 +47,12 @@ export function pluginInspectCommand(id: string, json = false): void {
 
 export function pluginValidateCommand(path: string): void {
   try {
-    const manifest = readPluginManifest(path);
+    const { manifest, format, warnings } = readPluginManifestDetailed(path);
     const digest = digestPluginDirectory(path);
-    console.log(`valid plugin ${manifest.id}@${manifest.version} sha256:${digest}`);
+    console.log(
+      `valid ${format === "claude" ? "Claude Code " : ""}plugin ${manifest.id}@${manifest.version} sha256:${digest}`,
+    );
+    for (const warning of warnings) console.error(`warning: ${warning}`);
   } catch (error) {
     fail(error);
   }
@@ -58,11 +67,72 @@ export function pluginCreateCommand(id: string): void {
   }
 }
 
-export function pluginInstallCommand(path: string, force: boolean): void {
+/** `source`: a local directory, git URL (optionally `#ref`), https archive, or `<plugin>@<marketplace>`. */
+export async function pluginInstallCommand(source: string, force: boolean): Promise<void> {
   try {
-    const result = installPlugin(path, { force });
+    const result = await installPluginFromSource(source, { force });
     console.log(`${result.updated ? "updated" : "installed"} plugin ${result.manifest.id}@${result.manifest.version}`);
-    console.log(`disabled until reviewed; run: seekforge plugin enable ${result.manifest.id}`);
+    console.log(`source: ${describePluginOrigin(result.origin)}`);
+    console.log(`digest: sha256:${result.digest}`);
+    console.log(`disabled until reviewed (${result.path}); run: seekforge plugin enable ${result.manifest.id}`);
+  } catch (error) {
+    fail(error);
+  }
+}
+
+export async function pluginMarketplaceAddCommand(
+  source: string,
+  opts: { name?: string; force?: boolean },
+): Promise<void> {
+  try {
+    const added = await addMarketplace(source, {
+      ...(opts.name !== undefined ? { name: opts.name } : {}),
+      force: opts.force === true,
+    });
+    const pinned = added.commit ? ` @ ${added.commit}` : "";
+    console.log(`added ${added.kind} marketplace ${added.name} (${added.source}${pinned})`);
+    console.log(
+      `${added.plugins?.length ?? 0} plugin(s); install one with: seekforge plugin install <name>@${added.name}`,
+    );
+    for (const issue of added.issues ?? []) console.error(`warning: ${issue}`);
+  } catch (error) {
+    fail(error);
+  }
+}
+
+export function pluginMarketplaceRemoveCommand(name: string): void {
+  try {
+    const result = removeMarketplace(name);
+    console.log(`removed marketplace ${result.name}${result.removedCache ? " and its cached copy" : ""}`);
+  } catch (error) {
+    fail(error);
+  }
+}
+
+export function pluginMarketplaceListCommand(json = false): void {
+  try {
+    const marketplaces = listMarketplaces();
+    if (json) {
+      console.log(JSON.stringify(marketplaces, null, 2));
+      return;
+    }
+    if (marketplaces.length === 0) {
+      console.log("no marketplaces; add one with: seekforge plugin marketplace add <git-url|path>");
+      return;
+    }
+    for (const market of marketplaces) {
+      const pinned = market.commit ? `@${market.commit.slice(0, 12)}` : "";
+      console.log(`${market.name}\t${market.kind}\t${market.source}${pinned}`);
+      if (market.error) {
+        console.log(`  error: ${market.error}`);
+        continue;
+      }
+      for (const plugin of market.plugins ?? []) {
+        const version = plugin.version ? `@${plugin.version}` : "";
+        console.log(`  ${plugin.name}${version}${plugin.description ? `\t${plugin.description}` : ""}`);
+      }
+      for (const issue of market.issues ?? []) console.log(`  skipped: ${issue}`);
+    }
   } catch (error) {
     fail(error);
   }

@@ -5,6 +5,7 @@ import { ToolError } from "../errors.js";
 import { defineTool, type ToolSpec } from "../registry.js";
 import { readUtf8FileBoundedSync } from "../../util/fs.js";
 import { loadSkills } from "../../skills/load.js";
+import { skillInvokeTools } from "./skill-invoke.js";
 
 /**
  * Reading the rest of a skill.
@@ -27,7 +28,7 @@ const MAX_SKILL_READ_BYTES = 256 * 1024;
 const MAX_LISTED_FILES = 100;
 
 const readSkillSchema = z.object({
-  id: z.string().describe("Skill id, exactly as it appears in the injected skill brief."),
+  id: z.string().describe("Skill id, exactly as it appears in the injected skill brief or skill listing."),
   file: z
     .string()
     .optional()
@@ -64,7 +65,7 @@ const readSkill = defineTool({
     description: args.file ? `Read skill ${args.id} file ${args.file}` : `Read skill ${args.id}`,
   }),
   async run(args, ctx) {
-    const skill = loadSkills(ctx.workspace).find((candidate) => candidate.id === args.id);
+    const skill = (ctx.skills?.skills ?? loadSkills(ctx.workspace)).find((candidate) => candidate.id === args.id);
     if (!skill) {
       throw new ToolError("skill_not_found", `No skill with id "${args.id}" is available in this workspace`);
     }
@@ -113,4 +114,4 @@ function listBundledFiles(dir: string | undefined): string[] {
   }
 }
 
-export const skillTools: ToolSpec[] = [readSkill];
+export const skillTools: ToolSpec[] = [readSkill, ...skillInvokeTools];

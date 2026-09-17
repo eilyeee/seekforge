@@ -38,6 +38,10 @@ import {
 } from "../memory/index.js";
 import {
   buildSkillBrief,
+  buildSkillListing,
+  createSkillSession,
+  INVOKE_SKILL_TOOL,
+  invocableSkills,
   loadSkills,
   logSkillOutcome,
   logSkillUsage,
@@ -468,6 +472,10 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           },
         }
       : {}),
+    ...(skill.allowedTools ? { allowedTools: [...skill.allowedTools] } : {}),
+    ...(skill.disallowedTools ? { disallowedTools: [...skill.disallowedTools] } : {}),
+    ...(skill.argumentNames ? { argumentNames: [...skill.argumentNames] } : {}),
+    ...(skill.paths ? { paths: [...skill.paths] } : {}),
   }));
   const confirmQueue = deps._confirmQueue ?? createConfirmQueue();
   // dispatch_agent is only advertised at depth 0 — dispatched runs never recurse.
@@ -682,14 +690,27 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         // truncateSessionAtUserTurn / rewindSessionToTurn indexing.
         let runTurnIndex = 0;
         let messages: ChatMessage[];
-        const skillSelections =
+        const skillsInjected = !(
           input.systemPromptOverride !== undefined ||
           (input.mode === "ask" && !input.plan) ||
           deps.injectSkills === false
-            ? []
-            : selectSkills(input.task, skillSnapshot ?? loadSkills(input.projectPath, deps.pluginContributions), {
-                workspace: input.projectPath,
-              });
+        );
+        let loadedSkills: readonly Skill[] | undefined;
+        const runSkills = (): readonly Skill[] =>
+          (loadedSkills ??= skillSnapshot ?? loadSkills(input.projectPath, deps.pluginContributions));
+        const skillSelections = skillsInjected
+          ? selectSkills(input.task, [...runSkills()], { workspace: input.projectPath })
+          : [];
+        // The listing names what invoke_skill can load; lexically selected
+        // skills stay in it (their brief is an excerpt) but are marked.
+        const skillListing =
+          skillsInjected &&
+          deps.dispatcher.list().some((tool) => tool.name === INVOKE_SKILL_TOOL) &&
+          (!deps.allowedTools || deps.allowedTools.includes(INVOKE_SKILL_TOOL))
+            ? buildSkillListing(invocableSkills(runSkills(), input.projectPath), {
+                preloaded: new Set(skillSelections.map((selection) => selection.skill.id)),
+              })
+            : undefined;
         if (skillSelections.length > 0) {
           logSkillUsage(input.projectPath, sessionId, skillSelections);
           yield emit({
@@ -716,9 +737,12 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                     projectRules: collectProjectRules(input.projectPath, undefined, input.task),
                     memoryBrief: memoryFor(input.task),
                     skillBrief: buildSkillBrief(skillSelections, deps.skillBriefMaxChars),
+                    ...(skillListing ? { skillListing } : {}),
                     subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
                     commandRoster:
-                      depth === 0 ? buildCommandRoster(loadUserCommands(input.projectPath)) || undefined : undefined,
+                      depth === 0
+                        ? buildCommandRoster(loadUserCommands(input.projectPath, deps.pluginContributions)) || undefined
+                        : undefined,
                     ...(priorPlan ? { planItems: priorPlan } : {}),
                     ...(repoOverview ? { repoOverview } : {}),
                     ...(relevantFiles ? { relevantFiles } : {}),
@@ -749,9 +773,12 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               projectRules: collectProjectRules(input.projectPath, undefined, input.task),
               memoryBrief,
               skillBrief: buildSkillBrief(skillSelections, deps.skillBriefMaxChars),
+              ...(skillListing ? { skillListing } : {}),
               subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
               commandRoster:
-                depth === 0 ? buildCommandRoster(loadUserCommands(input.projectPath)) || undefined : undefined,
+                depth === 0
+                  ? buildCommandRoster(loadUserCommands(input.projectPath, deps.pluginContributions)) || undefined
+                  : undefined,
               ...(repoOverview ? { repoOverview } : {}),
               ...(relevantFiles ? { relevantFiles } : {}),
               ...(deps.editFormat ? { editFormat: deps.editFormat } : {}),
@@ -861,6 +888,32 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           // granted expires with the run.
           ...(depth === 0 && deps.persistRule ? { persistRule: deps.persistRule } : {}),
         };
+        // Skill invocation state lives as long as this run; an activated
+        // skill's rules land on this run's policy object only.
+        ctx.skills = createSkillSession({
+          skills: runSkills,
+          preloaded: skillSelections.map((selection) => selection.skill.id),
+          policy: ctx.policy,
+          workspace: input.projectPath,
+          mode: input.mode,
+          agents: roster,
+          canSwitchModel: deps.providerForModel !== undefined,
+          ...(roster.length > 0
+            ? {
+                // dispatchTools is created below; a fork only runs once a tool call executes.
+                fork: (request) =>
+                  dispatchTools
+                    ? dispatchTools.runDispatch({ agentId: request.definition.id, task: request.task }, true, {
+                        definition: request.definition,
+                        permissionRules: request.permissionRules,
+                      })
+                    : Promise.resolve({
+                        ok: false,
+                        error: { code: "fork_unavailable", message: "subagent dispatch is unavailable" },
+                      }),
+              }
+            : {}),
+        });
 
         const allToolDefs =
           roster.length > 0
@@ -1569,6 +1622,14 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               };
               messages.push(toolMsg);
               trace.message(toolMsg);
+            }
+
+            // A skill invoked this turn may ask for another model for the rest
+            // of the run; the session only records the request when the host
+            // can build providers (providerForModel).
+            const skillModel = ctx.skills?.takeModelRequest();
+            if (skillModel !== undefined && deps.providerForModel) {
+              provider = deps.providerForModel(skillModel);
             }
 
             // Stuck detection: if a tool call failed with the SAME (name+args) as

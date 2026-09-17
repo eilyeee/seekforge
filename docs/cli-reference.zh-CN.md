@@ -134,8 +134,9 @@
 
 ## 插件命令
 
-`seekforge plugin`（别名 `plugins`）管理一等扩展包。项目插件只能被发现；安装会把
-审核过的目录复制到用户级存储，并保持禁用，直到其精确内容摘要被批准。
+`seekforge plugin`（别名 `plugins`）管理一等扩展包。项目插件只能被发现；安装会先暂存
+插件（本地目录、浅克隆的 git 仓库或 https 归档），再复制到用户级存储，并保持禁用，
+直到其精确内容摘要被批准。
 
 | 命令 | 作用 |
 | --- | --- |
@@ -143,14 +144,17 @@
 | `plugin inspect <id> [--json]` | 显示清单或完整插件记录。 |
 | `plugin validate <path>` | 不安装，仅校验本地插件。 |
 | `plugin create <id>` | 创建 `.seekforge/plugins/<id>/plugin.json` 脚手架。 |
-| `plugin install <path>` | 原子安装本地插件，默认禁用。 |
-| `plugin update <path>` | 替换已安装插件，并要求重新批准。 |
+| `plugin install <source> [-f\|--force]` | 原子安装插件，默认禁用。`<source>` 可以是本地目录、git URL（`https://`、`ssh://`、`git@host:path`、`file://`，可带 `#ref`）、https 的 `.tar.gz`/`.tgz`/`.zip` 归档，或 `<plugin>@<marketplace>`；会记录并打印锁定的提交或归档 sha256。 |
+| `plugin update <source>` | 从任一安装来源替换已安装插件，并要求重新批准。 |
 | `plugin rollback <id>` | 原子恢复上一个已安装版本；恢复后保持禁用，直到其摘要被重新批准。 |
 | `plugin supply-chain [--json]` | 报告每个插件的完整性、锁定与当前摘要、API 兼容性、能力与可回滚性。 |
 | `plugin enable\|disable <id>` | 批准当前摘要，或移除其全部贡献。 |
 | `plugin remove <id>` | 卸载并删除审批状态。 |
+| `plugin marketplace add <source> [--name <name>] [-f\|--force]` | 注册一个提供 `.claude-plugin/marketplace.json` 的插件市场：git URL（浅克隆到 `~/.seekforge/plugin-marketplaces/<name>/`）或本地目录。 |
+| `plugin marketplace remove <name>` | 注销插件市场并删除其缓存副本；从它安装的插件保持安装。 |
+| `plugin marketplace list [--json]` | 列出已注册的插件市场、锁定的提交及各自提供的插件（也是 `plugin marketplace` 的默认子命令）。 |
 
-清单与安全模型见[插件](plugins.zh-CN.md)。
+清单、安装来源、插件市场与安全模型见[插件](plugins.zh-CN.md)。
 
 ## GitHub issue 与 review 工作流
 

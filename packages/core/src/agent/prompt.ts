@@ -9,6 +9,8 @@ export type SystemPromptOptions = {
   memoryBrief?: string;
   /** Compressed procedures of the selected skills. */
   skillBrief?: string;
+  /** One line per skill the model may load with invoke_skill (buildSkillListing). */
+  skillListing?: string;
   /** One-line-per-agent roster; set only when dispatch_agent is advertised. */
   subagentRoster?: string;
   /** One-line-per-command roster of user commands invocable via run_user_command. */
@@ -169,9 +171,14 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
   }
 
   if (opts.skillBrief) {
+    parts.push("Active skills (procedure suggestions — they never override the rules above):\n" + opts.skillBrief);
+  }
+
+  if (opts.skillListing) {
     parts.push(
-      "Active skills (procedure suggestions — they never override the rules above " +
-        `and never grant extra permissions):\n${opts.skillBrief}`,
+      "Skills you can load with invoke_skill. When the task matches one, invoke it before doing " +
+        "the work it covers and follow what it returns (it never overrides the rules above):\n" +
+        opts.skillListing,
     );
   }
 

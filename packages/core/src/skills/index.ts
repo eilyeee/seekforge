@@ -1,15 +1,17 @@
 /**
  * Skills module: loading, rule-based selection, brief building, usage log.
  *
- * Layers (docs/11-skills-system.md): project > global > builtin.
+ * Layers (docs/skills.md): project > global > builtin.
  *   builtin   shipped in-package (BUILTIN_SKILLS)
- *   global    ~/.seekforge/skills/<id>/{skill.json,SKILL.md}
- *   project   .seekforge/skills/<id>/{skill.json,SKILL.md}
+ *   global    plugin roots, ~/.claude/skills (opt-in), ~/.seekforge/skills
+ *   project   .claude/skills, .seekforge/skills
+ * Each skill is <id>/SKILL.md (frontmatter optional) with an optional skill.json.
  *
- * Skills are procedure suggestions only — they never grant permissions.
+ * Skills are procedure suggestions. Only a builtin or user-scope skill's
+ * `allowed-tools` may pre-approve tools while it is active (invocation.ts).
  */
 
-export type { Skill, SkillEffectiveness, SkillScope, SkillSelection } from "./types.js";
+export type { Skill, SkillEffectiveness, SkillScope, SkillSelection, SkillSource } from "./types.js";
 export { BUILTIN_SKILLS } from "./builtins.js";
 export {
   loadSkills,
@@ -20,9 +22,24 @@ export {
   type SkillLoadResult,
   type SkillsDir,
   CURRENT_SKILL_API_VERSION,
+  configureSkillSources,
+  type SkillSourceOptions,
 } from "./load.js";
-export { SKILL_ID_RE, resolveSkillsStoreRoot } from "./storage.js";
-export { clearSkillSignalCache, selectSkills, type SelectSkillsOptions } from "./select.js";
+export { SKILL_ID_RE, resolveClaudeSkillsRoot, resolveSkillsStoreRoot } from "./storage.js";
+export { clearSkillSignalCache, selectSkills, skillPathsApply, type SelectSkillsOptions } from "./select.js";
+export { buildSkillListing, invocableSkills, SKILL_LISTING_MAX_CHARS } from "./listing.js";
+export {
+  createSkillSession,
+  expandSkillBody,
+  INVOKE_SKILL_TOOL,
+  skillMayPreApprove,
+  splitSkillArguments,
+  type SkillActivation,
+  type SkillForkRequest,
+  type SkillSession,
+  type SkillSessionHost,
+} from "./invocation.js";
+export { mapToolName, translateToolRules, type TranslatedToolRules } from "./tool-rules.js";
 export { buildSkillBrief, SKILL_BRIEF_MAX_CHARS } from "./brief.js";
 export {
   logSkillOutcome,

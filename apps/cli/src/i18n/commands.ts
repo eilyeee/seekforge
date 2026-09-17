@@ -108,7 +108,8 @@ export const commands = {
     "cmd.skill.imported": 'imported "{id}" \u2192 {dir}',
     "cmd.skill.importedTriggers": "triggers: {triggers}",
     "cmd.skill.importedMore": "Check it with `seekforge skill show {id}`. Imported skills are",
-    "cmd.skill.importedMore2": "procedure suggestions only \u2014 they never grant extra permissions.",
+    "cmd.skill.importedMore2":
+      "procedure suggestions; a global skill's allowed-tools is pre-approved while it runs (a project skill can only restrict).",
     "cmd.skill.created": "created {dir}",
     "cmd.skill.createdMore": "Edit SKILL.md and skill.json, then check with `seekforge skill show {id}`.",
     "cmd.skill.enabled": 'enabled "{id}" ({scope})',
@@ -330,7 +331,7 @@ export const commands = {
     "cmd.skill.imported": '已导入 "{id}" → {dir}',
     "cmd.skill.importedTriggers": "触发器：{triggers}",
     "cmd.skill.importedMore": "使用 `seekforge skill show {id}` 查看。导入的技能仅作为",
-    "cmd.skill.importedMore2": "过程建议 — 它们不会授予额外权限。",
+    "cmd.skill.importedMore2": "过程建议；全局技能的 allowed-tools 会在其运行期间被预先批准（项目技能只能收紧权限）。",
     "cmd.skill.created": "已创建 {dir}",
     "cmd.skill.createdMore": "编辑 SKILL.md 和 skill.json，然后使用 `seekforge skill show {id}` 查看。",
     "cmd.skill.enabled": '已启用 "{id}"（{scope}）',

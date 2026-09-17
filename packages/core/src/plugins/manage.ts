@@ -12,7 +12,7 @@ import {
   resolvePluginStoreRoot,
   type PluginState,
 } from "./load.js";
-import type { PluginManifest } from "./types.js";
+import type { PluginManifest, PluginOrigin } from "./types.js";
 import { PLUGIN_API_VERSION } from "./types.js";
 import { PLUGIN_ID_RE } from "./load.js";
 
@@ -79,7 +79,10 @@ export function createPluginScaffold(workspace: string, id: string): { manifest:
 }
 
 /** Installs a bounded, link-free local plugin atomically. Installed plugins start disabled. */
-export function installPlugin(sourcePath: string, options: { force?: boolean } = {}): InstallPluginResult {
+export function installPlugin(
+  sourcePath: string,
+  options: { force?: boolean; origin?: PluginOrigin } = {},
+): InstallPluginResult {
   const lease = acquireSessionLease(seekforgeHome(), "plugins-mutation");
   try {
     const source = resolve(sourcePath);
@@ -118,7 +121,12 @@ export function installPlugin(sourcePath: string, options: { force?: boolean } =
       if (committed && existsSync(previousRollback)) rmSync(previousRollback, { recursive: true, force: true });
     }
     const state = readState();
-    state.plugins[manifest.id] = { enabled: false, digest, updatedAt: new Date().toISOString() };
+    state.plugins[manifest.id] = {
+      enabled: false,
+      digest,
+      updatedAt: new Date().toISOString(),
+      origin: options.origin ?? { kind: "local", path: source },
+    };
     writeState(state);
     return { manifest, path: target, digest, updated: existed };
   } finally {

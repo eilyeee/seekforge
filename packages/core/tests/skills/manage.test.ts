@@ -74,7 +74,8 @@ describe("setSkillEnabled — builtins via override marker", () => {
     const dir = writeSkillDir(root, "alpha", undefined, MD);
     fs.writeFileSync(outside, JSON.stringify(skillJson("alpha")));
     fs.symlinkSync(outside, path.join(dir, "skill.json"));
-    expect(() => setSkillEnabled(ws, "alpha", false)).toThrow(/unknown skill/i);
+    expect(() => setSkillEnabled(ws, "alpha", false)).toThrow(/physical regular file/i);
+    expect(() => setSkillEnabled(ws, "alpha", true)).toThrow(/physical regular file/i);
     expect(JSON.parse(fs.readFileSync(outside, "utf8"))).toEqual(skillJson("alpha"));
   });
 });

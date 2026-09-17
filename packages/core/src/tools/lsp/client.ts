@@ -27,6 +27,8 @@ import { isRecord } from "../../util/guards.js";
 import { compareByCodePoints } from "@seekforge/shared";
 import { clipLine } from "@seekforge/shared/format";
 import { readUtf8FileBoundedSync } from "../../util/fs.js";
+import type { LspServerConfig } from "../../plugins/types.js";
+import { resolveLspServerTable } from "./config.js";
 
 const MAX_LSP_DOCUMENT_BYTES = 5 * 1024 * 1024;
 
@@ -122,6 +124,10 @@ type Candidate = {
    * is ours to create rather than a guess about someone's build.
    */
   workspaceArgs?: (workspace: string) => string[];
+  /** Configured servers only: extra environment for the process. */
+  env?: Record<string, string>;
+  /** Configured servers only: sent as `initializationOptions`. */
+  initializationOptions?: unknown;
 };
 type LangEntry = {
   /** LSP languageId sent in textDocument/didOpen. */
@@ -343,15 +349,70 @@ export function commandExistsOnPath(command: string): boolean {
 
 type Resolved = { languageId: string; candidate: Candidate };
 
+type ConfiguredTable = ReturnType<typeof resolveLspServerTable>["byExtension"];
+let defaultConfigured: ConfiguredTable = new Map();
+const configuredByWorkspace = new Map<string, ConfiguredTable>();
+
+/**
+ * Host seam for configured language servers: plugin contributions plus the
+ * user's `lspServers` config. Scoped to `workspace` when given (a server
+ * hosting several workspaces with different plugin sets), process-wide
+ * otherwise; `null` clears. Returns what was ignored and why, for the host to
+ * report — an invalid entry never disables the others.
+ */
+export function configureLspServers(
+  servers: { plugin?: Record<string, LspServerConfig>; user?: Record<string, unknown> } | null,
+  workspace?: string,
+): string[] {
+  const resolved = servers ? resolveLspServerTable(servers.plugin, servers.user) : undefined;
+  const table = resolved?.byExtension ?? new Map();
+  if (workspace === undefined) {
+    defaultConfigured = table;
+    if (servers === null) configuredByWorkspace.clear();
+  } else if (servers === null) {
+    configuredByWorkspace.delete(workspaceIdentity(workspace));
+  } else {
+    configuredByWorkspace.set(workspaceIdentity(workspace), table);
+  }
+  return resolved?.warnings ?? [];
+}
+
+function configuredTable(workspace: string | undefined): ConfiguredTable {
+  return (
+    (workspace !== undefined ? configuredByWorkspace.get(workspaceIdentity(workspace)) : undefined) ?? defaultConfigured
+  );
+}
+
 /**
  * Resolve the server to run for a file, or throw an actionable ToolError:
  *   - `lsp_unsupported` when the extension has no known server, and
  *   - `lsp_unavailable` (with the per-language install hint) when a server IS
  *     known but none of its binaries are found on PATH.
- * This is where graceful degradation happens — no process is spawned here.
+ * A configured server (see configureLspServers) replaces the built-in entry
+ * for its extensions. This is where graceful degradation happens — no process
+ * is spawned here.
  */
 export function resolveServerCommand(filePath: string, workspace?: string): Resolved {
   const ext = path.extname(filePath).toLowerCase();
+  const configured = configuredTable(workspace).get(ext);
+  if (configured) {
+    const { config } = configured;
+    if (!commandExistsOnPath(config.command)) {
+      throw new ToolError(
+        "lsp_unavailable",
+        `The ${configured.source === "user" ? "configured" : "plugin"} language server "${configured.name}" (${config.command}) was not found on PATH.`,
+      );
+    }
+    return {
+      languageId: configured.languageId,
+      candidate: {
+        command: config.command,
+        args: [...(config.args ?? [])],
+        ...(config.env ? { env: { ...config.env } } : {}),
+        ...(config.initializationOptions !== undefined ? { initializationOptions: config.initializationOptions } : {}),
+      },
+    };
+  }
   const entry = EXT_TO_LANG[ext];
   if (!entry) {
     // Derived, not spelled out: this list was written by hand and named three
@@ -359,7 +420,7 @@ export function resolveServerCommand(filePath: string, workspace?: string): Reso
     // the table held nineteen.
     throw new ToolError(
       "lsp_unsupported",
-      `No language server is configured for "${ext || filePath}". Supported: ${Object.keys(EXT_TO_LANG).sort(compareByCodePoints).join(", ")}.`,
+      `No language server is configured for "${ext || filePath}". Supported: ${supportedLspExtensions(workspace).join(", ")}.`,
     );
   }
   const candidate = entry.servers.find((s) => commandExistsOnPath(s.command));
@@ -386,15 +447,16 @@ export function resolveServerCommand(filePath: string, workspace?: string): Reso
  * its own copy of the list — a second hand-maintained copy of this table is
  * exactly the drift this repository keeps finding.
  */
-export function supportedLspExtensions(): string[] {
-  return Object.keys(EXT_TO_LANG).sort(compareByCodePoints);
+export function supportedLspExtensions(workspace?: string): string[] {
+  return [...new Set([...Object.keys(EXT_TO_LANG), ...configuredTable(workspace).keys()])].sort(compareByCodePoints);
 }
 
-export function lspServerCommands(): string[] {
+export function lspServerCommands(workspace?: string): string[] {
   const commands = new Set<string>();
   for (const entry of Object.values(EXT_TO_LANG)) {
     for (const server of entry.servers) commands.add(server.command);
   }
+  for (const configured of configuredTable(workspace).values()) commands.add(configured.config.command);
   return [...commands].sort(compareByCodePoints);
 }
 
@@ -734,6 +796,7 @@ class LspSession {
       child = spawn(this.candidate.command, this.candidate.args, {
         cwd: this.workspace,
         stdio: ["pipe", "pipe", "pipe"],
+        ...(this.candidate.env ? { env: { ...process.env, ...this.candidate.env } } : {}),
       });
     } catch (err) {
       throw new ToolError("lsp_unavailable", `Failed to start ${this.candidate.command}: ${errMsg(err)}`);
@@ -763,6 +826,9 @@ class LspSession {
         processId: process.pid,
         rootUri,
         workspaceFolders: [{ uri: rootUri, name: path.basename(this.workspace) }],
+        ...(this.candidate.initializationOptions !== undefined
+          ? { initializationOptions: this.candidate.initializationOptions }
+          : {}),
         capabilities: {
           textDocument: {
             synchronization: { didSave: false, dynamicRegistration: false },
@@ -1256,7 +1322,9 @@ async function getSession(workspace: string, absPath: string, signal?: AbortSign
   if (signal?.aborted) throw cancelledError();
   workspace = workspaceIdentity(workspace);
   const { languageId, candidate } = resolveServerCommand(absPath, workspace); // throws when unavailable
-  const key = `${workspace}\0${languageId}`;
+  // The command is part of the key: a configured server for a language must
+  // never be answered by a session the built-in table started, or vice versa.
+  const key = `${workspace}\0${languageId}\0${JSON.stringify([candidate.command, candidate.args, candidate.env ?? null])}`;
   const starting = startingSessions.get(key);
   if (starting) {
     const session = await abortable(starting, signal);

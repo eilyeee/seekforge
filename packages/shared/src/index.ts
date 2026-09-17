@@ -694,6 +694,12 @@ export type Skill = {
   priority: number;
   enabled: boolean;
   risk: "low" | "medium" | "high";
+  /** False: hide from slash menus (the model may still invoke it). Absent means true. */
+  userInvocable?: boolean;
+  /** True: only a user may invoke it; the model never sees it listed. */
+  disableModelInvocation?: boolean;
+  /** Placeholder for the skill's arguments, e.g. "[issue-number]". */
+  argumentHint?: string;
   /** Full SKILL.md content (only present on GET /api/skills/:id). */
   content?: string;
 };

@@ -3,17 +3,18 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { AGENT_ID_RE, kebabize, parseFrontmatter } from "../subagents/frontmatter.js";
 import { readUtf8FileBoundedSync } from "../util/fs.js";
-import { MAX_SKILL_DEFINITION_BYTES } from "./load.js";
+import { MAX_SKILL_DEFINITION_BYTES, validateSkillMarkdown } from "./load.js";
 import { withSkillMutation } from "./storage.js";
 import type { Skill } from "./types.js";
 
 /**
  * Importing external skills (Claude-Code-style SKILL.md with YAML
  * frontmatter, e.g. Meta_Kim canonical skills) into SeekForge's
- * skill.json + SKILL.md layout.
+ * skill.json + SKILL.md layout. SKILL.md is copied verbatim, so the
+ * invocation fields its frontmatter carries (allowed-tools, arguments, …)
+ * keep working; skill.json adds SeekForge's selection metadata on top.
  *
- * Imported skills are procedure suggestions like any other skill — they
- * never grant permissions, and land with medium trust (docs/14 §7).
+ * Imported skills land with medium trust (docs/14 §7).
  */
 
 export type ParsedExternalSkill = {
@@ -94,7 +95,10 @@ export function importExternalSkill(
   } catch {
     throw new Error(`skill source not found: ${file}`);
   }
-  const parsed = parseFrontmatterSkill(readUtf8FileBoundedSync(file, MAX_SKILL_DEFINITION_BYTES));
+  const markdown = readUtf8FileBoundedSync(file, MAX_SKILL_DEFINITION_BYTES);
+  const parsed = parseFrontmatterSkill(markdown);
+  const invalid = validateSkillMarkdown(markdown);
+  if (invalid !== undefined) throw new Error(`not an importable skill: ${invalid}`);
   const meta: Omit<Skill, "scope" | "content"> = {
     apiVersion: 1,
     id: parsed.id,
@@ -136,7 +140,7 @@ export function importExternalSkill(
         flag: "wx",
         mode: 0o600,
       });
-      fs.writeFileSync(path.join(temp, "SKILL.md"), `${parsed.body}\n`, { flag: "wx", mode: 0o600 });
+      fs.writeFileSync(path.join(temp, "SKILL.md"), markdown, { flag: "wx", mode: 0o600 });
       if (existed) fs.renameSync(dir, backup);
       try {
         fs.renameSync(temp, dir);

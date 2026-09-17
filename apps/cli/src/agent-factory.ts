@@ -2,8 +2,11 @@ import { existsSync } from "node:fs";
 import {
   buildAgentCoreDeps,
   configureBrowserProfile,
+  configureLspServers,
+  configureSkillSources,
   configureVision,
   configureWebSearch,
+  mergePluginLspServers,
   resolveWebSearchConfig,
   resolveBrowserProfilePath,
   seekforgeHome,
@@ -96,6 +99,8 @@ export function configureCliTools(config: CliConfig, workspace?: string): void {
   // agent's searches at an endpoint of its choosing and feed the model
   // whatever it likes back.
   configureWebSearch(resolveWebSearchConfig(config.webSearch), workspace);
+  // User-only like webSearch: which skill directories every run reads.
+  configureSkillSources({ claudeUserSkills: config.claudeUserSkills === true });
   configureVision(
     config.visionModel?.baseUrl
       ? {
@@ -135,6 +140,13 @@ export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
   // which is worse than not supporting them: the same config file behaved
   // differently depending on which command read it.
   configureCliTools(config, workspace);
+  // Needs this run's plugin snapshot, so it cannot live in configureCliTools.
+  for (const warning of configureLspServers(
+    mergePluginLspServers(workspace, config.lspServers, pluginContributions),
+    workspace,
+  )) {
+    console.error(`warning: ${warning}`);
+  }
 
   let runtime: RuntimeClient | undefined;
   if (config.runtimeBin) {

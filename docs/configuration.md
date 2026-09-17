@@ -1016,6 +1016,40 @@ project's searches through another's instance.
 
 Settable via `config set`? **No** — edit the file directly.
 
+### `lspServers`
+
+**Default unset.** Language servers for the `lsp_*` tools, keyed by a name
+(letters, digits, `.`, `_`, `-`). Each entry needs a `command` and either
+`extensionToLanguage` (`{ ".tf": "terraform" }`) or `extensions` plus a
+`languageId`; `args`, `env` and `initializationOptions` are optional. An entry
+replaces the built-in server for every extension it names and beats a plugin's
+server for the same extension. Invalid entries are skipped with a warning.
+
+```json
+{ "lspServers": { "terraform": { "command": "terraform-ls", "args": ["serve"], "extensionToLanguage": { ".tf": "terraform" } } } }
+```
+
+**User config only** — a repository config cannot name a command for SeekForge
+to start. Applied per workspace whenever the CLI, TUI or server assembles an
+agent. See [LSP](lsp.md#configured-language-servers).
+
+Settable via `config set`? **No** — edit the file directly.
+
+### `claudeUserSkills`
+
+**Default `false`.** When `true`, skills in `~/.claude/skills/<name>/SKILL.md`
+(Claude Code's user skill directory, resolved under `SEEKFORGE_HOME` when that
+is set) are loaded as user-scope skills, below `~/.seekforge/skills`. The
+project's `.claude/skills` is read regardless. User-scope skills may
+pre-approve tools with `allowed-tools` while they are active, which is why this
+is an opt-in and **user config only**. See [Skills](skills.md#claude-code-skills).
+
+```json
+{ "claudeUserSkills": true }
+```
+
+Settable via `config set`? **No** — edit the file directly.
+
 ### `locale`
 
 UI language for the CLI and TUI chrome (progress lines, summaries, error

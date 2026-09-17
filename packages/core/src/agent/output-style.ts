@@ -6,12 +6,33 @@
 //
 // Beyond the built-ins, a user can define a style as a Markdown file at
 // .seekforge/output-styles/<name>.md (project, then the user home); its body
-// (frontmatter stripped) is the addendum verbatim.
+// (frontmatter stripped) is the addendum verbatim. An enabled plugin's
+// output-style roots contribute `<plugin>:<name>` styles the same way.
 
 import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { seekforgeHome } from "../memory/store.js";
 import { readUtf8FileBoundedSync } from "../util/fs.js";
+import { loadPluginContributions, type PluginContributions } from "../plugins/index.js";
+
+type StyleContributions = Pick<PluginContributions, "outputStyleRoots">;
+
+function pluginStyleRoots(projectPath: string, contributions: StyleContributions | undefined) {
+  try {
+    return (contributions ?? loadPluginContributions(projectPath)).outputStyleRoots ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function physicalDirectory(dir: string): boolean {
+  try {
+    const stat = lstatSync(dir);
+    return !stat.isSymbolicLink() && stat.isDirectory();
+  } catch {
+    return false;
+  }
+}
 
 /** The set of built-in output styles. */
 export type OutputStyle = "default" | "concise" | "explanatory" | "learning";
@@ -115,7 +136,11 @@ function readStyleFile(file: string): string | undefined {
  * first, then the user home). The file body (frontmatter stripped) is the
  * addendum. Returns undefined when no such file exists in any layer.
  */
-export function loadCustomOutputStyle(name: string, projectPath: string): string | undefined {
+export function loadCustomOutputStyle(
+  name: string,
+  projectPath: string,
+  contributions?: StyleContributions,
+): string | undefined {
   if (!isCustomOutputStyleName(name)) return undefined;
   for (const base of outputStyleBases(projectPath)) {
     const dir = outputStyleDir(base);
@@ -123,6 +148,17 @@ export function loadCustomOutputStyle(name: string, projectPath: string): string
     const raw = readStyleFile(join(dir, `${name}.md`));
     if (raw === undefined) continue;
     const body = stripFrontmatter(raw);
+    if (body) return body;
+  }
+  const colon = name.indexOf(":");
+  if (colon <= 0) return undefined;
+  const plugin = name.slice(0, colon);
+  const style = name.slice(colon + 1);
+  if (!isCustomOutputStyleName(style) || style.includes(":")) return undefined;
+  for (const root of pluginStyleRoots(projectPath, contributions)) {
+    if (root.plugin !== plugin || !physicalDirectory(root.path)) continue;
+    const raw = readStyleFile(join(root.path, `${style}.md`));
+    const body = raw === undefined ? "" : stripFrontmatter(raw);
     if (body) return body;
   }
   return undefined;
@@ -133,9 +169,13 @@ export function loadCustomOutputStyle(name: string, projectPath: string): string
  * its preset; otherwise a custom .seekforge/output-styles/<name>.md file.
  * Returns undefined for "default" (no change). Throws if neither resolves.
  */
-export function resolveOutputStyle(style: string, projectPath: string): string | undefined {
+export function resolveOutputStyle(
+  style: string,
+  projectPath: string,
+  contributions?: StyleContributions,
+): string | undefined {
   if (isOutputStyle(style)) return outputStylePrompt(style);
-  const custom = loadCustomOutputStyle(style, projectPath);
+  const custom = loadCustomOutputStyle(style, projectPath, contributions);
   if (custom !== undefined) return custom;
   throw new Error(
     `Unknown output style: ${JSON.stringify(style)}. Expected a built-in (${OUTPUT_STYLES.join(", ")}) ` +
@@ -143,32 +183,47 @@ export function resolveOutputStyle(style: string, projectPath: string): string |
   );
 }
 
-export type OutputStyleInfo = { name: string; kind: "builtin" | "custom" };
+export type OutputStyleInfo = { name: string; kind: "builtin" | "custom"; plugin?: string };
+
+function styleFileNames(dir: string): string[] {
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+    .map((entry) => entry.name.slice(0, -3))
+    .filter((name) => name !== "");
+}
 
 /**
  * Lists the available output styles: the four built-ins first, then any custom
  * .seekforge/output-styles/*.md (project + user, de-duped by name; a custom
- * style that shadows a built-in name is reported once as builtin).
+ * style that shadows a built-in name is reported once as builtin), then the
+ * enabled plugins' `<plugin>:<name>` styles.
  */
-export function listOutputStyles(projectPath: string): OutputStyleInfo[] {
+export function listOutputStyles(projectPath: string, contributions?: StyleContributions): OutputStyleInfo[] {
   const out: OutputStyleInfo[] = OUTPUT_STYLES.map((name) => ({ name, kind: "builtin" as const }));
   const seen = new Set<string>(OUTPUT_STYLES);
   for (const base of outputStyleBases(projectPath)) {
     const dir = outputStyleDir(base);
     if (!dir) continue;
-    let entries: import("node:fs").Dirent[];
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-      const name = entry.name.slice(0, -3);
-      if (name === "" || seen.has(name)) continue;
+    for (const name of styleFileNames(dir)) {
+      if (seen.has(name)) continue;
       seen.add(name);
       out.push({ name, kind: "custom" });
+    }
+  }
+  for (const root of pluginStyleRoots(projectPath, contributions)) {
+    if (!physicalDirectory(root.path)) continue;
+    for (const style of styleFileNames(root.path)) {
+      const name = `${root.plugin}:${style}`;
+      if (style.includes(":") || seen.has(name)) continue;
+      seen.add(name);
+      out.push({ name, kind: "custom", plugin: root.plugin });
     }
   }
   return out;

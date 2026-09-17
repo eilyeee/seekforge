@@ -4,6 +4,7 @@ import { render } from "ink";
 import {
   buildProvider,
   configureBrowserProfile,
+  configureSkillSources,
   configureVision,
   configureWebSearch,
   resolveWebSearchConfig,
@@ -68,6 +69,7 @@ async function main(): Promise<void> {
   // agent's searches at an endpoint of its choosing and feed the model
   // whatever it likes back.
   configureWebSearch(resolveWebSearchConfig(config.webSearch), projectPath);
+  configureSkillSources({ claudeUserSkills: config.claudeUserSkills === true });
   configureVision(
     config.visionModel?.baseUrl
       ? {

@@ -144,6 +144,33 @@ export function clearSkillSignalCache(): void {
   signalCache.clear();
 }
 
+function anyPathMatches(paths: readonly string[], patterns: readonly string[]): boolean {
+  for (const pattern of new Set(patterns)) {
+    try {
+      const glob = compileGlob(pattern);
+      if (paths.some((candidate) => glob.test(candidate))) return true;
+    } catch {
+      // An invalid pattern matches nothing.
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether a skill's `paths` gate lets it be offered in this workspace: true
+ * for an ungated skill, else when some workspace file matches one of its
+ * globs. Without a workspace a gated skill is never offered.
+ */
+export function skillPathsApply(skill: Pick<Skill, "paths">, workspace: string | undefined): boolean {
+  if (!skill.paths || skill.paths.length === 0) return true;
+  if (workspace === undefined) return false;
+  try {
+    return anyPathMatches(detectWorkspaceSignals(workspace).paths, skill.paths);
+  } catch {
+    return false;
+  }
+}
+
 function normalizedUnique(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean))];
 }
@@ -321,6 +348,10 @@ export function selectSkills(task: string, skills: Skill[], opts?: SelectSkillsO
   const selections: SkillSelection[] = [];
   for (const skill of skills) {
     if (skill.risk === "high" && opts?.allowHighRisk !== true) continue;
+    // Automatic selection is the model side of invocation, so a skill that
+    // opted out of model invocation opts out of this too.
+    if (skill.disableModelInvocation === true) continue;
+    if (skill.paths && skill.paths.length > 0 && !anyPathMatches(signals.paths, skill.paths)) continue;
     const negative = normalizedUnique(skill.negativeTriggers ?? []).find((term) => taskIncludes(taskLower, term));
     if (negative) continue;
     let score = 0;

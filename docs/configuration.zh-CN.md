@@ -932,6 +932,36 @@ note 说明到底是哪种情况，而不是用一句话把两种情况混在一
 
 可用 `config set` 设置吗？**否** — 请直接编辑文件。
 
+### `lspServers`
+
+**默认未设置。** `lsp_*` 工具使用的语言服务器，以名称为键（字母、数字、`.`、`_`、`-`）。
+每个条目需要 `command`，以及 `extensionToLanguage`（`{ ".tf": "terraform" }`）或 `extensions`
+加 `languageId` 二者之一；`args`、`env` 与 `initializationOptions` 可选。条目会替换它列出的
+每个扩展名对应的内置服务器，并优先于插件为同一扩展名提供的服务器。无效条目会被跳过并给出警告。
+
+```json
+{ "lspServers": { "terraform": { "command": "terraform-ls", "args": ["serve"], "extensionToLanguage": { ".tf": "terraform" } } } }
+```
+
+**仅限用户配置** —— 仓库配置不能指定一个让 SeekForge 启动的命令。CLI、TUI 或服务器每次组装
+agent 时都会按工作区应用。见 [LSP](lsp.zh-CN.md#配置语言服务器)。
+
+可用 `config set` 设置吗？**否** — 请直接编辑文件。
+
+### `claudeUserSkills`
+
+**默认 `false`。** 设为 `true` 时，`~/.claude/skills/<name>/SKILL.md`（Claude Code 的用户技能
+目录；设置了 `SEEKFORGE_HOME` 时在其下解析）中的技能会作为用户层技能加载，优先级低于
+`~/.seekforge/skills`。项目中的 `.claude/skills` 无论如何都会读取。用户层技能在激活期间可以用
+`allowed-tools` 预先批准工具，所以这是一个显式开关，且**仅限用户配置**。见
+[技能](skills.zh-CN.md#claude-code-技能)。
+
+```json
+{ "claudeUserSkills": true }
+```
+
+可用 `config set` 设置吗？**否** — 请直接编辑文件。
+
 ### `locale`
 
 CLI 和 TUI 界面（进度行、摘要、错误消息）的 UI 语言。`--help` /
