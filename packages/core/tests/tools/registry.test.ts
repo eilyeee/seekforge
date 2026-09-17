@@ -57,6 +57,22 @@ describe("tool dispatcher call isolation", () => {
     expect(second.data).toEqual({ selectedHunks: [1] });
     expect(ctx.selectedHunks).toBeUndefined();
   });
+
+  it("carries the images a tool returns onto the result the loop reads", async () => {
+    const image = { mediaType: "image/png", dataBase64: "iVBORw0KGgo=", label: "shot.png" } as const;
+    const tool = defineTool({
+      name: "snap",
+      description: "test",
+      schema: z.object({}),
+      classify: () => ({ permission: "readonly", description: "snap" }),
+      async run() {
+        return { data: { path: "shot.png" }, images: [image] };
+      },
+    });
+    const res = await createDispatcher([tool]).execute(call("snap", {}), makeCtx(makeWorkspace()));
+    expect(res.ok).toBe(true);
+    expect(res.images).toEqual([image]);
+  });
 });
 
 describe("the prepare step", () => {

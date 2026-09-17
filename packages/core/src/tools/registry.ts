@@ -58,6 +58,8 @@ export type PreparedCall = {
 export type ToolRunOutput = {
   data: unknown;
   meta?: ToolResult["meta"];
+  /** Images for the model, carried onto the ToolResult (see ToolResult.images). */
+  images?: ToolResult["images"];
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -285,7 +287,12 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
               } else {
                 try {
                   const out = await tool.run(runArgs as never, runCtx);
-                  result = { ok: true, data: out.data, ...(out.meta ? { meta: out.meta } : {}) };
+                  result = {
+                    ok: true,
+                    data: out.data,
+                    ...(out.meta ? { meta: out.meta } : {}),
+                    ...(out.images && out.images.length > 0 ? { images: out.images } : {}),
+                  };
                 } catch (err) {
                   result = toolError(err);
                 }

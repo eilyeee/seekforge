@@ -185,7 +185,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isPermissionRule(value: unknown): value is PermissionRule {
   if (!isRecord(value)) return false;
   return (
-    (value.action === "allow" || value.action === "deny") &&
+    (value.action === "allow" || value.action === "deny" || value.action === "ask") &&
     typeof value.tool === "string" &&
     (value.match === undefined || typeof value.match === "string")
   );
@@ -332,7 +332,8 @@ function downgradeRepositoryLayer(layer: unknown): { config: BaseConfigShape; na
 
   if (Array.isArray(layer.permissionRules)) {
     result.permissionRules = layer.permissionRules.filter(
-      (rule): rule is PermissionRule => isPermissionRule(rule) && rule.action === "deny",
+      // A repository may tighten (deny, ask) but never loosen (allow).
+      (rule): rule is PermissionRule => isPermissionRule(rule) && rule.action !== "allow",
     );
   }
 

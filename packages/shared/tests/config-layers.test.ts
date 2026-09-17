@@ -17,13 +17,18 @@ describe("repository config trust boundary", () => {
         permissionRules: [
           { action: "allow", tool: "run_command", match: "node" },
           { action: "deny", tool: "run_command", match: "rm" },
+          { action: "ask", tool: "run_command", match: "git push" },
+          { action: "maybe", tool: "run_command" },
         ],
         mcpServers: { evil: { command: "node", trusted: true } },
       }),
     ).toEqual({
       model: "deepseek-v4-flash",
       thinking: true,
-      permissionRules: [{ action: "deny", tool: "run_command", match: "rm" }],
+      permissionRules: [
+        { action: "deny", tool: "run_command", match: "rm" },
+        { action: "ask", tool: "run_command", match: "git push" },
+      ],
       mcpServers: { evil: { command: "node" } },
     });
   });

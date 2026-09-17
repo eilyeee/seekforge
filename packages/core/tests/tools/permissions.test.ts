@@ -21,6 +21,67 @@ function scriptedConfirm(answer: ConfirmResult): {
   };
 }
 
+describe("ask rules and refusal feedback", () => {
+  const askRead: PermissionRule = { action: "ask", tool: "read_file", match: "secret" };
+
+  it("prompts for a read-only call an ask rule matches", async () => {
+    const ws = makeWorkspace();
+    fs.mkdirSync(path.join(ws, "secret"));
+    fs.writeFileSync(path.join(ws, "secret", "a.txt"), "hi");
+    fs.writeFileSync(path.join(ws, "b.txt"), "hi");
+    const { confirm, requests } = scriptedConfirm(false);
+    const ctx = makeCtx(ws, { policy: { approvalMode: "auto", rules: [askRead] }, confirm });
+    const denied = await dispatcher.execute(call("read_file", { path: "secret/a.txt" }), ctx);
+    expect(denied.error?.code).toBe("denied_by_user");
+    expect(requests).toHaveLength(1);
+    const other = await dispatcher.execute(call("read_file", { path: "b.txt" }), ctx);
+    expect(other.ok).toBe(true);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("outranks an allow rule and does not let 'remember' cover the next call", async () => {
+    const ws = makeWorkspace();
+    const rules: PermissionRule[] = [
+      { action: "allow", tool: "write_file" },
+      { action: "ask", tool: "write_file", match: "locked" },
+    ];
+    const { confirm, requests } = scriptedConfirm({ allow: true, remember: "session" });
+    const ctx = makeCtx(ws, { policy: { approvalMode: "auto", rules }, confirm });
+    await dispatcher.execute(call("write_file", { path: "locked/a.txt", content: "x" }), ctx);
+    await dispatcher.execute(call("write_file", { path: "locked/b.txt", content: "x" }), ctx);
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.sessionGrantable).toBe(false);
+    expect(ctx.policy.sessionAllowlist ?? []).toEqual([]);
+  });
+
+  it("never lets an ask rule rescue a denied call", async () => {
+    const ws = makeWorkspace();
+    const rules: PermissionRule[] = [
+      { action: "ask", tool: "write_file" },
+      { action: "deny", tool: "write_file" },
+    ];
+    const { confirm, requests } = scriptedConfirm(true);
+    const res = await dispatcher.execute(
+      call("write_file", { path: "a.txt", content: "x" }),
+      makeCtx(ws, { policy: { approvalMode: "confirm", rules }, confirm }),
+    );
+    expect(res.error?.code).toBe("denied_by_rule");
+    expect(requests).toHaveLength(0);
+  });
+
+  it("hands the user's refusal note to the model, bounded", async () => {
+    const ws = makeWorkspace();
+    const { confirm } = scriptedConfirm({ allow: false, feedback: `  use apply_patch instead ${"x".repeat(3000)}` });
+    const res = await dispatcher.execute(
+      call("write_file", { path: "a.txt", content: "x" }),
+      makeCtx(ws, { policy: { approvalMode: "confirm" }, confirm }),
+    );
+    expect(res.error?.code).toBe("denied_by_user");
+    expect(res.error?.message).toContain("The user said: use apply_patch instead");
+    expect(res.error?.message.length).toBeLessThan(2200);
+  });
+});
+
 describe("permission flow", () => {
   it("enforces an exact tool allow-list before normal permission rules", async () => {
     const ws = makeWorkspace();

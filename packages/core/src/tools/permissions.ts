@@ -113,8 +113,16 @@ export function proposeDurableRule(toolName: string, cls: ClassifiedCall): Permi
   return { action: "allow", tool: toolName, match };
 }
 
-async function confirmWithUser(toolName: string, cls: ClassifiedCall, ctx: ToolContext): Promise<PermissionOutcome> {
-  const durable = ctx.persistRule ? proposeDurableRule(toolName, cls) : undefined;
+async function confirmWithUser(
+  toolName: string,
+  cls: ClassifiedCall,
+  ctx: ToolContext,
+  // An ask rule demands a person for every matching call, so nothing this
+  // answer says may cover the next one.
+  askRule = false,
+): Promise<PermissionOutcome> {
+  const durable = ctx.persistRule && !askRule ? proposeDurableRule(toolName, cls) : undefined;
+  const grantable = !askRule && sessionGrantable(cls);
   const answer = await ctx.confirm({
     toolName,
     permission: cls.permission,
@@ -129,12 +137,13 @@ async function confirmWithUser(toolName: string, cls: ClassifiedCall, ctx: ToolC
     ...(durable !== undefined ? { rememberRule: durable } : {}),
     // Same reasoning as rememberRule: the frontend must not offer a grant this
     // layer will refuse to remember.
-    ...(sessionGrantable(cls) ? {} : { sessionGrantable: false }),
+    ...(grantable ? {} : { sessionGrantable: false }),
   });
   // Normalize the boolean | { allow, remember } | { allow, selectedHunks }
   // contract. A bare boolean is treated exactly as before.
   const allow = typeof answer === "boolean" ? answer : answer.allow;
   const remember = typeof answer !== "boolean" && "remember" in answer ? answer.remember : undefined;
+  const feedback = typeof answer !== "boolean" && "feedback" in answer ? answer.feedback : undefined;
   const selectedHunks = typeof answer !== "boolean" && "selectedHunks" in answer ? answer.selectedHunks : undefined;
   if (allow) {
     if (remember === "always" && durable !== undefined) {
@@ -148,7 +157,7 @@ async function confirmWithUser(toolName: string, cls: ClassifiedCall, ctx: ToolC
         // Ignored on purpose — the session grant below still applies.
       }
     }
-    if ((remember === "session" || remember === "always") && sessionGrantable(cls)) {
+    if ((remember === "session" || remember === "always") && grantable) {
       // Grow the run's in-memory session allowlist in place so the next
       // matching call auto-allows. Mutating the array the caller shares
       // across the session's calls is the whole point of the channel.
@@ -158,13 +167,18 @@ async function confirmWithUser(toolName: string, cls: ClassifiedCall, ctx: ToolC
     }
     return { allowed: true, decision: "user_approved", ...(selectedHunks !== undefined ? { selectedHunks } : {}) };
   }
+  const note = typeof feedback === "string" ? feedback.trim().slice(0, MAX_DENIAL_FEEDBACK_CHARS) : "";
   return {
     allowed: false,
     decision: "user_denied",
     errorCode: "denied_by_user",
-    errorMessage: `User denied ${cls.permission} permission for ${toolName}`,
+    errorMessage:
+      `User denied ${cls.permission} permission for ${toolName}` + (note !== "" ? `. The user said: ${note}` : ""),
   };
 }
+
+/** A refusal note is guidance, not a document; bound what reaches the model. */
+const MAX_DENIAL_FEEDBACK_CHARS = 2000;
 
 /** Collapse runs of whitespace so a rule can't be evaded with extra spaces. */
 function normalizeWhitespace(s: string): string {
@@ -294,11 +308,19 @@ export async function enforcePermission(
   const refused = denyBeforePrompt(toolName, cls, ctx);
   if (refused) return refused;
 
+  const rules = ctx.policy.rules ?? [];
+
+  // Ask rules sit between deny and everything that would run the call without
+  // a person: they outrank read-only auto-approval, allow rules, the session
+  // allowlist and every approval mode. What the user answers is still only
+  // this call's answer — see sessionGrantable for what "remember" may cover.
+  if (rules.some((r) => r.action === "ask" && ruleMatches(r, toolName, cls))) {
+    return confirmWithUser(toolName, cls, ctx, true);
+  }
+
   if (PERMISSION_LEVEL[cls.permission] === 0) {
     return { allowed: true, decision: "auto_readonly" };
   }
-
-  const rules = ctx.policy.rules ?? [];
 
   // Allow rules: a matching allow skips the prompt — including for "env"
   // (that's the point: e.g. allow web_fetch for a specific docs domain).

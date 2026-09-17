@@ -472,6 +472,21 @@ describe("sessionTitle", () => {
     const { sessionTitle } = await import("../../src/agent/trace.js");
     expect(sessionTitle(ws, "unknown-session")).toBe("unknown-session");
   });
+
+  it("prefers a user-chosen name, survives a meta rewrite, and clears on an empty name", async () => {
+    const { renameSession, sessionName, sessionTitle } = await import("../../src/agent/trace.js");
+    writeSessionMeta(ws, meta("s4", 0, { task: "original task" }));
+    renameSession(ws, "s4", `  release   prep\n${"é".repeat(100)}`);
+    expect(sessionName(ws, "s4")).toHaveLength(80);
+    expect(sessionTitle(ws, "s4").startsWith("release prep é")).toBe(true);
+    // A running loop rewrites session.json from memory; the name must outlive it.
+    writeSessionMeta(ws, meta("s4", 0, { task: "original task", status: "running" }));
+    expect(sessionTitle(ws, "s4").startsWith("release prep")).toBe(true);
+    renameSession(ws, "s4", "   ");
+    expect(sessionName(ws, "s4")).toBeUndefined();
+    expect(sessionTitle(ws, "s4")).toBe("original task");
+    expect(() => renameSession(ws, "missing", "x")).toThrow(/Unknown session/);
+  });
 });
 
 describe("createSessionTrace persistent-fd appends", () => {

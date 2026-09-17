@@ -115,20 +115,26 @@ export type PermissionRequest = {
  * When a frontend supports per-hunk selection for apply_patch, it may return
  * `{ allow: true, selectedHunks: number[] }` to apply only the chosen edits.
  * `selectedHunks` is ignored when allow is false.
+ *
+ * `feedback` is text the user typed alongside a refusal. Core hands it to the
+ * model with the denial so the next attempt can follow it instead of guessing
+ * why it was refused. It is ignored when allow is true.
  */
 export type ConfirmResult =
   | boolean
-  | { allow: boolean; remember?: "session" | "always" }
+  | { allow: boolean; remember?: "session" | "always"; feedback?: string }
   | { allow: true; selectedHunks: number[] };
 
 /**
  * Fine-grained permission rule. Evaluation: first matching rule of each
- * action category wins; deny rules are scanned before allow rules, so a
- * matching deny always blocks (even readonly tools). Allow rules never
- * rescue "dangerous" calls and never override ask-mode blocking.
+ * action category wins; deny rules are scanned before ask rules, and ask
+ * rules before allow rules. A matching deny always blocks (even readonly
+ * tools); a matching ask always prompts (even readonly tools, and even under
+ * an approval mode or allow rule that would otherwise run the call). Allow
+ * rules never rescue "dangerous" calls and never override ask-mode blocking.
  */
 export type PermissionRule = {
-  action: "allow" | "deny";
+  action: "allow" | "deny" | "ask";
   /** Tool name, or "*" for any tool. */
   tool: string;
   /**

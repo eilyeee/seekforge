@@ -674,12 +674,43 @@ export function truncateSessionAtUserTurn(
   });
 }
 
+const SESSION_TITLE_FILE = "title.txt";
+const MAX_SESSION_TITLE_CHARS = 80;
+
 /**
- * Short display title for a session: the first non-empty line of the
- * session's summary.md (leading "#" markers stripped), else the meta task's
- * first line (whitespace collapsed), else the session id. Capped at 80 chars.
+ * Give a session a name the user chose. Kept in its own file rather than in
+ * session.json because a running loop rewrites its meta from memory and would
+ * silently undo a rename made mid-run. An empty title clears the name.
+ */
+export function renameSession(workspace: string, sessionId: string, title: string): void {
+  if (!readSessionMeta(workspace, sessionId)) throw new Error(`Unknown session: ${sessionId}`);
+  const clean = Array.from(title.replace(/\s+/g, " ").trim()).slice(0, MAX_SESSION_TITLE_CHARS).join("");
+  if (clean === "") {
+    rmSync(sessionFile(workspace, sessionId, SESSION_TITLE_FILE), { force: true });
+    return;
+  }
+  writeSessionText(workspace, sessionId, SESSION_TITLE_FILE, `${clean}\n`);
+}
+
+/** The name set by renameSession, if any. */
+export function sessionName(workspace: string, sessionId: string): string | undefined {
+  try {
+    const name = readSessionText(workspace, sessionId, SESSION_TITLE_FILE).trim();
+    return name === "" ? undefined : name;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Short display title for a session: the name set by renameSession, else the
+ * first non-empty line of the session's summary.md (leading "#" markers
+ * stripped), else the meta task's first line (whitespace collapsed), else the
+ * session id. Capped at 80 chars.
  */
 export function sessionTitle(workspace: string, sessionId: string): string {
+  const name = sessionName(workspace, sessionId);
+  if (name !== undefined) return name;
   try {
     const summary = readSessionText(workspace, sessionId, "summary.md");
     for (const raw of summary.split("\n")) {
