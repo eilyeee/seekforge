@@ -2,43 +2,21 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { readUtf8FileBoundedSync, writeFileAtomic } from "../util/fs.js";
 import { resolveInsideWorkspace } from "../tools/sandbox.js";
-import { MAX_AGENT_DEFINITION_BYTES } from "./load.js";
-import { AGENT_ID_RE, kebabize, parseFrontmatter } from "./frontmatter.js";
-import type { AgentDefinition } from "./types.js";
+import { mapAgentToolList, parseExtendedAgentFields } from "./fields.js";
+import { AGENT_ID_RE, frontmatterList, kebabize, parseFrontmatter } from "./frontmatter.js";
+import { MAX_AGENT_DEFINITION_BYTES, type AgentDefinition } from "./types.js";
 
 /**
- * Importing external agent definitions (Claude-Code / Meta_Kim-style agent
- * .md with YAML frontmatter) into SeekForge's AGENT.md layout.
+ * Importing external agent definitions (Claude Code / Meta_Kim-style agent
+ * .md with YAML frontmatter) into SeekForge's AGENT.md layout. The same
+ * parser reads `.claude/agents/*.md` in place (see load.ts).
  *
  * Imported agents are prompt material only — they never grant permissions;
  * dispatching an edit-mode agent still goes through the normal approval flow.
  */
 
-/** Claude-style tool names → SeekForge builtin tool names. */
-const TOOL_NAME_MAP: Record<string, string> = {
-  read: "read_file",
-  grep: "search_text",
-  glob: "list_files",
-  bash: "run_command",
-  webfetch: "web_fetch",
-};
-
-/** Our own tool names pass through unchanged when listed directly. */
-const KNOWN_TOOLS = new Set([
-  "read_file",
-  "write_file",
-  "apply_patch",
-  "list_files",
-  "search_text",
-  "run_command",
-  "git_status",
-  "git_diff",
-  "git_commit",
-  "update_plan",
-  "detect_project",
-  "list_scripts",
-  "web_fetch",
-]);
+/** Claude Code's model aliases name Anthropic tiers, not a model this provider can serve. */
+const CLAUDE_MODEL_ALIASES: ReadonlySet<string> = new Set(["inherit", "sonnet", "opus", "haiku", "opusplan"]);
 
 export type ParsedExternalAgent = {
   def: Omit<AgentDefinition, "scope">;
@@ -46,45 +24,50 @@ export type ParsedExternalAgent = {
   droppedTools: string[];
 };
 
-/**
- * Parses a Meta_Kim-style agent markdown (frontmatter keys: name,
- * description, tools comma list, own, do_not_touch, boundary, trigger, type).
- *
- * mode rule: "ask" when `type` contains "meta"/"governance" OR the body
- * contains "executionBlock=true" or "NOT FOR DIRECT EXECUTION"; else "edit".
- */
-export function parseExternalAgent(markdown: string): ParsedExternalAgent {
-  const { fields, body } = parseFrontmatter(markdown);
+export type ParseExternalAgentOptions = {
+  /** Identifier used when the frontmatter has no usable `name` (a file's stem). */
+  fallbackName?: string;
+};
 
-  const rawName = fields.get("name") ?? "";
-  const id = kebabize(rawName);
+/**
+ * Parses a Claude Code or Meta_Kim-style agent markdown. Frontmatter keys:
+ * name, description, tools / disallowedTools (comma list or YAML list, Claude
+ * tool names mapped), model, maxTurns, permissionMode, isolation, skills,
+ * effort, color, mcpServers, hooks, and Meta_Kim's own, do_not_touch,
+ * boundary, trigger, type. The body is the agent's prompt.
+ *
+ * mode rule: "ask" when permissionMode is plan, `type` contains
+ * "meta"/"governance", or the body contains "executionBlock=true" or
+ * "NOT FOR DIRECT EXECUTION"; else "edit".
+ */
+export function parseExternalAgent(markdown: string, options: ParseExternalAgentOptions = {}): ParsedExternalAgent {
+  const parsed = parseFrontmatter(markdown);
+  const { fields, body } = parsed;
+
+  let rawName = fields.get("name") ?? "";
+  let id = kebabize(rawName);
+  if (!AGENT_ID_RE.test(id) && options.fallbackName !== undefined) {
+    rawName = rawName.trim() || options.fallbackName;
+    id = kebabize(options.fallbackName);
+  }
   if (!AGENT_ID_RE.test(id)) {
     throw new Error(`not an importable agent: frontmatter "name" is missing or invalid (${rawName || "empty"})`);
   }
 
+  const extended = parseExtendedAgentFields(parsed, "external");
   const type = (fields.get("type") ?? "") + " " + (fields.get("subagent_type") ?? "");
   const governanceType = /meta|governance/i.test(type);
   const executionBlocked = body.includes("executionBlock=true") || body.includes("NOT FOR DIRECT EXECUTION");
-  const mode: "ask" | "edit" = governanceType || executionBlocked ? "ask" : "edit";
+  const mode: "ask" | "edit" =
+    governanceType || executionBlocked || extended.permissionMode === "plan" ? "ask" : "edit";
 
-  const toolsField = fields.get("tools");
-  const tools: string[] = [];
-  const droppedTools: string[] = [];
-  for (const raw of (toolsField ?? "").split(",")) {
-    const name = raw.trim();
-    if (!name) continue;
-    const mapped = TOOL_NAME_MAP[name.toLowerCase()] ?? (KNOWN_TOOLS.has(name) ? name : undefined);
-    if (mapped) {
-      if (!tools.includes(mapped)) tools.push(mapped);
-    } else {
-      droppedTools.push(name);
-    }
-  }
+  const toolsField = frontmatterList(parsed, "tools");
+  const { tools, dropped: droppedTools } = mapAgentToolList(toolsField ?? []);
 
-  const triggers = (fields.get("trigger") ?? "")
-    .split("|")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const triggers = frontmatterList(parsed, "trigger", "|") ?? [];
+  const model = oneLine(fields.get("model"));
+  const maxTurnsRaw = (fields.get("maxturns") ?? fields.get("max-turns"))?.trim();
+  const maxTurns = maxTurnsRaw !== undefined && /^[1-9]\d{0,5}$/.test(maxTurnsRaw) ? Number(maxTurnsRaw) : undefined;
 
   return {
     def: {
@@ -99,7 +82,9 @@ export function parseExternalAgent(markdown: string): ParsedExternalAgent {
       own: oneLine(fields.get("own")),
       doNotTouch: oneLine(fields.get("do_not_touch")),
       boundary: oneLine(fields.get("boundary")),
-      model: oneLine(fields.get("model")),
+      model: model !== undefined && CLAUDE_MODEL_ALIASES.has(model.toLowerCase()) ? undefined : model,
+      ...(maxTurns !== undefined ? { maxTurns } : {}),
+      ...extended,
       body: body || undefined,
     },
     droppedTools,
@@ -118,11 +103,22 @@ export function renderAgentMarkdown(def: Omit<AgentDefinition, "scope">): string
     if (value === undefined || value === "") return;
     lines.push(`${key}: ${JSON.stringify(value)}`);
   };
+  const pushList = (key: string, value: readonly string[] | undefined): void => {
+    if (value !== undefined) lines.push(`${key}: ${JSON.stringify(value.join(", "))}`);
+  };
   push("name", def.name);
   push("description", def.description);
   push("trigger", def.triggers.join(" | ") || undefined);
-  if (def.tools !== undefined) lines.push(`tools: ${JSON.stringify(def.tools.join(", "))}`);
+  pushList("tools", def.tools);
+  pushList("disallowedTools", def.disallowedTools);
   push("mode", def.mode);
+  push("permissionMode", def.permissionMode);
+  push("isolation", def.isolation);
+  pushList("skills", def.skills);
+  push("effort", def.effort);
+  push("color", def.color);
+  pushList("mcpServers", def.mcpServers);
+  if (def.hooks !== undefined) lines.push(`hooks: ${JSON.stringify(def.hooks)}`);
   push("own", def.own);
   push("do_not_touch", def.doNotTouch);
   push("boundary", def.boundary);
@@ -142,17 +138,33 @@ export type ImportAgentOptions = {
 };
 
 /**
- * Imports a Meta_Kim-style agent .md file into targetRoot as
+ * Imports a Claude Code / Meta_Kim-style agent .md file into targetRoot as
  * `<targetRoot>/<id>/AGENT.md` in our canonical format (regenerated
- * frontmatter + original body). Returns the created directory and the
- * external tool names that were dropped.
+ * frontmatter + original body). Returns the created directory, the external
+ * tool names that were dropped, and the fields an import never carries.
+ *
+ * An import is how a file of unknown origin becomes a trusted definition, so
+ * it keeps only what tightens: hooks and a looser-than-default permissionMode
+ * are dropped (`droppedFields`); the user adds them to their own file by hand.
  */
 export function importExternalAgent(
   sourcePath: string,
   opts: ImportAgentOptions,
-): { dir: string; agent: Omit<AgentDefinition, "scope">; droppedTools: string[] } {
+): { dir: string; agent: Omit<AgentDefinition, "scope">; droppedTools: string[]; droppedFields: string[] } {
   const source = fs.realpathSync(sourcePath);
-  const { def, droppedTools } = parseExternalAgent(readUtf8FileBoundedSync(source, MAX_AGENT_DEFINITION_BYTES));
+  const parsed = parseExternalAgent(readUtf8FileBoundedSync(source, MAX_AGENT_DEFINITION_BYTES), {
+    fallbackName: path.basename(source).replace(/\.md$/i, ""),
+  });
+  const { droppedTools } = parsed;
+  const { hooks, permissionMode, ...kept } = parsed.def;
+  const droppedFields: string[] = [];
+  if (hooks !== undefined) droppedFields.push("hooks");
+  const loosening = permissionMode === "acceptEdits" || permissionMode === "bypassPermissions";
+  if (loosening) droppedFields.push("permissionMode");
+  const def: Omit<AgentDefinition, "scope"> = {
+    ...kept,
+    ...(permissionMode !== undefined && !loosening ? { permissionMode } : {}),
+  };
 
   fs.mkdirSync(opts.targetRoot, { recursive: true });
   const requestedDir = path.join(opts.targetRoot, def.id);
@@ -170,5 +182,5 @@ export function importExternalAgent(
   }
   const target = resolveInsideWorkspace(opts.targetRoot, path.join(def.id, "AGENT.md"));
   writeFileAtomic(target, renderAgentMarkdown(def));
-  return { dir: requestedDir, agent: def, droppedTools };
+  return { dir: requestedDir, agent: def, droppedTools, droppedFields };
 }

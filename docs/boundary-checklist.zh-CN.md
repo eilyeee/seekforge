@@ -4148,3 +4148,20 @@ MCP 的 header 值会对**所有**服务器从进程环境展开 `${VAR}`，其�
 - **发现位置：** 新增 `postToolUseFailure`、`permissionRequest`、`subagentStart` 与
   `postCompact` 时，在 `packages/shared/src/config-layers.ts` 和
   `packages/core/src/plugins/load.ts` 中发现。
+
+## 427. 排除用的 pathspec 也会被它本想尊重的忽略规则绊倒
+
+合并检查点用 `git add -A -- . ':(exclude).seekforge/sessions/' …` 暂存 worktree，
+让运行时状态留在用户分支之外。可在 `.gitignore` 列有 `.seekforge/` 的仓库里，只要
+检出目录中存在 `.seekforge/`，这条命令就以退出码 1 失败（"paths are ignored by one
+of your .gitignore files"）——排除项同样是一个指向被忽略路径的 pathspec。暂存其实已经
+完成，调用方看到的却是失败的 git 调用；于是在 agent 运行过的 worktree 里自动提交未提交
+改动，恰恰在忽略了运行时状态的仓库里失败，而代码注释还把这种仓库当作「从来没出过问题」
+的情形。
+
+- **正确做法：** pathspec 里只写 git 否则会处理的路径。先用 `git check-ignore`
+  问清哪些排除项本就被忽略，把它们去掉——它们不需要排除。
+- **正确做法：** git 管道逻辑要在规则所依赖的两种仓库形态下都测试——本例即
+  `.seekforge/` 被忽略与未被忽略两种。
+- **发现位置：** 隔离子智能体的测试；其夹具仓库和大多数真实仓库一样忽略了
+  `.seekforge/`。

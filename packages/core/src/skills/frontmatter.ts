@@ -3,11 +3,11 @@ import { parseFrontmatter } from "../subagents/frontmatter.js";
 /**
  * SKILL.md frontmatter, in the shape Claude Code writes it.
  *
- * Scalars come from the shared reader in subagents/frontmatter.ts. That reader
- * ignores YAML lists, and several skill fields (`allowed-tools`, `paths`, …)
- * are lists as often as they are strings, so the block and flow list forms are
- * read here. TODO(lane E): the shared reader is gaining list support; once it
- * lands, `readFrontmatterLists` should delegate to it.
+ * Scalars come from the shared reader in subagents/frontmatter.ts. Lists are
+ * read here rather than from that reader's structured values: tool rules put
+ * commas inside parentheses (`Bash(git add, git commit)`), which a YAML flow
+ * sequence splits, and a flow list's source text must survive as the scalar
+ * (`argument-hint: [version]` is a hint, not a list).
  */
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
@@ -65,8 +65,9 @@ function splitFlow(inner: string): string[] {
   return items.map(unquote).filter((item) => item !== "");
 }
 
-function readFrontmatterLists(block: string): Map<string, string[]> {
+function readFrontmatterLists(block: string): { lists: Map<string, string[]>; flowSource: Map<string, string> } {
   const lists = new Map<string, string[]>();
+  const flowSource = new Map<string, string>();
   const lines = block.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const kv = /^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/.exec(lines[i]!);
@@ -75,6 +76,7 @@ function readFrontmatterLists(block: string): Map<string, string[]> {
     const value = kv[2]!.trim();
     if (value.startsWith("[") && value.endsWith("]")) {
       lists.set(key, splitFlow(value.slice(1, -1)).slice(0, MAX_LIST_ITEMS));
+      flowSource.set(key, value);
       continue;
     }
     if (value !== "") continue;
@@ -94,7 +96,7 @@ function readFrontmatterLists(block: string): Map<string, string[]> {
     }
     if (items.length > 0) lists.set(key, items);
   }
-  return lists;
+  return { lists, flowSource };
 }
 
 /** True when the markdown opens with a frontmatter block. */
@@ -110,7 +112,10 @@ export function parseSkillFrontmatter(markdown: string): SkillFrontmatter {
   const match = FRONTMATTER_RE.exec(markdown);
   if (!match) return { fields: new Map(), lists: new Map(), body: markdown.trim() };
   const parsed = parseFrontmatter(markdown);
-  return { fields: parsed.fields, lists: readFrontmatterLists(match[1]!), body: parsed.body };
+  const { lists, flowSource } = readFrontmatterLists(match[1]!);
+  const fields = new Map(parsed.fields);
+  for (const [key, source] of flowSource) fields.set(key, source);
+  return { fields, lists, body: parsed.body };
 }
 
 /** A field that may be written as a list or as one delimited string. */

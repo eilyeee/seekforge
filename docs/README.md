@@ -24,6 +24,9 @@ and quick start; this folder holds the reference docs.
   approval, lifecycle commands, and security boundaries.
 - [Skills](skills.md) — native format, precedence, automatic selection,
   lifecycle safety, diagnostics, and usage telemetry.
+- [Subagents](subagents.md) — `AGENT.md` and Claude Code agent files, the
+  frontmatter fields, what a repository agent may do, isolated worktree
+  agents, background agents across runs, and progress reports.
 - [Browser / visual verification](browser.md) — the optional Playwright-backed
   tools that open a page (`browser_navigate`), read it (`browser_screenshot` /
   `browser_snapshot` / `browser_console`) and drive it (`browser_click` /

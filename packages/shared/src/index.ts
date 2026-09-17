@@ -511,6 +511,11 @@ export type FinalReport = {
 
 export type SubagentStatus = "running" | "done" | "failed" | "cancelled";
 
+/*
+ * `color` (every variant, additive) is the definition's display color — a
+ * named color or `#rrggbb`, validated by core. Presentation only; it never
+ * reaches the model.
+ */
 export type SubagentEvent =
   | {
       type: "subagent.started";
@@ -518,6 +523,7 @@ export type SubagentEvent =
       agentId: string;
       task: string;
       status: "running";
+      color?: string;
     }
   | {
       type: "subagent.step";
@@ -527,6 +533,12 @@ export type SubagentEvent =
       status: "running";
       toolName: string;
       subSessionId?: string;
+      /**
+       * Present when `toolName` is `agent_report`: the child's progress line,
+       * bounded by core. It is model output — render it as data.
+       */
+      message?: string;
+      color?: string;
     }
   | {
       type: "subagent.completed";
@@ -536,6 +548,7 @@ export type SubagentEvent =
       status: "done";
       resultSummary: string;
       subSessionId?: string;
+      color?: string;
     }
   | {
       type: "subagent.failed";
@@ -546,6 +559,7 @@ export type SubagentEvent =
       error: { code: string; message: string };
       resultSummary: string;
       subSessionId?: string;
+      color?: string;
     }
   | {
       type: "subagent.cancelled";
@@ -555,6 +569,7 @@ export type SubagentEvent =
       status: "cancelled";
       reason: string;
       subSessionId?: string;
+      color?: string;
     };
 
 export type AgentEvent =

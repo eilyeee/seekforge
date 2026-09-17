@@ -367,8 +367,9 @@ describe("dispatch_agent (loop-level)", () => {
     });
     await collect(agent.runTask({ ...baseInput, projectPath: workspace, approvalMode: "auto" }));
 
-    // list() filtered for the nested run
-    expect(provider.requests[1]!.tools!.map((t) => t.name)).toEqual(["read_file"]);
+    // list() filtered for the nested run; agent_report is a harness tool the
+    // whitelist keeps (only disallowedTools removes it)
+    expect(provider.requests[1]!.tools!.map((t) => t.name)).toEqual(["read_file", "agent_report"]);
     // execute() of a non-whitelisted tool blocked before the dispatcher
     expect(dispatcher.calls).toHaveLength(0);
     const nestedToolMsg = provider.requests[2]!.messages.at(-1)!;

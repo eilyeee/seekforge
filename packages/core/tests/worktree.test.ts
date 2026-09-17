@@ -262,6 +262,22 @@ describe("mergeWorktree", () => {
     expect(readFileSync(join(repo, ".seekforge", "skills", "team.md"), "utf8")).toContain("shared skill");
   });
 
+  it("checkpoints a worktree whose repository ignores .seekforge/", async () => {
+    // Naming an already-ignored path in an :(exclude) pathspec made `git add`
+    // exit 1 ("paths are ignored"), so the merge failed outright here.
+    writeFileSync(join(repo, ".gitignore"), ".seekforge/\n");
+    git(repo, "add", ".gitignore");
+    git(repo, "commit", "-q", "-m", "ignore runtime state");
+    const { path, branch } = await createWorktree(repo, "ignored-state");
+    mkdirSync(join(path, ".seekforge", "sessions", "s-1"), { recursive: true });
+    writeFileSync(join(path, ".seekforge", "sessions", "s-1", "messages.jsonl"), "{}\n");
+    writeFileSync(join(path, "feature.txt"), "made in the worktree\n");
+
+    expect(await mergeWorktree(repo, path, branch)).toEqual({ merged: true });
+    expect(readFileSync(join(repo, "feature.txt"), "utf8")).toBe("made in the worktree\n");
+    expect(existsSync(join(repo, ".seekforge", "sessions", "s-1"))).toBe(false);
+  });
+
   it("merges already-committed work without an extra checkpoint", async () => {
     const { path, branch } = await createWorktree(repo, "clean");
     writeFileSync(join(path, "clean.txt"), "committed\n");

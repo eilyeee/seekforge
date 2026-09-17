@@ -48,8 +48,8 @@ describe("parseExternalAgent", () => {
     expect(def.id).toBe("meta-conductor");
     expect(def.name).toBe("meta-conductor");
     expect(def.description).toContain("workflow orchestration");
-    expect(def.tools).toEqual(["read_file", "search_text", "list_files", "run_command", "web_fetch"]);
-    expect(droppedTools).toEqual(["Agent", "WebSearch"]);
+    expect(def.tools).toEqual(["read_file", "search_text", "glob", "run_command", "web_fetch", "web_search"]);
+    expect(droppedTools).toEqual(["Agent"]);
     expect(def.own).toContain("dispatch board ownership");
     expect(def.doNotTouch).toContain("SOUL.md design");
     expect(def.boundary).toContain("not an executor");
@@ -76,10 +76,10 @@ describe("parseExternalAgent", () => {
   });
 
   it("keeps an explicit unsupported tool list as an empty whitelist", () => {
-    const external = EXECUTOR_AGENT.replace("tools: Read, Grep, Bash", "tools: Agent, WebSearch");
+    const external = EXECUTOR_AGENT.replace("tools: Read, Grep, Bash", "tools: Agent, ExitPlanMode");
     const { def, droppedTools } = parseExternalAgent(external);
     expect(def.tools).toEqual([]);
-    expect(droppedTools).toEqual(["Agent", "WebSearch"]);
+    expect(droppedTools).toEqual(["Agent", "ExitPlanMode"]);
 
     const rendered = renderAgentMarkdown(def);
     expect(rendered).toContain('tools: ""');
@@ -111,7 +111,7 @@ describe("importExternalAgent", () => {
       targetRoot: target,
     });
     expect(dir).toBe(join(target, "meta-conductor"));
-    expect(droppedTools).toEqual(["Agent", "WebSearch"]);
+    expect(droppedTools).toEqual(["Agent"]);
 
     const written = readFileSync(join(dir, "AGENT.md"), "utf8");
     expect(written.startsWith("---\n")).toBe(true);

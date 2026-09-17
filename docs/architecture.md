@@ -184,10 +184,18 @@ source paths, line ranges, and exact excerpts resolve inside the repository.
 
 Each parent Agent run owns one Core dispatch manager for subagents. It emits a
 structured lifecycle (`started`, `step`, and one terminal event), isolates
-cancellation to the selected child, and drains queued steering only at a model
-turn boundary. Server WS frames expose those controls; TUI and Desktop render
-the same shared event contract and retain completed cards when a later run
-reuses a run-local dispatch id.
+cancellation to the selected child, and drains queued steering and the
+children's `agent_report` progress only at a model turn boundary. Server WS
+frames expose those controls; TUI and Desktop render the same shared event
+contract and retain completed cards when a later run reuses a run-local
+dispatch id. A host may instead supply a session-scoped manager
+(`createDispatchManager({ sessionScoped: true })`), whose background dispatches
+outlive their run and are reported to the model at the next one. Definition
+parsing and the trust rules are owned by `packages/core/src/subagents/`
+(`fields.ts`, `policy.ts`); edit agents are serialized by an in-process
+workspace edit lock, or run in an isolated worktree whose change is applied as
+a diff through the parent's approval flow (`isolation.ts`). See
+[Subagents](subagents.md).
 
 `dispatch_team` adds deterministic orchestration over the same manager. A team
 is a validated acyclic graph of named members; ready members run up to the

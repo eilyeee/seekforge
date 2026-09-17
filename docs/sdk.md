@@ -258,8 +258,13 @@ All are fields on `AgentCoreDeps` (or discovered from the workspace):
   `{ specs, dispose }`; hand `specs` to the dispatcher (remember to `dispose`).
 - **Subagents** — `deps.subagents = loadAgentDefinitions(workspace)` makes them
   dispatchable via `dispatch_agent` and the dependency-aware `dispatch_team`;
-  `deps.providerForModel`
-  builds a provider for a subagent's `model` override.
+  `deps.providerForModel(model, options)`
+  builds a provider for a subagent's `model` override, and `options` carries
+  its `effort` (`thinking` / `reasoningEffort`). A host that keeps a session
+  open passes `deps.dispatchManager = createDispatchManager({ sessionScoped:
+  true })` to every run so background agents outlive the run that started
+  them, and calls `disposeAll()` when the session ends. See
+  [Subagents](subagents.md).
 - **Hooks** — `deps.hooks` (a `HookConfig`) fires shell hooks around tool calls
   and lifecycle stages (`preToolUse` can block). See
   [Configuration → hooks](configuration.md#hooks).

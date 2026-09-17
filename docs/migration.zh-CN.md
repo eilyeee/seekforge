@@ -17,7 +17,7 @@
 | 指令文件中的 `@path` 导入 | 所有规则文件都支持；项目文件只能导入工作区内的文件。 |
 | MCP 服务器（`claude mcp add`、`.mcp.json`） | `mcpServers` 配置 + `seekforge mcp add/add-json/list/get/remove`；项目中的 `.mcp.json` 会被读取（每个服务器都需 `seekforge mcp approve`），`seekforge mcp import` 可复制 Claude Desktop / Claude Code 的服务器。见 [MCP](mcp.zh-CN.md)。 |
 | 斜杠命令 / 自定义命令 | 内置斜杠命令 + `.seekforge/commands/` 下的自定义命令。`description:` frontmatter 与 `$ARGUMENTS` 在所有界面都可用；`` !`shell` `` 插值由 CLI REPL（不带子命令的 `seekforge`）与服务端展开，**TUI 不支持**。文件格式见 [TUI README](../apps/tui/README.md#custom-commands)。 |
-| 子智能体 / 专家智能体 | `dispatch_agent` 名册 — `seekforge agent list/show/import`，定义存放于 `.seekforge/agents/`。 |
+| 子智能体 / 专家智能体 | `dispatch_agent` 名册 — `seekforge agent list/show/import`，定义存放于 `.seekforge/agents/`。Claude Code 的 `.claude/agents/*.md`（项目内与 `~/.claude/agents/`）可直接加载，工具名自动映射，仓库内文件只能收紧权限。参见[子智能体](subagents.zh-CN.md)。 |
 | 技能 / 可复用流程 | `.seekforge/skills/<id>/SKILL.md` — `seekforge skill create/list/import`。 |
 | 会话历史 / 转录 | `.seekforge/` 下的会话 trace — `seekforge sessions`、`resume`、`replay`、`audit`。 |
 | 权限 / 审批模式（自动批准、plan 模式） | 审批模式 `auto` / `acceptEdits` / `confirm` / `manual`；`-y`、`--permission-mode`、`permissionRules`。plan 不是审批模式——`--plan`（或 `--permission-mode plan`）是在 `confirm` 之下的只读运行。 |
