@@ -5,6 +5,8 @@
  */
 
 import { COMMANDS, COMMAND_GROUPS, commandGroupLabel, commandSummary, type CommandSpec } from "./commands.js";
+import { ACTION_IDS, type Binding, formatBinding } from "./keymap.js";
+import { translate } from "./strings.js";
 
 export type HelpRow =
   | { kind: "header"; text: string }
@@ -31,6 +33,20 @@ export function helpRows(specs: readonly CommandSpec[] = COMMANDS): HelpRow[] {
     }
   }
   return rows;
+}
+
+/**
+ * The keyboard section of /help, from the EFFECTIVE keymap (user overrides
+ * included): one line per action that has a binding, in action order.
+ */
+export function shortcutLines(table: readonly Binding[]): string[] {
+  const lines = [`── ${translate("keys.header", "Keyboard shortcuts")} ──`];
+  for (const action of ACTION_IDS) {
+    const keys = [...new Set(table.filter((b) => b.action === action).map(formatBinding))];
+    if (keys.length === 0) continue;
+    lines.push(`  ${keys.join(" / ").padEnd(26)} ${translate(`action.${action}`, action)}`);
+  }
+  return lines;
 }
 
 /** Indices of command rows (the overlay skips headers when navigating). */

@@ -1,5 +1,5 @@
 /**
- * /skills — listing surface.
+ * /skills — the rows behind the interactive panel (manage/toggles.ts).
  *
  * Core's Skill type (packages/core/src/skills/types.ts) carries id, scope
  * ("builtin" | "global" | "project"), description and enabled, but
@@ -30,28 +30,6 @@ export type SkillRow = {
 function collapse(text: string, max: number): string {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max)}…` : flat;
-}
-
-/**
- * One line per skill: "id  (scope)  description…", with "[builtin]" for
- * builtin scope and "[disabled]" when disabled. Empty input yields a hint
- * line pointing at `seekforge skill import`.
- */
-export function formatSkillLines(skills: ReadonlyArray<SkillRow>): string[] {
-  if (skills.length === 0) {
-    return ["no skills installed — seekforge skill import <path> adds one"];
-  }
-  return skills.map((s) => {
-    const scope = s.scope ? `  (${s.scope})` : "";
-    const desc = s.description ? `  ${collapse(s.description, 60)}` : "";
-    const builtin = s.scope === "builtin" ? "  [builtin]" : "";
-    const disabled = s.disabled ? "  [disabled]" : "";
-    const stats =
-      s.selections === undefined
-        ? ""
-        : `  [used ${s.selections}${s.successRate === undefined ? "" : `, ${Math.round(s.successRate * 100)}% success`}]`;
-    return `${s.id}${scope}${desc}${builtin}${disabled}${stats}`;
-  });
 }
 
 /**

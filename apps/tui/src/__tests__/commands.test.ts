@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { commandRequiresIdle, parseInput, parsePositiveIndex } from "../commands.js";
+import { COMMANDS, commandRequiresIdle, PARSED_COMMAND_NAMES, parseInput, parsePositiveIndex } from "../commands.js";
+import { STRINGS } from "../strings.js";
 
 describe("parseInput", () => {
   it("treats blank lines as empty", () => {
@@ -354,6 +355,33 @@ describe("commandRequiresIdle", () => {
     expect(commandRequiresIdle({ name: "rewind" })).toBe(true);
     expect(commandRequiresIdle({ name: "rewind", arg: "yes" })).toBe(true);
     expect(commandRequiresIdle({ name: "help" })).toBe(false);
+  });
+});
+
+describe("command registry coverage", () => {
+  it("lists every command the parser handles, so /help and the palette show it", () => {
+    const registered = new Set(COMMANDS.map((c) => c.name));
+    expect(PARSED_COMMAND_NAMES.filter((name) => !registered.has(name))).toEqual([]);
+    for (const name of ["status", "config", "permissions", "hooks", "release-notes", "bug", "rename", "ide"]) {
+      expect(registered.has(name), name).toBe(true);
+    }
+  });
+
+  it("gives every registered command a summary in both locales", () => {
+    for (const command of COMMANDS) {
+      expect(STRINGS.en[`cmd.${command.name}`], command.name).toBe(command.summary);
+      expect(STRINGS["zh-CN"][`cmd.${command.name}`], command.name).toBeTruthy();
+    }
+  });
+
+  it("parses /rename as free text and /ide as one word", () => {
+    expect(parseInput("/rename fix the  login bug")).toEqual({
+      kind: "slash",
+      command: { name: "rename", arg: "fix the login bug" },
+    });
+    expect(parseInput("/ide off")).toEqual({ kind: "slash", command: { name: "ide", arg: "off" } });
+    expect(parseInput("/ide")).toEqual({ kind: "slash", command: { name: "ide" } });
+    expect(parseInput("/permissions")).toEqual({ kind: "slash", command: { name: "permissions" } });
   });
 });
 

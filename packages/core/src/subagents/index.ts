@@ -38,6 +38,13 @@ export {
 export { mapAgentToolList, mapAgentToolName } from "./fields.js";
 export { buildSubagentPrompt, type SubagentPromptExtras } from "./prompt.js";
 export {
+  agentDefinitionRelPath,
+  createAgentDefinition,
+  validateNewAgent,
+  MAX_AGENT_ID_CHARS,
+  type NewAgentDefinition,
+} from "./create.js";
+export {
   MAX_INLINE_AGENTS,
   MAX_INLINE_AGENTS_BYTES,
   parseInlineAgentDefinitions,

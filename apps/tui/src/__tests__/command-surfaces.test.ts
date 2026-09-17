@@ -7,8 +7,6 @@ import {
   buildBugReport,
   findChangelogSection,
   formatConfigLines,
-  formatHookLines,
-  formatPermissionLines,
   formatReleaseNotes,
   formatStatusLines,
   type StatusInput,
@@ -125,87 +123,6 @@ describe("formatConfigLines", () => {
     expect(lines).toContain(`global:  ${CONFIG_PATHS.global}`);
     expect(lines).toContain(`project: ${CONFIG_PATHS.project}`);
     expect(lines).toContain("/config edit opens the global file");
-  });
-});
-
-describe("formatPermissionLines", () => {
-  const base = {
-    rules: [],
-    builtinAllowlist: [],
-    configAllowlist: [],
-    sessionAllowlist: [],
-    approval: "confirm",
-  };
-
-  it("renders rules as action tool(match) under approval + sandbox", () => {
-    const lines = formatPermissionLines({
-      ...base,
-      approval: "auto",
-      sandbox: "restricted",
-      rules: [
-        { action: "deny", tool: "run_command", match: "rm *" },
-        { action: "allow", tool: "*" },
-      ],
-    });
-    expect(lines[0]).toBe("approval mode: auto");
-    expect(lines[1]).toBe("sandbox: restricted");
-    expect(lines).toContain("rules (2):");
-    expect(lines).toContain("  deny run_command(rm *)");
-    expect(lines).toContain("  allow *");
-  });
-
-  it("summarizes the builtin allowlist to 10 entries with +N more", () => {
-    const builtin = Array.from({ length: 15 }, (_, i) => `cmd${i}`);
-    const lines = formatPermissionLines({ ...base, builtinAllowlist: builtin });
-    const builtinLine = lines.find((l) => l.startsWith("builtin allowlist:")) as string;
-    expect(builtinLine).toContain("cmd0");
-    expect(builtinLine).toContain("cmd9");
-    expect(builtinLine).not.toContain("cmd10");
-    expect(builtinLine).toContain("+5 more");
-  });
-
-  it("lists config and session allowlists in full", () => {
-    const lines = formatPermissionLines({
-      ...base,
-      configAllowlist: ["npm run build", "docker ps"],
-      sessionAllowlist: ["terraform plan"],
-    });
-    expect(lines).toContain("config allowlist: npm run build, docker ps");
-    expect(lines).toContain("session allowlist: terraform plan");
-  });
-
-  it("shows empty-state lines for every section, sandbox defaulting to off", () => {
-    const lines = formatPermissionLines(base);
-    expect(lines).toContain("sandbox: off");
-    expect(lines).toContain("rules: none configured (permissionRules in config)");
-    expect(lines).toContain("builtin allowlist: (empty)");
-    expect(lines).toContain("config allowlist: (none — commandAllowlist in config)");
-    expect(lines).toContain('session allowlist: (none — press "a" on a permission prompt to add)');
-  });
-});
-
-describe("formatHookLines", () => {
-  it("marks blocking stages and caps commands at 60 chars", () => {
-    const long = "x".repeat(80);
-    const lines = formatHookLines({
-      preToolUse: [{ command: "./gate.sh" }, { command: long }],
-      postToolUse: [{ command: "./log.sh" }],
-      userPromptSubmit: [{ command: "./prompt-check.sh" }],
-    });
-    expect(lines[0]).toBe("preToolUse (blocking): ./gate.sh");
-    expect(lines[1]).toBe(`preToolUse (blocking): ${"x".repeat(60)}…`);
-    expect(lines[2]).toBe("postToolUse: ./log.sh");
-    expect(lines[3]).toBe("userPromptSubmit (blocking): ./prompt-check.sh");
-    expect(lines).toHaveLength(4);
-  });
-
-  it("explains configuration when no hooks exist", () => {
-    for (const hooks of [undefined, {}]) {
-      const lines = formatHookLines(hooks);
-      expect(lines[0]).toBe("no hooks configured");
-      expect(lines.join("\n")).toContain('"hooks"');
-      expect(lines.join("\n")).toContain("preToolUse, userPromptSubmit");
-    }
   });
 });
 

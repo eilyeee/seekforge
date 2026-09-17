@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { PermissionRequest } from "@seekforge/shared";
 import { PermissionPanel } from "../components/PermissionPanel.js";
 import { DiffCard } from "../components/DiffCard.js";
+import { Markdown } from "../components/Markdown.js";
 
 /**
  * Presentation-only assertions over the rendered React element tree (no ink
@@ -130,5 +131,37 @@ describe("PermissionPanel — multi-hunk selection", () => {
     expect(types).toContain(DiffCard);
     expect(text).toContain("Apply this change? y accept · n reject");
     expect(text).not.toContain("number key toggle hunk");
+  });
+});
+
+describe("PermissionPanel — plans, session grants, reasons", () => {
+  it("renders a long free-text request (a plan to approve) as markdown", () => {
+    const req: PermissionRequest = {
+      toolName: "exit_plan_mode",
+      permission: "readonly",
+      description: "# Plan\n\n1. Read\n2. Edit",
+    };
+    const { text, types } = inspect(req);
+    expect(types).toContain(Markdown);
+    expect(text).toContain("Review:");
+  });
+
+  it("does not offer a session grant core would drop", () => {
+    const req: PermissionRequest = {
+      toolName: "browser_navigate",
+      permission: "env",
+      description: "Open a page",
+      sessionGrantable: false,
+      rememberRule: { action: "allow", tool: "browser_navigate" },
+    };
+    const { text } = inspect(req);
+    expect(text).not.toContain("allow this tool");
+    expect(text).not.toContain("A always allow");
+    expect(text).toContain("N or Tab deny with a reason");
+  });
+
+  it("offers the tool-wide session grant for a non-command request", () => {
+    const req: PermissionRequest = { toolName: "write_file", permission: "write", description: "Write a file" };
+    expect(inspect(req).text).toContain("a allow this tool for the rest of the session");
   });
 });

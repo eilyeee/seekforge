@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_CONFIG_FILE_BYTES, MAX_EDITOR_FILE_BYTES, MAX_STATE_FILE_BYTES } from "../bounded-file.js";
 import { saveClipboardImage } from "../clipboard-image.js";
 import { configParseErrors, loadConfig } from "../config.js";
@@ -25,6 +25,7 @@ const originalEditor = process.env.EDITOR;
 const originalVisual = process.env.VISUAL;
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   if (originalEditor === undefined) delete process.env.EDITOR;
   else process.env.EDITOR = originalEditor;
   if (originalVisual === undefined) delete process.env.VISUAL;
@@ -53,6 +54,9 @@ describe("bounded user/project files", () => {
     const file = join(dir, "config.json");
     writeFileSync(file, "{}");
     truncateSync(file, MAX_CONFIG_FILE_BYTES + 1);
+    // The user layer sits under the project one; a developer's own model must
+    // not stand in for the value this asserts is absent.
+    vi.stubEnv("HOME", tempRoot("seekforge-tui-config-home-"));
 
     expect(loadConfig(root).model).toBeUndefined();
     expect(configParseErrors(root)).toContain(file);
@@ -71,7 +75,13 @@ describe("bounded user/project files", () => {
     writeFileSync(keybindings, "{}");
     truncateSync(keybindings, MAX_CONFIG_FILE_BYTES + 1);
 
-    expect(loadCustomCommands(root, home)).toEqual([]);
+    // Core reads the user layer from SEEKFORGE_HOME.
+    vi.stubEnv("SEEKFORGE_HOME", home);
+    try {
+      expect(loadCustomCommands(root)).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
     expect(loadKeybindings(root, home)).toEqual([]);
   });
 });

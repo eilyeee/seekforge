@@ -2,6 +2,11 @@ import type { AgentEvent, FinalReport, PermissionRequest, TokenUsage } from "@se
 import type { MemoryCandidate } from "@seekforge/core";
 import { tailText } from "./format.js";
 import type { CandidateScope } from "./memory-candidates.js";
+import type { IdeCandidate } from "./ide/discovery.js";
+import type { McpServerStatus } from "./agent/mcp-registry.js";
+import type { ManageMessage } from "./manage/common.js";
+import type { ManageView } from "./manage/index.js";
+import type { SessionPickerState } from "./session-picker.js";
 
 /**
  * The chat model. A flat list of renderable items plus session-level state
@@ -36,8 +41,12 @@ export type Overlay =
   | { kind: "palette"; query: string; index: number }
   | { kind: "files"; query: string; index: number; anchor: number }
   | { kind: "context" }
-  /** Interactive session picker (/sessions): Enter resumes ids[index]. */
-  | { kind: "sessions"; ids: string[]; lines: string[]; index: number }
+  /** Session picker (/sessions): search, preview, rename, fork; Enter resumes. */
+  | { kind: "sessions"; picker: SessionPickerState }
+  /** Interactive management overlays (/permissions /mcp /agents /hooks /skills /plugins). */
+  | { kind: "manage"; view: ManageView }
+  /** Running IDE bridges to connect to (/ide). */
+  | { kind: "ide"; candidates: IdeCandidate[]; index: number }
   /** Backtrack picker (Esc Esc / /backtrack): Enter rewinds to the turn. */
   | {
       kind: "backtrack";
@@ -295,6 +304,15 @@ export type ChatAction =
   | { type: "permission-resolved" }
   | { type: "overlay"; overlay: Overlay | null }
   | { type: "overlay-move"; delta: number; count: number }
+  /** Replaces a management overlay's view, only while that overlay is still open. */
+  | { type: "manage-update"; view: ManageView }
+  /** Replaces the session picker's state, only while it is still open. */
+  | { type: "sessions-update"; picker: SessionPickerState }
+  /**
+   * An async MCP result for the open /mcp overlay: new server rows (and a
+   * status line) without disturbing the selection the user moved meanwhile.
+   */
+  | { type: "manage-mcp-servers"; servers: McpServerStatus[]; message?: ManageMessage }
   | { type: "scroll"; delta: number; max: number }
   | { type: "scroll-latest" }
   | { type: "set-approval"; approval: ApprovalSetting }
@@ -455,8 +473,37 @@ function innerReducer(state: ChatState, action: ChatAction): ChatState {
     case "overlay":
       return { ...state, overlay: action.overlay };
 
+    case "manage-update":
+      if (state.overlay?.kind !== "manage" || state.overlay.view.kind !== action.view.kind) return state;
+      return { ...state, overlay: { kind: "manage", view: action.view } };
+
+    case "sessions-update":
+      if (state.overlay?.kind !== "sessions") return state;
+      return { ...state, overlay: { kind: "sessions", picker: action.picker } };
+
+    case "manage-mcp-servers": {
+      if (state.overlay?.kind !== "manage" || state.overlay.view.kind !== "mcp") return state;
+      const view = state.overlay.view;
+      const index = Math.max(0, Math.min(view.index, action.servers.length - 1));
+      return {
+        ...state,
+        overlay: {
+          kind: "manage",
+          view: { ...view, servers: action.servers, index, ...(action.message ? { message: action.message } : {}) },
+        },
+      };
+    }
+
     case "overlay-move": {
-      if (!state.overlay || state.overlay.kind === "context" || action.count <= 0) return state;
+      if (
+        !state.overlay ||
+        state.overlay.kind === "context" ||
+        state.overlay.kind === "sessions" ||
+        state.overlay.kind === "manage" ||
+        action.count <= 0
+      ) {
+        return state;
+      }
       const raw = state.overlay.index + action.delta;
       const index = ((raw % action.count) + action.count) % action.count; // wrap
       return { ...state, overlay: { ...state.overlay, index } };

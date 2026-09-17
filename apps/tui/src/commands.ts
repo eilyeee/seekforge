@@ -60,8 +60,9 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
   { name: "help", summary: "show all commands", group: "info" },
   { name: "new", summary: "start a fresh session (next message opens it)", group: "session" },
   { name: "clear", args: "[name]", summary: "clear the transcript (name labels the old session)", group: "session" },
-  { name: "sessions", summary: "pick a session to resume (interactive)", group: "session" },
+  { name: "sessions", summary: "pick a session to resume — / search, r rename, f fork", group: "session" },
   { name: "resume", args: "<id>", summary: "continue an existing session", group: "session" },
+  { name: "rename", args: "<title>", summary: "name the current session (shown in /sessions)", group: "session" },
   { name: "plan", args: "<task>", summary: "plan read-only first, confirm, then execute", group: "run" },
   {
     name: "loop",
@@ -159,7 +160,7 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
     summary: "background and detached tasks (live; kill stops one)",
     group: "tools",
   },
-  { name: "agents", summary: "list dispatchable subagents", group: "tools" },
+  { name: "agents", summary: "list, create and edit subagents (interactive)", group: "tools" },
   {
     name: "agent-steer",
     args: "<dispatch-id> <message>",
@@ -167,12 +168,33 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
     group: "tools",
   },
   { name: "agent-cancel", args: "<dispatch-id>", summary: "cancel one running subagent", group: "tools" },
-  { name: "skills", summary: "list installed skills and their status", group: "tools" },
-  { name: "plugins", summary: "list first-class plugins and approval status", group: "tools" },
-  { name: "mcp", summary: "list configured MCP servers and their tools", group: "tools" },
+  { name: "skills", summary: "enable or disable installed skills (interactive)", group: "tools" },
+  { name: "plugins", summary: "enable or disable installed plugins (interactive)", group: "tools" },
+  { name: "mcp", summary: "MCP servers: status, reconnect, enable/disable (interactive)", group: "tools" },
   { name: "prompts", summary: "list MCP prompts (invoke as /mcp:<server>:<prompt>)", group: "tools" },
   { name: "init", summary: "analyze the codebase and write/refresh AGENTS.md", group: "tools" },
+  {
+    name: "ide",
+    args: "[off]",
+    summary: "connect to an IDE: selection and diagnostics context, diffs in the editor",
+    group: "tools",
+  },
+  { name: "hooks", summary: "browse configured hooks by stage (e opens the user config)", group: "tools" },
   { name: "doctor", summary: "diagnose the environment (key, node, git, runtime, mcp…)", group: "info" },
+  { name: "status", summary: "session, model, approval and environment at a glance", group: "info" },
+  { name: "release-notes", summary: "show the changelog section for this version", group: "info" },
+  { name: "bug", summary: "copy a bug report (version, doctor, last error) to the clipboard", group: "info" },
+  {
+    name: "config",
+    args: "[edit]",
+    summary: "show the effective config (edit opens the user config)",
+    group: "settings",
+  },
+  {
+    name: "permissions",
+    summary: "permission rules by source: add, delete, session grants (interactive)",
+    group: "settings",
+  },
   { name: "vim", summary: "toggle vim mode for the composer", group: "settings" },
   { name: "mouse", summary: "toggle mouse-wheel scroll (off = native text selection)", group: "settings" },
   {
@@ -216,6 +238,7 @@ export type SlashCommand =
   | { name: "clear"; arg?: string }
   | { name: "sessions" }
   | { name: "resume"; arg?: string }
+  | { name: "rename"; arg?: string }
   | { name: "plan"; arg?: string }
   /** Auto-loop: `verify` is the success command; `task` is the composer text. */
   | {
@@ -287,6 +310,7 @@ export type SlashCommand =
   | { name: "mcp" }
   | { name: "prompts" }
   | { name: "init" }
+  | { name: "ide"; arg?: string }
   | { name: "doctor" }
   | { name: "vim" }
   | { name: "mouse" }
@@ -588,6 +612,7 @@ const REST_ARG = new Set([
   "loop-steer",
   "graph-steer",
   "graph-signal",
+  "rename",
 ]);
 /** Commands taking a single word argument. */
 const WORD_ARG = new Set([
@@ -608,7 +633,25 @@ const WORD_ARG = new Set([
   "graph-show",
   "graph-pause",
   "graph-continue",
+  "ide",
 ]);
+
+/**
+ * Every built-in name parseInput resolves (aliases excluded). A handled
+ * command missing from COMMANDS is invisible to /help and the palette.
+ */
+export const PARSED_COMMAND_NAMES: readonly string[] = ["loop", "loop-resume", ...NO_ARG, ...REST_ARG, ...WORD_ARG];
+
+/**
+ * Whether `/name` resolves to a built-in (aliases included). A custom command
+ * with such a name is never offered or run: a checked-out repository must not
+ * be able to replace a built-in such as /approve with a prompt of its own.
+ */
+export function isBuiltinCommandName(name: string): boolean {
+  if (name === "" || /\s/.test(name)) return false;
+  const parsed = parseInput(`/${name}`);
+  return parsed.kind === "slash" && parsed.command.name !== "unknown";
+}
 
 export function parseInput(line: string): ParsedInput {
   const trimmed = line.trim();

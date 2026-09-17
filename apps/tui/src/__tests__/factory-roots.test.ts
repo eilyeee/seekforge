@@ -16,12 +16,12 @@ const { prepareMcp } = await import("../agent/factory.js");
 afterEach(() => loadMcpToolSpecs.mockClear());
 
 describe("prepareMcp workspace roots passthrough", () => {
-  const config = { mcpServers: { fake: { command: "node", args: ["x.js"] } } } as never;
+  const config = { mcpServers: { fake: { command: "node", args: ["x.js"], trusted: true } } } as never;
 
   it("forwards the workspace path as the roots argument", async () => {
     await prepareMcp(config, "/abs/workspace");
     expect(loadMcpToolSpecs).toHaveBeenCalledWith(
-      { fake: { command: "node", args: ["x.js"] } },
+      { fake: { command: "node", args: ["x.js"], trusted: true } },
       ["/abs/workspace"],
       undefined,
       undefined,
@@ -31,7 +31,7 @@ describe("prepareMcp workspace roots passthrough", () => {
   it("passes undefined roots when no workspace path is given", async () => {
     await prepareMcp(config);
     expect(loadMcpToolSpecs).toHaveBeenCalledWith(
-      { fake: { command: "node", args: ["x.js"] } },
+      { fake: { command: "node", args: ["x.js"], trusted: true } },
       undefined,
       undefined,
       undefined,
@@ -42,11 +42,17 @@ describe("prepareMcp workspace roots passthrough", () => {
     const handlers = { elicitation: async () => ({ action: "decline" as const }) };
     await prepareMcp(config, "/abs/workspace", handlers);
     expect(loadMcpToolSpecs).toHaveBeenCalledWith(
-      { fake: { command: "node", args: ["x.js"] } },
+      { fake: { command: "node", args: ["x.js"], trusted: true } },
       ["/abs/workspace"],
       undefined,
       handlers,
     );
+  });
+
+  it("never starts an untrusted server", async () => {
+    const out = await prepareMcp({ mcpServers: { raw: { command: "node" } } } as never, "/abs/workspace");
+    expect(loadMcpToolSpecs).not.toHaveBeenCalled();
+    expect(out.registry.statuses()).toMatchObject([{ name: "raw", state: "untrusted", origin: "user" }]);
   });
 
   it("is a no-op (never calls core) when no servers are configured", async () => {

@@ -1020,6 +1020,11 @@ The third answer appears only when the prompt also shows the rule it would
 write, and the rule shown is exactly what lands in the file. Core decides
 whether to propose one at all; a frontend that has not been given a rule does
 not offer the option, because it would then have to invent what to persist.
+Neither `a` nor `A` is offered for a call core would not remember (an
+`env`-level tool). In the TUI, `N` or Tab denies with a typed reason that core
+appends to the denial the model reads, and `/permissions` lists every rule with
+the file it comes from, adds rules to the user or project file (the project file
+takes `deny` and `ask` only) and deletes them.
 
 `seekforge serve` (and therefore the Desktop) writes the rule to the config of
 the account running the server. That is the same trust domain: the server binds
@@ -1464,6 +1469,10 @@ In the precedence stack, a selected profile overlay slots **just below
 `profiles` map itself is a selection mechanism only and is **stripped** from the
 config returned by `loadConfig` (so `config show` never echoes it). Available
 profile names are discoverable via `availableProfiles()`.
+
+`seekforge-tui` accepts the same `--profile <name>`, `SEEKFORGE_PROFILE` and
+`--settings <file>`, with the same trust rules; it has no `config.local.json`
+layer, so its profiles come from the global and project files.
 
 Settable via `config set`? **No** — edit the file directly.
 

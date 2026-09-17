@@ -120,7 +120,7 @@ export function promptArgsFromText(prompt: McpPromptRef, text: string): Record<s
 }
 
 /**
- * One line per MCP prompt for the /prompts listing, mirroring formatMcpLines:
+ * One line per MCP prompt for the /prompts listing:
  * "/mcp:<server>:<prompt>  description…" plus a final total. Empty input → a
  * single notice.
  */

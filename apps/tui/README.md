@@ -11,14 +11,37 @@ pnpm --filter @seekforge/tui build
 node apps/tui/bin/seekforge-tui.js     # or: seekforge-tui (when linked)
 ```
 
-Flags: `-c/--continue` resumes the most recent session; `--model <name>`,
-`--vim/--no-vim`, `-h`. First run without an API key opens a setup wizard.
+First run without an API key opens a setup wizard.
+
+### Launch flags
+
+| Flag | Effect |
+| --- | --- |
+| `-c`, `--continue` | resume the most recent session of this project |
+| `--resume <id>` | resume a specific session (refused when it does not exist; not with `-c`) |
+| `-m`, `--model <name>` | model for the session |
+| `--permission-mode <mode>` | tabs start in `default` / `acceptEdits` / `plan` / `bypassPermissions` (also `confirm` / `auto`); Shift+Tab still cycles |
+| `-y`, `--yes`, `--dangerously-skip-permissions` | start in auto approval (`--permission-mode` wins when both are given) |
+| `--add-dir <dir>` | extra read-only root for `@` references; repeatable, same rules as `/add-dir` |
+| `--settings <file>` | a JSON settings file, user-owned, layered above the config files |
+| `--profile <name>` | a named `profiles` overlay (also `SEEKFORGE_PROFILE`) |
+| `--mcp-config <file>` | MCP servers from `{ "mcpServers": { … } }` (or a bare map), merged over config |
+| `--strict-mcp-config` | use only the `--mcp-config` servers |
+| `--append-system-prompt <text>` | appended to every run's system prompt |
+| `--vim` / `--no-vim` | start the composer in (or out of) vim mode |
+| `--verbose` | start with verbose transcript output (Ctrl+O toggles) |
+| `-h`, `--help` | print the flag list |
+
+Values go either after the flag or after `=` (`--profile=ci`); use the `=` form
+for a value that starts with `-`. Anything else — an unknown flag, a stray
+argument — stops the launch with an error instead of being ignored.
 
 `seekforge-tui` launches a full-screen chat in the current working directory.
 A DeepSeek API key is required: set `DEEPSEEK_API_KEY` or write
 `~/.seekforge/config.json` with `{ "apiKey": "…" }`. Config precedence is
-`env > project .seekforge/config.json > ~/.seekforge/config.json` (same as the
-CLI).
+`env > --settings file > --profile overlay > project .seekforge/config.json >
+~/.seekforge/config.json` (the CLI's stack without `config.local.json`), with the
+same repository-trust reductions.
 
 ## Interface
 
@@ -64,26 +87,35 @@ CLI).
 - **Custom commands**: `.seekforge/commands/<name>.md` (project or
   `~/.seekforge/commands/`) become `/name` palette entries — see
   [Custom commands](#custom-commands).
-- **Keybindings**: override any binding in `.seekforge/keybindings.json`
-  (`{"composer": {"newline": "ctrl+j"}}` style; project overrides global).
+- **Keybindings**: every action can be rebound — see [Keybindings](#keybindings).
+  Alt+P opens the model picker, Alt+T toggles thinking.
 - **Modes**: persistent approval mode auto / confirm / plan — Shift+Tab
   cycles, `/approve <mode>` sets it. In plan mode every message runs a
   read-only planning turn, then `y` executes it in the same session.
 - **Permissions**: an inline panel shows the RAW command/path verbatim;
   `y` allows once, `a` allows similar commands for the rest of the session,
-  anything else denies.
-- **Status line**: model · context % · cost · tokens · approval mode ·
-  `⚙ N bg` background tasks · scroll indicator, with a spinner while running.
+  `A` also saves the rule core proposed to `~/.seekforge/config.json`,
+  `N` or Tab opens a one-line reason (Enter denies and the model reads the
+  reason), anything else denies. `a` and `A` are only offered when core will
+  honor them (never for `env`-level tools). Long diffs and plans (a request
+  whose preview is text, such as a plan to approve) scroll with ↑↓ PgUp PgDn;
+  a full-file diff opens at its first change. With an IDE connected, `o` opens
+  the proposed change in the IDE's diff view.
+- **Status line**: model · context % · cost · tokens · the connected IDE ·
+  approval mode · `⚙ N bg` background tasks · scroll indicator, with a spinner
+  while running.
 
 ## Slash commands
 
-`/help` `/new` `/clear` `/sessions` (picker; `f` forks) `/resume <id>` `/fork`
+`/help` (commands and the effective key bindings) `/new` `/clear [name]`
+`/sessions` `/resume <id>` `/rename <title>` `/fork`
 `/plan <task>` `/approve [auto|confirm|plan]` `/rewind [yes]` `/backtrack`
 `/diff` `/review` `/model` (picker) `/think [on|off|high|max]`
-`/remember <fact>` `/memory [edit]` `/config [edit]`
-`/todo [add|done|rm]` `/add-dir [path]`
+`/remember <fact>` `/memory [edit]` `/config [edit]` `/status` `/usage`
+`/todo [add|done|rm]` `/add-dir [path]` `/ide [off]`
 `/tasks [kill <id>]` `/agents` `/agent-steer <dispatch-id> <message>`
-`/agent-cancel <dispatch-id>` `/skills` `/plugins` `/mcp` (incl. resources) `/init`
+`/agent-cancel <dispatch-id>` `/skills` `/plugins` `/mcp` `/permissions`
+`/hooks` `/init` `/release-notes` `/bug`
 `/loop` `/loop-resume` `/loop-pause` `/loop-continue` `/loop-steer <guidance>`
 `/graph-list` `/graph-show <graph-id>` `/graph-pause <graph-id>`
 `/graph-continue <graph-id>` `/graph-steer <graph-id> <guidance>`
@@ -101,6 +133,53 @@ no `/graph-run` — starting, restarting, or approving a Graph node still goes
 through the CLI (`seekforge graph run|resume <file> --approve <node-id>`),
 because those need the Graph definition file, not just its checkpoint.
 
+**Sessions.** `/sessions` lists every session with its name (★), status, age,
+cost and id, and previews the selected one (first prompt, last reply). `/`
+starts a search over id, name and task; `r` renames the selected session
+inline (an empty name clears it); `f` forks it; Enter resumes it. `/rename
+<title>` names the current session, and `/clear <name>` names the one it
+leaves. Names are stored beside the session (`core renameSession`), so they
+survive a running loop rewriting `session.json`.
+
+**Management panels.** These open an interactive panel instead of printing:
+
+- `/permissions` — every rule with the layer it comes from (`--settings`,
+  profile, project, user) and this session's command grants. `a` adds a rule
+  (tool, action `deny`/`ask`/`allow`, match prefix, scope `user`/`project`),
+  `d` then `y` deletes one. The project file may only hold `deny` and `ask`
+  rules — the loader strips project `allow` rules, so the panel refuses to
+  write one there and marks existing ones as ignored. User-file edits take the
+  same cross-process lease as the prompt's `A`; project-file edits wait for no
+  run to own the workspace. Changes apply from the next run.
+- `/mcp` — each server's state (connected, failed with the reason, untrusted,
+  pending) with tool, prompt and resource counts. `r` reconnects one server,
+  `e` switches a server defined in your user config off or on (its `trusted`
+  flag, written to `~/.seekforge/config.json`; switching on asks first, since it
+  lets the server start), and `l` copies `seekforge mcp login <name>` for a
+  remote server. Repository and plugin servers are not switched here.
+- `/agents` — agents with their scope; `n` walks a short form (id, description,
+  tools, mode, model, project or global) and writes
+  `.seekforge/agents/<id>/AGENT.md`; `e` or Enter opens an agent's file in
+  `$EDITOR`.
+- `/hooks` — the configured hooks stage by stage with matcher, type and raw
+  command (config first, then plugins); `e` opens `~/.seekforge/config.json`.
+- `/skills` and `/plugins` — Space or Enter switches the selected entry
+  (core's `setSkillEnabled` / `setPluginEnabled`, the same owners as the CLI).
+  Enabling a plugin approves its current contents and asks first, naming what
+  it contributes; repository plugins are installed with
+  `seekforge plugin install` first. Plugin changes apply after a restart.
+
+**IDE bridge.** `/ide` lists running editor bridges from
+`~/.seekforge/ide/<port>.json` lock files — the ones whose workspace folder
+contains this project first — and Enter connects; `/ide off` disconnects. A
+lock file is only believed when it is a regular file owned by you with mode
+`0600` in a directory only you can write, and its process is alive. While
+connected, every prompt you type carries a bounded `<ide-context>` block (the
+active file, the selection up to 4,000 characters, up to 20 error
+diagnostics), limited to files inside the workspace and never a sensitive file,
+wrapped as untrusted data; a notice says what was attached. The permission
+panel's `o` opens a pending edit in the IDE's diff view.
+
 Background tasks started with `run_command background:true` survive across
 turns (one shared manager per TUI process; killed on exit). When one exits, the
 session that started it is told at its next turn boundary — a notice in the
@@ -117,32 +196,35 @@ Each `*.md` file under `.seekforge/commands/` (project) or
 `~/.seekforge/commands/` (user) becomes a `/name` palette entry, where `name`
 is the filename without `.md`. Subdirectories namespace with `:` —
 `commands/frontend/build.md` is `/frontend:build`. On a name clash the project
-copy wins over the user copy, and a custom command overrides a same-named
-built-in.
+copy wins over the user copy. A built-in command keeps its name in the TUI: a
+checked-out repository cannot replace `/approve` or `/permissions` with a file,
+so a custom command named like a built-in is not reachable here (the CLI REPL
+lets the custom command win).
 
-The body is the prompt. An optional YAML frontmatter block carries a label:
+The body is the prompt. An optional YAML frontmatter block configures it:
 
 ```markdown
 ---
 description: Open a PR for the current branch
+argument-hint: <base branch>
+model: deepseek-v4-pro
+allowed-tools: read_file, run_command
 ---
-Open a pull request for the current branch.
+Open a pull request from !`git branch --show-current` into $1.
 
 Arguments: $ARGUMENTS
 ```
 
 - `description` — palette label (defaults to the first non-empty body line).
-- `$ARGUMENTS` — replaced with whatever you typed after the command name.
+- `argument-hint` — shown next to the name in the palette and `/help`.
+- `model` — this invocation runs on that model.
+- `allowed-tools` — this invocation may call only these tools.
+- `disable-model-invocation: true` — the model cannot run it through
+  `run_user_command`.
 
-The frontmatter is stripped from the sent body.
-
-**The TUI reads only those two.** `argument-hint`, `model`, `allowed-tools`,
-`disable-model-invocation`, positional `$1`..`$9`, and `` !`shell` ``
-interpolation are implemented in Core (`packages/core/src/agent/commands.ts`)
-and reachable from the CLI REPL — `seekforge` with no subcommand — but the TUI
-parses command files with its own reader (`apps/tui/src/custom-commands.ts`),
-which extracts `description:` and expands `$ARGUMENTS` and nothing else. A file
-using the richer form still works here; the extra keys are simply inert.
+The frontmatter is stripped from the sent body. The TUI reads command files
+through Core (`packages/core/src/agent/commands.ts`), the same implementation
+as the CLI REPL and the server, so a file behaves the same on every surface.
 
 **Arguments.** `$ARGUMENTS` (every occurrence) is replaced with the full
 argument string; positional `$1`..`$9` take the whitespace-split arguments. If
@@ -152,12 +234,48 @@ the body has no placeholder, non-empty arguments are appended as an
 **Shell injection.** `` !`command` `` in the body runs in the workspace at
 invoke time and its trimmed output is inlined; a failing command becomes an
 inline `[command failed: …]` marker. This runs only when *you* invoke the
-command.
+command, with a 10-second timeout and a 1 MB output cap, and not while another
+run owns the workspace (the same guard the server applies).
 
 **Model invocation.** The model can invoke any command not marked
 `disable-model-invocation: true` via the `run_user_command` tool. That path
 only does `$ARGUMENTS`/`$1`..`$9` interpolation — it never runs `` !`shell` ``
 injections.
+
+## Keybindings
+
+`~/.seekforge/keybindings.json` and `<workspace>/.seekforge/keybindings.json`
+(project wins per action) map a scope to action → key spec:
+
+```json
+{
+  "composer": { "newline": "ctrl+j", "external-editor": "ctrl+x ctrl+e" },
+  "global": { "model-picker": "alt+m", "toggle-sidebar": "ctrl+x s" }
+}
+```
+
+A spec is modifiers (`ctrl`, `shift`, `alt`/`meta`/`option`) plus one key — a
+character or `return`, `escape`, `tab`, `up`, `down`, `left`, `right`, `pageup`,
+`pagedown`, `backspace`, `delete`. Two or three space-separated strokes make a
+chord (composer and global scopes only); a chord's first stroke waits 1.5 s for
+the rest, and the footer shows it. An override replaces the built-in keys for
+that action.
+
+| Scope | Actions |
+| --- | --- |
+| `composer` | `submit` `newline` `history-up` `history-down` `cursor-left` `cursor-right` `clear-line` `delete-back` `delete-forward` `external-editor` `history-search` `path-complete` `paste-image` |
+| `overlay` | `overlay-up` `overlay-down` `overlay-accept` `overlay-close` |
+| `global` | `cancel-or-quit` `cycle-approval` `scroll-up` `scroll-down` `scroll-latest` `toggle-verbose` `detach-run` `suspend` `tab-new` `tab-cycle` `toggle-sidebar` `toggle-pager` `model-picker` `toggle-thinking` |
+
+Composer actions may also be bound in `global`. An unknown scope or action, an
+action bound in a scope that never runs it, an unparsable spec, or a chord that
+hides a single-key binding is reported when the TUI starts, not silently
+dropped. Ctrl+C always cancels (and twice quits), whatever else
+`cancel-or-quit` is bound to. `/help` lists the bindings in effect.
+
+Alt shortcuts work when the terminal sends Alt as an ESC prefix (the common
+default; on macOS enable "Use Option as Meta key"), including terminals and
+multiplexers that deliver the ESC and the key separately.
 
 ## Development
 

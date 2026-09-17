@@ -14,6 +14,8 @@ type DiffCardProps = {
   path: string;
   lines: readonly DiffLine[];
   maxLines?: number;
+  /** First line shown (scrolled review); lines above it are summarized. */
+  offset?: number;
 };
 
 function colorProps(kind: DiffLineKind): { color?: string } {
@@ -27,11 +29,12 @@ function gutter(n: number | undefined): string {
   return (n === undefined ? "" : String(n)).padStart(4);
 }
 
-export function DiffCard({ path, lines, maxLines = 24 }: DiffCardProps): React.ReactElement {
+export function DiffCard({ path, lines, maxLines = 24, offset = 0 }: DiffCardProps): React.ReactElement {
   const { adds, dels } = diffStats(lines);
   const numbered = numberDiffLines(lines);
-  const visible = numbered.slice(0, Math.max(0, maxLines));
-  const hidden = numbered.length - visible.length;
+  const start = Math.max(0, Math.min(offset, numbered.length));
+  const visible = numbered.slice(start, start + Math.max(0, maxLines));
+  const hidden = numbered.length - start - visible.length;
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1} marginY={1}>
       <Text>
@@ -42,6 +45,7 @@ export function DiffCard({ path, lines, maxLines = 24 }: DiffCardProps): React.R
           (+{adds} −{dels})
         </Text>
       </Text>
+      {start > 0 ? <Text dimColor>↑ {start} more lines</Text> : null}
       {visible.map((row, i) => (
         <Text key={i}>
           {row.line.kind === "hunk" ? null : (
@@ -54,7 +58,11 @@ export function DiffCard({ path, lines, maxLines = 24 }: DiffCardProps): React.R
           </Text>
         </Text>
       ))}
-      {hidden > 0 ? <Text dimColor>… {hidden} more lines</Text> : null}
+      {hidden > 0 ? (
+        <Text dimColor>
+          {start > 0 ? "↓" : "…"} {hidden} more lines
+        </Text>
+      ) : null}
     </Box>
   );
 }

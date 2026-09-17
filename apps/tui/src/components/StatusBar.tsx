@@ -26,6 +26,8 @@ type StatusBarProps = {
   turnTokens?: number;
   /** Transient provider-retry indicator (set while the provider backs off). */
   retryStatus?: { attempt: number; maxAttempts: number; delayMs: number; reason: string };
+  /** Name of the connected IDE (/ide), if any. */
+  ide?: string;
 };
 
 /** 1 Hz tick while running, so the elapsed counter advances. */
@@ -84,6 +86,14 @@ export function StatusBar(props: StatusBarProps): React.ReactElement {
       </Text>
       {/* approval / background / detached moved to the mode line under the
           composer (Claude Code-style); the top bar stays lean. */}
+      {props.ide ? (
+        <>
+          <Divider />
+          <Text color="green">
+            ⧉ {t("ide.status")} {props.ide}
+          </Text>
+        </>
+      ) : null}
       {props.vim ? (
         <>
           <Divider />

@@ -916,6 +916,10 @@ global/settings 层可以包含全部三种 action。
 只有当提示同时把将要写入的那条规则原文展示出来时，第三个选项才会出现；展示的
 规则就是落盘的规则。是否提出这条规则由 core 决定；没拿到规则的前端不会提供这个
 选项，否则它就得自己编造要持久化的内容。
+对于 core 不会记住的调用（`env` 级工具），`a` 和 `A` 都不会出现。在 TUI 中，
+`N` 或 Tab 可附带输入的理由拒绝，core 会把理由附加到模型读到的拒绝信息里；
+`/permissions` 会列出每条规则及其来源文件，并可向用户或项目配置添加规则
+（项目配置只接受 `deny` 与 `ask`）或删除规则。
 
 `seekforge serve`（因而也包括 Desktop）会把规则写入**运行服务端的那个账号**的
 配置。这是同一个信任域：服务端只监听 127.0.0.1 且要求 bearer token，所以能回答
@@ -1285,6 +1289,10 @@ profile 内部的深合并字段（`mcpServers`、`permissionRules`、`hooks`）
 `config.local.json` 之上** —— 见下文「优先级」一节。`profiles` 映射本身
 只是一个选择机制，会从 `loadConfig` 返回的配置中**剔除**（因此 `config show`
 永远不会回显它）。可用的 profile 名称可通过 `availableProfiles()` 发现。
+
+`seekforge-tui` 同样接受 `--profile <name>`、`SEEKFORGE_PROFILE` 和
+`--settings <file>`，信任规则相同；它没有 `config.local.json` 这一层，
+因此 profile 只来自全局与项目配置文件。
 
 可通过 `config set` 设置？**不可以** —— 直接编辑文件。
 

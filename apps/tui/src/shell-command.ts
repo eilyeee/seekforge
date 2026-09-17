@@ -32,8 +32,38 @@ function groupAlive(child: ChildProcess): boolean {
   }
 }
 
+/** Raw outcome of one captured shell run. `failure` is set when the run was cut short. */
+type CapturedRun = { text: string; exitCode: number; signal: NodeJS.Signals | null; failure?: string };
+
 /** Runs the TUI's explicit `!command` without blocking rendering or leaking descendants. */
-export function runShellCommand(command: string, cwd: string, timeoutMs = 60_000): Promise<ShellCommandResult> {
+export async function runShellCommand(command: string, cwd: string, timeoutMs = 60_000): Promise<ShellCommandResult> {
+  const run = await runCaptured(command, cwd, timeoutMs, MAX_SHELL_OUTPUT_BYTES);
+  if (run.failure !== undefined) return { output: run.failure, exitCode: 1 };
+  return {
+    output: run.text || (run.signal ? `terminated by ${run.signal}` : "(no output)"),
+    exitCode: run.exitCode,
+  };
+}
+
+/** Output bound for a custom command's shell injection (the REPL and server use the same). */
+export const MAX_INJECTION_OUTPUT_BYTES = 1024 * 1024;
+
+/**
+ * One shell injection (`` !`command` ``) of a custom slash command: stdout+stderr on
+ * success, a rejection naming the exit status otherwise (core renders it as an
+ * inline `[command failed: …]` marker). Bounded like the CLI REPL's capture.
+ */
+export async function captureShellOutput(command: string, cwd: string, timeoutMs = 10_000): Promise<string> {
+  const run = await runCaptured(command, cwd, timeoutMs, MAX_INJECTION_OUTPUT_BYTES);
+  if (run.failure !== undefined) throw new Error(run.failure);
+  if (run.exitCode !== 0 || run.signal) {
+    const status = run.signal ? `signal ${run.signal}` : `exit ${run.exitCode}`;
+    throw new Error(run.text ? `${status}: ${run.text}` : status);
+  }
+  return run.text;
+}
+
+function runCaptured(command: string, cwd: string, timeoutMs: number, maxBytes: number): Promise<CapturedRun> {
   return new Promise((resolve) => {
     let child: ChildProcess;
     try {
@@ -43,7 +73,7 @@ export function runShellCommand(command: string, cwd: string, timeoutMs = 60_000
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (error) {
-      resolve({ output: error instanceof Error ? error.message : String(error), exitCode: 1 });
+      resolve({ text: "", exitCode: 1, signal: null, failure: error instanceof Error ? error.message : String(error) });
       return;
     }
 
@@ -51,7 +81,7 @@ export function runShellCommand(command: string, cwd: string, timeoutMs = 60_000
     let bytes = 0;
     let settled = false;
     let forceKillTimer: NodeJS.Timeout | undefined;
-    const finish = (result: ShellCommandResult): void => {
+    const finish = (result: CapturedRun): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timeoutTimer);
@@ -73,13 +103,13 @@ export function runShellCommand(command: string, cwd: string, timeoutMs = 60_000
         }
       }, FORCE_KILL_DELAY_MS);
       forceKillTimer.unref();
-      finish({ output: reason, exitCode: 1 });
+      finish({ text: "", exitCode: 1, signal: null, failure: reason });
     };
     const collect = (chunk: Buffer): void => {
       if (settled) return;
       bytes += chunk.length;
-      if (bytes > MAX_SHELL_OUTPUT_BYTES) {
-        terminate(`output exceeded ${MAX_SHELL_OUTPUT_BYTES} bytes`);
+      if (bytes > maxBytes) {
+        terminate(`output exceeded ${maxBytes} bytes`);
         return;
       }
       chunks.push(chunk);
@@ -87,7 +117,7 @@ export function runShellCommand(command: string, cwd: string, timeoutMs = 60_000
 
     child.stdout?.on("data", collect);
     child.stderr?.on("data", collect);
-    child.once("error", (error) => finish({ output: error.message, exitCode: 1 }));
+    child.once("error", (error) => finish({ text: "", exitCode: 1, signal: null, failure: error.message }));
     child.once("close", (code, signal) => {
       const descendantsAlive = groupAlive(child);
       if (forceKillTimer !== undefined && !descendantsAlive) clearTimeout(forceKillTimer);
@@ -106,11 +136,7 @@ export function runShellCommand(command: string, cwd: string, timeoutMs = 60_000
         }, FORCE_KILL_DELAY_MS);
         forceKillTimer.unref();
       }
-      const output = Buffer.concat(chunks).toString("utf8").trimEnd();
-      finish({
-        output: output || (signal ? `terminated by ${signal}` : "(no output)"),
-        exitCode: code ?? 1,
-      });
+      finish({ text: Buffer.concat(chunks).toString("utf8").trimEnd(), exitCode: code ?? 1, signal });
     });
     const timeoutTimer = setTimeout(() => terminate(`timed out after ${timeoutMs}ms`), timeoutMs);
   });
