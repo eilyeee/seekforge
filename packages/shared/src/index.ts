@@ -2256,6 +2256,12 @@ export type ClientFrame =
       remember?: "session" | "always";
       /** Per-hunk selection for multi-hunk apply_patch calls. */
       selectedHunks?: number[];
+      /**
+       * The user's reason for a refusal (`approved: false`); handed to the
+       * model with the denial. Ignored on an approval. Additive: older
+       * clients omit it and older servers ignore it.
+       */
+      feedback?: string;
     }
   | { type: "question.answer"; id: string; answer: string }
   | ({

@@ -16,6 +16,8 @@ type Props = {
   /** Worktree tab menu actions. */
   onMergeWorktree: (tabId: string) => void;
   onDiscardWorktree: (tabId: string) => void;
+  /** Renames a tab (and its session); an empty name clears the custom name. */
+  onRename?: (tabId: string, name: string) => void;
   /** Workspace id -> display name, for the per-tab workspace label. */
   workspaceName?: (ws: string) => string | undefined;
 };
@@ -40,9 +42,18 @@ export function TabBar({
   onNewWorktree,
   onMergeWorktree,
   onDiscardWorktree,
+  onRename,
   workspaceName,
 }: Props) {
   const t = useT();
+  /** The tab whose title is being edited inline, with the text so far. */
+  const [renaming, setRenaming] = useState<{ tabId: string; text: string } | null>(null);
+  const commitRename = () => {
+    if (!renaming) return;
+    const target = tabs.find((candidate) => candidate.tabId === renaming.tabId);
+    if (target && renaming.text.trim() !== target.title) onRename?.(renaming.tabId, renaming.text);
+    setRenaming(null);
+  };
   // Only label tabs by workspace when more than one workspace is in play
   // (worktree tabs always carry their branch chip instead).
   const distinctWs = new Set(tabs.map((t) => t.ws).filter(Boolean));
@@ -70,6 +81,9 @@ export function TabBar({
               tabIndex={active ? 0 : -1}
               aria-selected={active}
               onClick={() => onSelect(tab.tabId)}
+              onDoubleClick={() => {
+                if (onRename && renaming?.tabId !== tab.tabId) setRenaming({ tabId: tab.tabId, text: tab.title });
+              }}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
@@ -92,9 +106,32 @@ export function TabBar({
               ) : (
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-surface-overlay" />
               )}
-              <span className="truncate" title={tab.title}>
-                {tab.title}
-              </span>
+              {renaming?.tabId === tab.tabId ? (
+                <input
+                  ref={(element) => element?.focus()}
+                  value={renaming.text}
+                  aria-label={t("chat.tab.renameLabel")}
+                  maxLength={80}
+                  onChange={(e) => setRenaming({ tabId: tab.tabId, text: e.target.value })}
+                  onClick={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.nativeEvent.isComposing) return;
+                    if (e.key === "Enter") commitRename();
+                    else if (e.key === "Escape") setRenaming(null);
+                  }}
+                  onBlur={commitRename}
+                  className="w-32 rounded border border-accent/60 bg-surface px-1 text-xs text-primary focus:outline-none"
+                />
+              ) : (
+                <span
+                  className="truncate"
+                  title={onRename ? t("chat.tab.renameHint", { title: tab.title }) : tab.title}
+                >
+                  {tab.title}
+                </span>
+              )}
               {tab.worktree && (
                 <span
                   className="flex shrink-0 items-center gap-1 rounded bg-surface-overlay px-1 text-2xs text-secondary"

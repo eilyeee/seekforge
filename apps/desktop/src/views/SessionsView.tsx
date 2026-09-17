@@ -21,7 +21,7 @@ import {
   Modal,
   type BadgeTone,
 } from "../components/ui";
-import type { PruneResult, RewindResult, SessionMeta } from "../types";
+import type { NamedSessionMeta, PruneResult, RewindResult } from "../types";
 import { LatestRequest } from "./async-coordination";
 import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 
@@ -45,6 +45,7 @@ const STATUS_TONE: Record<SessionStatus, BadgeTone> = {
   cancelled: "neutral",
 };
 
+type SessionMeta = NamedSessionMeta;
 type Detail = { meta: SessionMeta; messages: ChatMessage[]; events: AgentEvent[]; workspaceId: string };
 type RewindPreview = { sessionId: string; result: RewindResult; workspaceId: string };
 type PendingDelete = { session: SessionMeta; workspaceId: string };
@@ -72,6 +73,8 @@ export function SessionsView() {
    * holds a formatted failure message (404 → a short "no audit" note).
    */
   const [audit, setAudit] = useState<Audit | null>(null);
+  /** Inline rename in progress: the session and the text typed so far. */
+  const [renaming, setRenaming] = useState<{ id: string; text: string } | null>(null);
   const requests = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
   const detailRequests = useRef(new LatestRequest());
 
@@ -99,6 +102,7 @@ export function SessionsView() {
     setPendingDelete(null);
     setPruneOpen(false);
     setAudit(null);
+    setRenaming(null);
     void refresh(ws);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requests, ws]);
@@ -187,6 +191,33 @@ export function SessionsView() {
       });
   };
 
+  const commitRename = () => {
+    const pending = renaming;
+    setRenaming(null);
+    if (!pending) return;
+    const current = sessions?.find((s) => s.id === pending.id);
+    if (current && (current.name ?? "") === pending.text.trim()) return;
+    const operation = requests.capture(ws);
+    if (!operation) return;
+    api
+      .sessionRename(pending.id, pending.text, operation.workspaceId)
+      .then(({ name }) => {
+        if (!requests.isCurrent(operation)) return;
+        setSessions((list) =>
+          list
+            ? list.map((s) => {
+                if (s.id !== pending.id) return s;
+                const { name: _previous, ...rest } = s;
+                return name === null ? rest : { ...rest, name };
+              })
+            : list,
+        );
+      })
+      .catch((e: unknown) => {
+        if (requests.isCurrent(operation)) setError(t("sessions.renameError", { error: String(e) }));
+      });
+  };
+
   const noteFor = (e: unknown): string =>
     e instanceof ApiError && e.status === 404 ? t("sessions.rewindNoCheckpoints") : String(e);
 
@@ -262,6 +293,7 @@ export function SessionsView() {
           <Button variant="ghost" size="sm" onClick={closeDetail}>
             {t("sessions.backBtn")}
           </Button>
+          {detail.meta.name && <span className="text-sm font-medium text-primary">{detail.meta.name}</span>}
           <span className="font-mono text-xs text-tertiary">{detail.meta.id}</span>
           <Badge tone={STATUS_TONE[detail.meta.status]}>{detail.meta.status}</Badge>
           <Button
@@ -347,9 +379,37 @@ export function SessionsView() {
                     </span>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-primary">{s.task}</h2>
+                        {renaming?.id === s.id ? (
+                          <Input
+                            value={renaming.text}
+                            autoFocus
+                            maxLength={80}
+                            aria-label={t("sessions.renameLabel")}
+                            placeholder={s.task}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => setRenaming({ id: s.id, text: e.target.value })}
+                            onKeyDown={(e) => {
+                              e.stopPropagation();
+                              if (e.nativeEvent.isComposing) return;
+                              if (e.key === "Enter") commitRename();
+                              else if (e.key === "Escape") setRenaming(null);
+                            }}
+                            onBlur={commitRename}
+                            className="min-w-0 flex-1 py-0.5 text-sm"
+                          />
+                        ) : (
+                          <h2
+                            className="min-w-0 flex-1 truncate text-sm font-semibold text-primary"
+                            title={s.name ? s.task : undefined}
+                          >
+                            {s.name ?? s.task}
+                          </h2>
+                        )}
                         <Badge tone={STATUS_TONE[s.status]}>{s.status}</Badge>
                       </div>
+                      {s.name && renaming?.id !== s.id && (
+                        <p className="mt-0.5 truncate text-xs text-tertiary">{s.task}</p>
+                      )}
                       <div className="mt-1 flex items-center gap-2">
                         <span className="truncate font-mono text-2xs text-tertiary">{s.id}</span>
                         {rewindNotes[s.id] && <span className="font-mono text-2xs text-warn">{rewindNotes[s.id]}</span>}
@@ -363,6 +423,17 @@ export function SessionsView() {
                         <span className="text-2xs text-tertiary">{formatWhen(s.updatedAt)}</span>
                       </div>
                       <div className="flex items-center gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setRenaming({ id: s.id, text: s.name ?? "" });
+                          }}
+                          title={t("sessions.renameBtnTitle")}
+                        >
+                          {t("sessions.renameBtn")}
+                        </Button>
                         {s.status !== "running" && (
                           <Button
                             variant="ghost"

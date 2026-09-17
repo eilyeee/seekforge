@@ -990,14 +990,22 @@ global/settings layers may contain all three actions.
 }
 ```
 
+Settable via `config set`? **No** — edit the file directly, use Desktop
+**Settings → Permissions**, or let the permission prompt write one for you
+(below).
+
+The Desktop editor lists the stored rules of the project config and of
+`~/.seekforge/config.json` in evaluation order and adds, edits, or deletes one
+rule at a time through the server (`/api/permission-rules`). Project scope
+offers only `deny` and `ask`, and an `allow` rule already stored there is shown
+as ignored; every edit names the entry it replaces, so an edit made elsewhere in
+the meantime is refused rather than overwritten.
+
 #### Refusing with a reason
 
 When a frontend lets you type a note while refusing, the note (trimmed, at
 most 2,000 characters) is appended to the denial the model reads — "The user
 said: …" — so its next attempt can follow it instead of guessing.
-
-Settable via `config set`? **No** — edit the file directly, or let the
-permission prompt write one for you (below).
 
 #### Saving a rule from the permission prompt
 
@@ -1214,8 +1222,10 @@ the run. Every other stage logs failures and carries on.
 
 Hook entries are concatenated per stage across trusted config layers for **all**
 stages: **global → settings**. Repository hooks are inert. Invalid entries are
-dropped when the config loads. The Desktop hook editor writes
-`~/.seekforge/config.json`.
+dropped when the config loads. The Desktop hook
+editor writes `~/.seekforge/config.json`; it edits `command`, `match`, and
+`pattern` directly and keeps every other entry field (and any stage a newer
+build added) verbatim, showing those fields as editable JSON values.
 
 Settable via `config set`? **No** — edit the file directly.
 

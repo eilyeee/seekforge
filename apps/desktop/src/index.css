@@ -28,6 +28,26 @@
     --sf-ok: 5 150 105; /* emerald-600 */
     --sf-warn: 217 119 6; /* amber-600 */
     --sf-danger: 220 38 38; /* red-600 */
+
+    /* Terminal panel: surface + the 16 ANSI colors, tuned per theme. */
+    --sf-terminal-bg: 255 255 255;
+    --sf-terminal-fg: 39 39 42;
+    --sf-ansi-0: 39 39 42;
+    --sf-ansi-1: 205 49 49;
+    --sf-ansi-2: 0 138 62;
+    --sf-ansi-3: 161 98 7;
+    --sf-ansi-4: 29 78 216;
+    --sf-ansi-5: 162 28 175;
+    --sf-ansi-6: 14 116 144;
+    --sf-ansi-7: 113 113 122;
+    --sf-ansi-8: 82 82 91;
+    --sf-ansi-9: 220 38 38;
+    --sf-ansi-10: 22 163 74;
+    --sf-ansi-11: 180 83 9;
+    --sf-ansi-12: 37 99 235;
+    --sf-ansi-13: 192 38 211;
+    --sf-ansi-14: 8 145 178;
+    --sf-ansi-15: 24 24 27;
   }
 
   /*
@@ -51,6 +71,25 @@
     --sf-ok: 52 211 153; /* emerald-400 */
     --sf-warn: 251 191 36; /* amber-400 */
     --sf-danger: 248 113 113; /* red-400 */
+
+    --sf-terminal-bg: 17 17 19;
+    --sf-terminal-fg: 228 228 231;
+    --sf-ansi-0: 63 63 70;
+    --sf-ansi-1: 248 113 113;
+    --sf-ansi-2: 74 222 128;
+    --sf-ansi-3: 250 204 21;
+    --sf-ansi-4: 96 165 250;
+    --sf-ansi-5: 232 121 249;
+    --sf-ansi-6: 34 211 238;
+    --sf-ansi-7: 212 212 216;
+    --sf-ansi-8: 113 113 122;
+    --sf-ansi-9: 252 165 165;
+    --sf-ansi-10: 134 239 172;
+    --sf-ansi-11: 253 224 71;
+    --sf-ansi-12: 147 197 253;
+    --sf-ansi-13: 240 171 252;
+    --sf-ansi-14: 103 232 249;
+    --sf-ansi-15: 250 250 250;
   }
 
   html,

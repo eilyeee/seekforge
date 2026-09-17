@@ -44,6 +44,11 @@ export type ComposerProps = {
    */
   sendBlocked?: boolean;
   sendBlockedHint?: string;
+  /**
+   * A run is active: sending queues the message for the next turn instead.
+   * Only the send affordance changes; the parent decides what "send" does.
+   */
+  queueing?: boolean;
   placeholder: string;
   /** Web-relevant slash commands; actions are the parent's callbacks. */
   commands: ComposerCommand[];
@@ -150,6 +155,7 @@ export function Composer({
   disabled,
   sendBlocked = false,
   sendBlockedHint,
+  queueing = false,
   placeholder,
   commands,
   workspaceId,
@@ -549,7 +555,9 @@ export function Composer({
               {sendBlockedHint}
             </span>
           ) : (
-            <span className="ml-auto hidden pr-1 text-2xs text-tertiary sm:inline">{t("chat.composer.sendHint")}</span>
+            <span className="ml-auto hidden pr-1 text-2xs text-tertiary sm:inline">
+              {queueing ? t("chat.composer.queueHint") : t("chat.composer.sendHint")}
+            </span>
           )}
           <button
             type="button"
@@ -577,8 +585,14 @@ export function Composer({
             type="button"
             onClick={send}
             disabled={disabled || sendBlocked || value.trim().length === 0}
-            title={sendBlocked && sendBlockedHint ? sendBlockedHint : t("chat.composer.send")}
-            aria-label={t("chat.composer.send")}
+            title={
+              sendBlocked && sendBlockedHint
+                ? sendBlockedHint
+                : queueing
+                  ? t("chat.composer.queue")
+                  : t("chat.composer.send")
+            }
+            aria-label={queueing ? t("chat.composer.queue") : t("chat.composer.send")}
             className="focus-ring flex h-7 w-7 items-center justify-center rounded-lg bg-accent text-white transition-colors hover:bg-accent-hover disabled:opacity-40"
           >
             <svg

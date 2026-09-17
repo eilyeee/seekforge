@@ -157,6 +157,22 @@ describe("WS client protocol decoder", () => {
     expect(parseClientFrame({ ...base, remember: true }, limits)).toMatchObject({ ok: false });
   });
 
+  it("accepts a bounded refusal reason and fails a malformed one closed", () => {
+    const base = { type: "permission.response", requestId: "p3", approved: false };
+    expect(parseClientFrame({ ...base, feedback: "use pnpm, not npm" }, limits)).toMatchObject({ ok: true });
+    expect(parseClientFrame({ ...base, feedback: "" }, limits)).toMatchObject({ ok: true });
+    // A malformed reason still carries the id, so the pending prompt is denied
+    // rather than left waiting for its timeout.
+    expect(parseClientFrame({ ...base, feedback: 42 }, limits)).toMatchObject({
+      ok: false,
+      permissionRequestId: "p3",
+    });
+    expect(parseClientFrame({ ...base, feedback: "x".repeat(4_001) }, limits)).toMatchObject({
+      ok: false,
+      permissionRequestId: "p3",
+    });
+  });
+
   it("enforces caller-provided loop and steering limits", () => {
     expect(
       parseClientFrame(

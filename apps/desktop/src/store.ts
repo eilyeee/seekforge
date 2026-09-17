@@ -18,8 +18,12 @@ import { needsOnboarding } from "./lib/onboarding";
 import {
   activeTab,
   closeTab as closeTabPure,
+  editQueuedMessage,
+  enqueueMessage,
   initialTabsState,
+  nextQueuedMessage,
   openTab as openTabPure,
+  removeQueuedMessage,
   routeFrame,
   routeConnectionState,
   switchTab,
@@ -36,7 +40,7 @@ import {
 } from "./lib/tabs";
 import { createWsClient, encodeClientFrame, type ClientFrame, type ServerFrame, type WsClient } from "./lib/ws";
 import { emptyUsage } from "./lib/usage";
-import type { RecentWorkspace, SessionMeta, Workspace, WorktreeMergeResult } from "./types";
+import type { NamedSessionMeta, RecentWorkspace, Workspace, WorktreeMergeResult } from "./types";
 
 export type View =
   | "chat"
@@ -218,6 +222,26 @@ type AppStore = {
   /** Sends a chat task; returns false when the socket rejected it (offline). */
   sendTask: (task: string) => boolean;
   /**
+   * Queues a message on the active tab while its run is active; it is sent as
+   * the next turn when the run ends. False when the queue is full.
+   */
+  queueMessage: (text: string) => boolean;
+  editQueuedMessage: (id: number, text: string) => void;
+  removeQueuedMessage: (id: number) => void;
+  /** Lets a queue paused by an interrupted run send again. */
+  resumeQueue: () => void;
+  /**
+   * Names a tab. A tab bound to a session renames the session too (the
+   * promise rejects when the server refused); an empty name clears it.
+   */
+  renameTab: (tabId: string, name: string) => Promise<void>;
+  /** Bottom dock (terminal / preview), shared by every view. */
+  dock: { open: boolean; panel: "terminal" | "preview" };
+  setDock: (dock: Partial<{ open: boolean; panel: "terminal" | "preview" }>) => void;
+  /** Loopback URL shown in the preview panel ("" = none yet). */
+  previewUrl: string;
+  setPreviewUrl: (url: string) => void;
+  /**
    * Starts loop mode on the active tab: sends a `loop` frame on the tab's WS,
    * marks the tab running, and resets the tab's loop progress. The server runs
    * the task→verify→fix cycle autonomously and streams `loop.event` frames.
@@ -261,10 +285,20 @@ type AppStore = {
   /** Stop one running subagent without cancelling its parent task. */
   cancelSubagent: (dispatchId: string) => void;
   newSession: () => void;
-  respondPermission: (approved: boolean, remember?: "session" | "always", selectedHunks?: number[]) => void;
+  respondPermission: (
+    approved: boolean,
+    remember?: "session" | "always",
+    selectedHunks?: number[],
+    feedback?: string,
+  ) => void;
   /** Answers the pending ask_user question on the active tab. */
   respondQuestion: (answer: string) => void;
-  continueSession: (meta: SessionMeta, messages: ChatMessage[], workspaceId: string, events?: AgentEvent[]) => void;
+  continueSession: (
+    meta: NamedSessionMeta,
+    messages: ChatMessage[],
+    workspaceId: string,
+    events?: AgentEvent[],
+  ) => void;
 };
 
 /**
@@ -282,6 +316,7 @@ const graphSubscriptionsByTab = new Map<string, Map<string, number>>();
  */
 const SEND_DISCONNECTED_ERROR = "disconnected: not sent — reconnect to continue";
 const SEND_TOO_LARGE_ERROR = "too_large: task exceeds the 1 MB WebSocket frame limit";
+const MAX_TAB_NAME_CHARS = 80;
 
 /**
  * Tells "the server is down" apart from "this is an old server missing the
@@ -331,6 +366,14 @@ export const useStore = create<AppStore>()((set, get) => {
     const tab = get().tabs.tabs.find((t) => t.tabId === tabId);
     set((s) => ({ tabs: routeFrame(s.tabs, tabId, frame) }));
     if (!tab) return;
+    if (frame.type === "event" && frame.event.type === "session.created" && tab.titleCustom && !tab.chat.sessionId) {
+      // A tab named before its first run passes the name on to the new session
+      // (only then: a resumed run must not undo a rename made elsewhere).
+      api.sessionRename(frame.event.sessionId, tab.title, tab.ws || undefined).catch(() => {});
+    }
+    // The server accepts a new start/send only after `idle`: that is when a
+    // queued message may go out, bound to the tab that owns the queue.
+    if (frame.type === "idle") drainQueue(tabId);
     if (frame.type === "permission.request") notify({ kind: "permission", tool: frame.request.toolName });
     else if (frame.type === "question.request") notify({ kind: "question" });
     else if (frame.type === "event" && frame.event.type === "session.completed")
@@ -339,6 +382,57 @@ export const useStore = create<AppStore>()((set, get) => {
       notify({ kind: "failed", tabTitle: tab.title });
     // A finished run may have left uncommitted work — refresh the dirty dot.
     if (frame.type === "idle" && tab.worktree) get().refreshWorktrees();
+  };
+
+  /**
+   * Sends a chat task on one tab's socket. Returns false (and surfaces why on
+   * that tab) when the task never left the client.
+   */
+  const sendTaskToTab = (tabId: string, task: string): boolean => {
+    const tab = get().tabs.tabs.find((candidate) => candidate.tabId === tabId);
+    if (!tab || tab.chat.running || task.trim() === "") return false;
+    const client = ensureWs(tab.tabId);
+    requestNotifyPermission();
+
+    const overrides = overridesOf(tab);
+    const continuation = continuationOf(tab.continuationPreset);
+    const patch: Partial<ChatTab> = {
+      chat: { ...appendUser(tab.chat, task), running: true },
+      wsError: null,
+      planReady: false,
+    };
+    const frame = tab.chat.sessionId
+      ? buildSendFrame(tab.chat.sessionId, task, tab.approvalMode, tab.mode, tab.ws, overrides, continuation)
+      : buildStartFrame(task, tab.mode, tab.approvalMode, tab.ws, overrides, continuation);
+    if (encodeClientFrame(frame) === null) {
+      set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, { wsError: SEND_TOO_LARGE_ERROR }) }));
+      return false;
+    }
+    const accepted = client.send(frame);
+    if (!accepted) {
+      // Socket is not OPEN: the task never left the client. Don't append a
+      // user bubble or mark running — surface the failure so the caller keeps
+      // the draft instead of silently dropping it.
+      set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, { wsError: SEND_DISCONNECTED_ERROR }) }));
+      return false;
+    }
+    if (!tab.chat.sessionId) {
+      if (!tab.titleCustom) patch.title = titleFromTask(task);
+      patch.planPending = tab.mode === "plan";
+    }
+    set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, patch) }));
+    return true;
+  };
+
+  /** Sends the tab's oldest queued message when the tab can take a new turn. */
+  const drainQueue = (tabId: string): void => {
+    const tab = get().tabs.tabs.find((candidate) => candidate.tabId === tabId);
+    const next = tab ? nextQueuedMessage(tab) : null;
+    if (!tab || !next) return;
+    // Removed only once it actually left; a failed send stays queued.
+    if (sendTaskToTab(tabId, next.text)) {
+      set((s) => ({ tabs: removeQueuedMessage(s.tabs, tabId, next.id) }));
+    }
   };
 
   const ensureWs = (tabId: string): WsClient => {
@@ -351,6 +445,7 @@ export const useStore = create<AppStore>()((set, get) => {
           set((s) => ({ tabs: routeConnectionState(s.tabs, tabId, conn) }));
           if (conn === "connected") {
             const tab = get().tabs.tabs.find((candidate) => candidate.tabId === tabId);
+            if (tab && !tab.activeRunId) drainQueue(tabId);
             if (tab?.activeRunId) {
               client?.send({
                 type: "subscribe",
@@ -638,41 +733,57 @@ export const useStore = create<AppStore>()((set, get) => {
         ),
       })),
 
-    sendTask: (task) => {
-      const tab = activeTab(get().tabs);
-      if (tab.chat.running || task.trim() === "") return false;
-      const client = ensureWs(tab.tabId);
-      requestNotifyPermission();
+    sendTask: (task) => sendTaskToTab(get().tabs.activeTabId, task),
 
-      const overrides = overridesOf(tab);
-      const continuation = continuationOf(tab.continuationPreset);
-      const patch: Partial<ChatTab> = {
-        chat: { ...appendUser(tab.chat, task), running: true },
-        wsError: null,
-        planReady: false,
-      };
-      const frame = tab.chat.sessionId
-        ? buildSendFrame(tab.chat.sessionId, task, tab.approvalMode, tab.mode, tab.ws, overrides, continuation)
-        : buildStartFrame(task, tab.mode, tab.approvalMode, tab.ws, overrides, continuation);
-      if (encodeClientFrame(frame) === null) {
-        set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, { wsError: SEND_TOO_LARGE_ERROR }) }));
-        return false;
-      }
-      const accepted = client.send(frame);
-      if (!accepted) {
-        // Socket is not OPEN: the task never left the client. Don't append a
-        // user bubble or mark running — surface the failure so the caller keeps
-        // the draft instead of silently dropping it.
-        set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, { wsError: SEND_DISCONNECTED_ERROR }) }));
-        return false;
-      }
-      if (!tab.chat.sessionId) {
-        patch.title = titleFromTask(task);
-        patch.planPending = tab.mode === "plan";
-      }
-      set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, patch) }));
+    queueMessage: (text) => {
+      const tabId = get().tabs.activeTabId;
+      const result = enqueueMessage(get().tabs, tabId, text);
+      if (!result.queued) return false;
+      set({ tabs: result.state });
+      // The run may have ended between the check and now.
+      drainQueue(tabId);
       return true;
     },
+
+    editQueuedMessage: (id, text) => set((s) => ({ tabs: editQueuedMessage(s.tabs, s.tabs.activeTabId, id, text) })),
+
+    removeQueuedMessage: (id) =>
+      set((s) => {
+        const tabs = removeQueuedMessage(s.tabs, s.tabs.activeTabId, id);
+        // An emptied queue has nothing left to hold back.
+        return {
+          tabs: activeTab(tabs).queue.length === 0 ? updateTab(tabs, tabs.activeTabId, { queuePaused: false }) : tabs,
+        };
+      }),
+
+    resumeQueue: () => {
+      const tabId = get().tabs.activeTabId;
+      set((s) => ({ tabs: updateTab(s.tabs, tabId, { queuePaused: false }) }));
+      drainQueue(tabId);
+    },
+
+    renameTab: async (tabId, name) => {
+      const tab = get().tabs.tabs.find((candidate) => candidate.tabId === tabId);
+      if (!tab) return;
+      const clean = Array.from(name.replace(/\s+/g, " ").trim()).slice(0, MAX_TAB_NAME_CHARS).join("");
+      const sessionId = tab.chat.sessionId;
+      if (sessionId) {
+        await api.sessionRename(sessionId, clean, tab.ws || undefined);
+      }
+      set((s) => ({
+        tabs: updateTab(s.tabs, tabId, (current) => {
+          if (clean !== "") return { title: clean, titleCustom: true };
+          // Cleared: fall back to the title the first task would have given.
+          const first = current.chat.items.find((item) => item.kind === "user");
+          return { titleCustom: false, title: first?.kind === "user" ? titleFromTask(first.text) : DEFAULT_TAB_TITLE };
+        }),
+      }));
+    },
+
+    dock: { open: false, panel: "terminal" },
+    setDock: (dock) => set((s) => ({ dock: { ...s.dock, ...dock } })),
+    previewUrl: "",
+    setPreviewUrl: (previewUrl) => set({ previewUrl }),
 
     startLoop: ({
       task,
@@ -837,6 +948,7 @@ export const useStore = create<AppStore>()((set, get) => {
       set((s) => ({
         tabs: updateTab(s.tabs, s.tabs.activeTabId, {
           title: DEFAULT_TAB_TITLE,
+          titleCustom: false,
           chat: initialChatState(),
           pendingPermission: null,
           pendingQuestion: null,
@@ -852,10 +964,11 @@ export const useStore = create<AppStore>()((set, get) => {
       }));
     },
 
-    respondPermission: (approved, remember, selectedHunks) => {
+    respondPermission: (approved, remember, selectedHunks, feedback) => {
       const tab = activeTab(get().tabs);
       const pending = tab.pendingPermission;
       if (!pending) return;
+      const reason = !approved && feedback !== undefined ? feedback.trim() : "";
       const sent = wsByTab.get(tab.tabId)?.send({
         type: "permission.response",
         requestId: pending.requestId,
@@ -864,6 +977,8 @@ export const useStore = create<AppStore>()((set, get) => {
         ...(remember ? { remember } : {}),
         // Per-hunk selection for multi-hunk apply_patch calls.
         ...(selectedHunks ? { selectedHunks } : {}),
+        // Why it was refused; the model reads it with the denial.
+        ...(reason !== "" ? { feedback: reason } : {}),
       });
       if (sent !== true) {
         // The server is still awaiting this response — keep the modal up (don't
@@ -894,7 +1009,8 @@ export const useStore = create<AppStore>()((set, get) => {
         // in the workspace where the request originated.
         let tabs = openTabPure(s.tabs, workspaceId);
         tabs = updateTab(tabs, tabs.activeTabId, {
-          title: titleFromTask(meta.task),
+          title: meta.name ?? titleFromTask(meta.task),
+          titleCustom: meta.name !== undefined,
           chat: {
             items,
             sessionId: meta.id,

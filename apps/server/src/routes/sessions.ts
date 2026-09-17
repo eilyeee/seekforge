@@ -17,10 +17,12 @@ import {
   pruneSessions,
   readCheckpoints,
   readSessionMeta,
+  renameSession,
   renderSessionAuditMarkdown,
   rewindSession,
   rewindSessionToTurn,
   SessionBusyError,
+  sessionName,
   truncateSessionAtUserTurn,
 } from "@seekforge/core";
 import type { AgentEvent, ToolResult } from "@seekforge/shared";
@@ -130,6 +132,15 @@ function loadOrchestrationEvents(workspace: string, sessionId: string): Historic
   return events;
 }
 
+/** Input bound for a rename; core stores at most 80 characters of it. */
+const MAX_SESSION_NAME_INPUT = 1_000;
+
+/** SessionMeta plus the user-chosen name, when there is one. */
+function withName<T extends { id: string }>(workspace: string, meta: T): T & { name?: string } {
+  const name = sessionName(workspace, meta.id);
+  return name === undefined ? meta : { ...meta, name };
+}
+
 function sessionMutation<T>(res: RouteCtx["res"], sessionId: string, mutate: () => T): { value: T } | undefined {
   try {
     return { value: mutate() };
@@ -149,7 +160,11 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
   const path = url.pathname;
 
   if (method === "GET" && path === "/api/sessions") {
-    return sendJson(res, 200, listSessions(workspace));
+    return sendJson(
+      res,
+      200,
+      listSessions(workspace).map((meta) => withName(workspace, meta)),
+    );
   }
 
   // Prune old sessions. Checked before DELETE :id (and before GET :id) so
@@ -231,6 +246,39 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     return sendJson(res, 200, { deleted });
   }
 
+  // Name a session (an empty name clears it). The name lives beside the
+  // session, so renaming a running session is safe and survives its next save.
+  if (method === "PATCH" && segs.length === 3 && segs[1] === "sessions") {
+    const id = segs[2]!;
+    if (!isSafeId(id) || !readSessionMeta(workspace, id)) {
+      return sendApiError(res, 404, "not_found", `session not found: ${id}`);
+    }
+    const body = await readJsonBody(req, res);
+    if (body === undefined) return;
+    const { name } = (body ?? {}) as { name?: unknown };
+    if (typeof name !== "string" || name.length > MAX_SESSION_NAME_INPUT) {
+      return sendApiError(
+        res,
+        400,
+        "bad_request",
+        `body must be {name: string} (at most ${MAX_SESSION_NAME_INPUT} characters)`,
+      );
+    }
+    renameSession(workspace, id, name);
+    return sendJson(res, 200, { id, name: sessionName(workspace, id) ?? null });
+  }
+
+  // Files the session wrote, from its checkpoint log (workspace-relative,
+  // first-write order). Empty for a session that never edited anything.
+  if (method === "GET" && segs.length === 4 && segs[1] === "sessions" && segs[3] === "changes") {
+    const id = segs[2]!;
+    if (!isSafeId(id) || !readSessionMeta(workspace, id)) {
+      return sendApiError(res, 404, "not_found", `session not found: ${id}`);
+    }
+    const files = [...new Set(readCheckpoints(workspace, id).map((entry) => entry.path))];
+    return sendJson(res, 200, { files });
+  }
+
   if (method === "GET" && segs.length === 3 && segs[1] === "sessions") {
     const id = segs[2]!;
     const meta = isSafeId(id) ? readSessionMeta(workspace, id) : undefined;
@@ -247,7 +295,7 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     } catch {
       // A legacy session may have no readable events file; messages still load.
     }
-    return sendJson(res, 200, { meta, messages, events });
+    return sendJson(res, 200, { meta: withName(workspace, meta), messages, events });
   }
 
   // User-turn index of a session: every role:"user" message in file order,

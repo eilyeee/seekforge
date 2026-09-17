@@ -852,6 +852,40 @@ describe("permission bridge", () => {
     expect(resultSeen).toBe(false);
   });
 
+  it("carries a refusal reason to core with the denial", async () => {
+    let resultSeen: ConfirmResult | undefined;
+    const { server } = await boot(permissionScript((r) => (resultSeen = r)));
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "write it", mode: "edit", approvalMode: "confirm" });
+    const req = await rx.waitFor((f) => f.type === "permission.request");
+    sendFrame(ws, {
+      type: "permission.response",
+      requestId: req.requestId,
+      approved: false,
+      feedback: "write it under docs/ instead",
+    });
+    await rx.waitFor((f) => f.type === "idle");
+    expect(resultSeen).toEqual({ allow: false, feedback: "write it under docs/ instead" });
+  });
+
+  it("ignores a blank reason and a reason sent with an approval", async () => {
+    const seen: ConfirmResult[] = [];
+    const { server } = await boot(permissionScript((r) => seen.push(r)));
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "write it", mode: "edit", approvalMode: "confirm" });
+    let req = await rx.waitFor((f) => f.type === "permission.request");
+    sendFrame(ws, { type: "permission.response", requestId: req.requestId, approved: false, feedback: "   " });
+    await rx.waitFor((f) => f.type === "idle");
+
+    sendFrame(ws, { type: "start", task: "write it", mode: "edit", approvalMode: "confirm" });
+    req = await rx.waitFor((f) => f.type === "permission.request");
+    sendFrame(ws, { type: "permission.response", requestId: req.requestId, approved: true, feedback: "ok" });
+    await rx.waitFor((f) => f.type === "idle");
+    expect(seen).toEqual([false, true]);
+  });
+
   it("rejects responses for unknown requestIds", async () => {
     const { server } = await boot(fakeAgentFactory(async function* () {}));
     const { ws, rx } = await open(server.port);

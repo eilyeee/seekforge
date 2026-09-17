@@ -1,12 +1,11 @@
 /** Client-side session search (Sessions view filter input). */
 
-type Searchable = { id: string; task: string };
+type Searchable = { id: string; task: string; name?: string };
 
 /**
- * Case-insensitive filter over session id and task text (the displayed
- * title is derived from the task, so matching the task covers it). Multiple
- * whitespace-separated terms must ALL match (each against id OR task);
- * a blank query returns everything.
+ * Case-insensitive filter over session id, the user-chosen name, and task
+ * text. Multiple whitespace-separated terms must ALL match (each against id,
+ * name OR task); a blank query returns everything.
  */
 export function filterSessions<T extends Searchable>(sessions: readonly T[], query: string): T[] {
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -14,6 +13,7 @@ export function filterSessions<T extends Searchable>(sessions: readonly T[], que
   return sessions.filter((s) => {
     const id = s.id.toLowerCase();
     const task = s.task.toLowerCase();
-    return terms.every((t) => id.includes(t) || task.includes(t));
+    const name = (s.name ?? "").toLowerCase();
+    return terms.every((t) => id.includes(t) || task.includes(t) || name.includes(t));
   });
 }

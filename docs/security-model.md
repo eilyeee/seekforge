@@ -510,3 +510,41 @@ vision requests, response streaming, and active Browser actions instead of
 waiting for each operation's independent timeout. Plain JSON and OAuth responses
 from MCP HTTP servers are likewise
 streamed with a 1 MiB cap; SSE events have the same bounded-buffer guarantee.
+
+---
+
+## 8. Workbench surfaces on the local server
+
+`seekforge serve` binds 127.0.0.1 and requires its bearer token on every `/api`
+request and on both WebSocket paths. Anyone holding the token already drives
+agent runs as the server account, so the Desktop workbench surfaces below add
+no new trust — but each keeps the guarantees the rest of this document makes:
+
+- **Terminal** (`/ws/terminal`). A shell as the server account, started in the
+  workspace, under a PTY from the system `script` utility. It lives exactly as
+  long as its socket: closing the socket or the server hangs up the whole
+  process group (then kills it). An embedder serving a read-only or shared
+  surface starts the server with `terminal: false`, which refuses the upgrade.
+- **Git push and pull requests.** A push is always explicit (the Desktop shows
+  the exact `remote branch:destination` first) and never forced: the route has
+  no force option and builds the refspec itself, so git's `+` cannot appear. The
+  branch named by the client must still be checked out. Git runs with
+  `LC_ALL=C` and `GIT_TERMINAL_PROMPT=0`; failures are classified by exit code
+  and `--porcelain` flags, never by message text. `gh pr create` runs without
+  prompts and never pushes.
+- **Per-hunk stage / unstage / revert.** The client names a hunk by its text;
+  the server recomputes the file's diff under the repository/workspace guard and
+  applies only its own copy of a hunk that still matches, so a stale or crafted
+  request cannot apply a different change. Reverting a file or hunk, and
+  deleting an untracked file, ask for confirmation in the Desktop.
+- **Preview.** The panel frames only `http(s)` URLs on `127.0.0.1`, `localhost`
+  or `[::1]` with an explicit port, never the workbench's own address, in a
+  sandboxed frame without top-level navigation.
+- **Permission rules editor.** It writes through the same config owner as the
+  "Always allow" answer. Project scope accepts only `deny` and `ask`; an `allow`
+  rule stored there is shown as ignored. Every edit names the entry it
+  replaces, so a concurrent change fails instead of altering another rule.
+- **Refusal reasons.** Text typed with a denial reaches the model as part of
+  the denial (at most 4000 characters on the wire, clipped further by core). It
+  is the user's guidance, not a tool result, and it never turns a denial into
+  an approval.

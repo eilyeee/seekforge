@@ -43,6 +43,7 @@ import {
   mergeConfigLayers,
   readJsonConfigLayer,
   repositoryConfigLayer,
+  sanitizeProjectConfig,
   userConfigLayer,
 } from "@seekforge/shared/config-layers";
 
@@ -625,17 +626,14 @@ export function setConfigValue(workspace: string, key: string, value: unknown, g
  * setConfigValue does — writing a fresh document would discard every other key.
  */
 export function appendGlobalPermissionRule(rule: PermissionRule): string {
-  const home = seekforgeHome();
-  const path = join(home, ".seekforge", "config.json");
-  // Read-modify-write of a file several processes edit — a CLI `config set
-  // --global`, a TUI approval, this. Without the lease two of them landing
-  // together silently drop one edit.
-  const lease = acquireGlobalConfigLease(home);
-  try {
-    return writeAppendedRule(path, rule);
-  } finally {
-    lease.release();
-  }
+  return mutatePermissionRules("", "user", (rules) => {
+    if (!rules.some((candidate) => sameRule(candidate, rule))) rules.push(rule);
+  });
+}
+
+/** Physical root the global-config lease is keyed on; every writer of that file must agree on it. */
+export function globalConfigLeaseRoot(): string {
+  return realpathSync(resolve(seekforgeHome()));
 }
 
 /**
@@ -646,35 +644,148 @@ export function appendGlobalPermissionRule(rule: PermissionRule): string {
  * a request on it would trade a rare, explicable error for an occasional
  * unexplained stall.
  */
-function acquireGlobalConfigLease(home: string): { release: () => void } {
+function acquireGlobalConfigLease(): { release: () => void } {
   try {
-    return acquireSessionLease(realpathSync(resolve(home)), GLOBAL_CONFIG_LOCK_ID);
+    return acquireSessionLease(globalConfigLeaseRoot(), GLOBAL_CONFIG_LOCK_ID);
   } catch {
     throw new ConfigValueError("another SeekForge process is updating the global config — try again");
   }
 }
 
-function writeAppendedRule(path: string, rule: PermissionRule): string {
-  let current: Record<string, unknown> = {};
-  if (existsSync(path)) {
-    try {
-      current = parseConfigDoc(readFileBounded(path, MAX_CONFIG_FILE_BYTES).toString("utf8"));
-    } catch {
-      throw new ConfigValueError(`refusing to overwrite malformed ${path} — fix or delete it first`);
+function sameRule(a: unknown, b: PermissionRule): boolean {
+  if (!isObjectRecord(a)) return false;
+  return a.action === b.action && a.tool === b.tool && (a.match ?? "") === (b.match ?? "");
+}
+
+/** Where a permission rule is stored: the user's own config or the checkout's. */
+export type PermissionRuleScope = "user" | "project";
+
+/**
+ * One stored entry as the rules editor shows it. `raw` is the file's value
+ * verbatim (so an entry this build cannot parse is shown and kept, never
+ * rewritten); `effective` says whether loading the layer keeps it.
+ */
+export type PermissionRuleEntry = { index: number; raw: unknown; rule?: PermissionRule; effective: boolean };
+
+export const MAX_PERMISSION_RULES = 500;
+const MAX_RULE_TOOL_CHARS = 256;
+const MAX_RULE_MATCH_CHARS = 4_096;
+
+/**
+ * Validates one rule the editor submitted. Stricter than the loader on
+ * purpose: a rule a person saves from a form should be exactly the rule that
+ * runs, so unknown fields and blank tools are refused instead of dropped.
+ */
+export function parsePermissionRuleInput(input: unknown, scope: PermissionRuleScope): PermissionRule {
+  if (!isObjectRecord(input)) throw new ConfigValueError("rule must be an object");
+  const extra = Object.keys(input).filter((key) => key !== "action" && key !== "tool" && key !== "match");
+  if (extra.length > 0) throw new ConfigValueError(`rule has unsupported fields: ${extra.join(", ")}`);
+  const { action, tool, match } = input;
+  if (action !== "allow" && action !== "deny" && action !== "ask") {
+    throw new ConfigValueError('rule.action must be "allow", "deny" or "ask"');
+  }
+  if (typeof tool !== "string" || tool.trim() === "" || tool.trim().length > MAX_RULE_TOOL_CHARS) {
+    throw new ConfigValueError(`rule.tool must be a tool name or "*" (at most ${MAX_RULE_TOOL_CHARS} characters)`);
+  }
+  if (match !== undefined && (typeof match !== "string" || match.length > MAX_RULE_MATCH_CHARS)) {
+    throw new ConfigValueError(`rule.match must be a string of at most ${MAX_RULE_MATCH_CHARS} characters`);
+  }
+  const rule: PermissionRule = {
+    action,
+    tool: tool.trim(),
+    ...(typeof match === "string" && match.trim() !== "" ? { match: match.trim() } : {}),
+  };
+  if (scope === "project" && !ruleSurvivesLoad(rule, "project")) {
+    // The repository layer is untrusted input: it may tighten (deny, ask) but
+    // never grant. An allow rule saved there would report success and then be
+    // discarded on every load.
+    throw new ConfigValueError("project rules may only deny or ask; save allow rules in user scope");
+  }
+  return rule;
+}
+
+/** Whether the shared layer owner keeps this raw entry when it loads `scope`. */
+function ruleSurvivesLoad(raw: unknown, scope: PermissionRuleScope): boolean {
+  const layer = { permissionRules: [raw] as PermissionRule[] };
+  const loaded =
+    scope === "project"
+      ? sanitizeProjectConfig(layer).permissionRules
+      : mergeConfigLayers([userConfigLayer(layer)], { envOverrides: false }).permissionRules;
+  return (loaded?.length ?? 0) === 1;
+}
+
+function rawRulesOf(doc: Record<string, unknown>): unknown[] {
+  return Array.isArray(doc.permissionRules) ? [...doc.permissionRules] : [];
+}
+
+function readPermissionRuleDoc(
+  workspace: string,
+  scope: PermissionRuleScope,
+  strict: boolean,
+): Record<string, unknown> {
+  try {
+    if (scope === "project") {
+      const raw = readProjectFile(workspace, ".seekforge/config.json", MAX_CONFIG_FILE_BYTES);
+      return raw === undefined ? {} : parseConfigDoc(raw);
     }
+    const path = join(seekforgeHome(), ".seekforge", "config.json");
+    if (!existsSync(path)) return {};
+    return parseConfigDoc(readFileBounded(path, MAX_CONFIG_FILE_BYTES).toString("utf8"));
+  } catch (error) {
+    if (!strict) return {};
+    if (error instanceof ProjectPathError) throw error;
+    const where = scope === "project" ? ".seekforge/config.json" : join(seekforgeHome(), ".seekforge", "config.json");
+    throw new ConfigValueError(`refusing to overwrite malformed ${where} — fix or delete it first`);
   }
-  const existing = Array.isArray(current.permissionRules) ? (current.permissionRules as PermissionRule[]) : [];
-  const same = (a: PermissionRule, b: PermissionRule): boolean =>
-    a.action === b.action && a.tool === b.tool && (a.match ?? "") === (b.match ?? "");
-  if (!existing.some((candidate) => same(candidate, rule))) {
-    current.permissionRules = [...existing, rule];
+}
+
+/** Both stored rule lists, each in file order (project rules are evaluated first). */
+export function listPermissionRules(workspace: string): Record<PermissionRuleScope, PermissionRuleEntry[]> {
+  const entries = (scope: PermissionRuleScope): PermissionRuleEntry[] =>
+    rawRulesOf(readPermissionRuleDoc(workspace, scope, false)).map((raw, index) => {
+      const effective = ruleSurvivesLoad(raw, scope);
+      const parsed = ruleSurvivesLoad(raw, "user") ? (raw as PermissionRule) : undefined;
+      return { index, raw, ...(parsed ? { rule: parsed } : {}), effective };
+    });
+  return { project: entries("project"), user: entries("user") };
+}
+
+/**
+ * The one read-modify-write of a stored `permissionRules` list. User scope
+ * takes the cross-process global-config lease itself; project scope expects
+ * the caller to hold the repository/workspace guard. A malformed file is
+ * refused rather than replaced, because writing a fresh document would discard
+ * every other key. Returns the path written.
+ */
+export function mutatePermissionRules(
+  workspace: string,
+  scope: PermissionRuleScope,
+  mutate: (rules: unknown[]) => void,
+): string {
+  const lease = scope === "user" ? acquireGlobalConfigLease() : undefined;
+  try {
+    const doc = readPermissionRuleDoc(workspace, scope, true);
+    const rules = rawRulesOf(doc);
+    mutate(rules);
+    if (rules.length > MAX_PERMISSION_RULES) {
+      throw new ConfigValueError(`at most ${MAX_PERMISSION_RULES} permission rules per scope`);
+    }
+    if (rules.length === 0) delete doc.permissionRules;
+    else doc.permissionRules = rules;
+    const serialized = `${JSON.stringify(doc, null, 2)}\n`;
+    if (Buffer.byteLength(serialized, "utf8") > MAX_CONFIG_FILE_BYTES) {
+      throw new ConfigValueError(`config exceeds ${MAX_CONFIG_FILE_BYTES} bytes`);
+    }
+    if (scope === "project") {
+      writeProjectFileAtomic(workspace, ".seekforge/config.json", serialized);
+      return join(workspace, ".seekforge", "config.json");
+    }
+    const path = join(seekforgeHome(), ".seekforge", "config.json");
+    writeGlobalConfigAtomic(path, serialized);
+    return path;
+  } finally {
+    lease?.release();
   }
-  const serialized = `${JSON.stringify(current, null, 2)}\n`;
-  if (Buffer.byteLength(serialized, "utf8") > MAX_CONFIG_FILE_BYTES) {
-    throw new ConfigValueError(`config exceeds ${MAX_CONFIG_FILE_BYTES} bytes`);
-  }
-  writeGlobalConfigAtomic(path, serialized);
-  return path;
 }
 
 /** Atomic + fsync write for the global (~/.seekforge) config, with symlink guard. */

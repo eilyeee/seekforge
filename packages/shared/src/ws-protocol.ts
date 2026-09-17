@@ -17,6 +17,9 @@ const LOOP_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const RUN_ID_RE = /^run-[A-Za-z0-9-]+$/;
 const DISPATCH_ID_RE = /^ag-[1-9]\d*$/;
 
+/** Upper bound on a refusal reason; core further clips what reaches the model. */
+export const MAX_PERMISSION_FEEDBACK_LENGTH = 4_000;
+
 function bad(error: string, permissionRequestId?: string): ClientFrameDecodeResult {
   return permissionRequestId === undefined ? { ok: false, error } : { ok: false, error, permissionRequestId };
 }
@@ -289,6 +292,13 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
         !selectedHunks.every((index) => Number.isSafeInteger(index) && (index as number) >= 0))
     ) {
       return bad("permission.response.selectedHunks must contain 1-10000 non-negative safe integers", requestId);
+    }
+    const feedback = frame["feedback"];
+    if (feedback !== undefined && (typeof feedback !== "string" || feedback.length > MAX_PERMISSION_FEEDBACK_LENGTH)) {
+      return bad(
+        `permission.response.feedback must be a string of at most ${MAX_PERMISSION_FEEDBACK_LENGTH} characters`,
+        requestId,
+      );
     }
     return { ok: true, frame: frame as ClientFrame };
   }

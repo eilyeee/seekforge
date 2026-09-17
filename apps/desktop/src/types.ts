@@ -112,7 +112,60 @@ export type {
   ApiErrorCode,
 } from "@seekforge/shared";
 
-import type { AgentInfo } from "@seekforge/shared";
+import type { AgentInfo, PermissionRule, SessionMeta } from "@seekforge/shared";
+
+// ---------------------------------------------------------------------------
+// Server contracts that only the Desktop consumes (SERVER-API.md). They are
+// declared here rather than in @seekforge/shared because no other package
+// produces or reads them.
+
+/** GET /api/sessions entries carry the user-chosen name when there is one. */
+export type NamedSessionMeta = SessionMeta & { name?: string };
+
+/** GET /api/git/remote */
+export type GitRemoteInfo = {
+  notGit?: true;
+  /** null while HEAD is detached. */
+  branch: string | null;
+  remotes: string[];
+  upstream: { remote: string; branch: string } | null;
+  ahead: number | null;
+  behind: number | null;
+  gh: { available: boolean };
+};
+
+export type GitHunkAction = "stage" | "unstage" | "revert";
+
+export type PermissionRuleScope = "user" | "project";
+
+/** One stored rule; `raw` is echoed back as `expected` when editing it. */
+export type PermissionRuleEntry = { index: number; raw: unknown; rule?: PermissionRule; effective: boolean };
+
+/** GET /api/permission-rules (project rules are evaluated first). */
+export type PermissionRuleLayers = Record<PermissionRuleScope, PermissionRuleEntry[]>;
+
+export type AgentDefinitionScope = "project" | "global";
+
+/** The agent editor payload; `tools: null` = every tool. */
+export type AgentDefinitionDraft = {
+  name: string;
+  description: string;
+  tools: string[] | null;
+  mode: "ask" | "edit";
+  model: string;
+  maxTurns: number | null;
+  body: string;
+  /** Frontmatter entries the form does not own, as raw YAML value text. */
+  extra: Array<{ key: string; value: string }>;
+};
+
+/** GET /api/agents/:id/source */
+export type AgentDefinitionSource = AgentDefinitionDraft & { id: string; scope: AgentDefinitionScope; path: string };
+
+/** GET /api/terminal */
+export type TerminalAvailability =
+  | { available: true; shell: string; pty: boolean; cwd: string }
+  | { available: false; reason: string; cwd: string };
 
 export type AgentImportResult = {
   ok: true;

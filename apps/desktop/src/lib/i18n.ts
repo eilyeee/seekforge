@@ -17,13 +17,14 @@ import { useSyncExternalStore } from "react";
 import { common } from "./i18n/common";
 import { views } from "./i18n/views";
 import { chat } from "./i18n/chat";
+import { workbench } from "./i18n/workbench";
 
 export type Locale = "en" | "zh-CN";
 
 export const LOCALE_STORAGE_KEY = "seekforge.locale";
 
 type Table = { en: Record<string, string>; zh: Record<string, string> };
-const TABLES: Table[] = [common, views, chat];
+const TABLES: Table[] = [common, views, chat, workbench];
 const EN: Record<string, string> = Object.assign({}, ...TABLES.map((t) => t.en));
 const ZH: Record<string, string> = Object.assign({}, ...TABLES.map((t) => t.zh));
 const STRINGS: Record<Locale, Record<string, string>> = { en: EN, "zh-CN": ZH };

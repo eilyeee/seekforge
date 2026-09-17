@@ -34,8 +34,11 @@ export default {
         ok: rgb("--sf-ok"),
         warn: rgb("--sf-warn"),
         danger: rgb("--sf-danger"),
+        // Terminal panel surface (its ANSI palette lives in index.css).
+        terminal: rgb("--sf-terminal-bg"),
       },
       textColor: {
+        terminal: rgb("--sf-terminal-fg"),
         primary: rgb("--sf-text-primary"),
         secondary: rgb("--sf-text-secondary"),
         tertiary: rgb("--sf-text-tertiary"),
