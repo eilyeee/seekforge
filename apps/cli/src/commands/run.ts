@@ -1,15 +1,19 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import {
+  buildProvider,
   createUsageBus,
-  listSessions,
+  forkSession,
   loadAgentDefinitions,
-  readSessionMeta,
+  produceStructuredOutput,
   resolvedPricingSource,
+  withInlineAgents,
 } from "@seekforge/core";
 import type { AgentEvent, ApprovalMode, FinalReport, TokenUsage } from "@seekforge/shared";
 import { cliMcpServerRequestHandlers, createCliAgent, prepareMcp } from "../agent-factory.js";
 import { colorIsEnabled, fail } from "../colors.js";
-import { loadConfig } from "../config.js";
+import { loadConfig, type CliConfig } from "../config.js";
 import { expandFileRefs } from "@seekforge/shared/file-refs";
 import {
   buildResultEnvelope,
@@ -20,18 +24,25 @@ import {
   type ResultOutcome,
 } from "../output-format.js";
 import { t } from "../i18n.js";
-import { extractMcpServersDoc } from "../mcp-config.js";
-import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "../bounded-file.js";
 import { resolvePermissionMode, UnknownPermissionModeError } from "../permission-mode.js";
 import { confirmInTerminal, createRenderer } from "../render.js";
 import { authorizeDir, isAuthorizedDir } from "../authorized-dirs.js";
 import { isCostBudgetExceeded } from "../cost-budget.js";
 import { elapsedSeconds, resolveDurationBudgetMs } from "../run-deadline.js";
-import { resolveOutputStyle } from "../output-style.js";
 import { readStreamJsonInput } from "../stream-input.js";
 import { buildToolGatingRules, parseToolList } from "../tool-gating.js";
 import { expandExtraFileRefs, normalizeExtraDir } from "@seekforge/shared/workspace-dirs";
 import { apiKeyEnvVar } from "@seekforge/shared/provider-env";
+import { createDebugLogger, type DebugLogger } from "../debug-log.js";
+import { createRunWorktree, repositoryPrefix, type LoopWorktree } from "../loop-worktree.js";
+import {
+  loadJsonSchemaFlag,
+  parseAgentsFlag,
+  resolveMcpServers,
+  resolvePromptFlags,
+  resolveSessionFlags,
+  RunSetupError,
+} from "../run-setup.js";
 
 export type RunOptions = {
   mode: "ask" | "edit";
@@ -40,6 +51,10 @@ export type RunOptions = {
   resumeSessionId?: string;
   /** Resume the most recent session (`-c`/`--continue`). */
   continueLast?: boolean;
+  /** Continue the resumed session in a forked copy (`--fork-session`). */
+  forkSession?: boolean;
+  /** Id for the new session this run creates (`--session-id`). */
+  sessionId?: string;
   /** Output format: text (human) | json (final object) | stream-json (JSONL). */
   outputFormat?: OutputFormat;
   /** Plan first (read-only), then ask before executing in the same session. */
@@ -52,8 +67,12 @@ export type RunOptions = {
   verbose?: boolean;
   /** Full system-prompt override (CLI --system-prompt → core systemPromptOverride). */
   systemPrompt?: string;
+  /** File whose contents replace the system prompt (CLI --system-prompt-file). */
+  systemPromptFile?: string;
   /** Append text to the system prompt (CLI --append-system-prompt). */
   appendSystemPrompt?: string;
+  /** File whose contents are appended to the system prompt (CLI --append-system-prompt-file). */
+  appendSystemPromptFile?: string;
   /** Comma-separated allow-list of tools (CLI --allowedTools). */
   allowedTools?: string;
   /** Comma-separated deny-list of tools (CLI --disallowedTools). */
@@ -85,6 +104,16 @@ export type RunOptions = {
   replayUserMessages?: boolean;
   /** stream-json output: emit partial assistant text deltas (--include-partial-messages). */
   includePartialMessages?: boolean;
+  /** Inline, run-scoped subagent definitions (CLI --agents JSON). */
+  agentsJson?: string;
+  /** Internal detail on stderr (CLI --debug [filter]); true = every category. */
+  debug?: boolean | string;
+  /** Run inside a new retained git worktree, optionally named (CLI --worktree [name]). */
+  worktree?: boolean | string;
+  /** JSON Schema the run's structured output must validate against (CLI --json-schema). */
+  jsonSchema?: string;
+  /** File holding that schema (CLI --json-schema-file). */
+  jsonSchemaFile?: string;
   /**
    * Per-run cost budget in USD (CLI --max-cost). The run aborts gracefully once
    * cumulative cost reaches it. Falls back to config.maxCostUsd; off when both
@@ -147,6 +176,43 @@ export async function ensureWorkspaceAuthorized(
   }
 }
 
+/** One-line summaries of config state worth seeing under `--debug config`. */
+export function debugConfigLines(config: CliConfig, opts: { settingsFile?: string; profile?: string }): string[] {
+  const hooks = Object.entries(config.hooks ?? {})
+    .filter(([, entries]) => Array.isArray(entries) && entries.length > 0)
+    .map(([stage, entries]) => `${stage}×${(entries as unknown[]).length}`);
+  return [
+    `provider=${config.provider ?? "deepseek"} model=${config.model ?? "(default)"}` +
+      `${opts.settingsFile ? ` settings=${opts.settingsFile}` : ""}` +
+      `${(opts.profile ?? process.env["SEEKFORGE_PROFILE"]) ? ` profile=${opts.profile ?? process.env["SEEKFORGE_PROFILE"]}` : ""}`,
+    `permissionRules=${config.permissionRules?.length ?? 0} sandbox=${config.sandbox ?? "off"} compaction=${config.compaction ?? "mechanical"}`,
+    `hooks: ${hooks.length > 0 ? hooks.join(" ") : "none"}`,
+  ];
+}
+
+/** MCP servers as `--debug mcp` reports them: name plus whether discovery may start it. */
+export function debugMcpLine(config: CliConfig, toolCount: number): string {
+  const servers = Object.entries(config.mcpServers ?? {}).map(
+    ([name, server]) => `${name}${(server as { trusted?: boolean }).trusted === true ? "" : " (untrusted, skipped)"}`,
+  );
+  return `${servers.length} configured server(s)${servers.length > 0 ? `: ${servers.join(", ")}` : ""}; ${toolCount} tool(s) loaded`;
+}
+
+/** What the structured-output call is told the run produced. */
+export function describeReportForStructuredOutput(report: FinalReport): string {
+  return [
+    report.summary,
+    "",
+    `Changed files: ${report.changedFiles.length > 0 ? report.changedFiles.join(", ") : "(none)"}`,
+    `Commands run: ${report.commandsRun.length > 0 ? report.commandsRun.join("; ") : "(none)"}`,
+    `Verification: ${report.verification}`,
+  ].join("\n");
+}
+
+function formatRunWorktree(worktree: LoopWorktree): string {
+  return t("render.worktreeRetained", { path: worktree.path, branch: worktree.branch });
+}
+
 /**
  * Runs a headless agent task. Returns `true` iff the agent run COMPLETED
  * successfully (a final report was produced); returns `false` on any guard
@@ -155,16 +221,18 @@ export async function ensureWorkspaceAuthorized(
  * `process.exitCode` alone is not reliable for every early-return path.
  */
 export async function runTaskCommand(task: string, opts: RunOptions): Promise<boolean> {
-  const projectPath = process.cwd();
+  const basePath = process.cwd();
+  const debug: DebugLogger = createDebugLogger(opts.debug);
   let config: ReturnType<typeof loadConfig>;
   try {
-    config = loadConfig(projectPath, opts.settingsFile, opts.profile);
+    config = loadConfig(basePath, opts.settingsFile, opts.profile);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const hint = (err as { hint?: string }).hint;
     fail(msg, hint ? { hint } : undefined);
     return false;
   }
+  for (const line of debugConfigLines(config, opts)) debug.log("config", line);
   const format: OutputFormat = opts.outputFormat ?? "text";
   const machine = isMachineFormat(format);
 
@@ -207,31 +275,119 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
     return false;
   }
 
+  // --permission-mode maps Claude-compatible (and native) names onto ApprovalMode;
+  // "plan" additionally forces plan-first. When unset, -y → auto, else confirm.
+  // -y and --dangerously-skip-permissions both map to approvalMode "auto"
+  // (auto-approve write/execute). "auto" is NOT literally every tool: the
+  // denylist still refuses dangerous calls and env changes still ask.
+  // The mapping itself is a pure helper (see permission-mode.ts) so it can be
+  // unit-tested; here we just surface an unknown mode as a CLI fail().
+  let approvalMode: ApprovalMode;
+  let planFromMode: boolean;
+  try {
+    ({ approvalMode, planFromMode } = resolvePermissionMode({
+      yes: opts.yes,
+      dangerouslySkipPermissions: opts.dangerouslySkipPermissions,
+      permissionMode: opts.permissionMode,
+    }));
+  } catch (err) {
+    if (err instanceof UnknownPermissionModeError) {
+      fail(t("err.unknownPermissionMode", { mode: err.mode }), {
+        hint: t("err.unknownPermissionModeHint"),
+      });
+      return false;
+    }
+    throw err;
+  }
+  const planMode = (opts.plan ?? false) || planFromMode;
+
+  // Every remaining flag is validated before anything has an effect: the
+  // workspace consent, a session fork, a worktree and MCP servers all come after.
+  const wantsWorktree = opts.worktree !== undefined && opts.worktree !== false;
+  let prompts: ReturnType<typeof resolvePromptFlags>;
+  let jsonSchema: unknown;
+  let inlineAgents: ReturnType<typeof parseAgentsFlag>;
+  let sessionPlan: ReturnType<typeof resolveSessionFlags>;
+  let mcpConfigForRun: CliConfig;
+  try {
+    prompts = resolvePromptFlags(opts, basePath);
+    jsonSchema = loadJsonSchemaFlag(opts);
+    if (jsonSchema !== undefined && opts.inputFormat === "stream-json") {
+      throw new RunSetupError(t("err.jsonSchemaStreamInput"));
+    }
+    inlineAgents = parseAgentsFlag(opts.agentsJson);
+    // A session lives in the checkout that ran it, so it cannot move into a new worktree.
+    if (wantsWorktree && (opts.resumeSessionId !== undefined || opts.continueLast || opts.forkSession)) {
+      throw new RunSetupError(t("err.worktreeConflict"));
+    }
+    sessionPlan = resolveSessionFlags(basePath, {
+      continueLast: opts.continueLast,
+      resumeSessionId: opts.resumeSessionId,
+      forkSession: opts.forkSession,
+      sessionId: opts.sessionId,
+    });
+    mcpConfigForRun = resolveMcpServers(config, opts);
+  } catch (err) {
+    if (err instanceof RunSetupError) {
+      fail(err.message, err.hint ? { hint: err.hint } : undefined);
+      return false;
+    }
+    throw err;
+  }
+  const effectiveAppend = prompts.appendSystemPrompt;
+  // --allowedTools/--disallowedTools synthesize per-run permission rules,
+  // prepended to any config rules. undefined when neither flag is used.
+  const permissionRules = buildToolGatingRules({
+    allowedTools: opts.allowedTools,
+    disallowedTools: opts.disallowedTools,
+    base: config.permissionRules,
+  });
+  const allowedTools = parseToolList(opts.allowedTools);
+
   // Folder-access consent: SeekForge must be authorized for this directory once
   // (interactively, or via -y) before it reads/edits files here.
-  if (!(await ensureWorkspaceAuthorized(projectPath, { yes: opts.yes === true, machine }))) {
+  if (!(await ensureWorkspaceAuthorized(basePath, { yes: opts.yes === true, machine }))) {
     return false;
   }
 
-  // Resolve which session (if any) to resume: explicit --resume wins over -c.
-  let resumeSessionId = opts.resumeSessionId;
-  if (!resumeSessionId && opts.continueLast) {
-    const recent = listSessions(projectPath)[0];
-    if (!recent) {
-      fail(t("err.noPreviousSession"), { hint: t("err.noPreviousSessionHint") });
+  // A resumed session keeps its original ask/edit mode.
+  const mode = sessionPlan.resumeMode ?? opts.mode;
+  let resumeSessionId = sessionPlan.resumeSessionId;
+  if (sessionPlan.fork && resumeSessionId !== undefined) {
+    let forked: string | null;
+    try {
+      forked = forkSession(basePath, resumeSessionId);
+    } catch (err) {
+      fail(t("err.forkFailed", { id: resumeSessionId }), {
+        hint: err instanceof Error ? err.message : String(err),
+      });
       return false;
     }
-    resumeSessionId = recent.id;
+    if (!forked) {
+      fail(t("err.forkFailed", { id: resumeSessionId }), { hint: t("err.sessionNotFoundHint") });
+      return false;
+    }
+    console.error(t("render.forkedSession", { from: resumeSessionId, id: forked }));
+    debug.log("session", `forked ${resumeSessionId} -> ${forked}`);
+    resumeSessionId = forked;
   }
 
-  let mode = opts.mode;
-  if (resumeSessionId) {
-    const meta = readSessionMeta(projectPath, resumeSessionId);
-    if (!meta) {
-      fail(t("err.sessionNotFound", { id: resumeSessionId }), { hint: t("err.sessionNotFoundHint") });
+  let projectPath = basePath;
+  let worktree: LoopWorktree | undefined;
+  if (wantsWorktree) {
+    try {
+      const prefix = await repositoryPrefix(basePath);
+      worktree = await createRunWorktree(basePath, typeof opts.worktree === "string" ? opts.worktree : undefined);
+      // Run from the same subdirectory of the new checkout the user is in. A
+      // directory git does not track is not in the new checkout at all.
+      projectPath = prefix ? join(worktree.path, prefix) : worktree.path;
+      if (!existsSync(projectPath)) throw new Error(t("err.worktreeNoPrefix", { prefix, path: worktree.path }));
+    } catch (err) {
+      fail(t("err.worktreeFailed", { message: err instanceof Error ? err.message : String(err) }));
       return false;
     }
-    mode = meta.mode; // a resumed session keeps its original ask/edit mode
+    console.error(t("render.worktreeCreated", { path: worktree.path, branch: worktree.branch }));
+    debug.log("worktree", `created ${worktree.path} on ${worktree.branch}; agent workspace ${projectPath}`);
   }
 
   // Normalize --add-dir roots (existing dirs outside the project); warn & skip bad ones.
@@ -347,77 +503,6 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
         : renderer
           ? renderer.render
           : () => {}; // json: swallow events, emit one final object at the end
-  // --permission-mode maps Claude-compatible (and native) names onto ApprovalMode;
-  // "plan" additionally forces plan-first. When unset, -y → auto, else confirm.
-  // -y and --dangerously-skip-permissions both map to approvalMode "auto"
-  // (auto-approve write/execute). "auto" is NOT literally every tool: the
-  // denylist still refuses dangerous calls and env changes still ask.
-  // The mapping itself is a pure helper (see permission-mode.ts) so it can be
-  // unit-tested; here we just surface an unknown mode as a CLI fail().
-  let approvalMode: ApprovalMode;
-  let planFromMode: boolean;
-  try {
-    ({ approvalMode, planFromMode } = resolvePermissionMode({
-      yes: opts.yes,
-      dangerouslySkipPermissions: opts.dangerouslySkipPermissions,
-      permissionMode: opts.permissionMode,
-    }));
-  } catch (err) {
-    if (err instanceof UnknownPermissionModeError) {
-      fail(t("err.unknownPermissionMode", { mode: err.mode }), {
-        hint: t("err.unknownPermissionModeHint"),
-      });
-      return false;
-    }
-    throw err;
-  }
-  const planMode = (opts.plan ?? false) || planFromMode;
-
-  // --output-style appends a communication-style preset to the system prompt,
-  // combined with any explicit --append-system-prompt.
-  let styleAddendum: string | undefined;
-  if (opts.outputStyle) {
-    try {
-      styleAddendum = resolveOutputStyle(opts.outputStyle, projectPath);
-    } catch {
-      fail(t("err.unknownOutputStyle", { style: opts.outputStyle }), {
-        hint: t("err.unknownOutputStyleHint"),
-      });
-      return false;
-    }
-  }
-  const effectiveAppend =
-    [styleAddendum, opts.appendSystemPrompt].filter((s): s is string => !!s).join("\n\n") || undefined;
-
-  // --mcp-config: load MCP servers from a JSON file ({mcpServers:{…}} or a bare
-  // {name:server} map). --strict-mcp-config uses ONLY those, ignoring the config
-  // file's servers; otherwise they merge over the config's (file wins per name).
-  let mcpConfigForRun = config;
-  if (opts.mcpConfig) {
-    let fileServers: Record<string, unknown>;
-    try {
-      const parsed = JSON.parse(readTextFileBounded(opts.mcpConfig, MAX_CONFIG_FILE_BYTES)) as unknown;
-      const extracted = extractMcpServersDoc(parsed);
-      if (!extracted) throw new Error("invalid MCP config shape");
-      fileServers = extracted;
-    } catch {
-      fail(t("err.mcpConfigRead", { path: opts.mcpConfig }), { hint: t("err.mcpConfigReadHint") });
-      return false;
-    }
-    const merged = opts.strictMcpConfig ? fileServers : { ...config.mcpServers, ...fileServers };
-    mcpConfigForRun = { ...config, mcpServers: merged as typeof config.mcpServers };
-  } else if (opts.strictMcpConfig) {
-    // strict with no --mcp-config means: no MCP servers at all.
-    mcpConfigForRun = { ...config, mcpServers: {} };
-  }
-  // --allowedTools/--disallowedTools synthesize per-run permission rules,
-  // prepended to any config rules. undefined when neither flag is used.
-  const permissionRules = buildToolGatingRules({
-    allowedTools: opts.allowedTools,
-    disallowedTools: opts.disallowedTools,
-    base: config.permissionRules,
-  });
-  const allowedTools = parseToolList(opts.allowedTools);
 
   // stream-json input consumes process.stdin as an async generator; a live
   // terminal prompt would race it for the same fd and corrupt the next
@@ -431,8 +516,13 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
     projectPath,
     cliMcpServerRequestHandlers({ config, confirm, model, usageBus }),
   );
+  debug.log("mcp", debugMcpLine(mcpConfigForRun, mcp.specs.length));
   let created: ReturnType<typeof createCliAgent>;
   try {
+    const subagents = withInlineAgents(loadAgentDefinitions(projectPath, mcp.pluginContributions), inlineAgents);
+    if (inlineAgents.length > 0) {
+      debug.log("subagent", `inline agents: ${inlineAgents.map((agent) => agent.id).join(", ")}`);
+    }
     created = createCliAgent({
       config,
       workspace: projectPath,
@@ -444,7 +534,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
       onModelDelta: emitPartial ?? renderer?.modelDelta,
       onReasoningDelta: renderer?.reasoningDelta,
       extractMemory: mode === "edit",
-      subagents: loadAgentDefinitions(projectPath, mcp.pluginContributions),
+      subagents,
       ...(opts.maxTurns !== undefined ? { maxTurns: opts.maxTurns } : {}),
       ...(permissionRules ? { permissionRules } : {}),
       ...(allowedTools.length > 0 ? { allowedTools } : {}),
@@ -465,6 +555,10 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
   const startedAt = Date.now();
   let numTurns = 0; // assistant text turns observed across runOnce calls
   let outcome: ResultOutcome = { kind: "success" };
+  let structuredOutput: unknown;
+  let structuredUsage: TokenUsage | undefined;
+  // --session-id names the session the FIRST run creates; later runs resume it.
+  let pendingSessionId = sessionPlan.newSessionId;
 
   const runOnce = async (input: {
     task: string;
@@ -474,6 +568,8 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
   }): Promise<{ sessionId?: string; completed: boolean }> => {
     let sessionId: string | undefined;
     let completed = false;
+    const newSessionId = input.resumeSessionId === undefined ? pendingSessionId : undefined;
+    pendingSessionId = undefined;
     for await (const event of agent.runTask({
       projectPath,
       task: input.task,
@@ -481,10 +577,12 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
       plan: input.plan,
       approvalMode,
       resumeSessionId: input.resumeSessionId,
+      ...(newSessionId !== undefined ? { sessionId: newSessionId } : {}),
       signal: controller.signal,
-      ...(opts.systemPrompt !== undefined ? { systemPromptOverride: opts.systemPrompt } : {}),
+      ...(prompts.systemPrompt !== undefined ? { systemPromptOverride: prompts.systemPrompt } : {}),
       ...(effectiveAppend !== undefined ? { appendSystemPrompt: effectiveAppend } : {}),
     })) {
+      debug.event(event);
       render(event);
       if (event.type === "model.message") numTurns++;
       if (event.type === "session.created") sessionId = event.sessionId;
@@ -503,17 +601,81 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
     return { sessionId, completed };
   };
 
+  // --json-schema: turn the finished run into a value that validates. Returns
+  // false (and records the outcome) when it never does.
+  const produceStructured = async (taskText: string): Promise<boolean> => {
+    if (jsonSchema === undefined || !finalReport) return true;
+    // A budget that tripped on the run's last usage report forbids this call too.
+    if (controller.signal.aborted) {
+      const message = t("err.structuredOutputSkipped");
+      outcome = { kind: "structured_output", message };
+      fail(message);
+      return false;
+    }
+    debug.log("structured", "requesting structured output");
+    try {
+      const result = await produceStructuredOutput({
+        provider: buildProvider(
+          {
+            provider: config.provider,
+            apiKey: config.apiKey,
+            baseUrl: config.baseUrl,
+            modelPricing: config.modelPricing,
+            thinking: config.thinking,
+            reasoningEffort: config.reasoningEffort,
+          },
+          model,
+        ),
+        schema: jsonSchema,
+        task: taskText,
+        result: describeReportForStructuredOutput(finalReport),
+        signal: controller.signal,
+        onAttempt: (attempt) =>
+          debug.log(
+            "structured",
+            `attempt ${attempt.number}: ${attempt.ok ? "valid" : `invalid — ${attempt.issues.join("; ")}`}`,
+          ),
+      });
+      structuredUsage = result.usage;
+      if (result.ok) {
+        structuredOutput = result.value;
+        return true;
+      }
+      const message = t("err.structuredOutputFailed", { attempts: result.attempts });
+      outcome = { kind: "structured_output", message: `${message}: ${result.issues.join("; ")}` };
+      fail(message, { hint: result.issues.join("; ") });
+      return false;
+    } catch (err) {
+      const message = t("err.structuredOutputError", { message: err instanceof Error ? err.message : String(err) });
+      outcome = { kind: "structured_output", message };
+      fail(message);
+      return false;
+    }
+  };
+
   // Emits the final Claude-compatible result envelope: pretty-printed for `json`,
-  // one JSONL line (via the stream mapper) for `stream-json`. No-op otherwise.
+  // one JSONL line (via the stream mapper) for `stream-json`. Text mode prints
+  // just the structured output, when there is one.
   const emitResult = (sessionId: string | undefined): void => {
     if (opts.suppressResult) return;
-    if (format !== "json" && format !== "stream-json") return;
+    if (format === "text" || format === "stream-json-raw") {
+      if (structuredOutput === undefined) return;
+      console.log(
+        format === "text"
+          ? JSON.stringify(structuredOutput, null, 2)
+          : JSON.stringify({ type: "structured_output", structured_output: structuredOutput }),
+      );
+      return;
+    }
     const input = {
       ...(finalReport ? { report: finalReport } : {}),
       sessionId,
       numTurns,
       durationMs: Date.now() - startedAt,
       outcome: finalReport ? outcome : outcome.kind === "success" ? { kind: "error" as const } : outcome,
+      ...(structuredOutput !== undefined ? { structuredOutput } : {}),
+      ...(structuredUsage ? { extraUsage: structuredUsage } : {}),
+      ...(worktree ? { worktree: { path: worktree.path, branch: worktree.branch } } : {}),
     };
     if (format === "stream-json") {
       console.log(JSON.stringify(streamMapper!.result(input)));
@@ -587,8 +749,10 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
     // Plan mode requires interactive confirmation, so only the human text
     // format supports it (machine formats run straight through).
     if (planMode && !machine) {
-      const planRun = await runOnce({ task: expand(task), mode: "ask", plan: true });
-      if (!planRun.completed || !planRun.sessionId) {
+      const planTask = expand(task);
+      const planRun = await runOnce({ task: planTask, mode: "ask", plan: true, resumeSessionId });
+      const planSessionId = planRun.sessionId ?? resumeSessionId;
+      if (!planRun.completed || !planSessionId) {
         process.exitCode = 1;
         return false;
       }
@@ -600,26 +764,31 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
         rl.close();
       }
       if (answer !== "y") {
-        console.log(t("render.planKept", { sessionId: planRun.sessionId ?? "" }));
+        console.log(t("render.planKept", { sessionId: planSessionId }));
         return false;
       }
       const execRun = await runOnce({
         task: "Execute the plan you produced above, step by step. Make the changes and run the verification.",
         mode: "edit",
-        resumeSessionId: planRun.sessionId,
+        resumeSessionId: planSessionId,
       });
-      if (!execRun.completed) process.exitCode = 1;
-      return execRun.completed;
+      const structuredOk = execRun.completed ? await produceStructured(planTask) : true;
+      emitResult(execRun.sessionId ?? planSessionId);
+      if (!execRun.completed || !structuredOk) process.exitCode = 1;
+      return execRun.completed && structuredOk;
     }
 
-    const run = await runOnce({ task: expand(task), mode, resumeSessionId });
-    emitResult(run.sessionId);
-    if (!run.completed) process.exitCode = 1;
-    return run.completed;
+    const expandedTask = expand(task);
+    const run = await runOnce({ task: expandedTask, mode, resumeSessionId });
+    const structuredOk = run.completed ? await produceStructured(expandedTask) : true;
+    emitResult(run.sessionId ?? resumeSessionId);
+    if (!run.completed || !structuredOk) process.exitCode = 1;
+    return run.completed && structuredOk;
   } finally {
     if (deadlineTimer) clearTimeout(deadlineTimer);
     process.removeListener("SIGINT", onSigint);
     dispose();
     mcp.dispose();
+    if (worktree) console.error(formatRunWorktree(worktree));
   }
 }

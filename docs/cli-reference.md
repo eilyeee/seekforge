@@ -2,15 +2,27 @@
 
 > **English** | [简体中文](cli-reference.zh-CN.md)
 
-Flag reference for `seekforge run`, `seekforge ask`, and `-p` headless mode.
+Flag reference for `seekforge run`, `seekforge ask`, `-p` headless mode and the
+interactive session.
 
 ## Legend
 
 - **run** — applies to `seekforge run "<task>"`
 - **ask** — applies to `seekforge ask "<question>"`
 - **-p** — applies to `seekforge -p "[prompt]"` (headless single-run)
-- **chat** — applies to `seekforge` (interactive REPL session)
+- **chat** — applies to the interactive session: `seekforge chat`, and bare
+  `seekforge` (see [Interactive sessions](#interactive-sessions))
 - ✦ — also settable in config/project settings
+
+Flags that only mean something to a headless run (`--output-format`, `--json`,
+`--input-format`, `--replay-user-messages`, `--include-partial-messages`,
+`--max-duration`, `--json-schema`, `--json-schema-file`, `--worktree`) are
+refused with an error when given to bare `seekforge` without `-p`, rather than
+silently ignored.
+
+Two flags take an optional value — `--debug [filter]` and `--worktree [name]` —
+so a word right after them is read as that value. Put them after the task
+(`seekforge run "fix it" --debug`) or use the `=` form (`--debug=api,tool`).
 
 ## Common flags
 
@@ -23,20 +35,35 @@ checks npm for a newer one.
 | `-m, --model <model>` ✦ | run, ask, -p, chat | Override model (`deepseek-v4-flash` / `deepseek-v4-pro`) |
 | `--json` | run, ask, -p | Alias for `--output-format stream-json` (machine mode; prompts denied, pair with `-y`) |
 | `--output-format <fmt>` | run, ask, -p | `text` (default human), `json` (Claude-style result object), `stream-json` (JSONL envelopes), `stream-json-raw` (raw events) |
-| `-c, --continue` | run, ask, -p | Resume the most recent session |
-| `--resume <id>` | run, ask, -p | Resume a specific session (see `seekforge sessions`) |
-| `--add-dir <path>` | run, ask, -p | Extra read-only root for `@`-references (repeatable) |
-| `--max-turns <n>` | run, ask, -p | Cap agent turns |
-| `--max-cost <usd>` | run, -p | Stop the run once cumulative cost reaches this budget (USD); graceful cancel, trace kept. Also settable as the `maxCostUsd` config key (applies to all modes) |
-| `--max-duration <seconds>` | run, -p, sandbox-run, remote-run | Stop the run once this much wall-clock time has passed — a timer, so it fires while a hung command or a silent MCP server is producing no events at all. Covers the whole invocation, not one turn. Graceful cancel, trace kept. Also settable as the `maxDurationSeconds` config key |
+| `-c, --continue` | run, ask, -p, chat | Resume the most recent session |
+| `--resume <id>` | run, ask, -p, chat | Resume a specific session (see `seekforge sessions`) |
+| `--fork-session` | run, ask, -p, chat | With `--resume`/`--continue`: copy the session first and continue the copy, leaving the original untouched |
+| `--session-id <id>` | run, ask, -p, chat | Start the new session under this id instead of a generated one. A UUID works; any letters, digits, `.`, `_` and `-` (at most 128 characters) do. Refused when a session with that id exists, and together with `--resume`, `--continue` or `--fork-session` |
+| `--add-dir <path>` | run, ask, -p, chat | Extra read-only root for `@`-references (repeatable) |
+| `--max-turns <n>` | run, ask, -p, chat | Cap agent turns (chat: per message) |
+| `--max-cost <usd>` | run, ask, -p, chat | Stop the run once cumulative cost reaches this budget (USD); graceful cancel, trace kept. In chat it caps the whole session: the running turn stops and no new one starts. Also settable as the `maxCostUsd` config key (applies to run, ask and -p) |
+| `--max-duration <seconds>` | run, ask, -p, sandbox-run, remote-run | Stop the run once this much wall-clock time has passed — a timer, so it fires while a hung command or a silent MCP server is producing no events at all. Covers the whole invocation, not one turn. Graceful cancel, trace kept. Also settable as the `maxDurationSeconds` config key |
+| `--system-prompt-file <path>` | run, ask, -p, chat | Like `--system-prompt`, read from a file (at most 1 MiB). Not together with `--system-prompt` |
+| `--append-system-prompt-file <path>` | run, ask, -p, chat | Like `--append-system-prompt`, read from a file (at most 1 MiB). Not together with `--append-system-prompt` |
+| `--agents <json>` | run, ask, -p, chat | Subagents for this invocation only — see [Inline subagents](#inline-subagents) |
+| `--debug [filter]` | run, ask, -p, chat | Internal detail on stderr — see [Debug output](#debug-output) |
 | `--settings <file>` | run, ask, -p, chat | Path to JSON settings file (layered over project config but below env/CLI flags) |
-| `--profile <name>` ✦ | run, ask, -p, chat | Apply a named `profiles` overlay from the config files; also `SEEKFORGE_PROFILE` env (flag wins). The overlay slots just below `--settings`. Available as a global flag and on `run` / `ask` / `loop` |
+| `--profile <name>` ✦ | run, ask, -p, chat | Apply a named `profiles` overlay from the config files; also `SEEKFORGE_PROFILE` env (flag wins). The overlay slots just below `--settings`. Available as a global flag and on `run` / `ask` / `chat` / `loop` |
 
 ## Run-specific flags
+
+`--permission-mode`, `--output-style`, `--fallback-model`, `--system-prompt`,
+`--append-system-prompt`, the tool lists, `--dangerously-skip-permissions`, the
+MCP flags and `--verbose` also apply to the interactive session. When the system
+prompt is replaced, `--output-style` and `--append-system-prompt` are appended
+to the replacement.
 
 | Flag | Description |
 | --- | --- |
 | `--plan` | Plan first (read-only), confirm, then execute in the same session |
+| `--worktree [name]` | Create a retained git worktree (`.seekforge/worktrees/run-<name>`, branch `seekforge/run-<name>`) and run there, from the same subdirectory you are in. Where the changes are is printed at the end (and reported as `worktree` in the json result); remove it with `git worktree remove --force <path>` and `git branch -D <branch>`. Not together with `--resume`, `--continue` or `--fork-session`. Also on `-p` |
+| `--json-schema <schema>` | Structured output — see [Structured output](#structured-output). Also on `ask` and `-p` |
+| `--json-schema-file <path>` | Read that schema from a file (at most 256 KiB). Not together with `--json-schema` |
 | `--permission-mode <mode>` | `default` / `confirm` — prompt on write/execute; `acceptEdits` — auto-allow in-workspace edits, prompt on commands; `plan` — confirm + plan-first; `bypassPermissions` / `auto` — full auto (like `-y`). Overrides `-y` when set |
 | `--fallback-model <model>` | Model to retry with if the primary is overloaded |
 | `--output-style <style>` | `default` (no change), `concise` (maximally terse), `explanatory` (teach as you answer), `learning` (leave 1–3 pieces for the user), or a custom `.seekforge/output-styles/<name>.md` (see Configuration) |
@@ -50,6 +77,9 @@ checks npm for a newer one.
 | `--verbose` | Print full tool args and results |
 
 ## Ask-specific flags
+
+`ask` also takes `--max-cost`, `--max-duration`, `--mcp-config`,
+`--strict-mcp-config`, `--json-schema` and `--json-schema-file`.
 
 | Flag | Description |
 | --- | --- |
@@ -76,12 +106,123 @@ In addition to the common flags above:
 | `--input-format <fmt>` | `text` (default) or `stream-json` (line-delimited user turns on stdin) |
 | `--mcp-config <file>` | See run-specific |
 | `--replay-user-messages` | With `-p` + `--input-format stream-json`: echo each user turn back as a stream-json event |
+| `--strict-mcp-config` | See run-specific |
+| `--verbose` | See run-specific |
+| `--worktree [name]` | See run-specific |
+| `--json-schema <schema>` / `--json-schema-file <path>` | See [Structured output](#structured-output); not together with `--input-format stream-json` |
 
 Piped text input is capped at 16 MiB. For `stream-json`, each JSONL record is
 capped at 1,000,000 characters, including an unterminated record still waiting
 for its newline; oversized input fails before it can grow memory without bound.
-| `--strict-mcp-config` | See run-specific |
-| `--verbose` | See run-specific |
+
+## Structured output
+
+`--json-schema '<schema>'` asks for a JSON value that validates against the
+given JSON Schema once the run has finished. SeekForge makes one more model call
+with the task, the run's summary, changed files and commands, and the schema,
+validates the reply, and feeds validation errors back for up to three attempts.
+The task and result are passed to that call as data, not instructions.
+
+- `--output-format json` / `stream-json`: the value is the result's
+  `structured_output` field; its calls are included in `total_cost_usd` and
+  `usage`.
+- `--output-format text`: the value is printed as JSON after the run.
+- If no attempt validates, the command exits 1, and the result has
+  `subtype: "error_max_structured_output_retries"`, `is_error: true` and the
+  last validation errors in `errors`.
+
+The validator supports `type`, `enum`, `const`, numeric bounds and `multipleOf`,
+string length and `pattern`, `items`/`prefixItems`/`additionalItems`,
+`contains`, `uniqueItems`, array and object sizes, `properties`,
+`patternProperties`, `additionalProperties`, `propertyNames`, `required`,
+`allOf`/`anyOf`/`oneOf`/`not`, and local `$ref`s (`#/$defs/…`,
+`#/definitions/…`). A schema using an assertion outside that set (`if`/`then`/
+`else`, `dependentRequired`, `unevaluatedProperties`, …) or a remote `$ref` is
+rejected before the run starts, rather than validated partially.
+
+## Inline subagents
+
+`--agents '<json>'` defines subagents for this invocation only, in Claude Code's
+shape — an object keyed by agent id:
+
+```bash
+seekforge -p "review the last commit" --agents '{
+  "reviewer": {"description": "Reviews diffs for bugs", "prompt": "You review code…",
+               "tools": ["read_file", "grep"], "model": "inherit"}
+}'
+```
+
+`description` and `prompt` are required. Optional: `tools` (array, or a
+comma-separated string; `[]` means no tools), `model` (`inherit` = the
+session's), and SeekForge's own `name`, `mode` (`ask`/`edit`), `maxTurns`,
+`triggers`, `own`, `doNotTouch`, `boundary`. `color` is accepted and ignored.
+Any other field — `disallowedTools`, `permissionMode`, `mcpServers`, `hooks`, … —
+is rejected, because silently dropping it would leave the agent with more reach
+than its author wrote. Each definition is validated exactly like an
+`AGENT.md` file; the JSON is capped at 256 KiB and 32 agents. An inline agent
+replaces a project, user, plugin or builtin agent with the same id for that
+run.
+
+## Debug output
+
+`--debug` prints internal detail to stderr (stdout is untouched, so machine
+formats stay parseable): the agent's own events — provider retries (`api`),
+usage (`usage`), tool calls (`tool`), permission requests (`permission`),
+context compaction (`context`), file changes (`file`), live command output
+(`command`), notices including hook messages (`hooks`), steps (`step`), model
+messages (`model`),
+subagents (`subagent`), sessions (`session`) — plus setup detail: effective
+config (`config`), MCP servers and their trust (`mcp`), worktrees (`worktree`)
+and structured-output attempts (`structured`).
+
+`--debug=api,tool` shows only those categories; `--debug='!command'` (quoted, so
+the shell leaves the `!` alone) shows everything except live command output.
+
+## Interactive sessions
+
+Bare `seekforge` in a terminal opens the TUI (the same app as `seekforge-tui`),
+passing `-c/--continue` and `-m/--model` on to it. It asks for folder access
+first, as the REPL always has. The classic readline REPL starts instead when:
+
+- you run `seekforge chat`, pass `--classic`, or set `SEEKFORGE_CLASSIC_REPL=1`;
+- stdin or stdout is not a terminal (piped input keeps working as before);
+- a flag the TUI cannot honor yet is given (`--resume`, `--permission-mode`,
+  `--add-dir`, `--settings`, `--profile` or `SEEKFORGE_PROFILE`, …). A note on
+  stderr names the flags; the REPL honors all of them.
+
+The REPL (`seekforge chat`) takes the session flags from the tables above:
+`-y`, `-m`, `-c`, `--resume`, `--fork-session`, `--session-id`,
+`--permission-mode` (`plan` plans every message read-only and asks before
+executing), `--ask`, `--add-dir`, `--mcp-config`, `--strict-mcp-config`, the
+system-prompt flags, `--output-style`, the tool lists, `--max-turns`,
+`--max-cost`, `--fallback-model`, `--agents`, `--debug`, `--verbose`,
+`--settings` and `--profile`. Beyond `/help`:
+
+| Input | What it does |
+| --- | --- |
+| `!<command>` | Run a shell command in the workspace, yourself — no permission prompt, like typing it in a terminal. Output streams to the screen; Ctrl+C stops it. The command, its exit code and its output (clipped to 16,000 characters, keeping the head and the tail; the last 8 commands) are added to your next message as data, not instructions |
+| `/compact [focus]` | Compact the current session now. Without a focus it is the instant mechanical digest; with one, the configured provider writes the summary around that focus (falling back to the digest if the model call fails) |
+| `/rename <title>` | Name the current session; the name is shown by `/sessions`, `seekforge sessions` and `sessions show` |
+| `/sessions` | Recent sessions, with names |
+| `# <fact>` | Save a fact to project memory |
+
+Ctrl+C cancels the running turn or `!` command and keeps the REPL open; at the
+prompt it exits, like Ctrl+D. Lines piped into the REPL are processed one by
+one, including the ones that arrive while a turn is running.
+
+## Permission prompts
+
+A terminal permission prompt always shows the raw command or path. It accepts:
+
+| Answer | Meaning |
+| --- | --- |
+| `y` / `yes` | Allow this call |
+| `a` / `always` | Allow it and similar calls for the rest of the session — offered only when that grant is possible (not for `env`-level tools or calls matched by an `ask` rule; typed anyway, it allows just this call) |
+| `n`, `no` or Enter | Refuse |
+| `n: <reason>` (or `no <reason>`) | Refuse and tell the agent why, so its next attempt can follow the reason |
+
+Anything else refuses. The per-hunk prompt of a multi-edit `apply_patch` accepts
+`y`, hunk indices, and `n: <reason>` too.
 
 ## Per-hunk partial-apply
 
@@ -123,9 +264,33 @@ Beyond the run/ask flags above, these subcommands operate on stored sessions
 
 | Command | What it does |
 | --- | --- |
-| `seekforge sessions` | List recent sessions (id, status, task) |
+| `seekforge sessions` | List recent sessions (id, status, cost, name, first line of the task) |
+| `seekforge sessions show <id> [--json]` | One session: name, status and mode, timestamps, message count, usage, plan and the full task |
+| `seekforge sessions rename <id> <title>` | Name a session (`""` clears the name). The REPL's `/rename` does the same for the current session |
 | `seekforge resume <id>` | Continue a session (also `run/ask -c` for the latest) |
 | `seekforge replay <session>` | Deterministically re-render a stored session's events to stdout — no model calls, no cost. `--verbose` for full tool args/results |
+
+`--fork-session` continues a copy of the resumed session (the original keeps its
+history), and `--session-id <id>` gives a new session the id you choose — for
+example a UUID your own tooling already tracks.
+
+## Updating
+
+`seekforge update` (alias `upgrade`) checks the npm registry for a newer
+release, then works out how this copy was installed from where its files live:
+
+| Install | Upgrade command |
+| --- | --- |
+| npm global | `npm install -g seekforge@latest --registry=https://registry.npmjs.org/` |
+| pnpm global | `pnpm add -g seekforge@latest --registry=https://registry.npmjs.org/` |
+| Volta | `volta install seekforge@latest` (with `npm_config_registry=https://registry.npmjs.org/`) |
+
+It prints the command and runs it after you confirm (`-y` skips the question;
+without a terminal and without `-y` it only prints). The official registry is
+named explicitly, so a mirror configured as your default registry cannot hand
+back an older version. Any other install (npx, yarn, bun, a copy it cannot
+place) only gets the command to run by hand; a source checkout is told to
+`git pull` and rebuild.
 
 ## Server flags
 

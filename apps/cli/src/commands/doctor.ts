@@ -65,6 +65,10 @@ export type DoctorProbes = BaseDoctorProbes & {
   glob: (dir: string, pattern: string) => string[] | null;
   /** File contents as UTF-8, or null when unreadable. Never throws. */
   readText: (path: string) => string | null;
+  /** Whether this Node can route fetch through HTTP(S)_PROXY (built-in env proxy support). */
+  nodeSupportsEnvProxy?: () => boolean;
+  /** Flags this Node process was started with. */
+  execArgv?: () => string[];
 };
 
 export function createDefaultProbes(): DoctorProbes {
@@ -113,6 +117,89 @@ export function createDefaultProbes(): DoctorProbes {
         return null;
       }
     },
+    // The flag's presence in allowedNodeEnvironmentFlags is the capability
+    // itself (it arrived in a 22.x backport); 24.0 honored the env var first.
+    nodeSupportsEnvProxy: () =>
+      process.allowedNodeEnvironmentFlags.has("--use-env-proxy") || Number.parseInt(process.versions.node, 10) >= 24,
+    execArgv: () => process.execArgv,
+  };
+}
+
+// Node's built-in support reads these and NO_PROXY; ALL_PROXY is not among them.
+const PROXY_VARS = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] as const;
+
+const PROXY_SCHEMES = new Set(["http:", "https:", "socks:", "socks4:", "socks5:", "socks5h:"]);
+
+/**
+ * A proxy URL fit to print: credentials replaced, anything else withheld —
+ * `user:pw@host` parses as a URL whose scheme is `user:`, so parsing alone is
+ * not a license to echo the value.
+ */
+export function redactProxyUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    if (!PROXY_SCHEMES.has(url.protocol)) return "(set, not a URL)";
+    if (url.username || url.password) {
+      url.username = "***";
+      url.password = "";
+    }
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return "(set, not a URL)";
+  }
+}
+
+/**
+ * Proxy variables versus what this Node does with them. Informational: a
+ * proxy the runtime ignores is worth knowing about, but not a failure.
+ */
+export function proxyCheck(probes: DoctorProbes): DoctorCheck {
+  const set = PROXY_VARS.filter((key) => probes.env(key));
+  if (set.length === 0) {
+    const allProxy = probes.env("ALL_PROXY") ?? probes.env("all_proxy");
+    return {
+      name: "proxy",
+      ok: true,
+      detail: allProxy ? "no HTTP(S)_PROXY set (ALL_PROXY is set, but node does not read it)" : "no HTTP(S)_PROXY set",
+    };
+  }
+  const shown = set.map((key) => `${key}=${redactProxyUrl(probes.env(key) ?? "")}`).join(", ");
+  const noProxy = probes.env("NO_PROXY") ?? probes.env("no_proxy");
+  const suffix = noProxy ? `; NO_PROXY=${noProxy}` : "";
+  const supported = probes.nodeSupportsEnvProxy?.() ?? false;
+  const enabled =
+    probes.env("NODE_USE_ENV_PROXY") === "1" ||
+    /(^|\s)--use-env-proxy(\s|$)/.test(probes.env("NODE_OPTIONS") ?? "") ||
+    (probes.execArgv?.() ?? []).includes("--use-env-proxy");
+  if (!supported) {
+    return {
+      name: "proxy",
+      ok: true,
+      warn: true,
+      detail: `${shown}${suffix} — node ${probes.nodeVersion()} has no built-in proxy support, so requests go direct`,
+      fixHint: "use a Node release with built-in proxy support (24+, or a recent 22.x)",
+    };
+  }
+  if (!enabled) {
+    return {
+      name: "proxy",
+      ok: true,
+      detail: `${shown}${suffix} — this node can honor it, but NODE_USE_ENV_PROXY is not set`,
+      fixHint: "export NODE_USE_ENV_PROXY=1 (or NODE_OPTIONS=--use-env-proxy) to send requests through the proxy",
+    };
+  }
+  return { name: "proxy", ok: true, detail: `${shown}${suffix} (honored by node)` };
+}
+
+/** pdftotext (poppler) on PATH. Informational: only PDF text extraction needs it. */
+export function pdftotextCheck(probes: DoctorProbes): DoctorCheck {
+  const resolved = probes.which("pdftotext");
+  if (resolved) return { name: "pdftotext", ok: true, detail: resolved };
+  return {
+    name: "pdftotext",
+    ok: true,
+    detail: "not on PATH — PDF text extraction unavailable",
+    fixHint: "brew install poppler (macOS) / apt install poppler-utils (Debian/Ubuntu)",
   };
 }
 
@@ -229,6 +316,8 @@ export function runDoctor(
   checks.push(lspServersCheck(probes, lspServerCommands()));
   checks.push(codeParsingCheck(astBackendInstalled()));
   checks.push(dockerCheck(probes));
+  checks.push(pdftotextCheck(probes));
+  checks.push(proxyCheck(probes));
 
   // Best-effort desktop/GUI diagnostics. Each is wrapped so a probe surprise
   // can never abort the whole report; a thrown probe degrades to a warn line.

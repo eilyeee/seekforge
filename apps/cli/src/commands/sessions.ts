@@ -1,26 +1,124 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { listSessions, pruneSessions } from "@seekforge/core";
+import {
+  listSessions,
+  loadSessionMessages,
+  pruneSessions,
+  readSessionMeta,
+  renameSession,
+  sessionName,
+  type SessionMeta,
+} from "@seekforge/core";
+import { clipLine } from "@seekforge/shared/format";
+import { fail } from "../colors.js";
 import { loadConfig } from "../config.js";
 import { t } from "../i18n.js";
 import { formatUsage } from "../render.js";
 
 function truncate(text: string, max: number): string {
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
+  return clipLine(text.replace(/\s+/g, " ").trim(), max);
+}
+
+/**
+ * One `sessions` row: id, status, cost, and the name (when set) before the
+ * task's first line — later lines are pasted input or carried `!` output.
+ */
+export function formatSessionLine(workspace: string, s: SessionMeta, opts: { cost?: boolean } = {}): string {
+  const cost = opts.cost !== false && s.usage ? ` $${s.usage.costUsd.toFixed(4)}` : "";
+  const name = sessionName(workspace, s.id);
+  const firstLine = s.task.split("\n").find((line) => line.trim() !== "") ?? "";
+  const task = name ? `«${name}» ${firstLine}` : firstLine;
+  return t("cmd.sessions.output", { id: s.id, status: s.status, cost, task: truncate(task, 72) });
 }
 
 export function sessionsCommand(): void {
-  const sessions = listSessions(process.cwd());
+  const workspace = process.cwd();
+  const sessions = listSessions(workspace);
   if (sessions.length === 0) {
     console.log(t("cmd.sessions.none"));
     return;
   }
-  for (const s of sessions) {
-    const cost = s.usage ? ` $${s.usage.costUsd.toFixed(4)}` : "";
-    console.log(t("cmd.sessions.output", { id: s.id, status: s.status, cost, task: truncate(s.task, 60) }));
+  for (const s of sessions) console.log(formatSessionLine(workspace, s));
+}
+
+/** `sessions rename <id> <title...>`: name a session; an empty title clears the name. */
+export function sessionsRenameCommand(id: string, titleParts: string[]): void {
+  const workspace = process.cwd();
+  const title = titleParts.join(" ").replace(/\s+/g, " ").trim();
+  if (!readSessionMeta(workspace, id)) {
+    fail(t("err.sessionNotFound", { id }), { hint: t("err.sessionNotFoundHint") });
+    return;
   }
+  try {
+    renameSession(workspace, id, title);
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+    return;
+  }
+  const name = sessionName(workspace, id);
+  console.log(name ? t("cmd.sessions.renamed", { id, title: name }) : t("cmd.sessions.nameCleared", { id }));
+}
+
+/** Everything `sessions show` reports about one session. */
+export function describeSession(workspace: string, meta: SessionMeta): Record<string, unknown> {
+  let messages: number | undefined;
+  try {
+    messages = loadSessionMessages(workspace, meta.id).length;
+  } catch {
+    messages = undefined;
+  }
+  const name = sessionName(workspace, meta.id);
+  return {
+    id: meta.id,
+    ...(name ? { name } : {}),
+    status: meta.status,
+    mode: meta.mode,
+    createdAt: meta.createdAt,
+    updatedAt: meta.updatedAt,
+    ...(meta.parentAgentId ? { parentAgentId: meta.parentAgentId } : {}),
+    ...(messages !== undefined ? { messages } : {}),
+    ...(meta.usage ? { usage: meta.usage } : {}),
+    ...(meta.plan ? { plan: meta.plan } : {}),
+    task: meta.task,
+  };
+}
+
+/** `sessions show <id> [--json]`. */
+export function sessionsShowCommand(id: string, opts: { json?: boolean } = {}): void {
+  const workspace = process.cwd();
+  const meta = readSessionMeta(workspace, id);
+  if (!meta) {
+    fail(t("err.sessionNotFound", { id }), { hint: t("err.sessionNotFoundHint") });
+    return;
+  }
+  const info = describeSession(workspace, meta);
+  if (opts.json) {
+    console.log(JSON.stringify(info, null, 2));
+    return;
+  }
+  const rows: [string, string | undefined][] = [
+    ["cmd.sessions.showId", meta.id],
+    ["cmd.sessions.showName", info.name as string | undefined],
+    ["cmd.sessions.showStatus", `${meta.status} (${meta.mode})`],
+    ["cmd.sessions.showCreated", meta.createdAt],
+    ["cmd.sessions.showUpdated", meta.updatedAt],
+    ["cmd.sessions.showParent", meta.parentAgentId],
+    ["cmd.sessions.showMessages", info.messages === undefined ? undefined : String(info.messages)],
+    ["cmd.sessions.showUsage", meta.usage ? formatUsage(meta.usage) : undefined],
+  ];
+  for (const [key, value] of rows) if (value !== undefined) console.log(`${t(key).padEnd(10)}${value}`);
+  if (meta.plan && meta.plan.length > 0) {
+    console.log(t("cmd.sessions.showPlan"));
+    for (const item of meta.plan) {
+      const box = item.status === "done" ? "☑" : item.status === "in_progress" ? "◐" : "☐";
+      console.log(`  ${box} ${item.step}`);
+    }
+  }
+  console.log(t("cmd.sessions.showTask"));
+  console.log(meta.task);
+  console.log("");
+  console.log(t("cmd.sessions.showResumeHint", { id: meta.id }));
 }
 
 export type PruneOptions = { olderThan?: string; keepLast?: string; dryRun?: boolean };

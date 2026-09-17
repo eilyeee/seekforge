@@ -1,9 +1,9 @@
 import { createRequire } from "node:module";
 import { Command, InvalidArgumentError } from "commander";
 import { SEEKFORGE_VERSION } from "@seekforge/core";
-import { fail, setColorEnabled, useColor } from "./colors.js";
+import { dim, fail, setColorEnabled, useColor } from "./colors.js";
 import { loadConfig } from "./config.js";
-import { detectLocale, setLocale } from "./i18n.js";
+import { detectLocale, setLocale, t } from "./i18n.js";
 import { checkForUpdate, formatUpdateNotice } from "./version-check.js";
 import { completionCommand } from "./commands/completion.js";
 import { doctorCommand } from "./commands/doctor.js";
@@ -36,9 +36,17 @@ import { registerSkillCommands } from "./commands/register-skill.js";
 import { registerPluginCommands } from "./commands/register-plugin.js";
 import { registerSecurityCommands } from "./commands/register-security.js";
 import { serveCommand } from "./commands/serve.js";
-import { updateCommand } from "./commands/update.js";
+import { defaultUpdateDeps, updateCommand } from "./commands/update.js";
 import { modelsCommand } from "./commands/models.js";
-import { sessionsCommand, sessionsPruneCommand, statusCommand } from "./commands/sessions.js";
+import {
+  sessionsCommand,
+  sessionsPruneCommand,
+  sessionsRenameCommand,
+  sessionsShowCommand,
+  statusCommand,
+} from "./commands/sessions.js";
+import { ensureWorkspaceAuthorized } from "./commands/run.js";
+import { decideInteractiveFrontend, launchTui, resolveTuiEntry } from "./tui-launch.js";
 import { runInheritedCommand } from "./inherited-command.js";
 import { registerLoopCommands } from "./register-loop.js";
 import { registerGraphCommands } from "./register-graph.js";
@@ -149,6 +157,62 @@ function parsePositiveFloat(val: string): number {
   return n;
 }
 
+/**
+ * Flags every agent-running surface shares (run, ask, -p and the interactive
+ * session). `scope` prefixes the help text where a flag's reach needs saying.
+ */
+function addSessionOptions(cmd: Command, scope = ""): Command {
+  return cmd
+    .option("--session-id <id>", `${scope}start the new session under this id (a UUID works)`)
+    .option("--fork-session", `${scope}with --resume/--continue: continue in a forked copy of the session`)
+    .option(
+      "--agents <json>",
+      `${scope}subagents for this run only: a JSON object keyed by agent id ({"id": {"description", "prompt", …}})`,
+    )
+    .option("--system-prompt-file <path>", `${scope}replace the system prompt with a file's contents`)
+    .option("--append-system-prompt-file <path>", `${scope}append a file's contents to the system prompt`)
+    .option(
+      "--debug [filter]",
+      `${scope}internal detail on stderr; filter = comma-separated categories, "!name" excludes one`,
+    );
+}
+
+/** `--json-schema` / `--json-schema-file` (structured output of a headless run). */
+function addStructuredOutputOptions(cmd: Command, scope = ""): Command {
+  return cmd
+    .option(
+      "--json-schema <schema>",
+      `${scope}also produce a JSON value validating against this JSON Schema (structured_output)`,
+    )
+    .option("--json-schema-file <path>", `${scope}read the --json-schema from a file`);
+}
+
+/** The new shared flags as commander parses them (see addSessionOptions / addStructuredOutputOptions). */
+type SessionFlagOpts = {
+  sessionId?: string;
+  forkSession?: boolean;
+  agents?: string;
+  systemPromptFile?: string;
+  appendSystemPromptFile?: string;
+  debug?: boolean | string;
+  jsonSchema?: string;
+  jsonSchemaFile?: string;
+};
+
+/** SessionFlagOpts → the RunOptions fields they feed. */
+function sessionRunOptions(opts: SessionFlagOpts) {
+  return {
+    sessionId: opts.sessionId,
+    forkSession: opts.forkSession,
+    agentsJson: opts.agents,
+    systemPromptFile: opts.systemPromptFile,
+    appendSystemPromptFile: opts.appendSystemPromptFile,
+    debug: opts.debug,
+    jsonSchema: opts.jsonSchema,
+    jsonSchemaFile: opts.jsonSchemaFile,
+  };
+}
+
 /** Resolve --output-format / --json, printing a clean error and exiting on bad input. */
 function resolveOutputFormatOrExit(opts: { outputFormat?: string; json?: boolean }) {
   try {
@@ -170,15 +234,17 @@ program
 
 // Top-level headless print mode: `seekforge -p "<prompt>"` (also reads piped
 // stdin). Routes to the print handler before the default `chat` command would
-// open an interactive session. Common run flags are accepted here too.
+// open an interactive session. The session flags apply to both; flags marked
+// "with -p" are rejected without it rather than silently ignored.
 program
   .option("-p, --print [prompt]", "headless single run: stream the result to stdout and exit (reads piped stdin)")
-  .option("--ask", "with -p: read-only Q&A mode (no writes/commands)")
-  .option("-y, --yes", "with -p: auto-approve write/execute permissions")
-  .option("-m, --model <model>", "with -p: override model")
+  .option("--classic", "interactive: use the classic readline REPL instead of the TUI (also SEEKFORGE_CLASSIC_REPL=1)")
+  .option("--ask", "read-only Q&A mode (no writes/commands)")
+  .option("-y, --yes", "auto-approve write/execute permissions")
+  .option("-m, --model <model>", "override model")
   .option(
     "--max-cost <usd>",
-    "with -p: stop the run once cumulative cost reaches this budget (USD)",
+    "stop once cumulative cost reaches this budget (USD; interactive: the whole session)",
     parsePositiveFloat,
   )
   .option(
@@ -191,40 +257,34 @@ program
     "with -p: text | json (Claude-style result) | stream-json (Claude-style envelopes) | stream-json-raw (raw events)",
   )
   .option("--json", "with -p: alias for --output-format stream-json (machine mode; no color/chrome)")
-  .option("-c, --continue", "with -p: resume the most recent session")
-  .option("--resume <id>", "with -p: resume a specific session")
-  .option("--add-dir <path>", "with -p: extra read-only root for @-references (repeatable)", collect, [] as string[])
-  .option("--max-turns <n>", "with -p: cap agent turns", parsePositiveInt)
-  .option("--verbose", "with -p: print full tool args and results")
-  .option("--system-prompt <text>", "with -p: replace the system prompt entirely")
-  .option("--append-system-prompt <text>", "with -p: append text to the system prompt")
-  .option("--allowedTools <list>", "with -p: only allow these tools (comma-separated)")
-  .option("--disallowedTools <list>", "with -p: deny these tools (comma-separated)")
-  .option(
-    "--permission-mode <mode>",
-    "with -p: default | acceptEdits | plan | bypassPermissions (also: confirm | auto)",
-  )
-  .option("--fallback-model <model>", "with -p: model to retry with if the primary is overloaded")
-  .option("--output-style <style>", "with -p: default | concise | explanatory | learning")
-  .option(
-    "--settings <file>",
-    "with -p: path to JSON settings file (layered over project config but below env/CLI flags)",
-  )
+  .option("-c, --continue", "resume the most recent session")
+  .option("--resume <id>", "resume a specific session")
+  .option("--add-dir <path>", "extra read-only root for @-references (repeatable)", collect, [] as string[])
+  .option("--max-turns <n>", "cap agent turns", parsePositiveInt)
+  .option("--verbose", "print full tool args and results")
+  .option("--system-prompt <text>", "replace the system prompt entirely")
+  .option("--append-system-prompt <text>", "append text to the system prompt")
+  .option("--allowedTools <list>", "only allow these tools (comma-separated)")
+  .option("--disallowedTools <list>", "deny these tools (comma-separated)")
+  .option("--permission-mode <mode>", "default | acceptEdits | plan | bypassPermissions (also: confirm | auto)")
+  .option("--fallback-model <model>", "model to retry with if the primary is overloaded")
+  .option("--output-style <style>", "default | concise | explanatory | learning")
+  .option("--settings <file>", "path to JSON settings file (layered over project config but below env/CLI flags)")
   .option("--input-format <fmt>", "with -p: text (default) | stream-json (line-delimited user turns on stdin)")
   .option(
     "--dangerously-skip-permissions",
-    "with -p: alias for -y — auto-approve write/execute (dangerous still refused; env still asks)",
+    "alias for -y — auto-approve write/execute (dangerous still refused; env still asks)",
   )
-  .option(
-    "--mcp-config <file>",
-    "with -p: load MCP servers from a JSON file (merged over config, unless --strict-mcp-config)",
-  )
-  .option("--strict-mcp-config", "with -p: use only --mcp-config servers, ignore config-file MCP servers")
+  .option("--mcp-config <file>", "load MCP servers from a JSON file (merged over config, unless --strict-mcp-config)")
+  .option("--strict-mcp-config", "use only --mcp-config servers, ignore config-file MCP servers")
   .option(
     "--replay-user-messages",
     "with -p + --input-format stream-json: echo each user turn back as a stream-json event",
   )
-  .option("--include-partial-messages", "with -p + --output-format stream-json: emit partial assistant text deltas");
+  .option("--include-partial-messages", "with -p + --output-format stream-json: emit partial assistant text deltas")
+  .option("--worktree [name]", "with -p: run in a new retained git worktree (optional name) and print where it is");
+addSessionOptions(program);
+addStructuredOutputOptions(program, "with -p: ");
 
 type SharedRunOpts = {
   // commander camelCases hyphenated flags, but "--settings" is one word → `settings`.
@@ -253,7 +313,7 @@ type SharedRunOpts = {
   includePartialMessages?: boolean;
 };
 
-program
+const run = program
   .command("run")
   .argument("<task>", "development task to perform (@path tokens inline file contents)")
   .option("-y, --yes", "auto-approve write/execute permissions (env-level still asks)")
@@ -286,9 +346,23 @@ program
   .option("--plan", "plan first (read-only), confirm, then execute in the same session")
   .option("--max-cost <usd>", "stop the run once cumulative cost reaches this budget (USD)", parsePositiveFloat)
   .option("--max-duration <seconds>", "stop the run once this much wall-clock time has passed", parsePositiveFloat)
-  .description("run a development task in the current project")
-  .action(async (task: string, opts: SharedRunOpts & { plan?: boolean; maxCost?: number; maxDuration?: number }) => {
+  .option("--worktree [name]", "run in a new retained git worktree (optional name) and print where it is")
+  .description("run a development task in the current project");
+addSessionOptions(run);
+addStructuredOutputOptions(run);
+run.action(
+  async (
+    task: string,
+    opts: SharedRunOpts & {
+      plan?: boolean;
+      maxCost?: number;
+      maxDuration?: number;
+      worktree?: boolean | string;
+    } & SessionFlagOpts,
+  ) => {
     await runTaskCommand(task, {
+      ...sessionRunOptions(opts),
+      worktree: opts.worktree,
       mode: "edit",
       yes: opts.yes,
       maxCostUsd: opts.maxCost,
@@ -314,7 +388,8 @@ program
       strictMcpConfig: opts.strictMcpConfig,
       plan: opts.plan,
     });
-  });
+  },
+);
 
 // Track E: run a task inside an isolated Docker container against the current
 // workspace. The docker argv is built by the pure buildDockerRunArgs; --check
@@ -585,7 +660,7 @@ for (const action of ["install", "uninstall", "status"] as const) {
     .action((opts: { dryRun?: boolean; json?: boolean }) => scheduleInstallCommand(action, opts));
 }
 
-program
+const ask = program
   .command("ask")
   .argument("<question>", "question about the current project (@path tokens inline file contents)")
   .option("-m, --model <model>", "override model")
@@ -607,9 +682,21 @@ program
   .option("--output-style <style>", "default | concise | explanatory | learning")
   .option("--settings <file>", "path to JSON settings file (layered over project config but below env/CLI flags)")
   .option("--profile <name>", "use a named config profile (also SEEKFORGE_PROFILE env)")
-  .description("read-only Q&A about the codebase (no writes, no mutating commands; read-only git/gh still runs)")
-  .action(async (question: string, opts: SharedRunOpts) => {
+  .option("--max-cost <usd>", "stop the run once cumulative cost reaches this budget (USD)", parsePositiveFloat)
+  .option("--max-duration <seconds>", "stop the run once this much wall-clock time has passed", parsePositiveFloat)
+  .option("--mcp-config <file>", "load MCP servers from a JSON file (merged over config, unless --strict-mcp-config)")
+  .option("--strict-mcp-config", "use only --mcp-config servers, ignore config-file MCP servers")
+  .description("read-only Q&A about the codebase (no writes, no mutating commands; read-only git/gh still runs)");
+addSessionOptions(ask);
+addStructuredOutputOptions(ask);
+ask.action(
+  async (question: string, opts: SharedRunOpts & { maxCost?: number; maxDuration?: number } & SessionFlagOpts) => {
     await runTaskCommand(question, {
+      ...sessionRunOptions(opts),
+      maxCostUsd: opts.maxCost,
+      maxDurationSeconds: opts.maxDuration,
+      mcpConfig: opts.mcpConfig,
+      strictMcpConfig: opts.strictMcpConfig,
       mode: "ask",
       model: opts.model,
       outputFormat: resolveOutputFormatOrExit(opts),
@@ -627,7 +714,8 @@ program
       fallbackModel: opts.fallbackModel,
       outputStyle: opts.outputStyle,
     });
-  });
+  },
+);
 
 program
   .command("init")
@@ -646,7 +734,7 @@ program
 
 program
   .command("doctor")
-  .description("run environment diagnostics (api key, node, git, runtime, mcp, editor, clipboard)")
+  .description("run environment diagnostics (api key, node, git, runtime, mcp, sandbox, proxy, pdftotext, …)")
   .action(() => {
     doctorCommand();
   });
@@ -654,9 +742,10 @@ program
 program
   .command("update")
   .alias("upgrade")
-  .description("check npm for a newer seekforge and print the install command")
-  .action(async () => {
-    await updateCommand();
+  .option("-y, --yes", "run the upgrade without asking")
+  .description("check npm for a newer seekforge and upgrade it with the package manager that installed it")
+  .action(async (opts: { yes?: boolean }) => {
+    await updateCommand({ yes: opts.yes }, defaultUpdateDeps(version));
   });
 
 const sessions = program
@@ -664,6 +753,22 @@ const sessions = program
   .description("list sessions of the current project")
   .action(() => {
     sessionsCommand();
+  });
+sessions
+  .command("show")
+  .argument("<session-id>", "session to describe (see `seekforge sessions`)")
+  .option("--json", "emit JSON")
+  .description("show one session: name, status, usage, plan and task")
+  .action((id: string, opts: { json?: boolean }) => {
+    sessionsShowCommand(id, opts);
+  });
+sessions
+  .command("rename")
+  .argument("<session-id>", "session to name")
+  .argument("<title...>", 'the new name ("" clears it)')
+  .description("give a session a name (shown by `sessions`, `sessions show` and the TUI)")
+  .action((id: string, title: string[]) => {
+    sessionsRenameCommand(id, title);
   });
 sessions
   .command("prune")
@@ -798,78 +903,188 @@ program
     completionCommand(shell);
   });
 
-program
+/** Every root flag as commander parses it (the chat action reads them all). */
+type RootOpts = SessionFlagOpts & {
+  print?: string | boolean;
+  classic?: boolean;
+  ask?: boolean;
+  yes?: boolean;
+  model?: string;
+  maxCost?: number;
+  maxDuration?: number;
+  outputFormat?: string;
+  json?: boolean;
+  continue?: boolean;
+  resume?: string;
+  addDir?: string[];
+  maxTurns?: number;
+  verbose?: boolean;
+  systemPrompt?: string;
+  appendSystemPrompt?: string;
+  allowedTools?: string;
+  disallowedTools?: string;
+  permissionMode?: string;
+  fallbackModel?: string;
+  outputStyle?: string;
+  settings?: string;
+  profile?: string;
+  inputFormat?: string;
+  dangerouslySkipPermissions?: boolean;
+  mcpConfig?: string;
+  strictMcpConfig?: boolean;
+  replayUserMessages?: boolean;
+  includePartialMessages?: boolean;
+  worktree?: boolean | string;
+};
+
+/** Flags that only mean something to a headless run, by attribute → spelling. */
+const PRINT_ONLY_FLAGS: [keyof RootOpts, string][] = [
+  ["outputFormat", "--output-format"],
+  ["json", "--json"],
+  ["inputFormat", "--input-format"],
+  ["replayUserMessages", "--replay-user-messages"],
+  ["includePartialMessages", "--include-partial-messages"],
+  ["maxDuration", "--max-duration"],
+  ["jsonSchema", "--json-schema"],
+  ["jsonSchemaFile", "--json-schema-file"],
+  ["worktree", "--worktree"],
+];
+
+/** Tracks an in-process TUI launch so the exit path leaves its screen alone. */
+let tuiLaunched = false;
+
+const chat = program
   .command("chat", { isDefault: true })
   .option("-y, --yes", "auto-approve write/execute permissions")
   .option("-m, --model <model>", "model for the session")
-  .description("interactive session (default when no command is given; `-p` for headless print mode)")
-  .action(async (opts: { yes?: boolean; model?: string }) => {
-    // `seekforge -p "…"` (or piped stdin) takes precedence over interactive chat.
-    const root = program.opts<{
-      print?: string | boolean;
-      ask?: boolean;
-      yes?: boolean;
-      model?: string;
-      maxCost?: number;
-      maxDuration?: number;
-      outputFormat?: string;
-      json?: boolean;
-      continue?: boolean;
-      resume?: string;
-      addDir?: string[];
-      maxTurns?: number;
-      verbose?: boolean;
-      systemPrompt?: string;
-      appendSystemPrompt?: string;
-      allowedTools?: string;
-      disallowedTools?: string;
-      permissionMode?: string;
-      fallbackModel?: string;
-      outputStyle?: string;
-      settings?: string;
-      profile?: string;
-      inputFormat?: string;
-      dangerouslySkipPermissions?: boolean;
-      mcpConfig?: string;
-      strictMcpConfig?: boolean;
-      replayUserMessages?: boolean;
-      includePartialMessages?: boolean;
-    }>();
-    if (root.print !== undefined) {
-      const inline = typeof root.print === "string" ? root.print : undefined;
-      await printCommand(inline, {
-        ask: root.ask,
-        yes: root.yes ?? opts.yes,
-        model: root.model ?? opts.model,
-        maxCost: root.maxCost,
-        maxDuration: root.maxDuration,
-        outputFormat: root.outputFormat,
-        json: root.json,
-        continueLast: root.continue,
-        resume: root.resume,
-        addDir: root.addDir,
-        maxTurns: root.maxTurns !== undefined ? String(root.maxTurns) : undefined,
-        verbose: root.verbose,
-        systemPrompt: root.systemPrompt,
-        appendSystemPrompt: root.appendSystemPrompt,
-        allowedTools: root.allowedTools,
-        disallowedTools: root.disallowedTools,
-        permissionMode: root.permissionMode,
-        fallbackModel: root.fallbackModel,
-        settingsFile: root.settings,
-        profile: root.profile,
-        outputStyle: root.outputStyle,
-        inputFormat: root.inputFormat,
-        dangerouslySkipPermissions: root.dangerouslySkipPermissions,
-        mcpConfig: root.mcpConfig,
-        strictMcpConfig: root.strictMcpConfig,
-        replayUserMessages: root.replayUserMessages,
-        includePartialMessages: root.includePartialMessages,
-      });
+  .option("-c, --continue", "resume the most recent session")
+  .option("--resume <id>", "resume a specific session")
+  .option("--ask", "every message runs read-only")
+  .option("--permission-mode <mode>", "default | acceptEdits | plan | bypassPermissions (also: confirm | auto)")
+  .option("--dangerously-skip-permissions", "alias for -y")
+  .option("--add-dir <path>", "extra read-only root for @-references (repeatable)", collect, [] as string[])
+  .option("--mcp-config <file>", "load MCP servers from a JSON file (merged over config, unless --strict-mcp-config)")
+  .option("--strict-mcp-config", "use only --mcp-config servers, ignore config-file MCP servers")
+  .option("--system-prompt <text>", "replace the system prompt entirely")
+  .option("--append-system-prompt <text>", "append text to the system prompt")
+  .option("--output-style <style>", "default | concise | explanatory | learning")
+  .option("--allowedTools <list>", "only allow these tools (comma-separated)")
+  .option("--disallowedTools <list>", "deny these tools (comma-separated)")
+  .option("--max-turns <n>", "cap agent turns per message", parsePositiveInt)
+  .option("--max-cost <usd>", "stop once the session has cost this much (USD)", parsePositiveFloat)
+  .option("--fallback-model <model>", "model to retry with if the primary is overloaded")
+  .option("--verbose", "print full tool args and results")
+  .option("--settings <file>", "path to JSON settings file (layered over project config but below env/CLI flags)")
+  .option("--profile <name>", "use a named config profile (also SEEKFORGE_PROFILE env)")
+  .description(
+    "interactive session (default when no command is given: the TUI in a terminal; `chat` is the classic REPL; `-p` for headless print mode)",
+  );
+addSessionOptions(chat);
+chat.action(async (opts: RootOpts) => {
+  const root = program.opts<RootOpts>();
+  // `seekforge -p "…"` (or piped stdin) takes precedence over interactive chat.
+  if (root.print !== undefined) {
+    const inline = typeof root.print === "string" ? root.print : undefined;
+    await printCommand(inline, {
+      ask: root.ask,
+      yes: root.yes ?? opts.yes,
+      model: root.model ?? opts.model,
+      maxCost: root.maxCost,
+      maxDuration: root.maxDuration,
+      outputFormat: root.outputFormat,
+      json: root.json,
+      continueLast: root.continue,
+      resume: root.resume,
+      addDir: root.addDir,
+      maxTurns: root.maxTurns !== undefined ? String(root.maxTurns) : undefined,
+      verbose: root.verbose,
+      systemPrompt: root.systemPrompt,
+      appendSystemPrompt: root.appendSystemPrompt,
+      allowedTools: root.allowedTools,
+      disallowedTools: root.disallowedTools,
+      permissionMode: root.permissionMode,
+      fallbackModel: root.fallbackModel,
+      settingsFile: root.settings,
+      profile: root.profile,
+      outputStyle: root.outputStyle,
+      inputFormat: root.inputFormat,
+      dangerouslySkipPermissions: root.dangerouslySkipPermissions,
+      mcpConfig: root.mcpConfig,
+      strictMcpConfig: root.strictMcpConfig,
+      replayUserMessages: root.replayUserMessages,
+      includePartialMessages: root.includePartialMessages,
+      worktree: root.worktree,
+      ...sessionRunOptions(root),
+    });
+    return;
+  }
+
+  // Flags given before `chat` land on the root, flags after it on `chat`.
+  const merged: RootOpts = { ...root };
+  for (const [key, value] of Object.entries(opts)) {
+    if (value !== undefined) (merged as Record<string, unknown>)[key] = value;
+  }
+  merged.addDir = [...(root.addDir ?? []), ...(opts.addDir ?? [])];
+
+  const printOnly = PRINT_ONLY_FLAGS.filter(([key]) => merged[key] !== undefined && merged[key] !== false);
+  if (printOnly.length > 0) {
+    const flags = printOnly.map(([, flag]) => flag).join(", ");
+    fail(t("err.printOnlyFlag", { flag: flags }), { hint: t("err.printOnlyFlagHint", { flag: flags }) });
+    return;
+  }
+
+  const { print: _print, ...interactiveFlags } = merged;
+  const decision = decideInteractiveFrontend({
+    explicitChat: program.args[0] === "chat",
+    flags: interactiveFlags,
+    env: process.env,
+    stdinIsTTY: process.stdin.isTTY === true,
+    stdoutIsTTY: process.stdout.isTTY === true,
+  });
+  if (decision.kind === "tui") {
+    const entry = resolveTuiEntry();
+    if (entry) {
+      // The TUI does not ask for folder access itself; `seekforge` always has.
+      if (!(await ensureWorkspaceAuthorized(process.cwd(), { yes: false, machine: false }))) return;
+      tuiLaunched = true;
+      await launchTui(entry, decision.args);
       return;
     }
-    await replCommand({ yes: opts.yes, model: opts.model, settingsFile: root.settings, profile: root.profile });
+    console.error(dim(t("status.tuiMissing")));
+  } else if (decision.unsupported) {
+    console.error(dim(t("status.tuiUnsupportedFlags", { flags: decision.unsupported.join(", ") })));
+  }
+
+  await replCommand({
+    yes: merged.yes,
+    model: merged.model,
+    settingsFile: merged.settings,
+    profile: merged.profile,
+    continueLast: merged.continue,
+    resumeSessionId: merged.resume,
+    forkSession: merged.forkSession,
+    sessionId: merged.sessionId,
+    permissionMode: merged.permissionMode,
+    dangerouslySkipPermissions: merged.dangerouslySkipPermissions,
+    ask: merged.ask,
+    addDirs: merged.addDir,
+    mcpConfig: merged.mcpConfig,
+    strictMcpConfig: merged.strictMcpConfig,
+    systemPrompt: merged.systemPrompt,
+    systemPromptFile: merged.systemPromptFile,
+    appendSystemPrompt: merged.appendSystemPrompt,
+    appendSystemPromptFile: merged.appendSystemPromptFile,
+    outputStyle: merged.outputStyle,
+    allowedTools: merged.allowedTools,
+    disallowedTools: merged.disallowedTools,
+    maxTurns: merged.maxTurns,
+    fallbackModel: merged.fallbackModel,
+    verbose: merged.verbose,
+    maxCostUsd: merged.maxCost,
+    agentsJson: merged.agents,
+    debug: merged.debug,
   });
+});
 
 // Non-blocking update check: fire-and-forget at start, print the notice (to
 // stderr, so it never pollutes stdout) after the command finishes. Skipped for
@@ -894,6 +1109,8 @@ program
     fail(message, { hint });
   })
   .finally(async () => {
+    // The TUI is still on screen when its launch resolves, and shows its own notice.
+    if (tuiLaunched) return;
     const latest = await updatePromise;
     if (latest) process.stderr.write(`${formatUpdateNotice(latest, version)}\n`);
   });

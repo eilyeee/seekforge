@@ -93,22 +93,27 @@ function collect(program) {
 }
 
 let dumped = false;
+// Resolves once the tree has been handed to the OS. A write to a pipe is
+// asynchronous, so exiting right after it cut the JSON at the pipe's 64 KiB
+// buffer as soon as the CLI surface grew past that.
 const emit = (program) => {
-  if (dumped) return;
+  if (dumped) return Promise.resolve();
   dumped = true;
-  process.stdout.write(`\n__CLI_COMMAND_TREE__${JSON.stringify(collect(program))}\n`);
+  return new Promise((resolve) => {
+    process.stdout.write(`\n__CLI_COMMAND_TREE__${JSON.stringify(collect(program))}\n`, () => resolve());
+  });
 };
 
 // The entry point ends in `program.parseAsync()`; intercepting it is what turns
 // a CLI run into an introspection run. `parse` is patched too so a future entry
 // point that calls the sync form is not silently missed.
 Command.prototype.parseAsync = async function patched() {
-  emit(this);
+  await emit(this);
   process.exit(0);
 };
 Command.prototype.parse = function patched() {
-  emit(this);
-  process.exit(0);
+  void emit(this).then(() => process.exit(0));
+  return this;
 };
 
 await import(pathToFileURL(entry).href);

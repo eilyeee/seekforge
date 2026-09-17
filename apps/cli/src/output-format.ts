@@ -74,7 +74,19 @@ export function buildUsage(usage: TokenUsage): Record<string, number> {
 }
 
 /** "How did this run end" → the Claude result-envelope subtype + is_error. */
-export type ResultOutcome = { kind: "success" } | { kind: "max_turns" } | { kind: "error"; message?: string };
+export type ResultOutcome =
+  | { kind: "success" }
+  | { kind: "max_turns" }
+  | { kind: "structured_output"; message: string }
+  | { kind: "error"; message?: string };
+
+const SUBTYPES: Record<ResultOutcome["kind"], string> = {
+  success: "success",
+  max_turns: "error_max_turns",
+  // Claude Code's name for "--json-schema never validated".
+  structured_output: "error_max_structured_output_retries",
+  error: "error",
+};
 
 /** Maps an AgentEvent error code (session.failed) to a result outcome. */
 export function outcomeFromErrorCode(code: string, message?: string): ResultOutcome {
@@ -92,7 +104,26 @@ export type ResultEnvelopeInput = {
   durationMs: number;
   /** Outcome: success | max_turns | error. Defaults to success when a report exists. */
   outcome?: ResultOutcome;
+  /** The validated `--json-schema` value, emitted as `structured_output`. */
+  structuredOutput?: unknown;
+  /**
+   * Usage spent outside the agent run (the structured-output calls). Different
+   * calls from the run's own window, so it is added to the reported totals.
+   */
+  extraUsage?: TokenUsage;
+  /** The retained worktree a `--worktree` run worked in. */
+  worktree?: { path: string; branch: string };
 };
+
+function sumUsage(a: TokenUsage | undefined, b: TokenUsage | undefined): TokenUsage | undefined {
+  if (!a || !b) return a ?? b;
+  return {
+    promptTokens: a.promptTokens + b.promptTokens,
+    completionTokens: a.completionTokens + b.completionTokens,
+    cacheHitTokens: a.cacheHitTokens + b.cacheHitTokens,
+    costUsd: a.costUsd + b.costUsd,
+  };
+}
 
 /**
  * Builds the Claude-compatible result envelope emitted by `--output-format json`
@@ -110,14 +141,14 @@ export function buildResultEnvelope(input: ResultEnvelopeInput): Record<string, 
   const { report, sessionId, numTurns, durationMs } = input;
   const outcome: ResultOutcome = input.outcome ?? { kind: "success" };
 
-  const subtype = outcome.kind === "success" ? "success" : outcome.kind === "max_turns" ? "error_max_turns" : "error";
+  const subtype = SUBTYPES[outcome.kind];
   const isError = outcome.kind !== "success";
 
   // `result` is the final summary text; on a failed run with no report, surface
   // the error message (Claude puts the error string in `result` for errors).
   const result = report?.summary ?? (outcome.kind === "error" ? (outcome.message ?? "") : "");
 
-  const usage = report?.usage;
+  const usage = sumUsage(report?.usage, input.extraUsage);
 
   const envelope: Record<string, unknown> = {
     type: "result",
@@ -131,12 +162,16 @@ export function buildResultEnvelope(input: ResultEnvelopeInput): Record<string, 
     usage: usage ? buildUsage(usage) : {},
   };
 
+  if (input.structuredOutput !== undefined) envelope.structured_output = input.structuredOutput;
+  if (outcome.kind === "structured_output") envelope.errors = [outcome.message];
+
   // SeekForge-specific extras (ignored by Claude consumers).
   if (report) {
     envelope.changedFiles = report.changedFiles;
     envelope.commandsRun = report.commandsRun;
     envelope.verification = report.verification;
   }
+  if (input.worktree) envelope.worktree = input.worktree;
   return envelope;
 }
 

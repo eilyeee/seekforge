@@ -16,6 +16,13 @@ export default defineConfig({
   // Their runtime deps (zod, ink, react) are declared as real dependencies.
   noExternal: [/^@seekforge\//],
   external: ["ink", "ink-spinner", "react"],
+  // The TUI sources are compiled with THIS package's tsconfig, which has no
+  // `jsx` setting, so esbuild would emit classic React.createElement calls with
+  // no React in scope and the bundled TUI would crash on its first render.
+  // Match apps/tui's `"jsx": "react-jsx"`.
+  esbuildOptions(options) {
+    options.jsx = "automatic";
+  },
   // Copy the built desktop web UI into dist/web so the published package's
   // `seekforge serve` ships a usable web workbench (not just the API).
   onSuccess: "node scripts/bundle-web.mjs",

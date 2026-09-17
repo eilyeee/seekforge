@@ -108,6 +108,7 @@ Agent 启动的命令会收到一份移除了凭据环境变量的父环境副�
 - 确认提示始终展示原始命令 / 路径，被注入的指令无法伪装成一个已获批的动作（§2，`permissions.ts:59`）。
 - 持久记忆会被过滤：读起来像是给 agent 下指令的提取事实，会在入库前被丢弃（`packages/core/src/memory/extract.ts::INJECTION_PATTERN` `:59`，应用于 `:301`）。
 - 工具输出在重新进入上下文之前会先做机密信息脱敏（`packages/core/src/tools/redact.ts::redactSecrets` `:30`）。
+- 用户在 REPL 中用 `!` 运行的 shell 命令是用户本人的操作，不经权限分级，但其输出仍是该命令打印出的任意内容。它会被放进一个声明为数据的 `<user-shell-commands>` 块并做实体编码（无法闭合自身的框架），再随下一条消息发送（`packages/core/src/agent/user-shell-context.ts::formatUserShellContext`）。`--json-schema` 背后的结构化输出调用也以同样方式包装已结束运行的任务与结果（`packages/core/src/util/structured-output.ts::buildStructuredOutputMessages`）。
 
 ---
 

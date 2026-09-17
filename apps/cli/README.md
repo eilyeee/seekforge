@@ -9,8 +9,8 @@ a diff with token/cost usage at the end.
 ```bash
 npm i -g seekforge            # published to the official npm registry
 
-seekforge                     # the CLI
-seekforge-tui                 # the terminal UI
+seekforge                     # interactive session: the terminal UI (seekforge chat = classic REPL)
+seekforge-tui                 # the terminal UI directly
 
 cd your-project
 seekforge config set apiKey sk-... --global   # DeepSeek API key
@@ -24,18 +24,20 @@ seekforge run "修复登录按钮点击无响应的问题"
 
 | Command | What it does |
 | --- | --- |
+| `seekforge` | interactive session — the TUI in a terminal; the classic REPL with `seekforge chat`, `--classic`, `SEEKFORGE_CLASSIC_REPL=1`, piped input, or flags the TUI does not support yet |
 | `seekforge run "<task>"` | run a development task (add `-y` to auto-approve safe writes/commands) |
 | `seekforge ask "<question>"` | read-only Q&A about the codebase |
 | `seekforge -p "<prompt>"` | headless print mode: one run, stream to stdout, exit (reads piped stdin) |
 | `seekforge resume <id> [task]` | continue a previous session with its full history |
 | `seekforge sessions` / `status` | list sessions / project overview |
+| `seekforge sessions show <id>` / `sessions rename <id> <title>` | describe / name a session |
 | `seekforge diff` | show the current git diff |
-| `seekforge doctor` | environment diagnostics (api key, node, git, runtime, mcp, editor, clipboard) |
+| `seekforge doctor` | environment diagnostics (api key, node, git, runtime, mcp, editor, clipboard, OS sandbox, proxy, pdftotext) |
 | `seekforge resolve <issue> --max-cost <usd>` | fix an issue in an isolated worktree and open a draft PR (`--wait-ci`, `--dry-run`, `--no-worktree`) |
 | `seekforge resolve-review <pr> --max-cost <usd>` | address actionable PR feedback, verify, commit, and push fixes |
 | `seekforge schedule add\|list\|run` | register and run local cost-bounded scheduled jobs |
 | `seekforge sandbox-run "<task>"` | execute through the optional Docker runner (`--check` prints the command only) |
-| `seekforge update` (alias `upgrade`) | check npm for a newer release and print the install command |
+| `seekforge update [-y]` (alias `upgrade`) | check npm for a newer release and upgrade with the package manager that installed it |
 | `seekforge init` | scaffold `.seekforge/` and `AGENTS.md` |
 | `seekforge skill list\|show\|create` | manage procedure skills |
 | `seekforge plugin list\|create\|install\|update\|enable\|disable\|remove` | manage digest-approved plugin bundles |
@@ -61,6 +63,24 @@ covered by [`docs/scheduling.md`](../../docs/scheduling.md) and
 | `--add-dir <path>` | extra read-only root whose `@path` references resolve (repeatable) |
 | `--max-turns <n>` | cap the number of agent turns |
 | `--verbose` | print full tool args and results instead of a quiet summary |
+| `--fork-session` | with `-c`/`--resume`: continue in a copy of the session |
+| `--session-id <id>` | start the new session under this id (a UUID works) |
+| `--system-prompt-file` / `--append-system-prompt-file <path>` | replace / extend the system prompt from a file |
+| `--agents '<json>'` | subagents for this run only (Claude Code's `{"id": {"description", "prompt", …}}` shape) |
+| `--debug [filter]` | internal detail on stderr (`--debug=api,tool`, `--debug='!command'`) |
+| `--json-schema '<schema>'` | also produce a JSON value validating against the schema (`structured_output`) |
+| `--worktree [name]` | (`run`, `-p`) run in a new retained git worktree and print where the changes are |
+
+Most of these also apply to the interactive session. Full reference:
+[`docs/cli-reference.md`](../../docs/cli-reference.md).
+
+### Interactive REPL
+
+`seekforge chat` answers `/help`; `!<command>` runs a shell command in the
+workspace and carries its output into your next message; `/compact <focus>`
+has the model summarize around a focus; `/rename <title>` names the session.
+Permission prompts accept `y`, `a` (this session), `n`, or `n: <reason>` to tell
+the agent why.
 
 ### Headless / piped usage
 
@@ -93,10 +113,12 @@ on the entry in `.seekforge/config.json` to enable automatic connection.
 
 ### Updating
 
-`seekforge update` only **checks** the npm registry and prints the install
-command (`npm i -g seekforge`); it never self-mutates the global install,
-because that binary may be owned by root or a version manager (npm/pnpm/volta/
-asdf/brew) and replacing the running binary mid-process is unsafe.
+`seekforge update` checks the npm registry, works out whether this copy was
+installed with npm, pnpm or Volta, prints that manager's upgrade command
+(pointed explicitly at `https://registry.npmjs.org/`) and runs it once you
+confirm (`-y` skips the question). An install it cannot place — npx, yarn, bun,
+a version manager it does not recognize — only gets the command to run by hand,
+because running the wrong manager against a global install can corrupt it.
 
 ## Safety model
 

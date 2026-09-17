@@ -209,6 +209,13 @@ data. Directives embedded in it are ignored:
   `:301`).
 - Secrets are redacted out of tool output before it re-enters the context
   (`packages/core/src/tools/redact.ts::redactSecrets` `:30`).
+- A shell command the user runs from the REPL with `!` is the user's own action
+  and is not permission-classified, but its output is still whatever the
+  command printed. It reaches the next message inside a
+  `<user-shell-commands>` block that calls it data, entity-encoded so it cannot
+  close its own frame (`packages/core/src/agent/user-shell-context.ts::formatUserShellContext`).
+  The structured-output call behind `--json-schema` frames the finished run's
+  task and result the same way (`packages/core/src/util/structured-output.ts::buildStructuredOutputMessages`).
 
 ---
 

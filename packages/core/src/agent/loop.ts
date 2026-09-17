@@ -489,7 +489,12 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         throw new RangeError("maxAutoContinuations produces an unsafe total turn limit");
       }
       const resuming = input.resumeSessionId !== undefined;
-      const sessionId = input.resumeSessionId ?? newSessionId();
+      // A caller-chosen id names a new session; reusing one would interleave
+      // two conversations in one messages.jsonl.
+      if (!resuming && input.sessionId !== undefined && readSessionMeta(input.projectPath, input.sessionId)) {
+        throw new Error(`session ${input.sessionId} already exists`);
+      }
+      const sessionId = input.resumeSessionId ?? input.sessionId ?? newSessionId();
       let sessionLease: Awaited<ReturnType<typeof acquireSessionLeaseWithPreemption>>;
       try {
         sessionLease = await acquireSessionLeaseWithPreemption(input.projectPath, sessionId, {

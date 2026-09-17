@@ -16,3 +16,27 @@ export { isRecord } from "./util/guards.js";
 export { onAbortOnce } from "./util/abort.js";
 export { killProcessTree } from "./util/process-tree.js";
 export { SEEKFORGE_VERSION } from "./version.js";
+export {
+  formatJsonSchemaIssues,
+  jsonSchemaProblems,
+  validateJsonSchema,
+  type JsonSchemaIssue,
+} from "./util/json-schema-validate.js";
+export {
+  buildStructuredOutputMessages,
+  DEFAULT_STRUCTURED_OUTPUT_ATTEMPTS,
+  MAX_STRUCTURED_OUTPUT_ATTEMPTS,
+  parseStructuredJson,
+  produceStructuredOutput,
+  type StructuredOutputInput,
+  type StructuredOutputProvider,
+  type StructuredOutputRequest,
+  type StructuredOutputResult,
+} from "./util/structured-output.js";
+export {
+  clipUserShellOutput,
+  formatUserShellContext,
+  MAX_USER_SHELL_OUTPUT_CHARS,
+  MAX_USER_SHELL_RUNS,
+  type UserShellRun,
+} from "./agent/user-shell-context.js";

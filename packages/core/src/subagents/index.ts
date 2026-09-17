@@ -25,6 +25,12 @@ export {
   type ImportAgentOptions,
   type ParsedExternalAgent,
 } from "./import.js";
+export {
+  MAX_INLINE_AGENTS,
+  MAX_INLINE_AGENTS_BYTES,
+  parseInlineAgentDefinitions,
+  withInlineAgents,
+} from "./inline.js";
 export { buildSubagentPrompt } from "./prompt.js";
 export {
   AGENT_RESULT_TOOL,
