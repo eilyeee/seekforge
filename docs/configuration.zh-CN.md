@@ -1393,7 +1393,7 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 | `sandbox` | enum | `off` / `read-only` / `workspace-write` / `restricted` |
 | `compaction` | enum | `mechanical` / `llm` |
 | `thinking` | boolean | `true` / `false` |
-| `reasoningEffort` | enum | `high` / `max` |
+| `reasoningEffort` | enum | `low` / `medium` / `high` / `max`（空值表示清除） |
 
 其余的键 —— `planModel`、`escalateOnFailure`、`maxCostUsd`、
 `modelPricing`、`modelContextWindows`、`autoCompactThreshold`、`inlineImages`、

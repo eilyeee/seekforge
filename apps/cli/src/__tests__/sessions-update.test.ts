@@ -11,7 +11,14 @@ import {
 } from "../commands/sessions.js";
 import { updateCommand, type UpdateDeps } from "../commands/update.js";
 import { detectInstallMethod, OFFICIAL_NPM_REGISTRY, upgradeCommand } from "../install-method.js";
-import { pdftotextCheck, proxyCheck, redactProxyUrl, runDoctor, type DoctorProbes } from "../commands/doctor.js";
+import {
+  coreConfigCheck,
+  pdftotextCheck,
+  proxyCheck,
+  runDoctor,
+  telemetryCheck,
+  type DoctorProbes,
+} from "../commands/doctor.js";
 
 let cwd: string;
 let out: string[];
@@ -214,10 +221,11 @@ describe("updateCommand", () => {
   });
 });
 
-describe("doctor proxy and pdftotext checks", () => {
+describe("doctor proxy, telemetry and pdftotext checks", () => {
   function probes(env: Record<string, string>, over: Partial<DoctorProbes> = {}): DoctorProbes {
     return {
       env: (key) => env[key],
+      environment: () => env,
       fileExists: () => true,
       nodeVersion: () => "v22.22.1",
       platform: () => "darwin",
@@ -227,38 +235,76 @@ describe("doctor proxy and pdftotext checks", () => {
       findRepoRoot: () => null,
       glob: () => null,
       readText: () => null,
-      nodeSupportsEnvProxy: () => true,
       execArgv: () => [],
+      allowedNodeFlags: () => new Set(["--use-env-proxy"]),
       ...over,
     };
   }
 
-  it("redacts credentials in proxy URLs", () => {
-    expect(redactProxyUrl("http://user:pw@proxy:8080")).toBe("http://***@proxy:8080");
-    expect(redactProxyUrl("http://proxy:8080/")).toBe("http://proxy:8080");
-    expect(redactProxyUrl("user:pw@proxy")).toBe("(set, not a URL)");
+  it("says nothing about a proxy nobody configured", () => {
+    expect(proxyCheck(probes({}))).toBeUndefined();
+    expect(runDoctor("/proj", { apiKey: "k" }, probes({})).map((c) => c.name)).not.toContain("proxy");
   });
 
-  it("reports proxy variables against what this node does with them", () => {
-    expect(proxyCheck(probes({}))).toEqual({ name: "proxy", ok: true, detail: "no HTTP(S)_PROXY set" });
-    expect(proxyCheck(probes({ ALL_PROXY: "socks5://x" })).detail).toContain("node does not read it");
-    const idle = proxyCheck(probes({ HTTPS_PROXY: "http://u:p@proxy:1", NO_PROXY: "localhost" }));
-    expect(idle).toMatchObject({ ok: true, fixHint: expect.stringContaining("NODE_USE_ENV_PROXY=1") });
-    expect(idle.warn).toBeUndefined();
-    expect(idle.detail).toContain("HTTPS_PROXY=http://***@proxy:1; NO_PROXY=localhost");
-    expect(idle.detail).not.toContain("u:p");
-    expect(proxyCheck(probes({ HTTPS_PROXY: "http://p:1", NODE_USE_ENV_PROXY: "1" })).detail).toContain("honored");
-    expect(
-      proxyCheck(probes({ HTTPS_PROXY: "http://p:1", NODE_OPTIONS: "--max-old-space-size=1 --use-env-proxy" })).detail,
-    ).toContain("honored");
-    expect(proxyCheck(probes({ HTTPS_PROXY: "http://p:1" }, { execArgv: () => ["--use-env-proxy"] })).detail).toContain(
-      "honored",
+  it("reports whether this process was started to use the proxy (the launcher's --use-env-proxy)", () => {
+    const launched = proxyCheck(
+      probes(
+        { HTTPS_PROXY: "http://u:p@proxy:1", NO_PROXY: "localhost" },
+        {
+          execArgv: () => ["--use-env-proxy"],
+        },
+      ),
     );
-    const old = proxyCheck(
-      probes({ http_proxy: "http://p:1" }, { nodeSupportsEnvProxy: () => false, nodeVersion: () => "v20.1.0" }),
+    expect(launched).toMatchObject({ name: "proxy", ok: true });
+    expect(launched?.warn).toBeUndefined();
+    expect(launched?.detail).toContain("requests use HTTPS_PROXY");
+    expect(launched?.detail).toContain("NO_PROXY=localhost");
+    // Only the variable's name is printed, never its value (which may carry credentials).
+    expect(launched?.detail).not.toContain("u:p");
+
+    const direct = proxyCheck(probes({ HTTPS_PROXY: "http://p:1" }));
+    expect(direct).toMatchObject({ ok: true, warn: true });
+    expect(direct?.fixHint).toContain("launcher");
+    expect(direct?.fixHint).not.toContain("export NODE_USE_ENV_PROXY=1 (or NODE_OPTIONS");
+
+    const oldNode = proxyCheck(
+      probes({ http_proxy: "http://p:1" }, { allowedNodeFlags: () => new Set(), nodeVersion: () => "v20.1.0" }),
     );
-    expect(old).toMatchObject({ ok: true, warn: true });
-    expect(old.detail).toContain("v20.1.0");
+    expect(oldNode).toMatchObject({ ok: true, warn: true });
+    expect(oldNode?.detail).toContain("v20.1.0");
+    expect(proxyCheck(probes({ ALL_PROXY: "socks5://x" }))?.detail).toContain("does not read it");
+  });
+
+  it("describes telemetry export and its configuration problems", () => {
+    expect(telemetryCheck(probes({}))).toEqual({
+      name: "telemetry",
+      ok: true,
+      detail: "off (set SEEKFORGE_ENABLE_TELEMETRY=1 to export)",
+    });
+    const on = telemetryCheck(
+      probes({
+        SEEKFORGE_ENABLE_TELEMETRY: "1",
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://user:secret@collector.example:4318",
+      }),
+    );
+    expect(on.ok).toBe(true);
+    expect(on.detail).toContain("collector.example");
+    expect(on.detail).not.toContain("secret");
+    const broken = telemetryCheck(probes({ SEEKFORGE_ENABLE_TELEMETRY: "1", OTEL_EXPORTER_OTLP_PROTOCOL: "grpc" }));
+    expect(broken).toMatchObject({ ok: true, warn: true, fixHint: expect.stringContaining("telemetry.md") });
+    expect(broken.detail).toContain("grpc");
+  });
+
+  it("surfaces a malformed apiKeyHelper in the user config", () => {
+    const read = (text: string) => probes({}, { readText: () => text });
+    expect(coreConfigCheck(read('{"apiKeyHelper": ""}'), "/home/u/.seekforge/config.json")).toMatchObject({
+      ok: true,
+      warn: true,
+      detail: expect.stringContaining("apiKeyHelper must be a non-empty string"),
+    });
+    expect(coreConfigCheck(read('{"apiKeyHelper": "pass show key"}'), "/c.json")).toBeUndefined();
+    expect(coreConfigCheck(read("{not json"), "/c.json")).toBeUndefined();
+    expect(coreConfigCheck(probes({}), "/c.json")).toBeUndefined();
   });
 
   it("reports pdftotext informationally", () => {
@@ -272,9 +318,10 @@ describe("doctor proxy and pdftotext checks", () => {
     expect(pdftotextCheck(probes({}))).toMatchObject({ ok: true, fixHint: expect.stringContaining("poppler") });
   });
 
-  it("includes both in the report without failing it", () => {
+  it("includes them in the report without failing it", () => {
     const checks = runDoctor("/proj", { apiKey: "k" }, probes({ EDITOR: "vi", HTTPS_PROXY: "http://p:1" }));
-    expect(checks.map((c) => c.name)).toEqual(expect.arrayContaining(["proxy", "pdftotext"]));
-    expect(checks.filter((c) => c.name === "proxy" || c.name === "pdftotext").every((c) => c.ok)).toBe(true);
+    const names = ["proxy", "pdftotext", "telemetry"];
+    expect(checks.map((c) => c.name)).toEqual(expect.arrayContaining(names));
+    expect(checks.filter((c) => names.includes(c.name)).every((c) => c.ok)).toBe(true);
   });
 });

@@ -61,7 +61,8 @@ import {
 } from "@seekforge/core";
 import { resolve } from "node:path";
 import { fail } from "../colors.js";
-import { loadConfig } from "../config.js";
+import { type loadConfig, resolveConfig } from "../config.js";
+import type { McpOrigins } from "../run-setup.js";
 import { loadGraphExecutionRegistry } from "../graph-executors.js";
 import { withAgentRuntime } from "../loop-runtime.js";
 import { ensureWorkspaceAuthorized } from "./run.js";
@@ -173,8 +174,9 @@ export async function graphRunCommand(file: string, opts: GraphRunCliOptions): P
     return;
   }
   let config: ReturnType<typeof loadConfig>;
+  let mcpOrigins: McpOrigins;
   try {
-    config = loadConfig(workspace, undefined, opts.profile);
+    ({ config, mcpOrigins } = resolveConfig(workspace, undefined, opts.profile));
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
@@ -216,7 +218,7 @@ export async function graphRunCommand(file: string, opts: GraphRunCliOptions): P
   try {
     if (needsRuntime) {
       await withAgentRuntime(
-        { config, workspace, model, extractMemory: true, forceOnSecondSigint: true },
+        { config, mcpOrigins, workspace, model, extractMemory: true, forceOnSecondSigint: true },
         ({ deps, controller }) => execute(deps, controller.signal),
       );
     } else await execute({} as AgentCoreDeps);

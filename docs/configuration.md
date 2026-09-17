@@ -1580,7 +1580,7 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 | `sandbox` | enum | `off` / `read-only` / `workspace-write` / `restricted` |
 | `compaction` | enum | `mechanical` / `llm` |
 | `thinking` | boolean | `true` / `false` |
-| `reasoningEffort` | enum | `high` / `max` |
+| `reasoningEffort` | enum | `low` / `medium` / `high` / `max` (empty clears it) |
 
 The remaining keys — `planModel`, `escalateOnFailure`, `maxCostUsd`,
 `modelPricing`, `modelContextWindows`, `autoCompactThreshold`, `inlineImages`,

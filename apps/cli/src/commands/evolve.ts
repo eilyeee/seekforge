@@ -1,11 +1,10 @@
 import {
   applyProposal,
-  createDeepSeekProvider,
+  buildProvider,
   listEvolutionProposals,
   listSessions,
   readEvolutionProposal,
   reflectOnSession,
-  resolveProviderConfig,
   scoreSession,
   sessionReflectionPath,
   setEvolutionProposalStatus,
@@ -70,14 +69,19 @@ export async function evolveAnalyzeCommand(sessionId?: string): Promise<void> {
   );
   for (const note of score.notes) console.log(t("cmd.evolve.note", { note }));
 
-  const provider = createDeepSeekProvider(
-    resolveProviderConfig({
+  // The same construction as a run's provider: the apiKeyHelper refresh and
+  // telemetry apply to this call too.
+  const provider = buildProvider(
+    {
       provider: config.provider,
       apiKey: config.apiKey,
-      ...(config.model ? { model: config.model } : {}),
-      ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
-      ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
-    }),
+      baseUrl: config.baseUrl,
+      modelPricing: config.modelPricing,
+      thinking: config.thinking,
+      reasoningEffort: config.reasoningEffort,
+      inlineImages: config.inlineImages,
+    },
+    config.model,
   );
 
   const result = await reflectOnSession(provider, { workspace, sessionId: target });

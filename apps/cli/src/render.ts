@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline/promises";
-import type { AgentEvent, ConfirmResult, PermissionRequest, TokenUsage } from "@seekforge/shared";
+import type { AgentEvent, ConfirmResult, PermissionRequest, PlanItem, TokenUsage } from "@seekforge/shared";
 import { type Colorizer, colorIsEnabled, makeColorizer } from "./colors.js";
 import { t } from "./i18n.js";
 import { parseIndexList } from "./input-selection.js";
@@ -20,6 +20,31 @@ function summarizeResult(data: unknown): string {
 export function formatUsage(usage: TokenUsage): string {
   const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n));
   return `${t("render.tokensLabel", { prompt: k(usage.promptTokens), cacheHit: k(usage.cacheHitTokens), completion: k(usage.completionTokens) })}   ${t("render.costLabel", { cost: usage.costUsd.toFixed(4) })}`;
+}
+
+/** Checklist lines for an update_plan result; a step in progress shows its activeForm. */
+export function formatPlanItems(items: readonly PlanItem[]): string[] {
+  return items.map((item) => {
+    const box = item.status === "done" ? "☑" : item.status === "in_progress" ? "◐" : "☐";
+    const label = item.status === "in_progress" && item.activeForm?.trim() ? item.activeForm.trim() : item.step;
+    return `  ${box} ${label}`;
+  });
+}
+
+/**
+ * The lines a terminal permission prompt prints before its question: the tool,
+ * then the RAW command/path, else the request's own description — every line
+ * of it indented, so a multi-line one (the plan an exit_plan_mode approval
+ * carries) reads as one block.
+ */
+export function formatPermissionRequest(req: PermissionRequest, heading: string): string[] {
+  const lines = [`\n${heading} [${req.permission}] ${req.toolName}`];
+  if (req.command) lines.push(`  command: ${req.command}`);
+  if (req.path) lines.push(`  path:    ${req.path}`);
+  if (!req.command && !req.path) {
+    for (const line of req.description.split(/\r?\n/)) lines.push(line.trim() === "" ? "" : `  ${line}`);
+  }
+  return lines;
 }
 
 export type RendererOptions = {
@@ -115,12 +140,9 @@ function renderEvent(e: AgentEvent, opts: RendererOptions, c: Colorizer): void {
       break;
     case "tool.completed": {
       if (e.toolName === "update_plan" && e.result.ok) {
-        const items = (e.result.data as { items?: Array<{ step: string; status: string }> })?.items ?? [];
+        const items = (e.result.data as { items?: PlanItem[] })?.items ?? [];
         console.log(c.yellow(t("render.planLabel")));
-        for (const item of items) {
-          const box = item.status === "done" ? "☑" : item.status === "in_progress" ? "◐" : "☐";
-          console.log(`  ${box} ${item.step}`);
-        }
+        for (const line of formatPlanItems(items)) console.log(line);
         break;
       }
       const mark = e.result.ok ? c.green("✓") : c.red("✗");
@@ -184,10 +206,7 @@ function renderEvent(e: AgentEvent, opts: RendererOptions, c: Colorizer): void {
  */
 export async function confirmInTerminal(req: PermissionRequest): Promise<ConfirmResult> {
   const c = makeColorizer(colorIsEnabled());
-  console.log(`\n${c.yellow(t("render.permissionRequired"))} [${req.permission}] ${req.toolName}`);
-  if (req.command) console.log(`  command: ${req.command}`);
-  if (req.path) console.log(`  path:    ${req.path}`);
-  if (!req.command && !req.path) console.log(`  ${req.description}`);
+  for (const line of formatPermissionRequest(req, c.yellow(t("render.permissionRequired")))) console.log(line);
   // Multi-hunk selection: offer per-hunk choice when the request carries
   // individual hunk previews (apply_patch with >1 edit).
   if (req.hunks && req.hunks.length > 1) {

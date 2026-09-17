@@ -12,6 +12,7 @@ import {
   seekforgeHome,
   createAgentCore,
   createDefaultDispatcher,
+  createMcpAwareDispatcher,
   createRuntimeClient,
   buildProvider,
   createMcpElicitationHandler,
@@ -24,6 +25,8 @@ import {
   type AgentCore,
   type AgentCoreDeps,
   type AgentDefinition,
+  type DispatchManager,
+  type McpRegistry,
   type RuntimeClient,
   type PluginContributions,
   type ToolSpec,
@@ -31,6 +34,7 @@ import {
   type UsageBus,
 } from "@seekforge/core";
 import type { ConfirmResult, PermissionRequest, PermissionRule } from "@seekforge/shared";
+import type { ConfigLayerOrigin } from "@seekforge/shared/config-layers";
 import type { CliConfig } from "./config.js";
 
 export type CliAgentOptions = {
@@ -49,8 +53,26 @@ export type CliAgentOptions = {
   extractMemory: boolean;
   /** Specialist agents the loop may dispatch via dispatch_agent. */
   subagents?: AgentDefinition[];
-  /** Extra tools from MCP servers (see prepareMcp). */
+  /** Extra tools from MCP servers (see prepareMcp). Ignored when `mcpRegistry` is set. */
   mcpToolSpecs?: ToolSpec[];
+  /**
+   * The live MCP registry from prepareMcp. When set, the dispatcher follows the
+   * servers' tools/list_changed and defers large tool sets behind tool_search;
+   * its tools must not also arrive as `mcpToolSpecs` (a name registered twice throws).
+   */
+  mcpRegistry?: McpRegistry;
+  /**
+   * Directories outside the project the file tools may read and write this
+   * run (CLI --add-dir), on top of config.additionalDirectories. Core
+   * re-validates them against the project on every run.
+   */
+  additionalDirectories?: string[];
+  /**
+   * A session-scoped subagent manager (the REPL owns one per session), so a
+   * background dispatch outlives the message that started it. The owner calls
+   * disposeAll() when the session ends.
+   */
+  dispatchManager?: DispatchManager;
   /** Cap on agent turns (maps to limits.maxAgentTurns); CLI --max-turns. */
   maxTurns?: number;
   /**
@@ -127,6 +149,15 @@ export function configureCliTools(config: CliConfig, workspace?: string): void {
   }
 }
 
+/** Config directories first, then the per-run ones, each once. */
+export function mergeAdditionalDirectories(
+  configured: readonly string[] | undefined,
+  extra: readonly string[] | undefined,
+): string[] | undefined {
+  const merged = [...new Set([...(configured ?? []), ...(extra ?? [])])];
+  return merged.length > 0 ? merged : undefined;
+}
+
 export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
   const { config } = opts;
   const workspace = opts.workspace ?? process.cwd();
@@ -178,7 +209,7 @@ export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
         commandAllowlist: config.commandAllowlist,
         sandbox: config.sandbox,
         sandboxNetwork: config.sandboxNetwork,
-        additionalDirectories: config.additionalDirectories,
+        additionalDirectories: mergeAdditionalDirectories(config.additionalDirectories, opts.additionalDirectories),
         compaction: config.compaction,
         autoCompactThreshold: config.autoCompactThreshold,
         modelContextWindows: config.modelContextWindows,
@@ -203,7 +234,10 @@ export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
           ),
       },
     ),
-    dispatcher: createDefaultDispatcher(opts.mcpToolSpecs ?? []),
+    dispatcher: opts.mcpRegistry
+      ? createMcpAwareDispatcher(opts.mcpRegistry)
+      : createDefaultDispatcher(opts.mcpToolSpecs ?? []),
+    ...(opts.dispatchManager ? { dispatchManager: opts.dispatchManager } : {}),
     ...(opts.usageBus ? { usageBus: opts.usageBus } : {}),
     ...(opts.maxTurns !== undefined && opts.maxTurns > 0 ? { limits: { maxAgentTurns: opts.maxTurns } } : {}),
     confirm: opts.confirm,
@@ -236,28 +270,61 @@ export function createCliAgent(opts: CliAgentOptions): CliAgent {
   return { agent: createAgentCore(deps), dispose };
 }
 
+export type PreparedMcp = {
+  /** Snapshot of the connected servers' tools, for counts; runs use `registry`. */
+  specs: ToolSpec[];
+  /** The live registry; undefined when no server is configured. Pass it as CliAgentOptions.mcpRegistry. */
+  registry?: McpRegistry;
+  dispose: () => void;
+  pluginContributions: PluginContributions;
+};
+
 /**
- * Spawns the configured MCP servers and builds their ToolSpecs for
+ * Spawns the configured MCP servers and builds their registry for
  * createCliAgent. Callers must invoke dispose() when the session ends
  * (kills the server child processes). No servers configured -> no-op.
  * `workspacePath` (absolute) is advertised to each server via the roots
- * capability, so servers answer roots/list with the real workspace.
+ * capability, so servers answer roots/list with the real workspace; its
+ * project approvals decide which repository servers connect. `origins` (the
+ * config merge report's, see resolveConfig) says who defined each server.
  */
 export async function prepareMcp(
   config: CliConfig,
   workspacePath?: string,
   serverRequestHandlers?: McpServerRequestHandlers,
-): Promise<{ specs: ToolSpec[]; dispose: () => void; pluginContributions: PluginContributions }> {
+  origins?: Readonly<Record<string, ConfigLayerOrigin>>,
+): Promise<PreparedMcp> {
   const workspace = workspacePath ?? process.cwd();
   const pluginContributions = loadPluginContributions(workspace);
   const servers = mergePluginMcpServers(workspace, config.mcpServers, pluginContributions);
   if (Object.keys(servers).length === 0) {
     return { specs: [], dispose: () => {}, pluginContributions };
   }
-  return {
-    ...(await loadMcpToolSpecs(servers, workspacePath ? [workspacePath] : undefined, undefined, serverRequestHandlers)),
-    pluginContributions,
-  };
+  const loaded = await loadMcpToolSpecs(
+    servers,
+    workspacePath ? [workspacePath] : undefined,
+    undefined,
+    serverRequestHandlers,
+    {
+      ...(workspacePath ? { workspace: workspacePath } : {}),
+      ...(origins ? { origins } : {}),
+      ...(config.mcpToolSearchThreshold !== undefined ? { toolSearchThreshold: config.mcpToolSearchThreshold } : {}),
+    },
+  );
+  return { specs: loaded.specs, registry: loaded.registry, dispose: loaded.dispose, pluginContributions };
+}
+
+/**
+ * The range the registry enforces when servers load, checked before a command
+ * has any effect (consent, a fork, a worktree) so a bad value is reported like
+ * any other setup problem. Undefined when the value is usable.
+ */
+export function mcpToolSearchThresholdProblem(config: CliConfig): string | undefined {
+  const value = config.mcpToolSearchThreshold as unknown;
+  if (value === undefined || Object.keys(config.mcpServers ?? {}).length === 0) return undefined;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100
+    ? undefined
+    : "mcpToolSearchThreshold must be a number from 0 to 100";
 }
 
 /**

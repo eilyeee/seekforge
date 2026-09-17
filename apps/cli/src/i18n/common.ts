@@ -146,6 +146,9 @@ export const common = {
     "render.tokenCeilingReached": "\ntoken ceiling {ceiling} reached \u2014 stopping",
     "render.durationBudgetReached": "\ntime budget {budget}s reached after {elapsed}s \u2014 stopping",
     "render.planKept": "plan kept, nothing executed (resume later: seekforge resume {sessionId})",
+    "render.planReadOnly": "read-only session: the plan was not approved for execution",
+    "render.mcpPending":
+      "MCP server(s) defined by this checkout were not started: {names} \u2014 review with `seekforge mcp get <name>`, then `seekforge mcp approve <name>`",
     "render.shuttingDown": "\nshutting down\u2026",
   },
   zh: {
@@ -282,6 +285,9 @@ export const common = {
     "render.tokenCeilingReached": "\n已达 token 上限 {ceiling} — 正在停止",
     "render.durationBudgetReached": "\n已达时间预算 {budget} 秒（实际用时 {elapsed} 秒）— 正在停止",
     "render.planKept": "计划已保留，未执行（稍后恢复：seekforge resume {sessionId}）",
+    "render.planReadOnly": "只读会话：该计划未被批准执行",
+    "render.mcpPending":
+      "此检出定义的 MCP 服务器未启动：{names} — 用 `seekforge mcp get <name>` 检查，再运行 `seekforge mcp approve <name>`",
     "render.shuttingDown": "\n正在关闭…",
   },
 };

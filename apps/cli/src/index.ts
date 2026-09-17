@@ -126,6 +126,11 @@ setLocale(
   })() ?? detectLocale(),
 );
 
+/** --add-dir's help: the grant reaches the file tools, not only @-references. */
+const ADD_DIR_HELP =
+  "grant a directory outside the project: file tools may read and write there under the same prompts and rules, " +
+  "and @-references resolve there (repeatable)";
+
 /** commander collector for repeatable options (e.g. --add-dir). */
 const collect = (val: string, prev: string[]): string[] => [...prev, val];
 
@@ -259,7 +264,7 @@ program
   .option("--json", "with -p: alias for --output-format stream-json (machine mode; no color/chrome)")
   .option("-c, --continue", "resume the most recent session")
   .option("--resume <id>", "resume a specific session")
-  .option("--add-dir <path>", "extra read-only root for @-references (repeatable)", collect, [] as string[])
+  .option("--add-dir <path>", ADD_DIR_HELP, collect, [] as string[])
   .option("--max-turns <n>", "cap agent turns", parsePositiveInt)
   .option("--verbose", "print full tool args and results")
   .option("--system-prompt <text>", "replace the system prompt entirely")
@@ -325,7 +330,7 @@ const run = program
   .option("--json", "alias for --output-format stream-json (CI mode; prompts denied, pair with -y)")
   .option("-c, --continue", "resume the most recent session")
   .option("--resume <id>", "resume a specific session (see `seekforge sessions`)")
-  .option("--add-dir <path>", "extra read-only root for @-references (repeatable)", collect, [] as string[])
+  .option("--add-dir <path>", ADD_DIR_HELP, collect, [] as string[])
   .option("--max-turns <n>", "cap agent turns", parsePositiveInt)
   .option("--verbose", "print full tool args and results")
   .option("--system-prompt <text>", "replace the system prompt entirely")
@@ -671,7 +676,7 @@ const ask = program
   .option("--json", "alias for --output-format stream-json (CI mode)")
   .option("-c, --continue", "resume the most recent session")
   .option("--resume <id>", "resume a specific session")
-  .option("--add-dir <path>", "extra read-only root for @-references (repeatable)", collect, [] as string[])
+  .option("--add-dir <path>", ADD_DIR_HELP, collect, [] as string[])
   .option("--max-turns <n>", "cap agent turns", parsePositiveInt)
   .option("--verbose", "print full tool args and results")
   .option("--system-prompt <text>", "replace the system prompt entirely")
@@ -962,7 +967,7 @@ const chat = program
   .option("--ask", "every message runs read-only")
   .option("--permission-mode <mode>", "default | acceptEdits | plan | bypassPermissions (also: confirm | auto)")
   .option("--dangerously-skip-permissions", "alias for -y")
-  .option("--add-dir <path>", "extra read-only root for @-references (repeatable)", collect, [] as string[])
+  .option("--add-dir <path>", ADD_DIR_HELP, collect, [] as string[])
   .option("--mcp-config <file>", "load MCP servers from a JSON file (merged over config, unless --strict-mcp-config)")
   .option("--strict-mcp-config", "use only --mcp-config servers, ignore config-file MCP servers")
   .option("--system-prompt <text>", "replace the system prompt entirely")
@@ -1044,8 +1049,9 @@ chat.action(async (opts: RootOpts) => {
   if (decision.kind === "tui") {
     const entry = resolveTuiEntry();
     if (entry) {
-      // The TUI does not ask for folder access itself; `seekforge` always has.
-      if (!(await ensureWorkspaceAuthorized(process.cwd(), { yes: false, machine: false }))) return;
+      // The TUI does not ask for folder access itself; `seekforge` always has
+      // (and -y authorizes the folder, as it does for the REPL).
+      if (!(await ensureWorkspaceAuthorized(process.cwd(), { yes: merged.yes === true, machine: false }))) return;
       tuiLaunched = true;
       await launchTui(entry, decision.args);
       return;

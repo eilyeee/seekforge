@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -6,7 +6,9 @@ import { writeSessionMeta } from "@seekforge/core";
 import {
   loadJsonSchemaFlag,
   parseAgentsFlag,
+  resolveAddDirs,
   resolveMcpServers,
+  resolveMcpSetup,
   resolvePromptFlags,
   resolveSessionFlags,
   RunSetupError,
@@ -166,6 +168,54 @@ describe("resolveMcpServers", () => {
     expect(setupError(() => resolveMcpServers(config, { mcpConfig: join(dir, "nope.json") })).message).toContain(
       "--mcp-config",
     );
+  });
+
+  it("marks --mcp-config servers as the user's and keeps the rest of the origins", () => {
+    const file = join(dir, "mcp.json");
+    writeFileSync(file, JSON.stringify({ b: { command: "B" }, c: { command: "c" } }));
+    const origins = { a: "repository", b: "repository" } as const;
+    expect(resolveMcpSetup(config, origins, {}).origins).toEqual(origins);
+    expect(resolveMcpSetup(config, origins, { mcpConfig: file }).origins).toEqual({
+      a: "repository",
+      b: "user",
+      c: "user",
+    });
+    expect(resolveMcpSetup(config, origins, { mcpConfig: file, strictMcpConfig: true }).origins).toEqual({
+      b: "user",
+      c: "user",
+    });
+    expect(resolveMcpSetup(config, origins, { strictMcpConfig: true })).toEqual({
+      config: { mcpServers: {} },
+      origins: {},
+    });
+  });
+
+  it("answers only for the names it holds, whatever they are called", () => {
+    const file = join(dir, "odd.json");
+    writeFileSync(file, '{"mcpServers": {"__proto__": {"command": "p"}, "toString": {"command": "t"}}}');
+    const { origins } = resolveMcpSetup({}, { constructor: "repository" as const }, { mcpConfig: file });
+    expect(Object.getPrototypeOf(origins)).toBeNull();
+    expect(Object.keys(origins).sort()).toEqual(["__proto__", "constructor", "toString"]);
+    expect(Object.getOwnPropertyDescriptor(origins, "__proto__")?.value).toBe("user");
+    expect(origins["constructor"]).toBe("repository");
+    expect(resolveMcpSetup({}, {}, {}).origins["hasOwnProperty"]).toBeUndefined();
+  });
+});
+
+describe("resolveAddDirs", () => {
+  it("keeps existing directories outside the project, once, and reports the rest", () => {
+    const project = join(dir, "project");
+    const other = join(dir, "other");
+    mkdirSync(join(project, "inner"), { recursive: true });
+    mkdirSync(other);
+    writeFileSync(join(dir, "file.txt"), "x");
+    const { dirs, skipped } = resolveAddDirs(
+      ["../other", other, "inner", join(dir, "file.txt"), join(dir, "missing"), " "],
+      project,
+    );
+    expect(dirs).toEqual([realpathSync(other)]);
+    expect(skipped).toEqual(["inner", join(dir, "file.txt"), join(dir, "missing"), " "]);
+    expect(resolveAddDirs(undefined, project)).toEqual({ dirs: [], skipped: [] });
   });
 });
 

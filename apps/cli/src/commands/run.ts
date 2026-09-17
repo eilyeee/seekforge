@@ -7,13 +7,28 @@ import {
   forkSession,
   loadAgentDefinitions,
   produceStructuredOutput,
+  readSessionMeta,
   resolvedPricingSource,
   withInlineAgents,
+  type McpRegistry,
 } from "@seekforge/core";
-import type { AgentEvent, ApprovalMode, FinalReport, TokenUsage } from "@seekforge/shared";
-import { cliMcpServerRequestHandlers, createCliAgent, prepareMcp } from "../agent-factory.js";
-import { colorIsEnabled, fail } from "../colors.js";
-import { loadConfig, type CliConfig } from "../config.js";
+import type {
+  AgentEvent,
+  ApprovalMode,
+  ConfirmResult,
+  FinalReport,
+  PermissionRequest,
+  TokenUsage,
+} from "@seekforge/shared";
+import {
+  cliMcpServerRequestHandlers,
+  createCliAgent,
+  mcpToolSearchThresholdProblem,
+  prepareMcp,
+  type PreparedMcp,
+} from "../agent-factory.js";
+import { colorIsEnabled, dim, fail } from "../colors.js";
+import { resolveConfig, type CliConfig } from "../config.js";
 import { expandFileRefs } from "@seekforge/shared/file-refs";
 import {
   buildResultEnvelope,
@@ -31,18 +46,43 @@ import { isCostBudgetExceeded } from "../cost-budget.js";
 import { elapsedSeconds, resolveDurationBudgetMs } from "../run-deadline.js";
 import { readStreamJsonInput } from "../stream-input.js";
 import { buildToolGatingRules, parseToolList } from "../tool-gating.js";
-import { expandExtraFileRefs, normalizeExtraDir } from "@seekforge/shared/workspace-dirs";
+import { expandExtraFileRefs } from "@seekforge/shared/workspace-dirs";
 import { apiKeyEnvVar } from "@seekforge/shared/provider-env";
 import { createDebugLogger, type DebugLogger } from "../debug-log.js";
 import { createRunWorktree, repositoryPrefix, type LoopWorktree } from "../loop-worktree.js";
 import {
   loadJsonSchemaFlag,
   parseAgentsFlag,
-  resolveMcpServers,
+  resolveAddDirs,
+  resolveMcpSetup,
   resolvePromptFlags,
   resolveSessionFlags,
   RunSetupError,
+  type McpOrigins,
 } from "../run-setup.js";
+
+/** The tool through which a plan run asks to start implementing (core plan-mode.ts). */
+export const EXIT_PLAN_MODE_TOOL = "exit_plan_mode";
+
+/**
+ * A confirm channel for a read-only session: the plan-approval request, whose
+ * approval would switch the run to edit mode, is refused without asking.
+ */
+export function readOnlyConfirm(
+  confirm: (req: PermissionRequest) => Promise<ConfirmResult>,
+  notice: (message: string) => void,
+): (req: PermissionRequest) => Promise<ConfirmResult> {
+  return async (req) => {
+    if (req.toolName !== EXIT_PLAN_MODE_TOOL) return confirm(req);
+    notice(t("render.planReadOnly"));
+    return false;
+  };
+}
+
+/** Whether an in-run exit_plan_mode approval already switched this session to edit mode. */
+export function planAlreadyApproved(projectPath: string, sessionId: string): boolean {
+  return readSessionMeta(projectPath, sessionId)?.mode === "edit";
+}
 
 export type RunOptions = {
   mode: "ask" | "edit";
@@ -190,12 +230,26 @@ export function debugConfigLines(config: CliConfig, opts: { settingsFile?: strin
   ];
 }
 
-/** MCP servers as `--debug mcp` reports them: name plus whether discovery may start it. */
-export function debugMcpLine(config: CliConfig, toolCount: number): string {
-  const servers = Object.entries(config.mcpServers ?? {}).map(
-    ([name, server]) => `${name}${(server as { trusted?: boolean }).trusted === true ? "" : " (untrusted, skipped)"}`,
-  );
-  return `${servers.length} configured server(s)${servers.length > 0 ? `: ${servers.join(", ")}` : ""}; ${toolCount} tool(s) loaded`;
+/** MCP servers as `--debug mcp` reports them: each server's state as the registry decided it. */
+export function debugMcpLine(mcp: { specs: readonly unknown[]; registry?: Pick<McpRegistry, "servers"> }): string {
+  const servers = (mcp.registry?.servers() ?? []).map((server) => {
+    const detail =
+      server.state === "connected"
+        ? `${server.trust ?? "trusted"}, ${server.toolCount} tool(s)`
+        : server.state === "pending"
+          ? "pending approval: seekforge mcp approve"
+          : server.state === "disabled"
+            ? "untrusted, not started"
+            : server.state;
+    return `${server.name} (${detail})`;
+  });
+  return `${servers.length} configured server(s)${servers.length > 0 ? `: ${servers.join(", ")}` : ""}; ${mcp.specs.length} tool(s) loaded`;
+}
+
+/** Stderr lines for the configured servers a run will not start, and why. */
+export function mcpStartupNotices(registry: Pick<McpRegistry, "servers"> | undefined): string[] {
+  const pending = (registry?.servers() ?? []).filter((server) => server.state === "pending").map((s) => s.name);
+  return pending.length > 0 ? [t("render.mcpPending", { names: pending.join(", ") })] : [];
 }
 
 /** What the structured-output call is told the run produced. */
@@ -223,9 +277,10 @@ function formatRunWorktree(worktree: LoopWorktree): string {
 export async function runTaskCommand(task: string, opts: RunOptions): Promise<boolean> {
   const basePath = process.cwd();
   const debug: DebugLogger = createDebugLogger(opts.debug);
-  let config: ReturnType<typeof loadConfig>;
+  let config: CliConfig;
+  let configOrigins: McpOrigins;
   try {
-    config = loadConfig(basePath, opts.settingsFile, opts.profile);
+    ({ config, mcpOrigins: configOrigins } = resolveConfig(basePath, opts.settingsFile, opts.profile));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const hint = (err as { hint?: string }).hint;
@@ -309,6 +364,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
   let inlineAgents: ReturnType<typeof parseAgentsFlag>;
   let sessionPlan: ReturnType<typeof resolveSessionFlags>;
   let mcpConfigForRun: CliConfig;
+  let mcpOrigins: McpOrigins;
   try {
     prompts = resolvePromptFlags(opts, basePath);
     jsonSchema = loadJsonSchemaFlag(opts);
@@ -326,7 +382,9 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
       forkSession: opts.forkSession,
       sessionId: opts.sessionId,
     });
-    mcpConfigForRun = resolveMcpServers(config, opts);
+    ({ config: mcpConfigForRun, origins: mcpOrigins } = resolveMcpSetup(config, configOrigins, opts));
+    const thresholdProblem = mcpToolSearchThresholdProblem(mcpConfigForRun);
+    if (thresholdProblem) throw new RunSetupError(thresholdProblem);
   } catch (err) {
     if (err instanceof RunSetupError) {
       fail(err.message, err.hint ? { hint: err.hint } : undefined);
@@ -390,13 +448,10 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
     debug.log("worktree", `created ${worktree.path} on ${worktree.branch}; agent workspace ${projectPath}`);
   }
 
-  // Normalize --add-dir roots (existing dirs outside the project); warn & skip bad ones.
-  const extraDirs: string[] = [];
-  for (const raw of opts.addDirs ?? []) {
-    const abs = normalizeExtraDir(raw, projectPath);
-    if (abs) extraDirs.push(abs);
-    else console.error(t("err.excludedDirSkipped", { dir: raw }));
-  }
+  // --add-dir roots (existing dirs outside the project) reach the file tools
+  // and @-references alike; warn & skip bad ones.
+  const { dirs: extraDirs, skipped: skippedDirs } = resolveAddDirs(opts.addDirs, projectPath);
+  for (const dir of skippedDirs) console.error(t("err.excludedDirSkipped", { dir }));
 
   // Ctrl+C: first press cancels cooperatively (session marked cancelled,
   // trace preserved for `seekforge resume`); second press force-exits.
@@ -507,16 +562,28 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
   // stream-json input consumes process.stdin as an async generator; a live
   // terminal prompt would race it for the same fd and corrupt the next
   // envelope. Deny automatically in that mode (as `machine` output already does).
-  const confirm = machine || opts.inputFormat === "stream-json" ? async () => false : confirmInTerminal;
+  const terminalConfirm = machine || opts.inputFormat === "stream-json" ? async () => false : confirmInTerminal;
+  // A read-only (ask) session never takes a plan approval that would switch it to edit mode.
+  const confirm =
+    mode === "ask" ? readOnlyConfirm(terminalConfirm, (message) => console.error(dim(message))) : terminalConfirm;
   // Shared by the MCP sampling handler and the agent, so a server's model calls
   // land in this run's usage rather than only on stderr.
   const usageBus = createUsageBus();
-  const mcp = await prepareMcp(
-    mcpConfigForRun,
-    projectPath,
-    cliMcpServerRequestHandlers({ config, confirm, model, usageBus }),
-  );
-  debug.log("mcp", debugMcpLine(mcpConfigForRun, mcp.specs.length));
+  let mcp: PreparedMcp;
+  try {
+    mcp = await prepareMcp(
+      mcpConfigForRun,
+      projectPath,
+      cliMcpServerRequestHandlers({ config, confirm, model, usageBus }),
+      mcpOrigins,
+    );
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+    if (worktree) console.error(formatRunWorktree(worktree));
+    return false;
+  }
+  debug.log("mcp", debugMcpLine(mcp));
+  for (const line of mcpStartupNotices(mcp.registry)) console.error(dim(line));
   let created: ReturnType<typeof createCliAgent>;
   try {
     const subagents = withInlineAgents(loadAgentDefinitions(projectPath, mcp.pluginContributions), inlineAgents);
@@ -528,7 +595,8 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
       workspace: projectPath,
       pluginContributions: mcp.pluginContributions,
       model,
-      mcpToolSpecs: mcp.specs,
+      ...(mcp.registry ? { mcpRegistry: mcp.registry } : {}),
+      ...(extraDirs.length > 0 ? { additionalDirectories: extraDirs } : {}),
       confirm,
       usageBus,
       onModelDelta: emitPartial ?? renderer?.modelDelta,
@@ -755,6 +823,14 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
       if (!planRun.completed || !planSessionId) {
         process.exitCode = 1;
         return false;
+      }
+      // The user already approved the plan inside the run (exit_plan_mode) and
+      // it was implemented there; a read-only session never executes one.
+      if (mode === "ask" || planAlreadyApproved(projectPath, planSessionId)) {
+        const structuredOk = await produceStructured(planTask);
+        emitResult(planSessionId);
+        if (!structuredOk) process.exitCode = 1;
+        return structuredOk;
       }
       const rl = createInterface({ input: process.stdin, output: process.stdout });
       let answer: string;

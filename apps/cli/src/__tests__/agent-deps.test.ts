@@ -1,11 +1,11 @@
-import { createUsageBus } from "@seekforge/core";
+import { asAdaptiveToolDispatcher, createDispatchManager, createUsageBus, loadMcpToolSpecs } from "@seekforge/core";
 // Contract test: CLI config -> AgentCoreDeps passthrough. Guards the cross-entry
 // parameters (sandbox, permission, planModel, compaction, hooks, limits) that
 // have silently dropped before.
 
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { createCliAgentDeps } from "../agent-factory.js";
+import { createCliAgentDeps, mcpToolSearchThresholdProblem, mergeAdditionalDirectories } from "../agent-factory.js";
 import type { CliConfig } from "../config.js";
 
 const base: CliConfig = { apiKey: "sk-test", model: "deepseek-v4-flash" };
@@ -80,4 +80,51 @@ test("usageBus reaches the agent, so an MCP server's sampling is counted", () =>
   const usageBus = createUsageBus();
   assert.equal(deps(base, { usageBus }).usageBus, usageBus);
   assert.equal(deps(base).usageBus, undefined);
+});
+
+test("--add-dir directories join config.additionalDirectories, each once", () => {
+  assert.deepEqual(
+    deps({ ...base, additionalDirectories: ["/a", "/b"] }, { additionalDirectories: ["/b", "/c"] })
+      .additionalDirectories,
+    ["/a", "/b", "/c"],
+  );
+  assert.deepEqual(deps(base, { additionalDirectories: ["/c"] }).additionalDirectories, ["/c"]);
+  assert.equal(deps(base, { additionalDirectories: [] }).additionalDirectories, undefined);
+  assert.equal(mergeAdditionalDirectories(undefined, undefined), undefined);
+});
+
+test("a session-scoped subagent manager reaches the agent", () => {
+  const manager = createDispatchManager({ sessionScoped: true });
+  assert.equal(deps(base, { dispatchManager: manager }).dispatchManager, manager);
+  assert.equal(deps(base).dispatchManager, undefined);
+});
+
+test("an MCP registry makes the dispatcher adaptive; without one it is the fixed default", async () => {
+  // A registry whose only server may not connect: no child process starts.
+  const loaded = await loadMcpToolSpecs({ off: { command: "never-started" } }, undefined, undefined, undefined, {
+    origins: { off: "user" },
+  });
+  try {
+    const adaptive = deps(base, { mcpRegistry: loaded.registry, mcpToolSpecs: loaded.specs }).dispatcher;
+    assert.ok(asAdaptiveToolDispatcher(adaptive));
+    assert.ok(adaptive.list().some((tool) => tool.name === "read_file"));
+    assert.equal(asAdaptiveToolDispatcher(deps(base).dispatcher), undefined);
+  } finally {
+    loaded.dispose();
+  }
+});
+
+test("mcpToolSearchThresholdProblem checks the range only when servers are configured", () => {
+  const servers = { mcpServers: { a: { command: "a" } } };
+  assert.equal(mcpToolSearchThresholdProblem({ ...base, ...servers, mcpToolSearchThreshold: 0 }), undefined);
+  assert.equal(mcpToolSearchThresholdProblem({ ...base, ...servers, mcpToolSearchThreshold: 100 }), undefined);
+  assert.match(
+    mcpToolSearchThresholdProblem({ ...base, ...servers, mcpToolSearchThreshold: 101 }) ?? "",
+    /from 0 to 100/,
+  );
+  assert.match(
+    mcpToolSearchThresholdProblem({ ...base, ...servers, mcpToolSearchThreshold: "5" as unknown as number }) ?? "",
+    /from 0 to 100/,
+  );
+  assert.equal(mcpToolSearchThresholdProblem({ ...base, mcpToolSearchThreshold: 101 }), undefined);
 });

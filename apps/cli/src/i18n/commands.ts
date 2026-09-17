@@ -112,6 +112,8 @@ export const commands = {
     "cmd.agent.imported": 'imported "{id}" [{mode}] \u2192 {dir}',
     "cmd.agent.tools": "tools: {tools}",
     "cmd.agent.droppedTools": "dropped tools (no SeekForge equivalent): {tools}",
+    "cmd.agent.droppedFields":
+      "not imported (an import never grants hooks or a looser permissionMode; add them to the file yourself if you trust it): {fields}",
     "cmd.agent.importedMore": "Check it with `seekforge agent show {id}`. The main agent can now",
     "cmd.agent.importedMore2": "delegate to it via dispatch_agent; edit-mode dispatch still asks for approval.",
 
@@ -399,6 +401,8 @@ export const commands = {
     "cmd.agent.imported": '已导入 "{id}" [{mode}] → {dir}',
     "cmd.agent.tools": "工具：{tools}",
     "cmd.agent.droppedTools": "已丢弃的工具（无 SeekForge 等效项）：{tools}",
+    "cmd.agent.droppedFields":
+      "未导入（导入不会带入钩子或更宽松的 permissionMode；如信任该文件，请自行添加到文件中）：{fields}",
     "cmd.agent.importedMore": "使用 `seekforge agent show {id}` 查看。主代理现在可以通过",
     "cmd.agent.importedMore2": "dispatch_agent 委托给子代理；编辑模式下的委托仍需批准。",
 

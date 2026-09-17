@@ -12,6 +12,8 @@ import {
   readSessionMeta,
   type AgentDefinition,
 } from "@seekforge/core";
+import type { ConfigLayerOrigin } from "@seekforge/shared/config-layers";
+import { normalizeExtraDir } from "@seekforge/shared/workspace-dirs";
 import type { CliConfig } from "./config.js";
 import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 import { t } from "./i18n.js";
@@ -107,7 +109,29 @@ export function resolveMcpServers(
   config: CliConfig,
   flags: { mcpConfig?: string; strictMcpConfig?: boolean },
 ): CliConfig {
-  if (!flags.mcpConfig) return flags.strictMcpConfig ? { ...config, mcpServers: {} } : config;
+  return resolveMcpSetup(config, {}, flags).config;
+}
+
+export type McpOrigins = Record<string, ConfigLayerOrigin>;
+
+/**
+ * resolveMcpServers plus who defined each surviving server: an explicit
+ * --mcp-config file is the user's (like --settings) and wins per name, and
+ * --strict-mcp-config leaves only the file's servers. The origins decide which
+ * servers may connect (see core mcpConnectionDecision).
+ */
+export function resolveMcpSetup(
+  config: CliConfig,
+  origins: Readonly<McpOrigins>,
+  flags: { mcpConfig?: string; strictMcpConfig?: boolean },
+): { config: CliConfig; origins: McpOrigins } {
+  // Keyed by server names, which come from files: no inherited keys may answer
+  // for a name ("constructor", "__proto__").
+  const nextOrigins: McpOrigins = Object.create(null);
+  if (!flags.strictMcpConfig) Object.assign(nextOrigins, origins);
+  if (!flags.mcpConfig) {
+    return { config: flags.strictMcpConfig ? { ...config, mcpServers: {} } : config, origins: nextOrigins };
+  }
   let fileServers: Record<string, unknown>;
   try {
     const parsed = JSON.parse(readTextFileBounded(flags.mcpConfig, MAX_CONFIG_FILE_BYTES)) as unknown;
@@ -118,7 +142,27 @@ export function resolveMcpServers(
     throw new RunSetupError(t("err.mcpConfigRead", { path: flags.mcpConfig }), t("err.mcpConfigReadHint"));
   }
   const merged = flags.strictMcpConfig ? fileServers : { ...config.mcpServers, ...fileServers };
-  return { ...config, mcpServers: merged as CliConfig["mcpServers"] };
+  for (const name of Object.keys(fileServers)) nextOrigins[name] = "user";
+  return { config: { ...config, mcpServers: merged as CliConfig["mcpServers"] }, origins: nextOrigins };
+}
+
+/**
+ * --add-dir values as absolute, physical directories outside the project,
+ * each once; `skipped` are the values that are not (missing, not a directory,
+ * or inside the project). Core re-validates the kept ones on every run.
+ */
+export function resolveAddDirs(
+  raw: readonly string[] | undefined,
+  projectPath: string,
+): { dirs: string[]; skipped: string[] } {
+  const dirs: string[] = [];
+  const skipped: string[] = [];
+  for (const value of raw ?? []) {
+    const abs = normalizeExtraDir(value, projectPath);
+    if (!abs) skipped.push(value);
+    else if (!dirs.includes(abs)) dirs.push(abs);
+  }
+  return { dirs, skipped };
 }
 
 /** The parsed --json-schema / --json-schema-file, or undefined when neither is set. */

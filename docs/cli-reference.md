@@ -39,7 +39,7 @@ checks npm for a newer one.
 | `--resume <id>` | run, ask, -p, chat | Resume a specific session (see `seekforge sessions`) |
 | `--fork-session` | run, ask, -p, chat | With `--resume`/`--continue`: copy the session first and continue the copy, leaving the original untouched |
 | `--session-id <id>` | run, ask, -p, chat | Start the new session under this id instead of a generated one. A UUID works; any letters, digits, `.`, `_` and `-` (at most 128 characters) do. Refused when a session with that id exists, and together with `--resume`, `--continue` or `--fork-session` |
-| `--add-dir <path>` | run, ask, -p, chat | Extra read-only root for `@`-references (repeatable) |
+| `--add-dir <path>` | run, ask, -p, chat | Grant a directory outside the project (repeatable): the file tools may read and write there under the same permission levels, prompts and rules as in the workspace, and `@`-references resolve there. Joins `additionalDirectories` from your user config. See [Additional directories](#additional-directories) |
 | `--max-turns <n>` | run, ask, -p, chat | Cap agent turns (chat: per message) |
 | `--max-cost <usd>` | run, ask, -p, chat | Stop the run once cumulative cost reaches this budget (USD); graceful cancel, trace kept. In chat it caps the whole session: the running turn stops and no new one starts. Also settable as the `maxCostUsd` config key (applies to run, ask and -p) |
 | `--max-duration <seconds>` | run, ask, -p, sandbox-run, remote-run | Stop the run once this much wall-clock time has passed — a timer, so it fires while a hung command or a silent MCP server is producing no events at all. Covers the whole invocation, not one turn. Graceful cancel, trace kept. Also settable as the `maxDurationSeconds` config key |
@@ -60,7 +60,7 @@ to the replacement.
 
 | Flag | Description |
 | --- | --- |
-| `--plan` | Plan first (read-only), confirm, then execute in the same session. The agent may also submit its plan with `exit_plan_mode`; approving that prompt continues the same run in edit mode (see [Cookbook → Refactor across files](cookbook.md#refactor-across-files)) |
+| `--plan` | Plan first (read-only), confirm, then execute in the same session. The agent may also submit its plan with `exit_plan_mode`: the prompt prints the plan, and approving it continues the same run in edit mode — the run then implements the plan and you are not asked "Execute this plan?" again; `n: <reason>` refuses and has the agent revise the plan (see [Cookbook → Refactor across files](cookbook.md#refactor-across-files)). A read-only session (`ask`, `-p --ask`) never executes a plan: `exit_plan_mode` is refused there |
 | `--worktree [name]` | Create a retained git worktree (`.seekforge/worktrees/run-<name>`, branch `seekforge/run-<name>`) and run there, from the same subdirectory you are in. Where the changes are is printed at the end (and reported as `worktree` in the json result); remove it with `git worktree remove --force <path>` and `git branch -D <branch>`. Not together with `--resume`, `--continue` or `--fork-session`. Also on `-p` |
 | `--json-schema <schema>` | Structured output — see [Structured output](#structured-output). Also on `ask` and `-p` |
 | `--json-schema-file <path>` | Read that schema from a file (at most 256 KiB). Not together with `--json-schema` |
@@ -72,9 +72,36 @@ to the replacement.
 | `--allowedTools <list>` | Only allow these tools (comma-separated) |
 | `--disallowedTools <list>` | Deny these tools (comma-separated) |
 | `--dangerously-skip-permissions` | Alias for `-y` — auto-approve write/execute (dangerous commands are still refused; env changes still ask) |
-| `--mcp-config <file>` | Load MCP servers from a JSON file (merged over config, unless `--strict-mcp-config`) |
+| `--mcp-config <file>` | Load MCP servers from a JSON file (merged over config, unless `--strict-mcp-config`). The file is yours, like `--settings`: its servers start when they carry `"trusted": true` |
 | `--strict-mcp-config` | Use only `--mcp-config` servers, ignore config-file MCP servers |
 | `--verbose` | Print full tool args and results |
+
+Every agent-running command (`run`, `ask`, `-p`, the REPL, `loop`, `graph`)
+connects MCP servers through the same registry: a checkout's servers start only
+once approved for the workspace (a run names the pending ones on stderr), a
+server's `tools/list_changed` reaches the running agent, and when the servers'
+tool definitions pass `mcpToolSearchThreshold` they are deferred behind
+`tool_search` (see [MCP → Tool search](mcp.md#110-tool-search-deferred-mcp-tools)).
+An out-of-range `mcpToolSearchThreshold` is refused before the run starts.
+
+## Additional directories
+
+`--add-dir <path>` (and `additionalDirectories` in your user config, never a
+repository's) lets the file tools work in a directory outside the project. A
+relative path resolves against the project; the directory must exist and lie
+outside it, otherwise it is skipped with a warning. The grant follows the rules
+in the [security model](security-model.md):
+
+- the same permission levels, prompts, rules and approval modes apply, and the
+  prompt shows the raw path;
+- containment is realpath-based, so a symlink that leaves every granted
+  directory is still refused;
+- secret-file rules apply at every depth of the granted directory, and writes
+  under any `.git` directory are refused;
+- the directories are re-validated on every run; `run_command`'s working
+  directory and the git, LSP and repo-map tools stay in the workspace;
+- `seekforge rewind` restores workspace files only — a change in a granted
+  directory is reported as skipped, not undone.
 
 ## Ask-specific flags
 
@@ -152,16 +179,33 @@ seekforge -p "review the last commit" --agents '{
 }'
 ```
 
-`description` and `prompt` are required. Optional: `tools` (array, or a
-comma-separated string; `[]` means no tools), `model` (`inherit` = the
-session's), and SeekForge's own `name`, `mode` (`ask`/`edit`), `maxTurns`,
-`triggers`, `own`, `doNotTouch`, `boundary`. `color` is accepted and ignored.
-Any other field — `disallowedTools`, `permissionMode`, `mcpServers`, `hooks`, … —
-is rejected, because silently dropping it would leave the agent with more reach
-than its author wrote. Each definition is validated exactly like an
-`AGENT.md` file; the JSON is capped at 256 KiB and 32 agents. An inline agent
-replaces a project, user, plugin or builtin agent with the same id for that
-run.
+`description` and `prompt` are required. Optional, as in an `AGENT.md` file:
+
+| Field | Value |
+| --- | --- |
+| `tools` | array, or a comma-separated string; `[]` means no tools. Claude Code names (`Read`, `Bash`, …) mean SeekForge's |
+| `disallowedTools` | tools removed after `tools`; every name must be a tool SeekForge knows (Claude Code names too) |
+| `model` | a model id; `inherit` = the session's |
+| `permissionMode` | `default`, `acceptEdits`, `plan` (read-only), `bypassPermissions`, `dontAsk` |
+| `isolation` | `worktree` (edit in a managed git worktree and return a diff) |
+| `skills` | skill ids whose bodies are preloaded into the agent's prompt |
+| `effort` | `low`, `medium`, `high`, `max` |
+| `mcpServers` | names of connected MCP servers the agent may use (never a server definition) |
+| `hooks` | `preToolUse` / `postToolUse` / `Stop` command hooks, in SeekForge's shape (`{ "preToolUse": [{ "match", "pattern", "command" }] }`) or Claude Code's (`{ "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command" }] }] }`) |
+| `color` | a display color (`red`, `blue`, …, or `#rrggbb`); anything else is ignored |
+| `name`, `mode` (`ask`/`edit`), `maxTurns`, `triggers`, `own`, `doNotTouch`, `boundary` | SeekForge's own fields |
+
+Inline definitions come from you, so they carry user authority, like an agent in
+`~/.seekforge/agents`: their `permissionMode` and `hooks` are honored. Where an
+`AGENT.md` file on disk would be read leniently, an inline value is not: an
+unknown field, a `disallowedTools` name that matches no tool, an invalid skill
+id or server name, a hook of another type or on another stage, a hook entry
+with keys it cannot use (such as `timeout`), a Claude Code matcher that does not
+name tools exactly, or more than 16 hooks per stage is rejected — silently
+dropping any of them could leave the agent with more reach than you wrote. Hook
+entries are checked with the same validator as config hooks. The JSON is capped
+at 256 KiB and 32 agents. An inline agent replaces a project, user, plugin or
+builtin agent with the same id for that run.
 
 ## Debug output
 
@@ -172,7 +216,8 @@ context compaction (`context`), file changes (`file`), live command output
 (`command`), notices including hook messages (`hooks`), steps (`step`), model
 messages (`model`),
 subagents (`subagent`), sessions (`session`) — plus setup detail: effective
-config (`config`), MCP servers and their trust (`mcp`), worktrees (`worktree`)
+config (`config`), each MCP server's standing (`mcp`: connected with its trust
+and tool count, pending approval, untrusted, failed), worktrees (`worktree`)
 and structured-output attempts (`structured`).
 
 `--debug=api,tool` shows only those categories; `--debug='!command'` (quoted, so
@@ -181,14 +226,19 @@ the shell leaves the `!` alone) shows everything except live command output.
 ## Interactive sessions
 
 Bare `seekforge` in a terminal opens the TUI (the same app as `seekforge-tui`),
-passing `-c/--continue` and `-m/--model` on to it. It asks for folder access
-first, as the REPL always has. The classic readline REPL starts instead when:
+passing on the flags it reads: `-c/--continue`, `--resume`, `-m/--model`,
+`--permission-mode`, `-y`/`--dangerously-skip-permissions`, `--add-dir`,
+`--settings`, `--profile` (the TUI reads `SEEKFORGE_PROFILE` itself),
+`--mcp-config`, `--strict-mcp-config`, `--append-system-prompt` and `--verbose`.
+It asks for folder access first, as the REPL always has (`-y` authorizes the
+folder). The classic readline REPL starts instead when:
 
 - you run `seekforge chat`, pass `--classic`, or set `SEEKFORGE_CLASSIC_REPL=1`;
 - stdin or stdout is not a terminal (piped input keeps working as before);
-- a flag the TUI cannot honor yet is given (`--resume`, `--permission-mode`,
-  `--add-dir`, `--settings`, `--profile` or `SEEKFORGE_PROFILE`, …). A note on
-  stderr names the flags; the REPL honors all of them.
+- a flag the TUI cannot honor yet is given (`--ask`, `--fork-session`,
+  `--session-id`, `--system-prompt`, the prompt-file flags, `--output-style`,
+  the tool lists, `--max-turns`, `--max-cost`, `--fallback-model`, `--agents`,
+  `--debug`). A note on stderr names the flags; the REPL honors all of them.
 
 The REPL (`seekforge chat`) takes the session flags from the tables above:
 `-y`, `-m`, `-c`, `--resume`, `--fork-session`, `--session-id`,
@@ -196,15 +246,25 @@ The REPL (`seekforge chat`) takes the session flags from the tables above:
 executing), `--ask`, `--add-dir`, `--mcp-config`, `--strict-mcp-config`, the
 system-prompt flags, `--output-style`, the tool lists, `--max-turns`,
 `--max-cost`, `--fallback-model`, `--agents`, `--debug`, `--verbose`,
-`--settings` and `--profile`. Beyond `/help`:
+`--settings` and `--profile`. Under `--ask` the agent's `exit_plan_mode`
+request is refused, so a plan never switches the session to edit mode. Beyond
+`/help`:
 
 | Input | What it does |
 | --- | --- |
 | `!<command>` | Run a shell command in the workspace, yourself — no permission prompt, like typing it in a terminal. Output streams to the screen; Ctrl+C stops it. The command, its exit code and its output (clipped to 16,000 characters, keeping the head and the tail; the last 8 commands) are added to your next message as data, not instructions |
-| `/compact [focus]` | Compact the current session now. Without a focus it is the instant mechanical digest; with one, the configured provider writes the summary around that focus (falling back to the digest if the model call fails) |
+| `/compact [focus]` | Compact the current session now. Without a focus it is the instant mechanical digest; with one, the configured provider writes the summary around that focus (falling back to the digest if the model call fails). Your `preCompact` / `postCompact` hooks run with reason `manual`: their messages are printed, and a `preCompact` block cancels the compaction (the REPL says so). Ctrl+C cancels it |
+| `/think [on\|off\|low\|medium\|high\|max]` | Thinking mode and reasoning effort for the next messages; a level turns thinking on, `off` clears it. Each provider receives the nearest level it accepts (see [`reasoningEffort`](configuration.md#reasoningeffort)) |
+| `/plan <task>` | Plan read-only, then ask before executing — unless the agent's `exit_plan_mode` plan was already approved and implemented in that run |
 | `/rename <title>` | Name the current session; the name is shown by `/sessions`, `seekforge sessions` and `sessions show` |
 | `/sessions` | Recent sessions, with names |
+| `/<name> [args]` | Run a custom command (`.seekforge/commands/<name>.md`, your own or a plugin's). A file named like a built-in command (`plan.md`, `EXIT.md`, …) is ignored — built-ins keep their names — and the REPL says so once at startup |
 | `# <fact>` | Save a fact to project memory |
+
+Subagents the agent starts in the background belong to the REPL session, not to
+the message that started them: they keep running after that message ends, and
+their results reach the agent with your next message. `/new`, `/resume <other
+id>` and leaving the REPL stop them.
 
 Ctrl+C cancels the running turn or `!` command and keeps the REPL open; at the
 prompt it exits, like Ctrl+D. Lines piped into the REPL are processed one by
