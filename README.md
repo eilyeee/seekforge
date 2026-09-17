@@ -207,10 +207,13 @@ baseline; see [Evals and the regression gate](docs/EVALS.md).
   wraps commands in seatbelt (macOS) / bwrap (Linux); `read-only` protects the
   workspace and `restricted` also cuts network. Hard-fails if requested but unavailable — never silently
   unsandboxed. A denial-looking failure asks once before retrying unsandboxed.
-- **Hooks** fire at 9 stages (preToolUse, postToolUse, sessionStart,
-  userPromptSubmit, preCompact, stop, subagentStop, notification,
-  sessionEnd); userPromptSubmit stdout is injected into the task as context,
-  and preToolUse can block a tool with a reason or allow it outright.
+- **Hooks** fire at 13 stages (preToolUse, permissionRequest, postToolUse,
+  postToolUseFailure, sessionStart, userPromptSubmit, preCompact, postCompact,
+  stop, subagentStart, subagentStop, notification, sessionEnd) as shell
+  commands, HTTP calls or model checks. preToolUse decides before the permission
+  prompt (refuse, allow, ask, rewrite), postToolUse can add context beside a
+  result, and a stop hook can keep the agent working — see
+  [docs/hooks.md](docs/hooks.md).
 - **MCP client** speaks stdio and streamable HTTP (`url` + optional bearer
   `headers`); server resources are listable and `@mcp:<server>:<uri>` inlines
   one into a message. SeekForge can also run *as* an MCP server

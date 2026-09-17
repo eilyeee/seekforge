@@ -92,7 +92,19 @@ import {
 } from "./loop-logic.js";
 import { buildRelevantFiles, buildRepoOverview, lazyFileGraph, scanRepo } from "./repo-map.js";
 import type { PlanItem } from "../tools/builtins/plan.js";
-import { buildHookContext, runHooks, type HookConfig, type HookOutcome } from "../hooks/index.js";
+import {
+  buildHookContext,
+  createPromptHookEvaluator,
+  formatStopHookContinuation,
+  formatToolHookContext,
+  hookNotices,
+  MAX_STOP_HOOK_CONTINUATIONS,
+  runHooks,
+  stopHookContinuation,
+  type HookConfig,
+  type HookOutcome,
+  type RunHooksOptions,
+} from "../hooks/index.js";
 import { classifyAgentError } from "./errors.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { buildCommandRoster, loadUserCommands } from "./commands.js";
@@ -361,12 +373,13 @@ export type AgentCoreDeps = {
    */
   editFormat?: "patch" | "whole";
   /**
-   * User-configured shell hooks. preToolUse/postToolUse reach the dispatcher
-   * via ToolContext and fire around every tool run (nested subagent runs
-   * included). sessionStart/userPromptSubmit/stop/sessionEnd fire only for
-   * the top-level session; userPromptSubmit can block the run, and its hook
-   * stdout is appended to the task as <hook-context>. preCompact,
-   * subagentStop and notification are advisory (see hooks/index.ts).
+   * User-configured hooks (docs/hooks.md). The tool stages reach the
+   * dispatcher via ToolContext and fire around every tool call (nested
+   * subagent runs included). sessionStart/userPromptSubmit/stop/sessionEnd
+   * fire only for the top-level session: userPromptSubmit can block the run,
+   * its and sessionStart's context is appended to the task as <hook-context>,
+   * and stop can keep the run going. Prompt hooks are evaluated with this
+   * run's provider. See hooks/index.ts for the stage table.
    */
   hooks?: HookConfig;
   /**
@@ -601,13 +614,11 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           return e;
         };
 
-        // Surface a hook's JSON `systemMessage` to the user as a notice — for
-        // non-blocking outcomes (a blocking hook's systemMessage is the block
-        // reason instead). Used at the loop-level hook stages below.
+        // Surface what hooks address to the user (systemMessage, and
+        // stopReason when continue is false) as notices. Used at the
+        // loop-level hook stages below.
         function* surfaceHookNotices(outcomes: HookOutcome[]): Generator<AgentEvent> {
-          for (const o of outcomes) {
-            if (o.ok && o.systemMessage) yield emit({ type: "notice", level: "info", message: o.systemMessage });
-          }
+          for (const message of hookNotices(outcomes)) yield emit({ type: "notice", level: "info", message });
         }
 
         // Plan-model routing: a plan run thinks on deps.planModel (e.g. /plan
@@ -622,6 +633,20 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         // A plan run (read-only ask mode) may leave plan mode through
         // exit_plan_mode; approval switches THIS run to edit mode.
         let planMode = input.plan === true && input.mode === "ask";
+
+        // Prompt-type hooks are evaluated by this run's model (or the entry's
+        // `model`, when routable); their tokens join the run total at the next
+        // usage report (withExternalUsage).
+        let pendingHookUsage: TokenUsage | undefined;
+        const hookOpts: RunHooksOptions = {
+          signal: runSignal,
+          evaluate: createPromptHookEvaluator(
+            (model) => (model !== undefined ? (deps.providerForModel?.(model) ?? provider) : provider),
+            (spent) => {
+              pendingHookUsage = pendingHookUsage ? addUsage(pendingHookUsage, spent) : spent;
+            },
+          ),
+        };
 
         // Task-relevant memory brief. Gated by deps.injectMemory (default on; the
         // eval's `no-memory` variant flips it off to measure memory's value), and
@@ -714,7 +739,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               mode: input.mode,
               resuming,
             },
-            { signal: runSignal },
+            hookOpts,
           );
           if (!runSignal.aborted) {
             yield* surfaceHookNotices(startOutcomes);
@@ -728,12 +753,18 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 workspace: input.projectPath,
                 task: input.task,
               },
-              { signal: runSignal },
+              hookOpts,
             );
             if (!runSignal.aborted) {
               promptBlocked = promptOutcomes.find((o) => !o.ok);
               if (!promptBlocked) {
-                task = input.task + buildHookContext(promptOutcomes);
+                // sessionStart contributes only explicit JSON additionalContext
+                // (a hook that merely logs stays out of the model's context);
+                // each stage has its own cap.
+                task =
+                  input.task +
+                  buildHookContext(startOutcomes, { plainStdout: false }) +
+                  buildHookContext(promptOutcomes);
                 yield* surfaceHookNotices(promptOutcomes);
               }
             }
@@ -846,7 +877,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 kind: "permission",
                 detail: req,
               },
-              { signal: runSignal },
+              hookOpts,
             );
             throwIfCancelled();
             return abortablePromise(deps.confirm(req), runSignal, () => {
@@ -875,7 +906,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                     kind: "question",
                     detail: q,
                   },
-                  { signal: runSignal },
+                  hookOpts,
                 );
                 throwIfCancelled();
                 return abortablePromise(askUser(q), runSignal, () => {
@@ -907,6 +938,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           log: (entry) => trace.toolCall(entry),
           runtime: deps.runtime,
           hooks: deps.hooks,
+          ...(hookOpts.evaluate ? { hookEvaluate: hookOpts.evaluate } : {}),
           sandbox: deps.sandbox,
           background: deps.background ?? createBackgroundTasks(),
           signal: runSignal,
@@ -1004,6 +1036,10 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         const withExternalUsage = (): TokenUsage => {
           const external = deps.usageBus?.drain();
           if (external) usage = addUsage(usage, external);
+          if (pendingHookUsage) {
+            usage = addUsage(usage, pendingHookUsage);
+            pendingHookUsage = undefined;
+          }
           return usage;
         };
         /**
@@ -1131,6 +1167,10 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           // Finalize gate (see finalize.ts): plan/verify/lint/review checks run
           // when the model declares it is done. Each kind fires at most once per run.
           const finalizeFired = new Set<FinalizeKind>();
+          // Times a stop hook has kept this run going (bounded).
+          let stopHookContinuations = 0;
+          // A tool-stage hook's `continue: false` ends the run after that turn.
+          let hookStopRequest: string | undefined;
           // Whether deps.verifyCommand has run since the most recent edit: an edit
           // resets it, running the command sets it, so the verify nudge fires only
           // for changes that have not been checked.
@@ -1264,6 +1304,8 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               }
               if (compacted) {
                 // Advisory heads-up before compaction mutates the conversation.
+                // Automatic compaction cannot be blocked: the request would not
+                // fit the window without it.
                 yield* surfaceHookNotices(
                   await runHooks(
                     "preCompact",
@@ -1273,9 +1315,10 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                       workspace: input.projectPath,
                       reason: "auto",
                     },
-                    { signal: runSignal },
+                    hookOpts,
                   ),
                 );
+                throwIfCancelled();
                 messages = compacted.messages;
                 // Persist a mechanical derivative of the durable trace. This
                 // avoids paying to compact the same history again on resume,
@@ -1292,6 +1335,20 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                   droppedTurns: compacted.droppedTurns,
                   summaryTokens: compacted.summaryTokens,
                 });
+                yield* surfaceHookNotices(
+                  await runHooks(
+                    "postCompact",
+                    deps.hooks?.postCompact,
+                    {
+                      sessionId,
+                      workspace: input.projectPath,
+                      reason: "auto",
+                      droppedTurns: compacted.droppedTurns,
+                    },
+                    hookOpts,
+                  ),
+                );
+                throwIfCancelled();
                 // The dropped middle held the plan and the file contents the run
                 // was working from. Re-attach the current plan and, when turns
                 // were actually dropped, fresh copies of the most recent files —
@@ -1485,6 +1542,46 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 messages.push({ role: "user", content: nudge.message });
                 continue;
               }
+              // stop hooks (top-level only) run where the answer would be
+              // accepted, so a `decision: "block"` can keep the run going. The
+              // payload's stopHookActive and a per-run cap keep a hook that
+              // always blocks from looping forever; `continue: false` from any
+              // hook wins over a block.
+              if (depth === 0 && (deps.hooks?.stop?.length ?? 0) > 0) {
+                const stopOutcomes = await runHooks(
+                  "stop",
+                  deps.hooks?.stop,
+                  {
+                    sessionId,
+                    workspace: input.projectPath,
+                    summary: res.content,
+                    stopHookActive: stopHookContinuations > 0,
+                  },
+                  hookOpts,
+                );
+                throwIfCancelled();
+                yield* surfaceHookNotices(stopOutcomes);
+                const verdict = stopHookContinuation(stopOutcomes);
+                if (verdict) {
+                  if (stopHookContinuations >= MAX_STOP_HOOK_CONTINUATIONS || !hasFutureTurn) {
+                    yield emit({
+                      type: "notice",
+                      level: "warn",
+                      message:
+                        stopHookContinuations >= MAX_STOP_HOOK_CONTINUATIONS
+                          ? `stop hooks kept this run going ${MAX_STOP_HOOK_CONTINUATIONS} times; finishing anyway`
+                          : "a stop hook asked to continue, but no turns are left; finishing",
+                    });
+                  } else {
+                    stopHookContinuations++;
+                    for (const message of verdict.echoes) yield emit({ type: "notice", level: "info", message });
+                    // TRANSIENT (not traced), like the finalize nudges.
+                    if (res.content) messages.push({ role: "assistant", content: res.content });
+                    messages.push({ role: "user", content: formatStopHookContinuation(verdict.reasons) });
+                    continue;
+                  }
+                }
+              }
               finalContent = res.content;
               // Trace the final assistant message so session resume replays it.
               trace.message({ role: "assistant", content: res.content });
@@ -1505,6 +1602,8 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
 
             const turnCalls = res.toolCalls;
             const callResults: (ToolResult | undefined)[] = new Array(turnCalls.length);
+            // postToolUse(Failure) hook output for the model, per call index.
+            const callHookContext: string[][] = turnCalls.map(() => []);
             let pendingDispatches = 0;
 
             const beginCall = (tc: ProviderToolCall): { args: unknown; parseError?: ToolResult } => {
@@ -1604,6 +1703,9 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               const touched: TouchedPath[] = [];
               if (parseError) {
                 result = parseError;
+              } else if (hookStopRequest !== undefined) {
+                // An earlier call's hook ended the run; nothing else in this turn runs.
+                result = { ok: false, error: { code: "stopped_by_hook", message: "not run: a hook ended the run" } };
               } else if (dispatchManager !== undefined && tc.name === AGENT_RESULT_TOOL) {
                 result = dispatchTools!.handleAgentResult(args);
               } else if (planMode && tc.name === EXIT_PLAN_MODE_TOOL) {
@@ -1670,9 +1772,14 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                     streamedChunks++;
                     pushEvent({ type: "command.output", stream, chunk });
                   },
+                  onHookFeedback: (feedback) => {
+                    for (const message of feedback.notices ?? []) pushEvent({ type: "notice", level: "info", message });
+                    if (feedback.context) callHookContext[i]!.push(...feedback.context);
+                    if (feedback.stopRun !== undefined) hookStopRequest ??= feedback.stopRun;
+                  },
                 };
-                // preToolUse/postToolUse hooks fire inside the dispatcher
-                // (after permission enforcement, around tool.run).
+                // Tool-stage hooks fire inside the dispatcher: preToolUse before
+                // the permission prompt, postToolUse(Failure) after tool.run.
                 const outcome: Promise<{ ok: true; result: ToolResult } | { ok: false; err: unknown }> = trackOperation(
                   deps.dispatcher.execute({ id: tc.id, name: tc.name, arguments: args }, callCtx).then(
                     (r) => ({ ok: true as const, result: r }),
@@ -1784,7 +1891,11 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               const images = callResults[i]!.images;
               const toolMsg: ChatMessage = {
                 role: "tool",
-                content: toolResultForModel(callResults[i]!, limits.toolOutputMaxChars),
+                // Hook output rides beside the bounded result, labeled as the
+                // user's hooks — never folded into the tool's own data.
+                content:
+                  toolResultForModel(callResults[i]!, limits.toolOutputMaxChars) +
+                  formatToolHookContext(callHookContext[i]!),
                 toolCallId: turnCalls[i]!.id,
                 // A screenshot belongs to the call that took it. Whether it
                 // reaches the model is the provider's answer, not the tool's —
@@ -1793,6 +1904,12 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               };
               messages.push(toolMsg);
               trace.message(toolMsg);
+            }
+
+            // A tool-stage hook said `continue: false`: the results above are
+            // recorded (resume stays consistent), and the run ends here.
+            if (hookStopRequest !== undefined) {
+              throw new AgentLimitError("stopped_by_hook", hookStopRequest);
             }
 
             // A skill invoked this turn may ask for another model for the rest
@@ -1948,20 +2065,6 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             );
           }
           yield emit({ type: "session.completed", report });
-          // stop fires after a SUCCESSFUL top-level completion only (never on
-          // failure/cancel — sessionEnd covers those). Advisory.
-          if (depth === 0) {
-            await runHooks(
-              "stop",
-              deps.hooks?.stop,
-              {
-                sessionId,
-                workspace: input.projectPath,
-                summary: finalContent,
-              },
-              { signal: runSignal },
-            );
-          }
         } catch (err) {
           const e = err as Partial<AgentLimitError> & Error;
           // DOMException.code is numeric (AbortError is commonly 20). The run's
@@ -2015,11 +2118,17 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           // Advisory only; never affects the (already emitted) outcome. Nested
           // subagent sessions (depth > 0) do not fire it.
           if (depth === 0) {
-            await runHooks("sessionEnd", deps.hooks?.sessionEnd, {
-              sessionId,
-              workspace: input.projectPath,
-              status: sessionEndStatus ?? "cancelled",
-            });
+            // No signal: the run may already be aborted by its own teardown.
+            await runHooks(
+              "sessionEnd",
+              deps.hooks?.sessionEnd,
+              {
+                sessionId,
+                workspace: input.projectPath,
+                status: sessionEndStatus ?? "cancelled",
+              },
+              hookOpts.evaluate ? { evaluate: hookOpts.evaluate } : {},
+            );
           }
         }
       } catch (error) {

@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
-import { compareByCodePoints } from "@seekforge/shared";
+import { compareByCodePoints, HOOK_STAGES, HOOK_TYPES, parseHookEntry } from "@seekforge/shared";
 import type { PluginSupplyChainEntry } from "@seekforge/shared";
 import { seekforgeHome } from "../memory/store.js";
-import type { HookConfig, HookEntry, HookStage } from "../hooks/index.js";
+import type { HookConfig, HookEntry } from "../hooks/index.js";
 import type { McpServerConfig } from "../mcp/types.js";
 import { readWorkspaceStateFile } from "../util/workspace-state.js";
 import { BUILTIN_GRAPH_HANDLER_IDS } from "../agent/graph-declarative-handlers.js";
@@ -30,20 +30,31 @@ export const PLUGIN_STATE_REL_PATH = ".seekforge/plugins-state.json";
 
 const permission = z.enum(["readonly", "write", "execute", "env", "dangerous"]);
 const hookEntry = z
-  .object({ match: z.string().optional(), pattern: z.string().optional(), command: z.string().min(1) })
-  .strict();
-const hookConfig = z
   .object({
-    preToolUse: z.array(hookEntry).optional(),
-    postToolUse: z.array(hookEntry).optional(),
-    sessionStart: z.array(hookEntry).optional(),
-    userPromptSubmit: z.array(hookEntry).optional(),
-    preCompact: z.array(hookEntry).optional(),
-    stop: z.array(hookEntry).optional(),
-    subagentStop: z.array(hookEntry).optional(),
-    notification: z.array(hookEntry).optional(),
-    sessionEnd: z.array(hookEntry).optional(),
+    type: z.enum(HOOK_TYPES).optional(),
+    match: z.string().optional(),
+    pattern: z.string().optional(),
+    timeout: z.number().optional(),
+    command: z.string().optional(),
+    url: z.string().optional(),
+    headers: z.record(z.string(), z.string()).optional(),
+    allowedEnvVars: z.array(z.string()).optional(),
+    prompt: z.string().optional(),
+    model: z.string().optional(),
   })
+  .strict()
+  .superRefine((value, ctx) => {
+    // One validator for every surface; the schema above only pins the keys.
+    const parsed = parseHookEntry(value);
+    if (!parsed.ok) ctx.addIssue({ code: "custom", message: `hook entry: ${parsed.error}` });
+    // Command hooks run with secrets scrubbed from their environment. A
+    // plugin's http hook must not get them back by naming them.
+    if (value.allowedEnvVars !== undefined && value.allowedEnvVars.length > 0) {
+      ctx.addIssue({ code: "custom", message: "plugin hooks may not expand environment variables" });
+    }
+  });
+const hookConfig = z
+  .object(Object.fromEntries(HOOK_STAGES.map((stage) => [stage, z.array(hookEntry).optional()])))
   .strict();
 const mcpServer = z
   .object({
@@ -391,18 +402,6 @@ export function pluginSupplyChainReport(workspace: string): { generatedAt: strin
   });
   return { generatedAt: new Date().toISOString(), entries };
 }
-
-const HOOK_STAGES: HookStage[] = [
-  "preToolUse",
-  "postToolUse",
-  "sessionStart",
-  "userPromptSubmit",
-  "preCompact",
-  "stop",
-  "subagentStop",
-  "notification",
-  "sessionEnd",
-];
 
 function mergeHooks(target: HookConfig, incoming: HookConfig | undefined): void {
   if (!incoming) return;

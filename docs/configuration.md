@@ -938,45 +938,46 @@ User-owned: a repository config cannot set it. Settable via `config set`?
 
 ### `hooks`
 
-User-owned shell hooks that fire at various stages of the agent lifecycle.
-Hooks receive a JSON payload on stdin with the stage name and relevant context
-(`sessionId`, `workspace`, `toolName`, `args`, `command`, `path`, etc.).
+User-owned hooks that run at fixed points of an agent run — around every tool
+call, at permission prompts, at session start/end, around compaction, and when
+the agent is about to finish. **The full reference is [Hooks](hooks.md)**; this
+is the summary.
 
 ```typescript
-type HookConfig = {
-  /** Fires before every tool call. Non-zero exit *blocks* the tool with a reason. */
-  preToolUse?: HookEntry[];
-  /** Fires after every tool call (receives `{ ok, errorCode }` — never raw output). */
-  postToolUse?: HookEntry[];
-  /** Fires when a session starts. */
-  sessionStart?: HookEntry[];
-  /** Fires when the user submits a prompt. stdout is injected into the task as context. */
-  userPromptSubmit?: HookEntry[];
-  /** Fires before context compaction. */
-  preCompact?: HookEntry[];
-  /** Fires when the agent receives a stop signal (Ctrl+C). */
-  stop?: HookEntry[];
-  /** Fires when a subagent stops. */
-  subagentStop?: HookEntry[];
-  /** Fires for non-blocking notifications. */
-  notification?: HookEntry[];
-  /** Fires when the session ends. Receives final session status. */
-  sessionEnd?: HookEntry[];
-};
+type HooksConfig = Partial<Record<HookStage, HookEntry[]>>;
+
+type HookStage =
+  | "preToolUse"          // before every tool call, before any permission prompt — can refuse, allow, ask, rewrite
+  | "permissionRequest"   // a call is about to prompt — can answer allow / deny for you
+  | "postToolUse"         // after every tool call — receives the redacted result; can add model context
+  | "postToolUseFailure"  // after a tool call that failed
+  | "sessionStart"        // a top-level run starts — JSON additionalContext joins the task
+  | "userPromptSubmit"    // for the task — can refuse the run; stdout joins the task as context
+  | "preCompact"          // before compaction — can cancel a manual one
+  | "postCompact"         // after compaction
+  | "stop"                // the agent is about to finish — decision "block" keeps it working
+  | "subagentStart"       // a dispatched subagent starts — JSON additionalContext joins its task
+  | "subagentStop"        // a dispatched subagent finished
+  | "notification"        // a permission prompt / ask_user question is shown
+  | "sessionEnd";         // the top-level session ended
 
 type HookEntry = {
-  /** Tool name this hook applies to, or "*" for any (default "*"). */
-  match?: string;
-  /** Prefix matched against the classified command or path. Absent = any. */
-  pattern?: string;
-  /** Shell command, run via `/bin/sh -c` with cwd = workspace. */
-  command: string;
+  type?: "command" | "http" | "prompt"; // default "command"
+  match?: string;     // tool / agent names: "*", "write_file|apply_patch", or an anchored regex
+  pattern?: string;   // prefix of the raw command or path
+  timeout?: number;   // seconds, 0 < timeout ≤ 600 (default 10; prompt 30)
+  command?: string;   // command: run via /bin/sh -c, event JSON on stdin
+  url?: string;       // http: POST target (http/https, redirects not followed)
+  headers?: Record<string, string>; // http: ${VAR} expands only names in allowedEnvVars
+  allowedEnvVars?: string[];
+  prompt?: string;    // prompt: condition a model checks; $ARGUMENTS marks the event
+  model?: string;
 };
 ```
 
-**Blocking stages**: `preToolUse` and `userPromptSubmit` — a non-zero exit
-prevents the tool call or run from proceeding. All other stages are advisory
-(logging, notifications, telemetry).
+**Blocking stages**: `preToolUse` and `userPromptSubmit` — a hook that fails
+(non-zero exit, non-`2xx` response, timeout, no verdict) refuses the call or
+the run. Every other stage logs failures and carries on.
 
 ```json
 {
@@ -990,7 +991,7 @@ prevents the tool call or run from proceeding. All other stages are advisory
     ],
     "sessionEnd": [
       {
-        "command": "echo 'session $SESSION_ID ended' >> /tmp/seekforge.log"
+        "command": "echo \"session ended in $SEEKFORGE_PROJECT_DIR\" >> /tmp/seekforge.log"
       }
     ]
   }
@@ -998,43 +999,27 @@ prevents the tool call or run from proceeding. All other stages are advisory
 ```
 
 Hook entries are concatenated per stage across trusted config layers for **all**
-stages: **global → settings**. Repository hooks are inert. The Desktop hook
-editor writes `~/.seekforge/config.json`.
+stages: **global → settings**. Repository hooks are inert. Invalid entries are
+dropped when the config loads. The Desktop hook editor writes
+`~/.seekforge/config.json`.
 
 Settable via `config set`? **No** — edit the file directly.
 
-#### preToolUse JSON stdout protocol
+#### Hook output protocol
 
-A `preToolUse` hook that exits 0 may print a JSON object on stdout to control
-the call (anything that isn't a JSON object is ignored and the plain exit-code
-behavior applies). Both the legacy shape and the Claude-Code shape are accepted:
+A hook that succeeds may print (or respond with) a JSON object; see
+[Hooks → Output protocol](hooks.md#output-protocol) for every field. In short:
 
-| Field | Where | Effect |
-| --- | --- | --- |
-| `decision` | top-level (`"allow"` / `"deny"`) | `deny` blocks the call (`reason` becomes the block reason). `allow` explicitly allows it and **skips the remaining `preToolUse` hooks**. |
-| `hookSpecificOutput.permissionDecision` | nested (`"allow"` / `"deny"` / `"ask"`) | Same as `decision`, plus `"ask"` — explicitly defer to the normal permission flow and keep running later hooks. Also read at the top level as `permissionDecision`. |
-| `permissionDecisionReason` / `reason` | nested / top-level | The human-readable reason shown when denying. |
-| `updatedInput` | top-level or under `hookSpecificOutput` | Replacement tool arguments. The dispatcher applies them before the tool runs, **re-validating against the tool schema and re-running permission checks** on the new args. An invalid replacement fails the call with `invalid_hook_args`; it never falls back to executing the original input. `preToolUse` only. |
-| `continue` | top-level (boolean) | `false` blocks the call (treated like a deny), using `systemMessage` as the reason. Parsed on all stages but only blocks on `preToolUse` and `userPromptSubmit`. |
-| `systemMessage` | top-level (string) | Shown to the user as a notice; also the block reason when `continue: false` blocks. Parsed on all stages. |
-| `additionalContext` / `hookSpecificOutput.additionalContext` | top-level / nested (string) | Injected into the prompt as context — used by `userPromptSubmit` and `sessionStart`. When absent, those stages fall back to the hook's raw stdout. |
-
-```json
-{
-  "hookSpecificOutput": {
-    "permissionDecision": "allow",
-    "permissionDecisionReason": "vetted command"
-  }
-}
-```
-
-```json
-{ "hookSpecificOutput": { "updatedInput": { "path": "safe.txt" } } }
-```
-
-A `userPromptSubmit` (or `sessionStart`) hook contributes context via
-`additionalContext` — or, absent that, its trimmed stdout — which is appended to
-the task as a `<hook-context>…</hook-context>` block (capped at 8000 chars).
+| Field | Effect |
+| --- | --- |
+| `permissionDecision` / `decision` (`preToolUse`) | `deny` refuses without prompting; `allow` answers the prompt the policy would show (never one an `ask` rule requires, never a compound shell command); `ask` forces a one-call prompt. All `preToolUse` hooks run — a later `deny` beats an earlier `allow`. |
+| `updatedInput` (`preToolUse`) | Replacement arguments, re-validated against the tool schema, re-classified and re-permission-checked. An invalid replacement fails the call with `invalid_hook_args`. |
+| `hookSpecificOutput.decision.behavior` (`permissionRequest`) | `allow` / `deny` in your place. |
+| `decision: "block"` + `reason` | `userPromptSubmit`: refuse the run. `stop`: keep the agent working (`stopHookActive` marks a repeat; at most 5 per run). `postToolUse(Failure)`: the reason reaches the model beside the result. `preCompact`: cancel a manual compaction. |
+| `additionalContext` | Model context: appended to the task (`sessionStart`, `userPromptSubmit`), the subagent's task (`subagentStart`), or beside the tool result (`postToolUse(Failure)`), inside escaped `<hook-context>` blocks. |
+| `continue: false` + `stopReason` | Ends the run after a tool stage, refuses a prompt / run, cancels a manual compaction; `stopReason` is shown to you. |
+| `systemMessage` | Shown to you as a notice. |
+| `suppressOutput` | Keeps the hook's output out of the transcript. |
 
 ### `visionModel`
 
@@ -1422,6 +1407,10 @@ child process, so a hook script can read them from its own environment:
 | --- | --- |
 | `SEEKFORGE_HOOK_STAGE` | The lifecycle stage that fired this hook. |
 | `SEEKFORGE_TOOL` | The triggering tool's name, or empty when the stage is not tool-scoped. |
+| `SEEKFORGE_PROJECT_DIR` | The session's workspace directory (also the hook's working directory). |
+
+These reach `command` hooks only; `http` and `prompt` hooks get the same facts
+in the JSON event.
 
 The statusline command receives its own set — see [Statusline](#statusline).
 

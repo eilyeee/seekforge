@@ -186,7 +186,9 @@ including the optional pre-release and build-metadata parts (`1.2.0-rc.1+build.7
 Contribution roots are relative directories confined to the plugin. MCP server
 names are exposed as `<plugin-id>__<server-name>` to avoid ambiguous collisions. User
 configuration wins over a plugin MCP server with the same effective name;
-plugin hooks run before user-configured hooks.
+plugin hooks run before user-configured hooks. Hook entries use the same types,
+stages and validation as user [hooks](hooks.md), except that a plugin's `http`
+hook may not list `allowedEnvVars`.
 
 A contributed MCP server carries exactly the connection trust its manifest
 declares. `trusted` defaults to `false` here as everywhere else, so the `docs`

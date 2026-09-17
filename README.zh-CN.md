@@ -194,10 +194,12 @@ Markdown/JSON/JUnit 报告。每周的 workflow 用 nightly 套件对照已提�
   用 seatbelt（macOS）/ bwrap（Linux）包裹命令；`read-only` 保护工作区，
   `restricted` 再切断网络。请求了但不可用时硬失败——绝不静默降级为无沙箱。
   疑似沙箱拒绝的失败会询问一次后再无沙箱重试。
-- **Hook** 在 9 个阶段触发（preToolUse、postToolUse、sessionStart、
-  userPromptSubmit、preCompact、stop、subagentStop、notification、
-  sessionEnd）；userPromptSubmit 的 stdout 注入任务作为上下文，preToolUse
-  可带理由拦截工具或直接放行。
+- **Hook** 在 13 个阶段触发（preToolUse、permissionRequest、postToolUse、
+  postToolUseFailure、sessionStart、userPromptSubmit、preCompact、postCompact、
+  stop、subagentStart、subagentStop、notification、sessionEnd），形式可以是
+  shell 命令、HTTP 调用或模型检查。preToolUse 在权限提示之前作出决定（拒绝、
+  放行、询问、改写），postToolUse 可在结果旁补充上下文，stop hook 可以让智能体
+  继续工作——见 [docs/hooks.zh-CN.md](docs/hooks.zh-CN.md)。
 - **MCP 客户端**支持 stdio 与 streamable HTTP（`url` + 可选 bearer
   `headers`）；server 资源可列出，`@mcp:<server>:<uri>` 把资源内联进消息。
   SeekForge 也能*作为* MCP server 运行（`seekforge mcp-serve`）。完整指南：

@@ -16,6 +16,8 @@ and quick start; this folder holds the reference docs.
 - [Configuration](configuration.md) — config layers & precedence, profiles,
   permission rules, hooks (incl. the JSON output protocol), output styles,
   MCP servers, sandbox, and the TUI status line.
+- [Hooks](hooks.md) — command / HTTP / prompt hooks at 13 stages, matchers,
+  the output protocol, and how hooks meet the permission prompt.
 - [MCP](mcp.md) — Model Context Protocol servers (stdio + Streamable HTTP),
   resources, prompts, and `${ENV}` header expansion.
 - [Plugins](plugins.md) — first-class skill/agent/MCP/hook bundles, digest-bound

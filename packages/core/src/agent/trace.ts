@@ -14,6 +14,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { join, resolve, sep } from "node:path";
 import type { AgentEvent, ChatMessage, PlanItem, SessionStatus, TokenUsage } from "@seekforge/shared";
 import { compactMessages, estimateMessagesTokens } from "./context.js";
+import { runManualCompactionHooks, type CompactionBlocked, type CompactionHookOptions } from "../hooks/index.js";
 import {
   acquireSessionLease,
   assertSessionLease,
@@ -573,6 +574,8 @@ export type ManualCompactionResult = {
   droppedTurns: number;
   beforeTokens: number;
   afterTokens: number;
+  /** Messages the compaction hooks addressed to the user, when hooks ran. */
+  notices?: string[];
 };
 
 /**
@@ -581,8 +584,52 @@ export type ManualCompactionResult = {
  * context budget, and rewrites the file. The next resume replays the
  * compacted history. Returns null when the session is too short to compact
  * or has no messages file.
+ *
+ * Passing `hooks` (the user's config hooks) fires preCompact with reason
+ * "manual" — which may block, resolving `{ blocked: true, reason }` with
+ * nothing changed — and postCompact afterwards; the call is then async.
  */
 export function compactSessionNow(
+  workspace: string,
+  sessionId: string,
+  lease?: SessionLease,
+): ManualCompactionResult | null;
+export function compactSessionNow(
+  workspace: string,
+  sessionId: string,
+  lease: SessionLease | undefined,
+  hooks: CompactionHookOptions,
+): Promise<ManualCompactionResult | CompactionBlocked | null>;
+export function compactSessionNow(
+  workspace: string,
+  sessionId: string,
+  lease?: SessionLease,
+  hooks?: CompactionHookOptions,
+): ManualCompactionResult | null | Promise<ManualCompactionResult | CompactionBlocked | null> {
+  if (hooks === undefined) return compactStoredSession(workspace, sessionId, lease);
+  return (async () => {
+    // Held across the hooks: a busy session fails before any hook fires, and
+    // nothing else can change the history between preCompact and the rewrite.
+    const owned = lease ?? acquireSessionLease(workspace, sessionId);
+    try {
+      // Hooks fire only for a session that can actually be compacted.
+      let messages: ChatMessage[];
+      try {
+        messages = loadSessionMessages(workspace, sessionId);
+      } catch {
+        return null;
+      }
+      if (!compactMessages(messages, 0)) return null;
+      return await runManualCompactionHooks({ sessionId, workspace }, hooks, () =>
+        compactStoredSession(workspace, sessionId, owned),
+      );
+    } finally {
+      if (!lease) owned.release();
+    }
+  })();
+}
+
+function compactStoredSession(
   workspace: string,
   sessionId: string,
   lease?: SessionLease,

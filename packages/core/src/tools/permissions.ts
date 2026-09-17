@@ -381,3 +381,12 @@ export async function enforcePermission(
       return confirmWithUser(toolName, cls, ctx);
   }
 }
+
+/**
+ * Whether a user ask rule demands a person for this call. The dispatcher uses
+ * it so a hook's "allow" can skip an ordinary prompt but never answer one an
+ * ask rule requires.
+ */
+export function askRuleMatches(toolName: string, cls: ClassifiedCall, ctx: ToolContext): boolean {
+  return (ctx.policy.rules ?? []).some((r) => r.action === "ask" && ruleMatches(r, toolName, cls));
+}

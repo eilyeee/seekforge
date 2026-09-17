@@ -18,7 +18,7 @@ import { createDispatcher, type ToolSpec } from "./registry.js";
 import { builtinTools } from "./builtins/index.js";
 import type { RuntimeClient } from "../runtime/index.js";
 import type { BackgroundTasks } from "./background.js";
-import type { HookConfig } from "../hooks/index.js";
+import type { HookConfig, HookPromptEvaluator, ToolHookFeedback } from "../hooks/index.js";
 import type { SandboxLevel } from "./os-sandbox.js";
 import type { SkillSession } from "../skills/invocation.js";
 import type { CheckpointOrigin, ShellCheckpointNote } from "./shell-checkpoint.js";
@@ -75,10 +75,20 @@ export type ToolContext = {
    */
   sandbox?: SandboxLevel;
   /**
-   * User-configured shell hooks. The dispatcher fires preToolUse (blocking)
-   * and postToolUse (advisory) around every tool run; see ../hooks/index.ts.
+   * User-configured hooks. The dispatcher fires preToolUse (before the
+   * permission prompt), permissionRequest (in place of a prompt it can
+   * answer), and postToolUse / postToolUseFailure (after the run); see
+   * ../hooks/index.ts.
    */
   hooks?: HookConfig;
+  /** Evaluates prompt-type hooks. Absent = those hooks fail (and block a blocking stage). */
+  hookEvaluate?: HookPromptEvaluator;
+  /**
+   * Per-call sink for what a tool-stage hook asks of the host: context for the
+   * model beside the result, notices for the user, or ending the run. The
+   * agent loop wires it per call; absent = that output is dropped.
+   */
+  onHookFeedback?: (feedback: ToolHookFeedback) => void;
   /** Optional tool-call audit log sink (JSONL). */
   log?: (entry: Record<string, unknown>) => void;
   /**

@@ -29,7 +29,14 @@ import {
   type DispatchManager,
   type TeamMemberPlan,
 } from "../subagents/index.js";
-import { runHooks } from "../hooks/index.js";
+import {
+  buildHookContext,
+  hookNotices,
+  permissionRequestAnswer,
+  runHooks,
+  type HookOutcome,
+  type RunHooksOptions,
+} from "../hooks/index.js";
 import { onAbortOnce } from "../util/abort.js";
 import { ZERO_USAGE, addUsage, subtractUsage } from "./loop-logic.js";
 import type { AgentCore, RunAgentTaskInput } from "./index.js";
@@ -85,6 +92,56 @@ export type DispatchTools = {
 export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
   const { deps, input, roster, dispatchManager, pushEvent, confirmAllowed } = rt;
   const terminalDispatches = new Set<string>();
+  const hookOpts = (signal?: AbortSignal): RunHooksOptions => ({
+    ...(signal ? { signal } : {}),
+    ...(rt.ctx.hookEvaluate ? { evaluate: rt.ctx.hookEvaluate } : {}),
+  });
+  const pushHookNotices = (outcomes: HookOutcome[]): void => {
+    for (const message of hookNotices(outcomes)) pushEvent({ type: "notice", level: "info", message });
+  };
+
+  /**
+   * The approval prompt for dispatching an edit-mode agent. A permissionRequest
+   * hook may answer it for the user, as it can a tool call's. Resolves
+   * undefined when approved, else the refusal to return.
+   */
+  async function confirmDispatch(
+    toolName: string,
+    def: AgentDefinition,
+    task: string,
+  ): Promise<ToolResult | undefined> {
+    const req: PermissionRequest = {
+      toolName,
+      permission: "write",
+      description: `Dispatch agent ${def.id}: ${task.slice(0, 100)}`,
+    };
+    const answers = await runHooks(
+      "permissionRequest",
+      deps.hooks?.permissionRequest,
+      {
+        sessionId: rt.sessionId,
+        workspace: input.projectPath,
+        toolName,
+        args: { agentId: def.id, task },
+        permission: req.permission,
+        description: req.description,
+      },
+      hookOpts(input.signal),
+    );
+    pushHookNotices(answers);
+    const answer = permissionRequestAnswer(answers);
+    if (answer?.decision === "deny") {
+      return {
+        ok: false,
+        error: { code: "hook_blocked", message: `Blocked by permissionRequest hook: ${answer.reason ?? "denied"}` },
+      };
+    }
+    if (answer?.decision === "allow" || (await confirmAllowed(req))) return undefined;
+    return {
+      ok: false,
+      error: { code: "denied_by_user", message: `dispatch of agent "${def.id}" denied by user` },
+    };
+  }
 
   function resultSummary(result: ToolResult): string {
     if (!result.ok) return (result.error?.message ?? "subagent failed").slice(0, 500);
@@ -188,10 +245,20 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
     let failure: { code: string; message: string } | undefined;
     let cancelled = false;
 
+    // subagentStart may add context to the subagent's task — only an explicit
+    // JSON additionalContext, like sessionStart. Otherwise advisory.
+    const startOutcomes = await runHooks(
+      "subagentStart",
+      deps.hooks?.subagentStart,
+      { sessionId: rt.sessionId, workspace: input.projectPath, agentId: def.id, task },
+      hookOpts(signal),
+    );
+    pushHookNotices(startOutcomes);
+
     const events = nested
       .runTask({
         projectPath: input.projectPath,
-        task,
+        task: task + buildHookContext(startOutcomes, { plainStdout: false }),
         mode: def.mode,
         approvalMode: input.approvalMode,
         signal,
@@ -277,12 +344,19 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
     rt.ctx.log?.({ tool: DISPATCH_AGENT_TOOL, agentId: def.id, task, subSessionId });
 
     // subagentStop: a dispatched run finished (sessionId = the parent's).
-    await runHooks("subagentStop", deps.hooks?.subagentStop, {
-      sessionId: rt.sessionId,
-      workspace: input.projectPath,
-      agentId: def.id,
-      ok: !cancelled && failure === undefined && report !== undefined,
-    });
+    pushHookNotices(
+      await runHooks(
+        "subagentStop",
+        deps.hooks?.subagentStop,
+        {
+          sessionId: rt.sessionId,
+          workspace: input.projectPath,
+          agentId: def.id,
+          ok: !cancelled && failure === undefined && report !== undefined,
+        },
+        hookOpts(),
+      ),
+    );
 
     if (cancelled) {
       return { ok: false, error: { code: "subagent_cancelled", message: "dispatch aborted" } };
@@ -355,17 +429,8 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
     // ask-mode agents are read-only and auto-allowed; edit-mode agents
     // go through the normal approval flow (unless approvalMode is auto).
     if (!skipConfirm && def.mode === "edit" && input.approvalMode !== "auto") {
-      const approved = await confirmAllowed({
-        toolName: DISPATCH_AGENT_TOOL,
-        permission: "write",
-        description: `Dispatch agent ${def.id}: ${task.slice(0, 100)}`,
-      });
-      if (!approved) {
-        return {
-          ok: false,
-          error: { code: "denied_by_user", message: `dispatch of agent "${def.id}" denied by user` },
-        };
-      }
+      const refused = await confirmDispatch(DISPATCH_AGENT_TOOL, def, task);
+      if (refused) return refused;
     }
 
     let dispatchId = "";
@@ -445,18 +510,11 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
         if (input.mode === "edit" && def.mode === "edit" && input.approvalMode !== "auto") {
           // Frontends expose one interactive permission slot per run. Ask
           // serially, then launch approved members with normal concurrency.
-          const approved = await confirmAllowed({
-            toolName: DISPATCH_AGENT_TOOL,
-            permission: "write",
-            description: `Dispatch agent ${def.id}: ${member.task.slice(0, 100)}`,
-          });
-          if (!approved) {
+          const refused = await confirmDispatch(DISPATCH_AGENT_TOOL, def, member.task);
+          if (refused) {
             const outcome = outcomes.get(member.id)!;
             outcome.status = "failed";
-            outcome.result = {
-              ok: false,
-              error: { code: "denied_by_user", message: `dispatch of agent "${def.id}" denied by user` },
-            };
+            outcome.result = refused;
             if (validated.plan.failurePolicy === "stop") stopped = true;
             continue;
           }
@@ -599,17 +657,8 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
       };
     }
     if (def.mode === "edit" && input.approvalMode !== "auto") {
-      const approved = await confirmAllowed({
-        toolName: AGENT_SEND_TOOL,
-        permission: "write",
-        description: `Dispatch agent ${def.id}: ${task.slice(0, 100)}`,
-      });
-      if (!approved) {
-        return {
-          ok: false,
-          error: { code: "denied_by_user", message: `dispatch of agent "${def.id}" denied by user` },
-        };
-      }
+      const refused = await confirmDispatch(AGENT_SEND_TOOL, def, task);
+      if (refused) return refused;
     }
     const resumeSessionId = rec.subSessionId;
     const promise = dispatchManager.resume({

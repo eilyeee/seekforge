@@ -1,10 +1,34 @@
 import type { z } from "zod";
-import type { PermissionName, ToolCall, ToolDefinitionForModel, ToolResult } from "@seekforge/shared";
+import type {
+  ConfirmResult,
+  PermissionName,
+  PermissionRequest,
+  ToolCall,
+  ToolDefinitionForModel,
+  ToolResult,
+} from "@seekforge/shared";
 import type { ToolContext, ToolDispatcher } from "./index.js";
 import { ToolError } from "./errors.js";
 import { zodToJsonSchema } from "./json-schema.js";
-import { denyBeforePrompt, enforcePermission, type PermissionDecision, type PermissionRefusal } from "./permissions.js";
-import { runHooks, type HookPayload } from "../hooks/index.js";
+import {
+  askRuleMatches,
+  denyBeforePrompt,
+  enforcePermission,
+  type PermissionDecision,
+  type PermissionOutcome,
+  type PermissionRefusal,
+} from "./permissions.js";
+import { hasShellControlSyntax } from "./run-command.js";
+import {
+  hookToolResult,
+  permissionRequestAnswer,
+  runHooks,
+  toolHookFeedback,
+  type HookOutcome,
+  type HookPayload,
+  type HookStage,
+  type RunHooksOptions,
+} from "../hooks/index.js";
 
 /** Result of classifying one concrete call before permission enforcement. */
 export type ClassifiedCall = {
@@ -92,6 +116,12 @@ export function defineTool<S extends z.ZodTypeAny>(spec: ToolSpec<S>): ToolSpec 
 
 export const TOOL_NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
+/**
+ * What the audit log records as the call's permission decision: the policy's
+ * own decision, or a hook's answer in place of a prompt.
+ */
+export type DispatchDecision = PermissionDecision | "not_evaluated" | "hook_allowed" | "hook_denied";
+
 export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
   const byName = new Map<string, ToolSpec>();
   for (const tool of tools) {
@@ -114,7 +144,7 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
     async execute(call: ToolCall, ctx: ToolContext): Promise<ToolResult> {
       const started = Date.now();
       const startedAt = new Date(started).toISOString();
-      let decision: PermissionDecision | "not_evaluated" = "not_evaluated";
+      let decision: DispatchDecision = "not_evaluated";
       let permission: PermissionName | undefined;
       let classified: ClassifiedCall | undefined;
       let effectiveArgs: unknown = call.arguments;
@@ -126,25 +156,27 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
         ok: false,
         error: { code, message, ...(detail !== undefined ? { detail } : {}) },
       });
+      const cancelled = (): ToolResult => fail("cancelled", "Tool call cancelled");
 
       /**
-       * Classify, then let an async `prepare` enrich the review payload. The
-       * permission level is re-asserted from the classification afterwards so
-       * the enrichment cannot change what the user is being asked to approve.
+       * Classify, apply the refusals that need nobody's input, then let an
+       * async `prepare` enrich the review payload. The permission level is
+       * re-asserted from the classification afterwards so the enrichment
+       * cannot change what the user is being asked to approve.
        *
-       * A call the policy refuses out of hand never reaches `prepare`: that
-       * step does I/O to describe the change, and a tool the run has denied
-       * must do nothing at all. The refusal is returned so the caller reports
-       * it verbatim instead of re-deriving it.
+       * A call the policy refuses out of hand reaches neither `prepare` nor any
+       * hook: prepare does I/O to describe the change, and a tool the run has
+       * denied must do nothing at all. The refusal is returned so the caller
+       * reports it verbatim instead of re-deriving it.
        */
       const classifyAndPrepare = async (
         spec: ToolSpec,
         args: unknown,
       ): Promise<{ classified: ClassifiedCall; refused?: PermissionRefusal }> => {
         const base = spec.classify(args as never, ctx);
-        if (!spec.prepare) return { classified: base };
         const refused = denyBeforePrompt(call.name, base, ctx);
         if (refused) return { classified: base, refused };
+        if (!spec.prepare) return { classified: base };
         const prepared = await spec.prepare(args as never, ctx);
         preparedState = prepared.state;
         // Only what prepare actually supplied is merged: a spread would let an
@@ -161,6 +193,189 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
         err instanceof ToolError
           ? fail(err.code, err.message, err.detail)
           : fail("internal_error", err instanceof Error ? err.message : String(err));
+
+      // Hooks see model-controlled content only in their payload (stdin,
+      // request body, fenced prompt data), never on a command line.
+      const hookOpts: RunHooksOptions = {
+        ...(ctx.signal ? { signal: ctx.signal } : {}),
+        ...(ctx.hookEvaluate ? { evaluate: ctx.hookEvaluate } : {}),
+      };
+      const hookPayload = (args: unknown, cls: ClassifiedCall): HookPayload => ({
+        sessionId: ctx.sessionId,
+        workspace: ctx.workspace,
+        toolName: call.name,
+        args,
+        ...(cls.command !== undefined ? { command: cls.command } : {}),
+        ...(cls.path !== undefined ? { path: cls.path } : {}),
+      });
+      const report = (stage: HookStage, outcomes: HookOutcome[]): void => {
+        const feedback = toolHookFeedback(stage, outcomes);
+        if (feedback) ctx.onHookFeedback?.(feedback);
+      };
+
+      /**
+       * Permission enforcement with the hooks' answers applied. `hookAllow`
+       * answers the prompt the policy would show; `hookAsk` forces one, as a
+       * one-call ask rule would. permissionRequest hooks run where the prompt
+       * would appear and may answer it for the user. No hook approval answers
+       * a prompt a person must see (an ask rule, a preToolUse "ask"), and none
+       * covers a compound shell command — the limit allow rules have. The
+       * absolute refusals (deny rules, ask mode, dangerous) already ran.
+       */
+      const enforceWithHooks = async (
+        cls: ClassifiedCall,
+        args: unknown,
+        hookAllow: boolean,
+        hookAsk: boolean,
+      ): Promise<{ outcome: PermissionOutcome; decision: DispatchDecision }> => {
+        const personRequired = hookAsk || askRuleMatches(call.name, cls, ctx);
+        const compound = call.name === "run_command" && cls.command !== undefined && hasShellControlSyntax(cls.command);
+        const hookMayApprove = !personRequired && !compound;
+        let answeredBy: "hook_allowed" | "hook_denied" | undefined;
+        let denial = "denied";
+        const confirm = async (req: PermissionRequest): Promise<ConfirmResult> => {
+          if (hookAllow && hookMayApprove) {
+            answeredBy = "hook_allowed";
+            return true;
+          }
+          const answers = await runHooks(
+            "permissionRequest",
+            ctx.hooks?.permissionRequest,
+            { ...hookPayload(args, cls), permission: req.permission, description: req.description },
+            hookOpts,
+          );
+          report("permissionRequest", answers);
+          if (ctx.signal?.aborted) return false;
+          const answer = permissionRequestAnswer(answers);
+          if (answer?.decision === "deny") {
+            answeredBy = "hook_denied";
+            if (answer.reason) denial = answer.reason;
+            return false;
+          }
+          if (hookMayApprove && answer?.decision === "allow") {
+            answeredBy = "hook_allowed";
+            return true;
+          }
+          return ctx.confirm(req);
+        };
+        const policy = hookAsk
+          ? { ...ctx.policy, rules: [{ action: "ask" as const, tool: call.name }, ...(ctx.policy.rules ?? [])] }
+          : ctx.policy;
+        const outcome = await enforcePermission(call.name, cls, { ...ctx, policy, confirm });
+        if (answeredBy === "hook_denied") {
+          return {
+            outcome: {
+              allowed: false,
+              decision: outcome.decision,
+              errorCode: "hook_blocked",
+              errorMessage: `Blocked by permissionRequest hook: ${denial}`,
+            },
+            decision: "hook_denied",
+          };
+        }
+        return {
+          outcome,
+          decision: answeredBy === "hook_allowed" && outcome.allowed ? "hook_allowed" : outcome.decision,
+        };
+      };
+
+      /** Everything after the absolute refusals: preToolUse, the prompt, the run, postToolUse. */
+      const gateAndRun = async (spec: ToolSpec, parsedArgs: unknown, initial: ClassifiedCall): Promise<ToolResult> => {
+        let cls = initial;
+        permission = cls.permission;
+        // preToolUse decides before anyone is prompted: a deny refuses without
+        // asking, an allow answers the prompt, an ask forces one.
+        const pre = await runHooks("preToolUse", ctx.hooks?.preToolUse, hookPayload(parsedArgs, cls), hookOpts);
+        if (ctx.signal?.aborted) return cancelled();
+        report("preToolUse", pre);
+        const blockedBy = pre.find((o) => !o.ok);
+        if (blockedBy) {
+          decision = "hook_denied";
+          return fail(
+            "hook_blocked",
+            `Blocked by preToolUse hook${blockedBy.timedOut ? " (timed out)" : ""}: ` +
+              (blockedBy.outputTail || `exit ${blockedBy.exitCode}`),
+          );
+        }
+
+        let runArgs = parsedArgs;
+        const updated = pre.find((o) => o.updatedInput !== undefined)?.updatedInput;
+        if (updated !== undefined) {
+          // Re-validate first; an invalid rewrite must not silently execute the
+          // original call.
+          const reparsed = spec.schema.safeParse(updated);
+          if (!reparsed.success) {
+            return fail(
+              "invalid_hook_args",
+              `preToolUse hook returned invalid arguments for ${call.name}`,
+              reparsed.error.issues,
+            );
+          }
+          runArgs = reparsed.data;
+          effectiveArgs = reparsed.data;
+          inputRewritten = true;
+          // The rewrite can change the path/command, so re-classify, re-apply
+          // the refusals and re-prepare: a hook must not smuggle a denylisted
+          // call past the gate, and the state handed to run() must describe
+          // the arguments actually being run.
+          let re: Awaited<ReturnType<typeof classifyAndPrepare>>;
+          try {
+            re = await classifyAndPrepare(spec, runArgs);
+          } catch (err) {
+            return toolError(err);
+          }
+          cls = re.classified;
+          classified = cls;
+          permission = cls.permission;
+          if (re.refused) {
+            decision = re.refused.decision;
+            return fail(re.refused.errorCode, re.refused.errorMessage);
+          }
+        }
+
+        const hookAsk = pre.some((o) => o.decision === "ask");
+        const hookAllow = !hookAsk && pre.some((o) => o.decision === "allow");
+        const gate = await enforceWithHooks(cls, runArgs, hookAllow, hookAsk);
+        decision = gate.decision;
+        if (ctx.signal?.aborted) return cancelled();
+        if (!gate.outcome.allowed) return fail(gate.outcome.errorCode, gate.outcome.errorMessage);
+
+        // selectedHunks and prepared are call-local. A dispatcher can be used
+        // concurrently by SDK consumers, so mutating the shared context lets
+        // one approval alter another in-flight call.
+        const runCtx: ToolContext = { ...ctx };
+        delete runCtx.selectedHunks;
+        delete runCtx.prepared;
+        if (gate.outcome.selectedHunks !== undefined) runCtx.selectedHunks = [...gate.outcome.selectedHunks];
+        if (preparedState !== undefined) runCtx.prepared = preparedState;
+
+        let ran: ToolResult;
+        try {
+          const out = await spec.run(runArgs as never, runCtx);
+          ran = {
+            ok: true,
+            data: out.data,
+            ...(out.meta ? { meta: out.meta } : {}),
+            ...(out.images && out.images.length > 0 ? { images: out.images } : {}),
+          };
+        } catch (err) {
+          ran = toolError(err);
+        }
+
+        // postToolUse (every run) and postToolUseFailure (failed runs) see the
+        // args actually run and a redacted, bounded copy of the result. They
+        // never block; what they return reaches the model beside the result.
+        const post = ctx.hooks?.postToolUse ?? [];
+        const postFailure = ran.ok ? [] : (ctx.hooks?.postToolUseFailure ?? []);
+        if (post.length > 0 || postFailure.length > 0) {
+          const postPayload: HookPayload = { ...hookPayload(runArgs, cls), result: hookToolResult(ran) };
+          report("postToolUse", await runHooks("postToolUse", post, postPayload, hookOpts));
+          if (postFailure.length > 0 && !ctx.signal?.aborted) {
+            report("postToolUseFailure", await runHooks("postToolUseFailure", postFailure, postPayload, hookOpts));
+          }
+        }
+        return ctx.signal?.aborted ? cancelled() : ran;
+      };
 
       const tool = byName.get(call.name);
       const parsed = tool?.schema.safeParse(call.arguments ?? {});
@@ -182,142 +397,16 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
 
       if (!tool) {
         result = fail("unknown_tool", `Unknown tool: ${call.name}`);
+      } else if (!parsed?.success) {
+        result = fail("invalid_args", `Invalid arguments for ${call.name}`, parsed?.error.issues);
+      } else if (prepareFailure || !classified) {
+        result = prepareFailure ?? fail("internal_error", `${call.name} produced no classification`);
+      } else if (refusedBeforePrepare) {
+        permission = classified.permission;
+        decision = refusedBeforePrepare.decision;
+        result = fail(refusedBeforePrepare.errorCode, refusedBeforePrepare.errorMessage);
       } else {
-        if (!parsed?.success) {
-          result = fail("invalid_args", `Invalid arguments for ${call.name}`, parsed?.error.issues);
-        } else if (prepareFailure || !classified) {
-          result = prepareFailure ?? fail("internal_error", `${call.name} produced no classification`);
-        } else if (refusedBeforePrepare) {
-          permission = classified.permission;
-          decision = refusedBeforePrepare.decision;
-          result = fail(refusedBeforePrepare.errorCode, refusedBeforePrepare.errorMessage);
-        } else {
-          permission = classified.permission;
-          const outcome = await enforcePermission(call.name, classified, ctx);
-          decision = outcome.decision;
-          if (!outcome.allowed) {
-            result = fail(outcome.errorCode, outcome.errorMessage);
-          } else {
-            // selectedHunks is call-local. A dispatcher can be used concurrently
-            // by SDK consumers, so mutating the shared context lets one approval
-            // alter another in-flight apply_patch call.
-            const runCtx: ToolContext = { ...ctx };
-            delete runCtx.selectedHunks;
-            delete runCtx.prepared;
-            if (outcome.selectedHunks !== undefined) runCtx.selectedHunks = [...outcome.selectedHunks];
-            if (preparedState !== undefined) runCtx.prepared = preparedState;
-            // Hooks fire only for calls that passed permission enforcement.
-            // Model-controlled content goes into the payload (stdin), never
-            // into the hook command line.
-            const hookPayload: HookPayload = {
-              sessionId: ctx.sessionId,
-              workspace: ctx.workspace,
-              toolName: call.name,
-              args: parsed.data,
-              ...(classified.command !== undefined ? { command: classified.command } : {}),
-              ...(classified.path !== undefined ? { path: classified.path } : {}),
-            };
-            const preOutcomes = await runHooks("preToolUse", ctx.hooks?.preToolUse, hookPayload, {
-              signal: ctx.signal,
-            });
-            const blockedBy = preOutcomes.find((o) => !o.ok);
-            if (ctx.signal?.aborted) {
-              result = fail("cancelled", "Tool call cancelled");
-            } else if (blockedBy) {
-              result = fail(
-                "hook_blocked",
-                `Blocked by preToolUse hook${blockedBy.timedOut ? " (timed out)" : ""}: ` +
-                  (blockedBy.systemMessage || blockedBy.outputTail || `exit ${blockedBy.exitCode}`),
-              );
-            } else {
-              // A non-denying preToolUse hook may rewrite the tool's arguments
-              // via updatedInput. Re-validate against the schema first; an
-              // invalid rewrite must not silently execute the original call.
-              let runArgs: unknown = parsed.data;
-              let updatedDenied: ToolResult | undefined;
-              const updated = preOutcomes.find((o) => o.updatedInput !== undefined)?.updatedInput;
-              if (updated !== undefined) {
-                const reparsed = tool.schema.safeParse(updated);
-                if (!reparsed.success) {
-                  updatedDenied = fail(
-                    "invalid_hook_args",
-                    `preToolUse hook returned invalid arguments for ${call.name}`,
-                    reparsed.error.issues,
-                  );
-                } else {
-                  runArgs = reparsed.data;
-                  effectiveArgs = reparsed.data;
-                  inputRewritten = true;
-                  // The rewritten args can change the path/command, so re-classify
-                  // and re-enforce permission — a hook must not be able to smuggle
-                  // a denylisted/forbidden call past the gate via updatedInput.
-                  // prepare runs again for the same reason: the state handed to
-                  // run() must describe the arguments actually being run.
-                  let reClassified: ClassifiedCall | undefined;
-                  try {
-                    const reOutcome = await classifyAndPrepare(tool, reparsed.data);
-                    if (reOutcome.refused) {
-                      classified = reOutcome.classified;
-                      permission = reOutcome.classified.permission;
-                      decision = reOutcome.refused.decision;
-                      updatedDenied = fail(reOutcome.refused.errorCode, reOutcome.refused.errorMessage);
-                    } else {
-                      reClassified = reOutcome.classified;
-                    }
-                  } catch (err) {
-                    updatedDenied = toolError(err);
-                  }
-                  if (reClassified) {
-                    const reCheck = await enforcePermission(call.name, reClassified, ctx);
-                    classified = reClassified;
-                    permission = reClassified.permission;
-                    decision = reCheck.decision;
-                    if (!reCheck.allowed) updatedDenied = fail(reCheck.errorCode, reCheck.errorMessage);
-                    else {
-                      delete runCtx.selectedHunks;
-                      delete runCtx.prepared;
-                      if (reCheck.selectedHunks !== undefined) runCtx.selectedHunks = [...reCheck.selectedHunks];
-                      if (preparedState !== undefined) runCtx.prepared = preparedState;
-                    }
-                  }
-                }
-              }
-              if (updatedDenied) {
-                result = updatedDenied;
-              } else {
-                try {
-                  const out = await tool.run(runArgs as never, runCtx);
-                  result = {
-                    ok: true,
-                    data: out.data,
-                    ...(out.meta ? { meta: out.meta } : {}),
-                    ...(out.images && out.images.length > 0 ? { images: out.images } : {}),
-                  };
-                } catch (err) {
-                  result = toolError(err);
-                }
-                // postToolUse is advisory: failures log to stderr, never block.
-                // It sees the args actually run (post-updatedInput); the payload
-                // carries ok/errorCode only, never raw tool output.
-                await runHooks(
-                  "postToolUse",
-                  ctx.hooks?.postToolUse,
-                  {
-                    sessionId: ctx.sessionId,
-                    workspace: ctx.workspace,
-                    toolName: call.name,
-                    args: runArgs,
-                    ...(classified?.command !== undefined ? { command: classified.command } : {}),
-                    ...(classified?.path !== undefined ? { path: classified.path } : {}),
-                    result: { ok: result.ok, errorCode: result.error?.code ?? null },
-                  },
-                  { signal: ctx.signal },
-                );
-                if (ctx.signal?.aborted) result = fail("cancelled", "Tool call cancelled");
-              }
-            }
-          }
-        }
+        result = await gateAndRun(tool, parsed.data, classified);
       }
 
       const ended = Date.now();

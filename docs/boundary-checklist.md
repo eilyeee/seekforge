@@ -4937,3 +4937,22 @@ expansion to `command`, `args`, `env` and `url` would have made it worse.
   layer can keep.
 - **Caught:** by `packages/core/src/mcp/http.ts`, which expanded headers
   unconditionally, while adding expansion to the other fields.
+
+## 426. An ordering list must not double as a filter
+
+`mergeConfigLayers` took an optional `hookStages` list "only to keep key order",
+and then built the merged hooks by iterating that list. The TUI and server pass
+their own historical order, so when the hook stages grew from nine to thirteen,
+the four new stages merged fine in the CLI and vanished silently in the TUI and
+the server — no error, the hooks simply never ran. `mergePluginHooks` had the
+same shape with its own local copy of the list.
+
+- **Do:** when a parameter exists to order things, append everything it omits
+  after the listed items. An order says "these first", never "only these".
+- **Do:** derive the universe from the one owner (`HOOK_STAGES` in
+  `@seekforge/shared`), not from a local copy that the next addition forgets.
+- **Do:** test the surface that passes the custom list with an item the list
+  does not name.
+- **Caught:** `packages/shared/src/config-layers.ts` and
+  `packages/core/src/plugins/load.ts`, while adding `postToolUseFailure`,
+  `permissionRequest`, `subagentStart` and `postCompact`.
