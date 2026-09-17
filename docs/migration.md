@@ -15,7 +15,7 @@ the SeekForge feature you already know from another tool.
 | Config file (`.aider.conf.yml`, `.clinerules`, `settings.json`, `config.toml`) | `.seekforge/config.json` (project) + `~/.seekforge/config.json` (global) + `.seekforge/config.local.json` (gitignored). See [Configuration](configuration.md). |
 | API key env var | `DEEPSEEK_API_KEY` (or `ARK_API_KEY` for the Ark provider); also the `apiKey` config key. |
 | Project instructions (`CONVENTIONS.md`, `.clinerules`, `CLAUDE.md`, `AGENTS.md`) | `AGENTS.md` (created by `seekforge init`), plus curated `.seekforge/memory/project.md` memory. |
-| MCP servers | `mcpServers` config + `seekforge mcp add/list/remove`. See [MCP](mcp.md). |
+| MCP servers (`claude mcp add`, `.mcp.json`) | `mcpServers` config + `seekforge mcp add/add-json/list/get/remove`; a project `.mcp.json` is read (each server needs `seekforge mcp approve`), and `seekforge mcp import` copies Claude Desktop / Claude Code servers. See [MCP](mcp.md). |
 | Slash commands / custom commands | Built-in slash commands + custom commands under `.seekforge/commands/`. `description:` frontmatter and `$ARGUMENTS` work on every surface; `` !`shell` `` interpolation is expanded by the CLI REPL (`seekforge` with no command) and the server, **not** by the TUI. See the [TUI README](../apps/tui/README.md#custom-commands) for the file format. |
 | Subagents / specialist agents | `dispatch_agent` roster — `seekforge agent list/show/import`, definitions under `.seekforge/agents/`. |
 | Skills / reusable procedures | `.seekforge/skills/<id>/SKILL.md` — `seekforge skill create/list/import`. |

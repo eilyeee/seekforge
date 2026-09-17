@@ -1,4 +1,5 @@
 import type { McpClientOptions } from "./client.js";
+import type { McpServerConfig } from "./types.js";
 import { McpError } from "./errors.js";
 import { readMcpOAuthCredential, recordMcpOAuthTokens } from "./oauth-store.js";
 import { isRecord } from "../util/guards.js";
@@ -64,32 +65,31 @@ export async function readLimitedResponseText(response: Response, maxBytes = MAX
   }
 }
 
+/** One Server-Sent Event: its `event:` name (default "message") and joined `data:` lines. */
+export type SseEvent = { event: string; data: string };
+
 /**
- * Extracts the JSON-RPC response with `id` from a `text/event-stream` body:
- * SSE events are parsed incrementally, the `data:` lines of each event are
- * joined and JSON-parsed, and reading stops at the first response whose id
- * matches (further events — server notifications/requests — are ignored).
+ * Parses a `text/event-stream` body incrementally and hands each event to
+ * `onEvent` until it returns true (stop) or the stream ends. Events are
+ * separated by a blank line (\n\n or \r\n\r\n); a single event may not exceed
+ * MAX_SSE_EVENT_CHARS. Returns whether `onEvent` asked to stop.
  */
-async function consumeSseMessages(
+export async function consumeSseEvents(
   body: ReadableStream<Uint8Array>,
-  onMessage: (message: JsonRpcMessage) => boolean | Promise<boolean>,
+  onEvent: (event: SseEvent) => boolean | Promise<boolean>,
 ): Promise<boolean> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   const processEvent = async (rawEvent: string): Promise<boolean> => {
-    const data = rawEvent
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice(5).replace(/^ /, ""))
-      .join("\n");
-    if (!data) return false;
-    try {
-      return await onMessage(JSON.parse(data) as JsonRpcMessage);
-    } catch (error) {
-      if (error instanceof SyntaxError) return false;
-      throw error;
+    let event = "message";
+    const data: string[] = [];
+    for (const line of rawEvent.split(/\r?\n/)) {
+      if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+      else if (line.startsWith("event:")) event = line.slice(6).trim() || "message";
     }
+    if (data.length === 0) return false;
+    return onEvent({ event, data: data.join("\n") });
   };
   try {
     for (;;) {
@@ -122,6 +122,26 @@ async function consumeSseMessages(
   }
 }
 
+/**
+ * The JSON-RPC messages of a `text/event-stream` body: each event's data is
+ * JSON-parsed (unparseable events are skipped) and handed to `onMessage` until
+ * it returns true.
+ */
+async function consumeSseMessages(
+  body: ReadableStream<Uint8Array>,
+  onMessage: (message: JsonRpcMessage) => boolean | Promise<boolean>,
+): Promise<boolean> {
+  return consumeSseEvents(body, async ({ data }) => {
+    let message: JsonRpcMessage;
+    try {
+      message = JSON.parse(data) as JsonRpcMessage;
+    } catch {
+      return false;
+    }
+    return onMessage(message);
+  });
+}
+
 async function readSseResponse(
   body: ReadableStream<Uint8Array>,
   id: number,
@@ -138,6 +158,147 @@ async function readSseResponse(
   });
   if (response) return response;
   throw new McpError("mcp_parse_error", `SSE stream ended without a response for request ${id}`);
+}
+
+/**
+ * Credentials for one HTTP-reached server: the configured headers, plus a
+ * bearer token from configured OAuth or a `seekforge mcp login` credential,
+ * renewed once on HTTP 401. Shared by the Streamable HTTP and legacy SSE
+ * transports.
+ *
+ * `config` is the definition as it will be used — `${VAR}` references already
+ * expanded (or deliberately left literal) by resolveMcpServerConfig — and
+ * `serverUrl` is that definition's endpoint, which is also what a stored
+ * credential is keyed by.
+ */
+export type McpHttpAuth = {
+  /** Configured headers, with Authorization replaced by the bearer token while one is held. */
+  headers(): Record<string, string>;
+  canRenew(): boolean;
+  refresh(signal: AbortSignal): Promise<string>;
+};
+
+export function createMcpHttpAuth(name: string, config: McpServerConfig, serverUrl: string): McpHttpAuth {
+  let accessToken: string | undefined;
+  let inflight: Promise<string> | undefined;
+  if (config.oauth === undefined) {
+    // Reuse a stored, unexpired access token so the first request is not spent
+    // earning a 401 — and so servers that answer 403 instead of 401 still work.
+    const stored = readMcpOAuthCredential(name, serverUrl);
+    const unexpired = stored?.expiresAt === undefined || Date.parse(stored.expiresAt) > Date.now();
+    if (stored?.accessToken && unexpired) accessToken = stored.accessToken;
+  }
+
+  /**
+   * Configured OAuth wins over an interactively stored credential: an explicit
+   * config entry is the operator's deliberate choice, and `seekforge mcp login`
+   * only fills the gap when there is none.
+   */
+  function grant():
+    | { tokenEndpoint: string; clientId: string; clientSecret?: string; refreshToken: string; scope?: string }
+    | undefined {
+    if (config.oauth) return config.oauth;
+    const stored = readMcpOAuthCredential(name, serverUrl);
+    if (!stored?.refreshToken) return undefined;
+    return {
+      tokenEndpoint: stored.tokenEndpoint,
+      clientId: stored.clientId,
+      ...(stored.clientSecret !== undefined ? { clientSecret: stored.clientSecret } : {}),
+      refreshToken: stored.refreshToken,
+      ...(stored.scope !== undefined ? { scope: stored.scope } : {}),
+    };
+  }
+
+  async function refresh(signal: AbortSignal): Promise<string> {
+    if (inflight) return inflight;
+    const oauth = grant();
+    if (!oauth) throw new McpError("mcp_auth_error", `MCP server "${name}" requires authentication`);
+    inflight = (async () => {
+      const body = new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: oauth.refreshToken,
+        client_id: oauth.clientId,
+        ...(oauth.clientSecret !== undefined ? { client_secret: oauth.clientSecret } : {}),
+        ...(oauth.scope !== undefined ? { scope: oauth.scope } : {}),
+      });
+      let response: Response;
+      try {
+        response = await fetch(oauth.tokenEndpoint, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+          body,
+          signal,
+        });
+      } catch (error) {
+        throw new McpError(
+          "mcp_auth_error",
+          `MCP OAuth refresh failed for "${name}": ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {});
+        throw new McpError("mcp_auth_error", `MCP OAuth refresh failed for "${name}" with HTTP ${response.status}`);
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(await readLimitedResponseText(response)) as unknown;
+      } catch {
+        throw new McpError("mcp_auth_error", `MCP OAuth refresh for "${name}" returned invalid JSON`);
+      }
+      const token =
+        typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+          ? (parsed as Record<string, unknown>)["access_token"]
+          : undefined;
+      if (typeof token !== "string" || token.length === 0) {
+        throw new McpError("mcp_auth_error", `MCP OAuth refresh for "${name}" omitted access_token`);
+      }
+      accessToken = token;
+      // A stored credential is renewed in place; a rotated refresh token would
+      // otherwise be lost and the next process would have to log in again.
+      // Config-declared OAuth stays untouched: config is never written back.
+      if (config.oauth === undefined) {
+        const rotated = isRecord(parsed) ? parsed.refresh_token : undefined;
+        const expiresIn = isRecord(parsed) ? parsed.expires_in : undefined;
+        recordMcpOAuthTokens(
+          {
+            serverName: name,
+            serverUrl,
+            tokenEndpoint: oauth.tokenEndpoint,
+            clientId: oauth.clientId,
+            ...(oauth.clientSecret !== undefined ? { clientSecret: oauth.clientSecret } : {}),
+          },
+          {
+            accessToken: token,
+            tokenType: "Bearer",
+            ...(typeof rotated === "string" && rotated.length > 0 ? { refreshToken: rotated } : {}),
+            ...(typeof expiresIn === "number" && Number.isFinite(expiresIn) && expiresIn > 0
+              ? { expiresAt: new Date(Date.now() + Math.floor(expiresIn) * 1000).toISOString() }
+              : {}),
+            ...(oauth.scope !== undefined ? { scope: oauth.scope } : {}),
+          },
+        );
+      }
+      return token;
+    })().finally(() => {
+      inflight = undefined;
+    });
+    return inflight;
+  }
+
+  return {
+    headers(): Record<string, string> {
+      const configured: Record<string, string> = { ...(config.headers ?? {}) };
+      if (accessToken !== undefined) {
+        for (const key of Object.keys(configured)) {
+          if (key.toLowerCase() === "authorization") delete configured[key];
+        }
+        configured.authorization = `Bearer ${accessToken}`;
+      }
+      return configured;
+    },
+    canRenew: () => grant() !== undefined,
+    refresh,
+  };
 }
 
 /**
@@ -158,7 +319,9 @@ async function readSseResponse(
  *
  * Static `headers` cover bearer-token servers — and each header value may interpolate
  * `${ENV_VAR}` so secrets live in the environment, not in committed config
- * (e.g. `"Authorization": "Bearer ${GITHUB_MCP_TOKEN}"`). Optional OAuth
+ * (e.g. `"Authorization": "Bearer ${GITHUB_MCP_TOKEN}"`); whether a reference
+ * expands is decided by the server's trust before the transport sees the
+ * config (see launch.ts). Optional OAuth
  * refresh-token config renews an expired bearer token after HTTP 401; when no
  * OAuth block is configured, a credential stored by `seekforge mcp login` is
  * used instead and renewed in place (rotated refresh tokens are persisted).
@@ -166,19 +329,12 @@ async function readSseResponse(
  * supports it; roots/list requests are answered and notifications are delivered
  * to `onNotification`.
  */
-
-/** Expands `${VAR}` in a header value from process.env (missing → empty). */
-function expandEnvRefs(value: string): string {
-  return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => process.env[name] ?? "");
-}
 export function createMcpHttpTransport(options: McpClientOptions): {
   request<T>(method: string, params: unknown, signal?: AbortSignal): Promise<T>;
   dispose(): void;
 } {
   const url = options.config.url;
   if (!url) throw new McpError("mcp_config", `MCP server "${options.name}" has no url`);
-  /** Same endpoint, already narrowed — stored credentials are keyed by it. */
-  const serverUrl: string = url;
   const timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const maxTotal = options.maxRequestTotalMs ?? MAX_REQUEST_TOTAL_MS;
   /** Per in-flight request id: re-arm its idle timer. */
@@ -188,38 +344,20 @@ export function createMcpHttpTransport(options: McpClientOptions): {
     ...(options.workspaceRoots !== undefined ? { workspaceRoots: options.workspaceRoots } : {}),
     ...(options.serverRequestHandlers !== undefined ? { handlers: options.serverRequestHandlers } : {}),
   });
+  const auth = createMcpHttpAuth(options.name, options.config, url);
 
   let sessionId: string | undefined;
   let negotiatedVersion: string | undefined;
   let handshake: Promise<void> | undefined;
   let nextId = 1;
   let disposed = false;
-  let oauthAccessToken: string | undefined;
-  let oauthRefresh: Promise<string> | undefined;
-  if (options.config.oauth === undefined) {
-    // Reuse a stored, unexpired access token so the first request is not spent
-    // earning a 401 — and so servers that answer 403 instead of 401 still work.
-    const stored = readMcpOAuthCredential(options.name, serverUrl);
-    const unexpired = stored?.expiresAt === undefined || Date.parse(stored.expiresAt) > Date.now();
-    if (stored?.accessToken && unexpired) oauthAccessToken = stored.accessToken;
-  }
   const inflight = new Set<AbortController>();
   let eventStreamController: AbortController | undefined;
   let eventStreamSupported: boolean | undefined;
 
   function headers(): Record<string, string> {
-    const configured: Record<string, string> = {};
-    for (const [k, v] of Object.entries(options.config.headers ?? {})) {
-      configured[k] = expandEnvRefs(v);
-    }
-    if (oauthAccessToken !== undefined) {
-      for (const key of Object.keys(configured)) {
-        if (key.toLowerCase() === "authorization") delete configured[key];
-      }
-    }
     return {
-      ...configured,
-      ...(oauthAccessToken !== undefined ? { authorization: `Bearer ${oauthAccessToken}` } : {}),
+      ...auth.headers(),
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
       ...(negotiatedVersion !== undefined ? { "mcp-protocol-version": negotiatedVersion } : {}),
@@ -227,115 +365,8 @@ export function createMcpHttpTransport(options: McpClientOptions): {
     };
   }
 
-  /**
-   * Configured OAuth wins over an interactively stored credential: an explicit
-   * config entry is the operator's deliberate choice, and `seekforge mcp login`
-   * only fills the gap when there is none.
-   */
-  function oauthGrant():
-    | { tokenEndpoint: string; clientId: string; clientSecret?: string; refreshToken: string; scope?: string }
-    | undefined {
-    const oauth = options.config.oauth;
-    if (oauth) {
-      return {
-        tokenEndpoint: expandEnvRefs(oauth.tokenEndpoint),
-        clientId: expandEnvRefs(oauth.clientId),
-        ...(oauth.clientSecret !== undefined ? { clientSecret: expandEnvRefs(oauth.clientSecret) } : {}),
-        refreshToken: expandEnvRefs(oauth.refreshToken),
-        ...(oauth.scope !== undefined ? { scope: expandEnvRefs(oauth.scope) } : {}),
-      };
-    }
-    const stored = readMcpOAuthCredential(options.name, serverUrl);
-    if (!stored?.refreshToken) return undefined;
-    return {
-      tokenEndpoint: stored.tokenEndpoint,
-      clientId: stored.clientId,
-      ...(stored.clientSecret !== undefined ? { clientSecret: stored.clientSecret } : {}),
-      refreshToken: stored.refreshToken,
-      ...(stored.scope !== undefined ? { scope: stored.scope } : {}),
-    };
-  }
-
-  const canRenewToken = (): boolean => oauthGrant() !== undefined;
-
-  async function refreshAccessToken(signal: AbortSignal): Promise<string> {
-    if (oauthRefresh) return oauthRefresh;
-    const oauth = oauthGrant();
-    if (!oauth) throw new McpError("mcp_auth_error", `MCP server "${options.name}" requires authentication`);
-    oauthRefresh = (async () => {
-      const body = new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: oauth.refreshToken,
-        client_id: oauth.clientId,
-        ...(oauth.clientSecret !== undefined ? { client_secret: oauth.clientSecret } : {}),
-        ...(oauth.scope !== undefined ? { scope: oauth.scope } : {}),
-      });
-      let response: Response;
-      try {
-        response = await fetch(oauth.tokenEndpoint, {
-          method: "POST",
-          headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
-          body,
-          signal,
-        });
-      } catch (error) {
-        throw new McpError(
-          "mcp_auth_error",
-          `MCP OAuth refresh failed for "${options.name}": ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-      if (!response.ok) {
-        await response.body?.cancel().catch(() => {});
-        throw new McpError(
-          "mcp_auth_error",
-          `MCP OAuth refresh failed for "${options.name}" with HTTP ${response.status}`,
-        );
-      }
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(await readLimitedResponseText(response)) as unknown;
-      } catch {
-        throw new McpError("mcp_auth_error", `MCP OAuth refresh for "${options.name}" returned invalid JSON`);
-      }
-      const token =
-        typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-          ? (parsed as Record<string, unknown>)["access_token"]
-          : undefined;
-      if (typeof token !== "string" || token.length === 0) {
-        throw new McpError("mcp_auth_error", `MCP OAuth refresh for "${options.name}" omitted access_token`);
-      }
-      oauthAccessToken = token;
-      // A stored credential is renewed in place; a rotated refresh token would
-      // otherwise be lost and the next process would have to log in again.
-      // Config-declared OAuth stays untouched: config is never written back.
-      if (options.config.oauth === undefined) {
-        const rotated = isRecord(parsed) ? parsed.refresh_token : undefined;
-        const expiresIn = isRecord(parsed) ? parsed.expires_in : undefined;
-        recordMcpOAuthTokens(
-          {
-            serverName: options.name,
-            serverUrl,
-            tokenEndpoint: oauth.tokenEndpoint,
-            clientId: oauth.clientId,
-            ...(oauth.clientSecret !== undefined ? { clientSecret: oauth.clientSecret } : {}),
-          },
-          {
-            accessToken: token,
-            tokenType: "Bearer",
-            ...(typeof rotated === "string" && rotated.length > 0 ? { refreshToken: rotated } : {}),
-            ...(typeof expiresIn === "number" && Number.isFinite(expiresIn) && expiresIn > 0
-              ? { expiresAt: new Date(Date.now() + Math.floor(expiresIn) * 1000).toISOString() }
-              : {}),
-            ...(oauth.scope !== undefined ? { scope: oauth.scope } : {}),
-          },
-        );
-      }
-      return token;
-    })().finally(() => {
-      oauthRefresh = undefined;
-    });
-    return oauthRefresh;
-  }
+  const canRenewToken = (): boolean => auth.canRenew();
+  const refreshAccessToken = (signal: AbortSignal): Promise<string> => auth.refresh(signal);
 
   async function sendServerResponse(message: JsonRpcMessage, signal: AbortSignal): Promise<void> {
     const id = message.id;

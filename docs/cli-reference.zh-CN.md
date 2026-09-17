@@ -99,6 +99,7 @@
 | 所选 `--profile` 覆盖层（如有） | ↑ |
 | `.seekforge/config.local.json`（个人配置，已 gitignore） | ↑ |
 | `.seekforge/config.json`（项目） | ↑ |
+| `.mcp.json`（Claude Code 项目服务器；仅 `mcpServers`） | ↑ |
 | `~/.seekforge/config.json`（全局） | 最低 |
 
 对于深合并字段（`mcpServers`、`permissionRules`、`hooks`），settings 层会合并进既有配置，而不是整体替换。
@@ -151,6 +152,28 @@
 | `plugin remove <id>` | 卸载并删除审批状态。 |
 
 清单与安全模型见[插件](plugins.zh-CN.md)。
+
+## MCP 命令
+
+`seekforge mcp` 管理 MCP 服务器。检出目录定义的服务器（`.seekforge/config.json`、
+`config.local.json`、`.mcp.json`）只有在为该工作区批准后才会连接；用户配置中的服务器
+标记为 `trusted` 时连接。
+
+| 命令 | 作用 |
+| --- | --- |
+| `mcp list [--tools] [-y]` | 启动受信任/已批准的服务器并列出其工具；待批准的仓库服务器只显示、不启动。`-y` 预先授权文件夹。 |
+| `mcp get <name>` | 显示服务器的定义（不展开引用）、传输方式与状态，不启动任何东西。 |
+| `mcp add [-t stdio\|http\|sse] [-s user\|project\|local] [-g] [-e K=V]… [-H "K: V"]… [--trust] <name> <命令或 URL…>` | 添加服务器。`--trust` 在用户作用域写入 `trusted: true`，在项目/本地作用域为本工作区批准它。 |
+| `mcp add-json [-s …] [-g] [--trust] <name> '<json>'` | 以 Claude Code 的 JSON 格式添加一个定义。 |
+| `mcp import [--from claude-desktop\|claude-code] [-y] [--no-trust]` | 预览并把 Claude Desktop / Claude Code 中的服务器复制到用户配置（除非 `--no-trust`，否则标为受信任）。 |
+| `mcp approve <name> [-y]` | 展示定义后，为本工作区批准仓库定义的服务器。 |
+| `mcp reject <name>` | 阻止仓库定义的服务器在本工作区连接。 |
+| `mcp reset-project-choices` | 清除本工作区的全部批准/拒绝决定。 |
+| `mcp remove <name> [-s …] [-g]` | 从某个作用域删除服务器（别名 `rm`）。 |
+| `mcp login <name> [-y]` / `mcp logout <name>` | 远程服务器的交互式 OAuth / 删除其存储的凭据。 |
+| `mcp-serve [--allow-write]` | 把 SeekForge 自身作为 stdio 上的 MCP 服务器运行。 |
+
+传输方式、`${VAR}` 展开、批准与工具搜索见 [MCP](mcp.zh-CN.md)。
 
 ## GitHub issue 与 review 工作流
 

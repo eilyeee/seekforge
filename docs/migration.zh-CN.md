@@ -13,7 +13,7 @@
 | 配置文件（`.aider.conf.yml`、`.clinerules`、`settings.json`、`config.toml`） | `.seekforge/config.json`（项目级）+ `~/.seekforge/config.json`（全局）+ `.seekforge/config.local.json`（已 gitignore）。见[配置](configuration.zh-CN.md)。 |
 | API 密钥环境变量 | `DEEPSEEK_API_KEY`（Ark provider 则为 `ARK_API_KEY`）；也可用 `apiKey` 配置键。 |
 | 项目指令（`CONVENTIONS.md`、`.clinerules`、`CLAUDE.md`、`AGENTS.md`） | `AGENTS.md`（由 `seekforge init` 创建），外加人工筛选的 `.seekforge/memory/project.md` 记忆。 |
-| MCP 服务器 | `mcpServers` 配置 + `seekforge mcp add/list/remove`。见 [MCP](mcp.zh-CN.md)。 |
+| MCP 服务器（`claude mcp add`、`.mcp.json`） | `mcpServers` 配置 + `seekforge mcp add/add-json/list/get/remove`；项目中的 `.mcp.json` 会被读取（每个服务器都需 `seekforge mcp approve`），`seekforge mcp import` 可复制 Claude Desktop / Claude Code 的服务器。见 [MCP](mcp.zh-CN.md)。 |
 | 斜杠命令 / 自定义命令 | 内置斜杠命令 + `.seekforge/commands/` 下的自定义命令。`description:` frontmatter 与 `$ARGUMENTS` 在所有界面都可用；`` !`shell` `` 插值由 CLI REPL（不带子命令的 `seekforge`）与服务端展开，**TUI 不支持**。文件格式见 [TUI README](../apps/tui/README.md#custom-commands)。 |
 | 子智能体 / 专家智能体 | `dispatch_agent` 名册 — `seekforge agent list/show/import`，定义存放于 `.seekforge/agents/`。 |
 | 技能 / 可复用流程 | `.seekforge/skills/<id>/SKILL.md` — `seekforge skill create/list/import`。 |

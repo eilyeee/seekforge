@@ -8,6 +8,7 @@ export const COMMON_CONFIG_KEYS = [
   "commandAllowlist",
   "permissionRules",
   "mcpServers",
+  "mcpToolSearchThreshold",
   "hooks",
   "sandbox",
   "compaction",

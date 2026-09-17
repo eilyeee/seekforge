@@ -4,8 +4,8 @@
 
 SeekForge 同时实现了 Model Context Protocol（MCP）的两端：
 
-- **客户端模式（Client mode）** —— 连接外部 MCP 服务器（stdio 或 Streamable HTTP），
-  并将其 tools、resources 和 prompts 提供给 agent 使用。
+- **客户端模式（Client mode）** —— 连接外部 MCP 服务器（stdio、Streamable HTTP
+  或旧版 HTTP+SSE 传输），并将其 tools、resources 和 prompts 提供给 agent 使用。
 - **服务器模式（Server mode）** —— 将 SeekForge 自身作为 MCP 服务器运行在 stdio 上，
   让其他 agent 可以使用本工作区的内置工具。
 
@@ -18,13 +18,14 @@ agent 通过三个通道与已配置的 MCP 服务器交互：**tools**（主要
 
 ### 1.1 配置
 
-MCP 服务器在 `.seekforge/config.json`（项目级）或 `~/.seekforge/config.json`
-（全局级）的 `mcpServers` 下声明。
+MCP 服务器在 `~/.seekforge/config.json`（用户级）、`.seekforge/config.json`
+（项目级）或 `.seekforge/config.local.json`（仅本检出目录）的 `mcpServers` 下声明。
+Claude Code 的项目文件——工作区根目录下的 `.mcp.json`——同样会被读取。
 
-项目条目只负责定义：仓库配置不能授予自身自动启动权限，因此项目里的
-`trusted: true` 会被忽略。要信任已审查的服务器，请把完整条目复制到全局配置，
-并在那里设置 `trusted: true`。显式管理操作仍可连接用户选中的未信任项目条目，
-用于测试或检查工具。
+随检出目录一起分发的一切——两个项目文件以及 `.mcp.json`——都**只是定义，而非授权**：
+仓库配置不能授予自身自动启动权限，因此项目里的 `trusted: true` 会被忽略。项目服务器
+只有在**你为该工作区批准它**之后才会自动连接（`seekforge mcp approve <name>`，见 §1.7）。
+用户配置中的服务器带有 `trusted: true` 时自动连接。
 
 配置格式与 Claude Code 兼容：
 
@@ -44,6 +45,7 @@ MCP 服务器在 `.seekforge/config.json`（项目级）或 `~/.seekforge/config
     },
     "web-search": {
       // Streamable HTTP transport — selected by the presence of "url"
+      // (or explicitly with "type": "http")
       "url": "https://example.com/mcp",
       // Optional: extra HTTP headers sent on every request
       "headers": {
@@ -57,6 +59,11 @@ MCP 服务器在 `.seekforge/config.json`（项目级）或 `~/.seekforge/config
         "clientSecret": "${MCP_CLIENT_SECRET}",
         "refreshToken": "${MCP_REFRESH_TOKEN}"
       }
+    },
+    "linear": {
+      // Legacy HTTP+SSE transport (MCP 2024-11-05) — only an explicit type selects it
+      "type": "sse",
+      "url": "https://mcp.linear.app/sse"
     }
   }
 }
@@ -64,50 +71,121 @@ MCP 服务器在 `.seekforge/config.json`（项目级）或 `~/.seekforge/config
 
 **传输方式选择**（按服务器逐项判定，互斥）：
 
-| 是否有 `url`？ | 传输方式        | 生效字段                 |
-|---|---|---|
-| 否         | stdio           | `command`、`args`、`env` |
-| 是         | Streamable HTTP | `url`、`headers`、`oauth` |
+| `type` | 未写 `type` 时 | 传输方式 | 生效字段 |
+|---|---|---|---|
+| `"stdio"` | 没有 `url` | stdio | `command`、`args`、`env` |
+| `"http"` | 有 `url` | Streamable HTTP | `url`、`headers`、`oauth` |
+| `"sse"` | —— | 旧版 HTTP+SSE | `url`、`headers`、`oauth` |
 
-每个服务器必须有 `command`（stdio）或 `url`（HTTP）之一；两者皆无会导致配置错误。
+服务器需要 `command`（stdio）或 `url`（HTTP/SSE）；两者皆无、或写了其他 `type` 的定义
+会被报告为无效，永不连接。旧版 SSE 传输打开一条 `GET <url>` 事件流，等待服务器的
+`endpoint` 事件，再把每条消息 POST 到那里；公布的 endpoint 必须与 `url` 同源，因为这些
+POST 带着同样的 header 和 bearer token。
+
+**`.mcp.json`** —— `{ "mcpServers": { name: { "command", "args", "env" } |
+{ "type": "http" | "sse", "url", "headers" } } }` —— 作为位于 `.seekforge/config.json`
+之下的仓库层读取：只保留这些字段（Claude Code 自己的 `oauth` 段描述的是另一套流程，
+会被丢弃）；SeekForge 自己的项目文件也定义了的名字以后者为准；你的用户配置已定义的
+名字则被整体忽略。
+
+**`${VAR}` 引用。** `command`、`args`、`env` 的值、`url`、`headers` 与 `oauth` 的值
+可以用 `${VAR}` 或 `${VAR:-default}` 引用进程环境变量（变量未设置或为空时取默认值）。
+只有来自你的用户配置的服务器、或你已批准的项目服务器，其引用才会展开；未批准的项目
+定义按字面使用——这样检出目录就无法在你没看过模板的情况下，把某个环境变量拷进 URL 或
+header。`seekforge mcp get` 和批准提示始终展示未展开的定义。
+
+**stdio 服务器的环境。** 来自用户配置的服务器继承完整环境，与 Claude Code 一致。
+已批准的项目服务器继承的环境会去掉看起来像密钥的变量（`*_API_KEY`、`*_TOKEN`、
+`*_SECRET`、`*PASSWORD*` 等——与 `run_command` 使用的是同一张表），但它自己 `env`
+段里点名的变量除外——批准时你已经看到了它们：
+
+```jsonc
+{ "mcpServers": { "gh": { "command": "gh-mcp", "env": { "GITHUB_TOKEN": "${GITHUB_TOKEN}" } } } }
+```
 
 ### 1.2 CLI 命令
 
 #### `seekforge mcp list [--tools] [-y]`
 
-启动每一个已配置的服务器，执行 initialize 握手，并打印各服务器的工具名。
+启动已配置的服务器，执行 initialize 握手，并打印各服务器的工具名。
 某个服务器失败时会内联显示错误，列表继续输出。加上 `--tools` 后，
 还会显示每个工具描述的第一行。每一行还会标明该条目是「来自本仓库」还是
 「来自你的配置」。
 
-**「列出」不是只读操作：每一个条目都会被启动。** `mcp add` 默认写入项目配置，
-所以在一个不是你写的检出目录里，「列出服务器」等于「运行这个仓库选定的命令」。
-因此只要待列出的服务器中有来自检出目录的，`mcp list` 就会要求与 `seekforge run`
-相同的文件夹访问授权；`-y` 可以预先授权，这正是 CI 需要的。来自你自己的全局配置
-或 `--settings` 的服务器则不会触发提示。
+**「列出」不是只读操作：每一个被列出的服务器都会被启动。** 因此检出目录定义的服务器
+只有在你为本工作区批准了这份确切的定义之后才会被启动；待批准和已拒绝的服务器只打印
+其命令或 URL，**不会启动**，即使加了 `-y` 也一样。即将启动已批准的仓库服务器时，
+`mcp list` 还会要求与 `seekforge run` 相同的文件夹访问授权；`-y` 可以预先授权，这正是
+CI 需要的。来自你自己的全局配置或 `--settings` 的服务器则不会触发提示。
 
 ```text
 $ seekforge mcp list --tools
-filesystem  (npx -y ..., untrusted)  2 tool(s)
+filesystem  (npx -y ..., untrusted, from your config)  2 tool(s)
   read_file  Read the complete contents of a file from the file system
   write_file  Write text content to a file at a specified path
+docs  （http https://docs.example/mcp，待批准，来自本仓库）  未启动 —— 先用 `seekforge mcp get docs` 审查，再运行 `seekforge mcp approve docs`
 ```
 
-#### `seekforge mcp add <name> <command> [args...]`
+#### `seekforge mcp get <name>`
 
-向项目配置的 `mcpServers` 追加一个 **stdio** 服务器（加 `--global` 则写入
-`~/.seekforge/`）。`<name>` 之后的第一个 token 是命令，其余成为 `args`。
+打印单个服务器的来源、状态（受信任/不受信任；项目服务器则为已批准/待批准/已拒绝）、
+传输方式，以及原样的定义——`${VAR}` 引用不展开。不启动任何东西。
 
-新增的项目服务器**不受信任（untrusted）** —— CLI 会提示先审查该条目，
-再复制到全局配置并设置 `"trusted": true`，以允许 Agent 自动连接。
+#### `seekforge mcp add [选项] <name> <命令或 URL...>`
+
+添加一个服务器。选项写在 `<name>` **之前**；名字之后的一切都是服务器自己的命令行
+（因此 `-y` 属于 `npx`，而不是 SeekForge）。
+
+| 选项 | 含义 |
+|---|---|
+| `-t, --transport stdio\|http\|sse` | 默认 `stdio`：`<name>` 之后的第一个 token 是命令，其余是参数。`http`/`sse`：恰好一个 URL。 |
+| `-s, --scope user\|project\|local` | 写到哪里：`~/.seekforge/config.json`、`.seekforge/config.json`（默认）或 `.seekforge/config.local.json`。 |
+| `-g, --global` | 等同 `--scope user`。 |
+| `-e, --env KEY=VALUE` | stdio 服务器的环境变量，可重复。 |
+| `-H, --header "Name: value"` | http/sse 服务器的 HTTP 头，可重复。 |
+| `--trust` | 让它自动连接：用户作用域写入 `"trusted": true`；项目作用域则为本工作区批准刚写入的这份定义。 |
+
+不加 `--trust` 时，用户作用域的服务器不受信任，项目作用域的服务器处于待批准状态；
+CLI 会说明是哪一种。
 
 ```text
 seekforge mcp add fs npx -y @modelcontextprotocol/server-filesystem .
+seekforge mcp add --transport http -H "Authorization: Bearer \${DOCS_TOKEN}" -g --trust docs https://docs.example/mcp
+seekforge mcp add --transport sse --scope local linear https://mcp.linear.app/sse
 ```
 
-#### `seekforge mcp remove <name>`
+#### `seekforge mcp add-json [--scope …] [-g] [--trust] <name> '<json>'`
 
-从 `mcpServers` 中删除一个服务器。同样接受 `--global` 操作全局配置。
+以 Claude Code 格式的 JSON 添加一个定义（`{"type":"http","url":"…","headers":{…}}`、
+`{"command":"…","args":[…]}`）。未知字段会被拒绝。项目/本地作用域的条目不能带
+`trusted`；请改用 `--trust` 批准它。
+
+#### `seekforge mcp import [--from claude-desktop|claude-code] [-y] [--no-trust]`
+
+把 Claude Desktop（macOS 上为
+`~/Library/Application Support/Claude/claude_desktop_config.json`，Windows 上为
+`%APPDATA%\Claude\…`，其他平台为 `~/.config/Claude/…`）以及 Claude Code 的
+`~/.claude.json`——其用户作用域的 `mcpServers`，加上它为**当前**项目保存的条目——中的
+服务器定义复制到你的用户配置。不写 `--from` 时两处都读；同名出现两次时保留先找到的定义。
+
+命令会在请求确认之前打印它将写入的每个服务器（以及跳过某个的原因：你的配置里已有、
+定义无效或重名）；`-y` 跳过的是提问，而不是列表。SeekForge 没有对应位置的字段会被丢弃
+并点名，包括 Claude Code 的 `oauth` 段（这类服务器请用 `seekforge mcp login`）。
+
+**导入的服务器会标记为 `"trusted": true`。** 它们来自你自己的配置文件，在那里本就在运行，
+而且你刚看过每一份定义；`--no-trust` 则以不受信任的方式导入。任何仓库的 `.mcp.json`
+都不会被导入——请按工作区逐个批准。
+
+#### `seekforge mcp approve <name> [-y]` · `mcp reject <name>` · `mcp reset-project-choices`
+
+为本工作区决定检出目录定义的服务器。`approve` 打印原样的定义并在记录前询问
+（`-y` 跳过提问）；`reject` 记录它不得连接，从而不再显示为待批准；
+`reset-project-choices` 清除本工作区的所有决定。你自己配置中定义的名字会被拒绝——
+请在那里信任它。见 §1.7。
+
+#### `seekforge mcp remove <name> [--scope …] [-g]`
+
+从所选作用域（默认项目）删除一个服务器。
 
 #### `seekforge mcp login <name> [-y]`
 
@@ -119,7 +197,8 @@ seekforge mcp add fs npx -y @modelcontextprotocol/server-filesystem .
 命令会去那个 origin 做发现、注册客户端、并把你的浏览器打开到它指定的授权页。因此
 当条目来自仓库时，`mcp login` 会先打印它将把你带到哪里，并要求与 `seekforge run`、
 `mcp list` 相同的文件夹访问授权；`-y` 可预先授权。来自你自己的全局配置或
-`--settings` 的条目不会触发提示。
+`--settings` 的条目不会触发提示。条目 `url` 中的 `${VAR}` 只对你自己的条目和已批准的
+项目条目展开（§1.1），存储的凭据以实际访问的 URL 为键。
 
 流程本身：
 
@@ -157,7 +236,7 @@ $ seekforge mcp login docs
 配置合并顺序（后者优先）为：
 
 ```text
-settings file  >  project .seekforge/config.json  >  global ~/.seekforge/config.json
+settings file  >  .seekforge/config.local.json  >  project .seekforge/config.json  >  .mcp.json  >  global ~/.seekforge/config.json
 ```
 
 合并以**服务器名**为单位，而不是以服务器条目内部的字段为单位：高优先级层若定义了
@@ -168,7 +247,7 @@ settings file  >  project .seekforge/config.json  >  global ~/.seekforge/config.
 由于仓库层在优先级上位于全局配置**之上**，有两条规则约束它们：
 
 - **仓库层可以新增服务器名，但绝不能改指你已拥有的名字。** 如果
-  `.seekforge/config.json`（或 `config.local.json`）定义了一个
+  `.seekforge/config.json`（或 `config.local.json`、`.mcp.json`）定义了一个
   `~/.seekforge/config.json` 或你的 `--settings` 文件已经定义的名字，仓库中的定义
   会被忽略，并且 SeekForge 会明确告知。克隆下来的仓库无法改指你已配置服务器的
   `command`、`url`、`headers` 或 `oauth`。
@@ -180,8 +259,8 @@ settings file  >  project .seekforge/config.json  >  global ~/.seekforge/config.
 ——因为四者走的是同一套分层代数，而层的来源是其类型的一部分。目前只有 CLI 会把这类
 收窄**打印**出来，其余界面只执行、不提示。
 
-仓库定义根本无法遮蔽全局条目——上面那条规则会忽略它——而单独存在的仓库条目同样
-不受信任；信任不会跨该边界继承。完整的分层模型见
+仓库定义根本无法遮蔽全局条目——上面那条规则会忽略它——而单独存在的仓库条目在你批准之前
+始终不会连接；信任不会跨该边界继承。完整的分层模型见
 [cli-reference.zh-CN.md](cli-reference.zh-CN.md#设置分层)。
 
 ### 1.4 工具命名
@@ -288,34 +367,68 @@ Web 工作台，经 WebSocket 的确认/提问通道），以及 TUI。TUI 在�
 服务器，因此它的 handler 会路由到当前占据屏幕的那次运行；如果请求到达时没有任何运行
 在进行，它会被拒绝，而不是被错投到别处。
 
+#### 列表变更
+
+服务器可以宣告某个列表变了。收到 `notifications/tools/list_changed` 时，客户端会重新
+列出该服务器的工具；正在运行的 agent 从**下一个 provider 轮次**起就能看到新的工具集。
+一次改变了自身服务器列表的工具调用（服务器在应答前发出了通知）会最多等待两秒让刷新完成，
+因此紧接着的下一轮就已包含新工具。工具名只由服务器名与工具名决定，所以刷新永远不会给
+模型已知的工具改名；列表原样返回时请求也完全不变。`prompts/list_changed` 与
+`resources/list_changed` 会转交给前端（registry 的 `subscribe`），由前端重新读取它展示的列表。
+
 `tools/list`、`resources/list` 和 `prompts/list` 会逐页消费每个不透明的
 `nextCursor`。重复出现的 cursor 会被拒绝，发现过程上限为 100 页和 10,000 条，
 因此格式错误或恶意的服务器无法制造无限循环或无上限的目录内存分配。
 
 ### 1.7 信任模型
 
-每个用户级服务器条目有一个可选的 `trusted` 布尔值（默认 `false`）。Agent 自动
-发现只连接全局配置或显式 settings 中设置为 `trusted: true` 的条目；仓库信任标志
-会被剥离，因为连接本身就可能启动本地进程或访问远程端点。已信任工具依次使用按原始
-工具名设置的覆盖、服务器默认值、MCP 注解（`destructive`/`openWorld` 升到 `env`，
-`readOnly` 映射为 `readonly`），最后回退到 `write`。显式检查未信任条目时始终使用
-`env`，不能通过注解降低权限。
+连接服务器会启动本地进程或访问某个端点，因此自动连接需要有人为这份定义作保：
 
-| `trusted` | 自动连接 | 工具权限 | 使用 `-y` 时 | 未使用 `-y` 时 |
-|---|---|---|---|---|
-| `false` | 禁用 | 不适用 | 不适用 | 不适用 |
-| `true` | 启用 | 覆盖/默认/注解，否则 `"write"` | 取决于策略 | 取决于策略 |
+| 服务器定义在哪里 | 何时自动连接 | `${VAR}` 引用 | stdio 环境 |
+|---|---|---|---|
+| 你的用户配置 / `--settings` | 带有 `"trusted": true` | 展开 | 完整继承 |
+| 检出目录（`.seekforge/config.json`、`config.local.json`、`.mcp.json`） | 你为**本工作区**批准了**这份确切的定义** | 展开 | 去掉看似密钥的变量，其 `env` 点名的除外 |
+| 检出目录，未批准（待批准或已拒绝） | 永不 | 按字面保留 | —— |
 
-`seekforge mcp list`、Desktop 的服务器测试/工具查看等显式管理操作仍可连接用户
-主动选择的未信任条目，因为用户已经发起了这一次准确的连接。只有审查过命令或
-URL 及其配置后，才应把服务器标记为已信任。
+**批准记录**保存在 `~/.seekforge/mcp-project-approvals.json`（仅属主可读写），任何检出
+目录都无法写入它；以工作区的真实路径和定义原样（引用不展开、忽略 `trusted`、其余字段
+全部计入）的 SHA-256 摘要为键。修改定义——多一个参数、换一个 URL、加一个 header——
+服务器就会重新变成待批准，直到你批准新的定义。CLI 用 `seekforge mcp approve` / `reject` /
+`reset-project-choices` 管理它们；前端调用同一组 core 函数（`approveProjectMcpServer`、
+`rejectProjectMcpServer`、`resetProjectMcpChoices`、`listProjectMcpServers`），并通过
+registry 的 `reconnect(name)` 让决定在运行中的会话里生效。
+`seekforge mcp add --trust` 会批准它写入的内容，`mcp import` 会把导入的服务器标为受信任（§1.2）。
 
-工具结果把文本保留在 `content` 中，同时保留有界且脱敏的 `structuredContent`；
-图片、音频和资源只以附件描述信息暴露，不会把 base64 载荷塞进模型上下文。
+连接后，受信任或已批准服务器的工具依次使用按原始工具名设置的覆盖、服务器默认值、
+MCP 注解（`destructive`/`openWorld` 升到 `env`，`readOnly` 映射为 `readonly`），最后回退
+到 `write`。仓库条目的 `permission` / `toolPermissions` 只能比这更严格（§1.3）。为显式管理
+操作而连接、却不具备上述任一身份的条目始终使用 `env`，不能通过注解降低权限。
+
+Desktop 的服务器测试/工具查看等显式管理操作仍可连接用户主动选择的未信任条目，因为
+用户已经发起了这一次准确的连接；这样的连接不展开任何引用，并使用去除密钥后的环境。
+`seekforge mcp list` 只启动具备身份的条目（见 §1.2）。
+
+工具结果把文本保留在 `content` 中，保留有界且脱敏的 `structuredContent`，并在
+`attachments` 中描述二进制内容。**图片**部分（PNG、JPEG、GIF、WebP；每个结果最多 8 张、
+每张不超过 1 MiB）会作为附着在该工具结果上的图片交给模型——是否真正发送由 provider
+决定，与浏览器截图相同——其描述信息会标明 `attached: true`。音频、其他二进制类型以及
+超出上述限制的图片仍只保留描述信息；模型读到的文本里不会出现任何 base64 载荷。
 
 ### 1.8 Resources
 
 已配置 MCP 服务器的资源可以列出和读取。每个资源都会标注其所属服务器名。
+
+只要有服务器已连接，agent 就有两个相应的工具：
+
+| 工具 | 参数 | 结果 |
+|---|---|---|
+| `list_mcp_resources` | `server?` | `{ resources: [{ server, uri, name?, description?, mimeType? }] }`，最多 200 条；失败的服务器记录在 `errors` 中 |
+| `read_mcp_resource` | `server`、`uri` | `{ server, uri, note, contents: [{ uri?, mimeType?, text }] }`；文本上限 50,000 字符，图片 blob 作为图片附上，其他 blob 仅描述 |
+
+对受信任和已批准的服务器，两者都以 `readonly` 运行（不提示）——读取资源与读取文件
+同等对待；其他情况为 `env`。资源内容是来自服务器的数据：结果中会明确说明，密钥会被
+脱敏，其中的指令不会被执行。
+
 编程接口如下：
 
 - **`listMcpResources(entries)`** —— 返回所有已连接服务器上每个资源的
@@ -341,6 +454,26 @@ TUI 和 Server/Desktop 运行会在任务到达模型之前，为每条消息展
 
 TUI 提供 prompt 命令。桌面端设置页会列出 prompt 模板，收集其声明的参数，
 通过工作区作用域的 server API 完成解析，并将渲染后的 prompt 插入到聊天输入框中。
+
+### 1.10 工具搜索（延迟加载的 MCP 工具）
+
+每个请求都携带全部工具定义，而少数几个 MCP 服务器带来的定义 token 就可能比对话本身还多。
+当已连接服务器的工具定义超过请求上下文预算的 **`mcpToolSearchThreshold`**%（默认 10）时，
+它们会被**延迟加载**：
+
+- 每个 MCP 工具只以 `名称: 一行摘要` 的形式列在 `tool_search` 工具的描述里；
+- `tool_search` 接受 `query`——关键词，或用 `select:name1,name2` 指定确切名称——以及
+  `max_results`（默认 5，最多 20）；它返回匹配工具的完整 schema 并将其**加载**，
+  从下一个 provider 轮次起这些工具会以完整定义出现；
+- 调用一个尚未加载的延迟工具会以 `tool_not_advertised` 失败，消息会告诉模型先用
+  `select:<该名称>` 调用 `tool_search`。
+
+内置工具和两个资源工具始终完整公布。`mcpToolSearchThreshold: 0` 总是延迟 MCP 工具；
+`100` 则从不延迟。已加载的工具在会话剩余时间内保持加载。索引只在某个服务器的工具列表
+变化时才会改变，但每次加载都会改变公布的工具集，从而开启新的提示缓存前缀——这是不必
+每轮都为每份 schema 付费的代价。带有精确 `allowedTools` 列表的运行永不延迟。
+
+`tool_search` 本身以 `readonly` 运行：它只读取 SeekForge 已持有的目录，不访问任何服务器。
 
 ---
 
@@ -484,7 +617,7 @@ MCP 客户端发起的工具调用上：
 | `mcp_cancelled`    | 请求完成前调用方的 AbortSignal 已触发 |
 | `mcp_error`        | 服务器返回了 JSON-RPC 错误              |
 | `mcp_tool_error`   | 工具调用返回了 `isError: true`            |
-| `mcp_http_error`   | HTTP 传输：不可达或非 200        |
+| `mcp_http_error`   | HTTP/SSE 传输：不可达、非 2xx、SSE 流已关闭或公布了其他 origin 的 endpoint |
 | `mcp_parse_error`  | 响应体无法解析                      |
 | `mcp_auth_error`   | OAuth：元数据/端点无效、不支持 PKCE S256、issuer 或 state 不匹配、令牌响应缺少 access token |
 | `mcp_pagination_limit` | 分页列表超过 100 页或 10,000 条 |
@@ -515,27 +648,37 @@ MCP 客户端发起的工具调用上：
 | 模块              | 文件                                      | 职责 |
 |---|---|---|
 | `McpServerConfig`   | `packages/core/src/mcp/types.ts`          | 每个 MCP 服务器条目的配置 schema |
-| `McpClient`         | `packages/core/src/mcp/client.ts`         | 客户端传输：stdio 或 HTTP |
+| `McpClient`         | `packages/core/src/mcp/client.ts`         | 客户端传输：stdio、HTTP 或 SSE |
 | `McpHttpTransport`  | `packages/core/src/mcp/http.ts`           | Streamable HTTP：POST + SSE |
+| `McpSseTransport`   | `packages/core/src/mcp/sse.ts`            | 旧版 HTTP+SSE（2024-11-05） |
+| 启动策略            | `packages/core/src/mcp/launch.ts`         | `${VAR}` 展开、stdio 环境 |
+| 批准记录            | `packages/core/src/mcp/approvals.ts`      | 按工作区的项目服务器决定 |
+| `McpRegistry`       | `packages/core/src/mcp/registry.ts`       | 在线连接、列表刷新、延迟加载分发器 |
+| 面向模型的工具      | `packages/core/src/mcp/meta-tools.ts`     | `list_mcp_resources`、`read_mcp_resource`、`tool_search` |
 | `McpToolSpecs`      | `packages/core/src/mcp/tools.ts`          | 转换 tools/resources/prompts |
 | `McpServer`         | `packages/core/src/mcp/server.ts`         | 服务器模式：stdio 上的 JSON-RPC |
-| CLI 客户端命令 | `apps/cli/src/commands/mcp.ts`            | `mcp list`、`mcp add`、`rm` |
+| CLI 客户端命令 | `apps/cli/src/commands/mcp.ts`            | `mcp list/get/add/add-json/import/approve/reject/remove` |
 | CLI 配置辅助  | `apps/cli/src/mcp-config.ts`              | 读写配置中的 `mcpServers` |
 | CLI 服务器命令  | `apps/cli/src/commands/mcp-serve.ts`      | `mcp-serve` 入口 |
 | Agent factory       | `apps/cli/src/agent-factory.ts`           | `prepareMcp()` 启动各服务器 |
 
 ### 客户端连接生命周期
 
-1. `loadMcpToolSpecs(servers, workspaceRoots?)` 为每个条目创建一个客户端。
-2. 对每个服务器：`createMcpClient({ name, config })` 选择传输方式
-   （存在 `config.url` 则为 HTTP，否则为 stdio）。
+1. `loadMcpToolSpecs(servers, workspaceRoots?, signal?, handlers?, options?)` 逐条决定
+   能否连接（`mcpConnectionDecision`：受信任的用户条目，或已为 `options.workspace` /
+   `workspaceRoots[0]` 批准的项目条目；`options.origins` 为配置合并报告中的
+   `mcpServerOrigins`）。
+2. 对每个要连接的服务器：`createMcpClient({ name, config, trust })` 按信任级别展开引用，
+   并选择传输方式（`type`；否则存在 `config.url` 为 HTTP，否则为 stdio）。
 3. 第一个请求触发 `initialize` 握手（stdio 的握手超时为 120s，
    以容纳 npx 安装耗时）。
 4. 握手完成后发送 `notifications/initialized`。
-5. `tools/list`、`resources/list`、`prompts/list` 各调用一次，
-   结果缓存为 `ToolSpec` 对象。
-6. `loadMcpToolSpecs` 返回 `{ specs, entries, dispose }`。
-7. `specs` 与内置工具一起传给 `createDefaultDispatcher(mcpToolSpecs)`。
+5. 调用 `tools/list` 并转换为 `ToolSpec` 对象；服务器每次发送
+   `notifications/tools/list_changed` 时都会再次调用。
+6. `loadMcpToolSpecs` 返回 `{ specs, entries, dispose, registry }`。
+7. 要么把 `specs`（快照，含资源工具）传给 `createDefaultDispatcher(specs)`；要么为了列表
+   刷新与工具搜索，用 `createMcpAwareDispatcher(registry)` 取代该分发器——registry 的
+   revision 一变，agent 循环就会重新读取其工具目录。
 8. 会话结束时，`dispose()` 杀掉所有子进程并取消在途的 HTTP 请求。
 
 ### 超时

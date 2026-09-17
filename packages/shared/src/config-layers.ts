@@ -40,6 +40,7 @@
  * (the package root must stay browser-safe for the desktop bundle).
  */
 
+import { join } from "node:path";
 import { readFileBounded } from "./bounded-file-read.js";
 import { apiKeyEnvVar } from "./provider-env.js";
 import {
@@ -556,6 +557,46 @@ export function describeConfigMergeReport(report: ConfigMergeReport): string[] {
     );
   }
   return lines;
+}
+
+/** Claude Code's project server file, read from the workspace root. */
+export const PROJECT_MCP_JSON_FILE = ".mcp.json";
+
+/** The fields of a `.mcp.json` entry this format defines; everything else is dropped. */
+const MCP_JSON_ENTRY_FIELDS = ["type", "command", "args", "env", "url", "headers"] as const;
+
+/**
+ * `<projectPath>/.mcp.json` — `{ "mcpServers": { name: { command, args, env } |
+ * { type: "http" | "sse", url, headers } } }` — as a REPOSITORY layer that
+ * carries nothing but those server definitions.
+ *
+ * Only the fields that format defines survive. Its `oauth` block describes a
+ * different flow than SeekForge's and is dropped, as is anything a checkout
+ * adds to grant itself standing (`trusted`, `permission`); the layer then goes
+ * through the same reduction as every other repository layer, so its servers
+ * stay unconnected until the user approves each one and can never take a name
+ * a user-owned layer defines. Put it BELOW `.seekforge/config.json` in the layer
+ * list: when both files name a server, SeekForge's own file wins.
+ *
+ * Absent, unreadable or malformed files yield an empty layer.
+ */
+export function readProjectMcpJsonLayer<T extends BaseConfigShape>(projectPath: string): ConfigLayer<T> {
+  const raw = readJsonConfigLayer<Record<string, unknown>>(join(projectPath, PROJECT_MCP_JSON_FILE), {
+    requireObject: true,
+  });
+  const servers: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  if (isRecord(raw.mcpServers)) {
+    for (const [name, value] of Object.entries(raw.mcpServers)) {
+      if (!isRecord(value)) continue;
+      const entry: Record<string, unknown> = {};
+      for (const field of MCP_JSON_ENTRY_FIELDS) {
+        if (Object.hasOwn(value, field)) entry[field] = value[field];
+      }
+      servers[name] = entry;
+    }
+  }
+  const layer = Object.keys(servers).length > 0 ? ({ mcpServers: servers } as T) : ({} as T);
+  return repositoryConfigLayer(layer);
 }
 
 /**

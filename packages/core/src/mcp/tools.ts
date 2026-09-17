@@ -1,14 +1,13 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { DEFAULT_LIMITS, PERMISSION_LEVEL, type PermissionName } from "@seekforge/shared";
+import { type ChatImage, DEFAULT_LIMITS, PERMISSION_LEVEL, type PermissionName } from "@seekforge/shared";
 import { ToolError } from "../tools/errors.js";
 import { redactSecrets } from "../tools/redact.js";
 import { defineTool, type ToolSpec } from "../tools/registry.js";
 import { truncateHeadTail } from "../tools/text.js";
-import { createMcpClient, McpError, type McpClient, type McpContentPart } from "./client.js";
-import type { McpServerRequestHandlers } from "./server-requests.js";
+import { McpError, type McpClient, type McpContentPart } from "./client.js";
 import { sanitizeMcpErrorMessage } from "./errors.js";
-import type { McpPromptArgument, McpServerConfig, McpTool } from "./types.js";
+import type { McpPromptArgument, McpServerTrust, McpTool } from "./types.js";
 
 const DESCRIPTION_MAX_CHARS = 500;
 const MCP_INPUT_SCHEMA_MAX_CHARS = 64 * 1024;
@@ -16,13 +15,19 @@ const MCP_RAW_TOOL_NAME_MAX_CHARS = 256;
 
 export type McpClientEntry = {
   serverName: string;
+  /**
+   * The live connection. A registry reconnect replaces it in place, so tool
+   * specs read it at call time rather than capturing it.
+   */
   client: McpClient;
   trusted: boolean;
+  /** Who stands behind the definition (see launch.ts). Absent on hand-built entries. */
+  trust?: McpServerTrust;
   permission?: PermissionName;
   toolPermissions?: Record<string, PermissionName>;
 };
 
-function isPermissionName(value: unknown): value is PermissionName {
+export function isPermissionName(value: unknown): value is PermissionName {
   return typeof value === "string" && Object.hasOwn(PERMISSION_LEVEL, value);
 }
 
@@ -73,25 +78,77 @@ function inputSchema(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function attachmentDescriptors(parts: readonly McpContentPart[]): Array<Record<string, unknown>> {
-  return parts
-    .filter((part) => part.type !== "text")
-    .map((part) => {
-      if (part.type === "resource") {
-        return {
-          type: "resource",
-          ...(part.resource?.uri ? { uri: redactSecrets(part.resource.uri) } : {}),
-          ...(part.resource?.mimeType ? { mimeType: part.resource.mimeType } : {}),
-          ...(part.resource?.text ? { textChars: part.resource.text.length } : {}),
-          ...(part.resource?.blob ? { encodedBytes: part.resource.blob.length } : {}),
-        };
-      }
-      return {
-        type: part.type,
-        ...(part.mimeType ? { mimeType: part.mimeType } : {}),
-        ...(part.data ? { encodedBytes: part.data.length } : {}),
-      };
+/**
+ * What an MCP image may cost the conversation. It is written into the session
+ * transcript and resent on later turns until micro-compaction clears it, so the
+ * per-image bound matches the browser screenshot attachment (1 MiB decoded),
+ * well inside what the transcript accepts on replay (6 MiB of base64, 8 images
+ * per message — see trace.ts).
+ */
+export const MCP_IMAGE_MAX_BYTES = 1024 * 1024;
+export const MCP_IMAGES_MAX_PER_RESULT = 8;
+const IMAGE_MEDIA_TYPES: ReadonlySet<string> = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
+
+type ImageVerdict = { image: ChatImage } | { omitted: "unsupported_type" | "invalid_data" | "too_large" };
+
+/** Validates one base64 image payload against the attachment limits. */
+function toChatImage(mimeType: string | undefined, data: string, label: string): ImageVerdict {
+  const mediaType = (mimeType ?? "").toLowerCase();
+  if (!IMAGE_MEDIA_TYPES.has(mediaType)) return { omitted: "unsupported_type" };
+  const compact = data.replace(/\s+/g, "");
+  if (compact.length === 0 || compact.length % 4 !== 0 || !BASE64_RE.test(compact)) {
+    return { omitted: "invalid_data" };
+  }
+  const padding = compact.endsWith("==") ? 2 : compact.endsWith("=") ? 1 : 0;
+  if ((compact.length / 4) * 3 - padding > MCP_IMAGE_MAX_BYTES) return { omitted: "too_large" };
+  return { image: { mediaType: mediaType as ChatImage["mediaType"], dataBase64: compact, label } };
+}
+
+/**
+ * Splits non-text MCP content into images the model can be shown and
+ * descriptors for everything else. Image parts (and embedded image resources)
+ * within the limits travel as tool-result images; the descriptor that stays in
+ * the data says one was attached. Other binary content — audio, non-image
+ * blobs, images over the limits — is described, never inlined.
+ */
+export function mcpAttachments(
+  parts: readonly McpContentPart[],
+  label: string,
+): { images: ChatImage[]; descriptors: Array<Record<string, unknown>> } {
+  const images: ChatImage[] = [];
+  const descriptors: Array<Record<string, unknown>> = [];
+  const attach = (mimeType: string | undefined, data: string): Record<string, unknown> => {
+    if (images.length >= MCP_IMAGES_MAX_PER_RESULT) return { omitted: "too_many_images" };
+    const verdict = toChatImage(mimeType, data, label);
+    if ("omitted" in verdict) return { omitted: verdict.omitted };
+    images.push(verdict.image);
+    return { attached: true };
+  };
+  for (const part of parts) {
+    if (part === null || typeof part !== "object" || part.type === "text") continue;
+    if (part.type === "resource") {
+      const blob = typeof part.resource?.blob === "string" ? part.resource.blob : undefined;
+      const imageBlob = blob !== undefined && (part.resource?.mimeType ?? "").toLowerCase().startsWith("image/");
+      descriptors.push({
+        type: "resource",
+        ...(part.resource?.uri ? { uri: redactSecrets(part.resource.uri) } : {}),
+        ...(part.resource?.mimeType ? { mimeType: part.resource.mimeType } : {}),
+        ...(part.resource?.text ? { textChars: part.resource.text.length } : {}),
+        ...(blob !== undefined ? { encodedBytes: blob.length } : {}),
+        ...(imageBlob ? attach(part.resource?.mimeType, blob) : {}),
+      });
+      continue;
+    }
+    const data = typeof part.data === "string" ? part.data : undefined;
+    descriptors.push({
+      type: part.type,
+      ...(part.mimeType ? { mimeType: part.mimeType } : {}),
+      ...(data !== undefined ? { encodedBytes: data.length } : {}),
+      ...(part.type === "image" && data !== undefined ? attach(part.mimeType, data) : {}),
     });
+  }
+  return { images, descriptors };
 }
 
 function safeStructuredContent(value: unknown): unknown {
@@ -108,7 +165,7 @@ function safeStructuredContent(value: unknown): unknown {
 }
 
 function toToolSpec(entry: McpClientEntry, tool: McpTool): ToolSpec {
-  const { serverName, client } = entry;
+  const { serverName } = entry;
   return defineTool({
     name: mcpToolPublicName(serverName, tool.name),
     description: truncateDescription(`[MCP:${serverName}] ${tool.description ?? ""}`.trim()),
@@ -124,14 +181,16 @@ function toToolSpec(entry: McpClientEntry, tool: McpTool): ToolSpec {
       command: `mcp:${serverName}/${tool.name}`,
     }),
     async run(args, ctx) {
+      const client = entry.client;
       let text: string;
       let attachments: Array<Record<string, unknown>> = [];
+      let images: ChatImage[] = [];
       let structuredContent: unknown;
       try {
         if (typeof client.callToolDetailed === "function") {
           const detailed = await client.callToolDetailed(tool.name, args as Record<string, unknown>, ctx.signal);
           text = detailed.text;
-          attachments = attachmentDescriptors(detailed.content);
+          ({ images, descriptors: attachments } = mcpAttachments(detailed.content, `${serverName}/${tool.name}`));
           structuredContent = safeStructuredContent(detailed.structuredContent);
         } else {
           text = await client.callTool(tool.name, args as Record<string, unknown>, ctx.signal);
@@ -147,9 +206,57 @@ function toToolSpec(entry: McpClientEntry, tool: McpTool): ToolSpec {
           ...(attachments.length > 0 ? { attachments } : {}),
         },
         meta: { truncated },
+        ...(images.length > 0 ? { images } : {}),
       };
     },
   });
+}
+
+/** The first line of a server-supplied description, bounded, for catalog listings. */
+export function mcpToolSummary(tool: Pick<McpTool, "description">, max = 100): string {
+  const description = typeof tool.description === "string" ? tool.description : "";
+  const line = description.trim().split("\n")[0]?.trim() ?? "";
+  return line.length <= max ? line : `${line.slice(0, max - 1)}…`;
+}
+
+/** One server's tools, as specs plus what the registry needs to compare and index them. */
+export type McpServerToolSet = {
+  specs: ToolSpec[];
+  /** Public name → one-line summary, in tools/list order. */
+  summaries: Map<string, string>;
+  /** Digest of every advertised field; equal fingerprints advertise identically. */
+  fingerprint: string;
+};
+
+/**
+ * Lists one server's tools and converts them. Throws on a malformed list
+ * (non-array, repeated names) or a transport failure — callers decide whether
+ * that server then contributes nothing or keeps what it had.
+ */
+export async function buildMcpServerToolSet(entry: McpClientEntry, signal?: AbortSignal): Promise<McpServerToolSet> {
+  const tools: unknown = await entry.client.listTools(signal);
+  if (!Array.isArray(tools)) throw new TypeError("tools/list result.tools must be an array");
+  const specs: ToolSpec[] = [];
+  const summaries = new Map<string, string>();
+  const advertised: unknown[] = [];
+  const rawNames = new Set<string>();
+  for (const value of tools) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) continue;
+    const tool = value as Partial<McpTool>;
+    if (typeof tool.name !== "string" || tool.name.length === 0 || tool.name.length > MCP_RAW_TOOL_NAME_MAX_CHARS)
+      continue;
+    if (rawNames.has(tool.name)) throw new TypeError(`tools/list repeated tool name ${JSON.stringify(tool.name)}`);
+    rawNames.add(tool.name);
+    const spec = toToolSpec(entry, tool as McpTool);
+    specs.push(spec);
+    summaries.set(spec.name, mcpToolSummary(tool));
+    advertised.push([spec.name, spec.description, spec.parametersOverride, tool.annotations ?? null]);
+  }
+  return {
+    specs,
+    summaries,
+    fingerprint: createHash("sha256").update(JSON.stringify(advertised)).digest("hex"),
+  };
 }
 
 /**
@@ -161,21 +268,7 @@ export async function buildMcpToolSpecs(clients: McpClientEntry[], signal?: Abor
   const groups = await Promise.all(
     clients.map(async (entry): Promise<ToolSpec[]> => {
       try {
-        const tools: unknown = await entry.client.listTools(signal);
-        if (!Array.isArray(tools)) throw new TypeError("tools/list result.tools must be an array");
-        const specs: ToolSpec[] = [];
-        const rawNames = new Set<string>();
-        for (const value of tools) {
-          if (typeof value !== "object" || value === null || Array.isArray(value)) continue;
-          const tool = value as Partial<McpTool>;
-          if (typeof tool.name !== "string" || tool.name.length === 0 || tool.name.length > MCP_RAW_TOOL_NAME_MAX_CHARS)
-            continue;
-          if (rawNames.has(tool.name))
-            throw new TypeError(`tools/list repeated tool name ${JSON.stringify(tool.name)}`);
-          rawNames.add(tool.name);
-          specs.push(toToolSpec(entry, tool as McpTool));
-        }
-        return specs;
+        return (await buildMcpServerToolSet(entry, signal)).specs;
       } catch (err) {
         if (signal?.aborted) throw err;
         const message = sanitizeMcpErrorMessage(err);
@@ -285,71 +378,4 @@ export async function getMcpPrompt(
   const entry = clients.find((e) => e.serverName === server);
   if (!entry) throw new McpError("unknown_server", `no MCP server named "${server}" is connected`);
   return entry.client.getPrompt(name, args, signal);
-}
-
-/**
- * Creates a client per configured server and builds their ToolSpecs.
- * `entries` exposes the live connections for resource access
- * (listMcpResources / readMcpResource). dispose() shuts every client down
- * (kills the child processes). `workspaceRoots` (absolute paths) is advertised
- * to each server via the roots capability and answered on roots/list.
- *
- * `serverRequestHandlers` answers the requests that go the other way and need a
- * model or the user (sampling/elicitation). Each capability is advertised only
- * when its handler is supplied, so leaving them out keeps the previous behavior
- * exactly: servers are told the client cannot do it and never ask.
- */
-export async function loadMcpToolSpecs(
-  servers: Record<string, McpServerConfig>,
-  workspaceRoots?: string[],
-  signal?: AbortSignal,
-  serverRequestHandlers?: McpServerRequestHandlers,
-): Promise<{ specs: ToolSpec[]; entries: McpClientEntry[]; dispose: () => void }> {
-  const entries: McpClientEntry[] = [];
-  for (const [serverName, value] of Object.entries(servers)) {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
-      process.stderr.write(`warning: MCP server "${serverName}" has an invalid configuration\n`);
-      continue;
-    }
-    const config = value as McpServerConfig;
-    // Discovery itself starts a local process or contacts a remote endpoint.
-    // Tool-level confirmation happens too late to authorize that side effect.
-    if (config.trusted !== true) continue;
-    if (config.permission !== undefined && !isPermissionName(config.permission)) {
-      process.stderr.write(`warning: MCP server "${serverName}" has an invalid permission\n`);
-      continue;
-    }
-    if (
-      config.toolPermissions !== undefined &&
-      (typeof config.toolPermissions !== "object" ||
-        config.toolPermissions === null ||
-        Array.isArray(config.toolPermissions) ||
-        Object.values(config.toolPermissions).some((permission) => !isPermissionName(permission)))
-    ) {
-      process.stderr.write(`warning: MCP server "${serverName}" has invalid toolPermissions\n`);
-      continue;
-    }
-    entries.push({
-      serverName,
-      client: createMcpClient({
-        name: serverName,
-        config,
-        ...(workspaceRoots !== undefined ? { workspaceRoots } : {}),
-        ...(serverRequestHandlers !== undefined ? { serverRequestHandlers } : {}),
-      }),
-      trusted: true,
-      ...(config.permission ? { permission: config.permission } : {}),
-      ...(config.toolPermissions ? { toolPermissions: config.toolPermissions } : {}),
-    });
-  }
-  const dispose = () => {
-    for (const entry of entries) entry.client.dispose();
-  };
-  try {
-    const specs = await buildMcpToolSpecs(entries, signal);
-    return { specs, entries, dispose };
-  } catch (err) {
-    dispose();
-    throw err;
-  }
 }

@@ -153,6 +153,8 @@ const ESSENTIAL_TOOL_NAMES = new Set([
   "dispatch_team",
   "agent_result",
   "agent_send",
+  // The only way to reach a deferred MCP tool; trimming it strands them all.
+  "tool_search",
 ]);
 
 /**

@@ -4,8 +4,9 @@
 
 SeekForge implements both sides of the Model Context Protocol (MCP):
 
-- **Client mode** — connect to external MCP servers (stdio or Streamable HTTP)
-  and surface their tools, resources, and prompts to the agent.
+- **Client mode** — connect to external MCP servers (stdio, Streamable HTTP,
+  or the legacy HTTP+SSE transport) and surface their tools, resources, and
+  prompts to the agent.
 - **Server mode** — run SeekForge itself as an MCP server on stdio so other
   agents can use this workspace's built-in tools.
 
@@ -19,14 +20,17 @@ The agent interacts with configured MCP servers through three channels: **tools*
 
 ### 1.1 Configuration
 
-MCP servers are declared under `mcpServers` in `.seekforge/config.json`
-(project) or `~/.seekforge/config.json` (global).
+MCP servers are declared under `mcpServers` in `~/.seekforge/config.json`
+(user), `.seekforge/config.json` (project), or `.seekforge/config.local.json`
+(this checkout only). Claude Code's project file, `.mcp.json` at the workspace
+root, is read too.
 
-Project entries are definitions only: repository configuration cannot grant
-itself automatic startup authority, so project `trusted: true` is ignored. To
-trust a reviewed server, copy its complete entry to the global config and set
-`trusted: true` there. Explicit management actions may still connect to a
-selected untrusted project entry for testing or tool inspection.
+Everything that ships inside the checkout — the two project files and
+`.mcp.json` — is a **definition, not a grant**: repository configuration cannot
+give itself automatic startup authority, so a project `trusted: true` is
+ignored. A project server connects automatically only after **you approve it for
+that workspace** (`seekforge mcp approve <name>`, see §1.7). A server in your
+user config connects automatically when it carries `trusted: true`.
 
 The config format is Claude Code–compatible:
 
@@ -46,6 +50,7 @@ The config format is Claude Code–compatible:
     },
     "web-search": {
       // Streamable HTTP transport — selected by the presence of "url"
+      // (or explicitly with "type": "http")
       "url": "https://example.com/mcp",
       // Optional: extra HTTP headers sent on every request
       "headers": {
@@ -59,6 +64,11 @@ The config format is Claude Code–compatible:
         "clientSecret": "${MCP_CLIENT_SECRET}",
         "refreshToken": "${MCP_REFRESH_TOKEN}"
       }
+    },
+    "linear": {
+      // Legacy HTTP+SSE transport (MCP 2024-11-05) — only an explicit type selects it
+      "type": "sse",
+      "url": "https://mcp.linear.app/sse"
     }
   }
 }
@@ -66,56 +76,139 @@ The config format is Claude Code–compatible:
 
 **Transport selection** (per-server, mutually exclusive):
 
-| Has `url`? | Transport       | Effective fields         |
-|---|---|---|
-| No         | stdio           | `command`, `args`, `env` |
-| Yes        | Streamable HTTP | `url`, `headers`, `oauth` |
+| `type` | Otherwise | Transport | Effective fields |
+|---|---|---|---|
+| `"stdio"` | no `url` | stdio | `command`, `args`, `env` |
+| `"http"` | `url` present | Streamable HTTP | `url`, `headers`, `oauth` |
+| `"sse"` | — | legacy HTTP+SSE | `url`, `headers`, `oauth` |
 
-A server must have either `command` (stdio) or `url` (HTTP); having neither
-causes a configuration error.
+A server needs a `command` (stdio) or a `url` (HTTP/SSE); a definition that has
+neither, or names another `type`, is reported as invalid and never connected.
+The legacy SSE transport opens one `GET <url>` event stream, waits for the
+server's `endpoint` event and POSTs every message there; the announced endpoint
+must be on the same origin as `url`, because those POSTs carry the same headers
+and bearer token.
+
+**`.mcp.json`** — `{ "mcpServers": { name: { "command", "args", "env" } |
+{ "type": "http" | "sse", "url", "headers" } } }` — is read as a repository
+layer below `.seekforge/config.json`: only those fields are kept (Claude Code's
+own `oauth` block describes a different flow and is dropped), a name SeekForge's
+own project file also defines loses to it, and a name your user config defines
+is ignored entirely.
+
+**`${VAR}` references.** `command`, `args`, `env` values, `url`, `headers` and
+`oauth` values may reference the process environment as `${VAR}` or
+`${VAR:-default}` (the default applies when the variable is unset or empty).
+References expand only for a server from your user config or a project server
+you approved; an unapproved project definition is used literally, so a
+checkout cannot copy an environment variable into a URL or header without you
+having seen the template. `seekforge mcp get` and the approval prompt always
+show the unexpanded definition.
+
+**Environment of a stdio server.** A server from your user config inherits the
+whole environment, as in Claude Code. An approved project server inherits it
+with secret-looking variables removed (`*_API_KEY`, `*_TOKEN`, `*_SECRET`,
+`*PASSWORD*`, … — the same list `run_command` uses), except for the variables
+its own `env` block names, which you saw when you approved it:
+
+```jsonc
+{ "mcpServers": { "gh": { "command": "gh-mcp", "env": { "GITHUB_TOKEN": "${GITHUB_TOKEN}" } } } }
+```
 
 ### 1.2 CLI Commands
 
 #### `seekforge mcp list [--tools] [-y]`
 
-Spawns every configured server, performs the initialize handshake, and prints
+Spawns the configured servers, performs the initialize handshake, and prints
 each server's tool names. A failing server shows its error inline and listing
 continues. With `--tools`, the first line of each tool's description is shown.
 Each line also says whether the entry came `from this repository` or
 `from your config`.
 
-**Listing is not a read: every entry is started.** `mcp add` writes to the
-project config by default, so in a checkout you did not write, "list the
-servers" means "run the commands this repository chose". When any listed server
-comes from the checkout, `mcp list` therefore asks for the same folder-access
-consent `seekforge run` asks for; `-y` pre-authorizes it, which is what CI
-needs. Servers from your own global or `--settings` config are listed without a
+**Listing is not a read: every listed server is started.** So a server the
+checkout defines is started only once you approved that exact definition for
+this workspace; pending and rejected ones are printed with their command or URL
+and **not started**, even with `-y`. When an approved repository server is about
+to start, `mcp list` also asks for the same folder-access consent
+`seekforge run` asks for; `-y` pre-authorizes that, which is what CI needs.
+Servers from your own global or `--settings` config are listed without a
 prompt.
 
 ```text
 $ seekforge mcp list --tools
-filesystem  (npx -y ..., untrusted)  2 tool(s)
+filesystem  (npx -y ..., untrusted, from your config)  2 tool(s)
   read_file  Read the complete contents of a file from the file system
   write_file  Write text content to a file at a specified path
+docs  (http https://docs.example/mcp, pending approval, from this repository)  not started — review with `seekforge mcp get docs`, then `seekforge mcp approve docs`
 ```
 
-#### `seekforge mcp add <name> <command> [args...]`
+#### `seekforge mcp get <name>`
 
-Appends a **stdio** server to `mcpServers` in the project config (add
-`--global` for `~/.seekforge/`). The first token after `<name>` is the command;
-the rest become `args`.
+Prints one server's source, its standing (trusted / untrusted, or approved /
+pending / rejected for a project server), its transport, and the definition
+exactly as written — `${VAR}` references unexpanded. Starts nothing.
 
-New project servers are **untrusted** — the CLI prints a reminder to review the
-entry, then copy it to global config with `"trusted": true` before automatic
-Agent connection.
+#### `seekforge mcp add [options] <name> <command-or-url...>`
+
+Adds a server. Options go **before** `<name>`; everything after the name is the
+server's own command line (so `-y` belongs to `npx`, not to SeekForge).
+
+| Option | Meaning |
+|---|---|
+| `-t, --transport stdio\|http\|sse` | Default `stdio`: the first token after `<name>` is the command, the rest its args. `http`/`sse`: exactly one URL. |
+| `-s, --scope user\|project\|local` | Where to write: `~/.seekforge/config.json`, `.seekforge/config.json` (default), or `.seekforge/config.local.json`. |
+| `-g, --global` | Same as `--scope user`. |
+| `-e, --env KEY=VALUE` | Environment variable for a stdio server. Repeatable. |
+| `-H, --header "Name: value"` | HTTP header for an http/sse server. Repeatable. |
+| `--trust` | Connect it automatically: in the user scope this writes `"trusted": true`; in a project scope it approves the definition just written for this workspace. |
+
+Without `--trust`, a user-scope server is untrusted and a project-scope server
+is pending approval; the CLI says which.
 
 ```text
 seekforge mcp add fs npx -y @modelcontextprotocol/server-filesystem .
+seekforge mcp add --transport http -H "Authorization: Bearer \${DOCS_TOKEN}" -g --trust docs https://docs.example/mcp
+seekforge mcp add --transport sse --scope local linear https://mcp.linear.app/sse
 ```
 
-#### `seekforge mcp remove <name>`
+#### `seekforge mcp add-json [--scope …] [-g] [--trust] <name> '<json>'`
 
-Deletes a server from `mcpServers`. Accepts `--global` for the global config.
+Adds one definition given as JSON in Claude Code's format
+(`{"type":"http","url":"…","headers":{…}}`, `{"command":"…","args":[…]}`).
+Unknown fields are rejected. A project/local entry may not carry `trusted`;
+use `--trust` to approve it instead.
+
+#### `seekforge mcp import [--from claude-desktop|claude-code] [-y] [--no-trust]`
+
+Copies server definitions from Claude Desktop
+(`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS,
+`%APPDATA%\Claude\…` on Windows, `~/.config/Claude/…` elsewhere) and from
+Claude Code's `~/.claude.json` — its user-scope `mcpServers` plus the entries it
+keeps for the **current** project — into your user config. Without `--from`,
+both sources are read; a name found twice keeps its first definition.
+
+The command prints every server it would write (and why any is skipped: already
+in your config, invalid, or a duplicate) before asking for confirmation; `-y`
+skips the question, not the listing. Fields SeekForge has no place for are
+dropped and named, including Claude Code's `oauth` block (use
+`seekforge mcp login` for those servers).
+
+**Imported servers are marked `"trusted": true`.** They come from your own
+configuration files, where they were already running, and you have just seen
+each definition; `--no-trust` imports them untrusted instead. Nothing is
+imported from any repository's `.mcp.json` — approve those per workspace.
+
+#### `seekforge mcp approve <name> [-y]` · `mcp reject <name>` · `mcp reset-project-choices`
+
+Decide on a server the checkout defines, for this workspace. `approve` prints
+the definition as written and asks before recording it (`-y` skips the
+question); `reject` records that it must not connect, so it stops showing as
+pending; `reset-project-choices` forgets every decision for this workspace. A
+name your own config defines is refused — trust it there instead. See §1.7.
+
+#### `seekforge mcp remove <name> [--scope …] [-g]`
+
+Deletes a server from the chosen scope (default project).
 
 #### `seekforge mcp login <name> [-y]`
 
@@ -129,7 +222,9 @@ registers a client with, and opens your browser at. So when the entry comes from
 the repository, `mcp login` prints where it is about to send you and asks for the
 same folder-access consent `seekforge run` and `mcp list` ask for; `-y`
 pre-authorizes it. An entry from your own global or `--settings` config needs no
-prompt.
+prompt. A `${VAR}` in the entry's `url` expands only for your own entries and
+approved project entries (§1.1), and the stored credential is keyed by the URL
+actually contacted.
 
 The flow itself:
 
@@ -170,7 +265,7 @@ are untouched.
 The config merge order (later wins) is:
 
 ```text
-settings file  >  project .seekforge/config.json  >  global ~/.seekforge/config.json
+settings file  >  .seekforge/config.local.json  >  project .seekforge/config.json  >  .mcp.json  >  global ~/.seekforge/config.json
 ```
 
 The merge is per **server name**, not per key inside a server entry: a higher
@@ -184,7 +279,7 @@ Because the repository layers sit *above* global config in precedence, two
 rules constrain them:
 
 - **A repository layer may add server names, never repoint one you own.** If
-  `.seekforge/config.json` (or `config.local.json`) defines a name that
+  `.seekforge/config.json` (or `config.local.json`, or `.mcp.json`) defines a name that
   `~/.seekforge/config.json` or your `--settings` file already defines, the
   repository definition is ignored and SeekForge says so. A clone cannot
   redirect the `command`, `url`, `headers` or `oauth` of a server you
@@ -200,8 +295,8 @@ each layer's origin as part of its type. Only the CLI currently *prints* the
 narrowing; the others enforce it silently.
 
 A repository entry cannot shadow a global one at all — the rule above ignores it
-— and a repository entry that stands alone is still untrusted; trust is never
-inherited across that boundary. For the full layering model see
+— and a repository entry that stands alone stays unconnected until you approve
+it; trust is never inherited across that boundary. For the full layering model see
 [cli-reference.md](cli-reference.md#settings-layering).
 
 ### 1.4 Tool Naming
@@ -333,6 +428,19 @@ confirm/question channels), and the TUI. The TUI starts its MCP servers before
 the app renders, so its handlers reach whichever run currently owns the screen;
 a request arriving with no run active is refused rather than misrouted.
 
+#### List changes
+
+Servers may announce that a list changed. On
+`notifications/tools/list_changed` the client re-lists that server's tools; a
+running agent sees the new set from its **next provider turn**. A tool call
+that changed its own server's list (the server notified before answering) waits
+up to two seconds for that refresh, so the very next turn already has it. Tool
+names are derived from the server and tool names alone, so a refresh never
+renames a tool the model already knows, and a list that comes back unchanged
+does not change the request at all. `prompts/list_changed` and
+`resources/list_changed` are passed to the frontend (the registry's
+`subscribe`), which re-reads the lists it shows.
+
 `tools/list`, `resources/list`, and `prompts/list` consume every opaque
 `nextCursor`. Repeated cursors are rejected and discovery is capped at 100 pages
 and 10,000 items so a malformed or hostile server cannot create an infinite
@@ -340,34 +448,66 @@ loop or unbounded catalog allocation.
 
 ### 1.7 Trust Model
 
-Each user-owned server entry has an optional `trusted` boolean (default `false`).
-Automatic agent discovery connects only global or explicitly supplied settings
-entries marked `trusted: true`; repository trust flags are stripped because the
-connection itself can start a local process or contact a remote endpoint.
-Trusted tools use a configured raw-tool-name override first, then the server
-default, then MCP annotations (`destructive`/`openWorld` escalate to `env`,
-`readOnly` maps to `readonly`), and otherwise `write`. Untrusted entries remain
-`env` when explicitly inspected and can never lower their permission through
-annotations.
+Connecting a server starts a local process or contacts an endpoint, so an
+automatic connection needs someone to have vouched for the definition:
 
-| `trusted` | Automatic connection | Tool permission | With `-y` | Without `-y` |
-|---|---|---|---|---|
-| `false`   | Disabled | N/A | N/A | N/A |
-| `true`    | Enabled | override/default/annotation, else `"write"` | Policy-dependent | Policy-dependent |
+| Where the server is defined | Connects automatically when | `${VAR}` references | stdio environment |
+|---|---|---|---|
+| Your user config / `--settings` | it has `"trusted": true` | expanded | inherited in full |
+| The checkout (`.seekforge/config.json`, `config.local.json`, `.mcp.json`) | you approved **this exact definition** for **this workspace** | expanded | secret-looking variables removed, except those its `env` names |
+| The checkout, not approved (pending or rejected) | never | left literal | — |
 
-Explicit management commands such as `seekforge mcp list` and Desktop's server
-test/tool inspection can connect the selected untrusted entry because that exact
-connection was initiated by the user. Mark a server trusted only after reviewing
-its command or URL and configuration.
+**Approvals** live in `~/.seekforge/mcp-project-approvals.json` (owner-only),
+which no checkout can write, keyed by the workspace's real path and a SHA-256
+digest of the definition as written (references unexpanded, `trusted` ignored,
+every other field included). Change the definition — a new argument, another
+URL, one more header — and the server is pending again until you approve the new
+one. `seekforge mcp approve` / `reject` / `reset-project-choices` manage them from
+the CLI; frontends call the same core functions (`approveProjectMcpServer`,
+`rejectProjectMcpServer`, `resetProjectMcpChoices`, `listProjectMcpServers`) and
+apply a decision to a running session with the registry's `reconnect(name)`.
+`seekforge mcp add --trust` approves what it writes, and `mcp import` marks what
+it imports trusted (§1.2).
+
+Once connected, a trusted or approved server's tools use a configured
+raw-tool-name override first, then the server default, then MCP annotations
+(`destructive`/`openWorld` escalate to `env`, `readOnly` maps to `readonly`),
+and otherwise `write`. A repository entry's `permission` / `toolPermissions` can
+only be stricter than that (§1.3). Entries connected for an explicit management
+action without either kind of standing stay at `env` and can never lower their
+permission through annotations.
+
+Explicit management actions such as Desktop's server test/tool inspection can
+connect a selected untrusted entry because the user initiated that exact
+connection; such a connection expands no references and gets the scrubbed
+environment. `seekforge mcp list` starts only entries with standing (see §1.2).
 
 Tool results keep text under `content`, preserve bounded/redacted
-`structuredContent`, and expose image/audio/resource metadata as attachment
-descriptors without placing base64 payloads into the model context.
+`structuredContent`, and describe binary content in `attachments`. **Image**
+parts (PNG, JPEG, GIF, WebP; up to 8 per result and 1 MiB each) are handed to
+the model as images attached to that tool result — whether they travel is the
+provider's call, as for a browser screenshot — and their descriptor says
+`attached: true`. Audio, other binary types, and images over those limits stay
+descriptors; no base64 payload is placed in the text the model reads.
 
 ### 1.8 Resources
 
 Configured MCP servers' resources are listable and readable. Each resource is
-tagged with its server name. The programmatic surface:
+tagged with its server name.
+
+The agent has two tools for them, advertised whenever a server is connected:
+
+| Tool | Arguments | Result |
+|---|---|---|
+| `list_mcp_resources` | `server?` | `{ resources: [{ server, uri, name?, description?, mimeType? }] }`, at most 200; a failing server is reported under `errors` |
+| `read_mcp_resource` | `server`, `uri` | `{ server, uri, note, contents: [{ uri?, mimeType?, text }] }`; text capped at 50,000 characters, image blobs attached as images, other blobs described |
+
+Both run at `readonly` (no prompt) for trusted and approved servers — reading a
+resource has the same standing as reading a file — and at `env` otherwise.
+Resource content is data from the server: the result says so, secrets are
+redacted, and instructions inside it are not followed.
+
+The programmatic surface:
 
 - **`listMcpResources(entries)`** — returns `{ server, uri, name }` for every
   resource across all connected servers. A failing server logs a warning and
@@ -398,6 +538,33 @@ tagged with its server name:
 TUI exposes prompt commands. Desktop Settings lists prompt templates, collects
 their declared arguments, resolves them through the workspace-scoped server API,
 and inserts the rendered prompt into the chat composer.
+
+### 1.10 Tool search (deferred MCP tools)
+
+Every request carries every tool definition, and a few MCP servers can bring
+more definition tokens than the conversation itself. When the connected
+servers' tool definitions exceed **`mcpToolSearchThreshold`** percent of the
+request's context budget (default 10), they are **deferred**:
+
+- each MCP tool is listed only as `name: one-line summary` inside the
+  description of a `tool_search` tool;
+- `tool_search` takes `query` — keywords, or `select:name1,name2` for exact
+  names — and `max_results` (default 5, at most 20); it returns the matching
+  tools' full schemas and **loads** them, so they are advertised in full from
+  the next provider turn;
+- calling a deferred tool that was not loaded fails with `tool_not_advertised`
+  and a message telling the model to call `tool_search` with
+  `select:<that name>` first.
+
+Built-in tools and the two resource tools are always advertised in full.
+`mcpToolSearchThreshold: 0` always defers MCP tools; `100` never does. Loaded
+tools stay loaded for the rest of the session. The index only changes when a
+server's tool list does, but each load does change the advertised tools, which
+starts a new cached prompt prefix — that is the price of not paying for every
+schema on every turn. A run with an exact `allowedTools` list is never deferred.
+
+`tool_search` itself runs at `readonly`: it reads the catalog SeekForge already
+holds and contacts no server.
 
 ---
 
@@ -548,7 +715,7 @@ failure stands.
 | `mcp_cancelled`    | The caller's AbortSignal fired before the request completed |
 | `mcp_error`        | Server returned a JSON-RPC error              |
 | `mcp_tool_error`   | Tool call returned `isError: true`            |
-| `mcp_http_error`   | HTTP transport: unreachable or non-200        |
+| `mcp_http_error`   | HTTP/SSE transport: unreachable, non-2xx, an SSE stream that closed or announced an endpoint on another origin |
 | `mcp_parse_error`  | Unparseable response body                     |
 | `mcp_auth_error`   | OAuth: invalid metadata/endpoint, no PKCE S256, mismatched issuer or state, or a token response without an access token |
 | `mcp_pagination_limit` | A paginated list exceeded 100 pages or 10,000 items |
@@ -579,28 +746,40 @@ The implementation spans two packages:
 | Module              | File                                      | Role |
 |---|---|---|
 | `McpServerConfig`   | `packages/core/src/mcp/types.ts`          | Config schema per MCP server entry |
-| `McpClient`         | `packages/core/src/mcp/client.ts`         | Client transport: stdio or HTTP |
+| `McpClient`         | `packages/core/src/mcp/client.ts`         | Client transport: stdio, HTTP or SSE |
 | `McpHttpTransport`  | `packages/core/src/mcp/http.ts`           | Streamable HTTP: POST + SSE |
+| `McpSseTransport`   | `packages/core/src/mcp/sse.ts`            | Legacy HTTP+SSE (2024-11-05) |
+| Launch policy       | `packages/core/src/mcp/launch.ts`         | `${VAR}` expansion, stdio environment |
+| Approvals           | `packages/core/src/mcp/approvals.ts`      | Per-workspace project-server decisions |
+| `McpRegistry`       | `packages/core/src/mcp/registry.ts`       | Live connections, list refresh, deferral dispatcher |
+| Model-facing tools  | `packages/core/src/mcp/meta-tools.ts`     | `list_mcp_resources`, `read_mcp_resource`, `tool_search` |
 | `McpToolSpecs`      | `packages/core/src/mcp/tools.ts`          | Converts tools/resources/prompts |
 | `McpServer`         | `packages/core/src/mcp/server.ts`         | Server mode: JSON-RPC over stdio |
-| CLI client commands | `apps/cli/src/commands/mcp.ts`            | `mcp list`, `mcp add`, `rm` |
+| CLI client commands | `apps/cli/src/commands/mcp.ts`            | `mcp list/get/add/add-json/import/approve/reject/remove` |
 | CLI config helpers  | `apps/cli/src/mcp-config.ts`              | Read/write `mcpServers` in config |
 | CLI server command  | `apps/cli/src/commands/mcp-serve.ts`      | `mcp-serve` entry point |
 | Agent factory       | `apps/cli/src/agent-factory.ts`           | `prepareMcp()` spawns servers |
 
 ### Client connection lifecycle
 
-1. `loadMcpToolSpecs(servers, workspaceRoots?)` creates one client per entry.
-2. For each server: `createMcpClient({ name, config })` selects the transport
-   (HTTP if `config.url` exists, otherwise stdio).
+1. `loadMcpToolSpecs(servers, workspaceRoots?, signal?, handlers?, options?)`
+   decides per entry whether it may connect (`mcpConnectionDecision`: trusted
+   user entry, or project entry approved for `options.workspace` /
+   `workspaceRoots[0]`; `options.origins` is the config merge report's
+   `mcpServerOrigins`).
+2. For each connecting server: `createMcpClient({ name, config, trust })`
+   expands references per the trust and selects the transport (`type`, else
+   HTTP if `config.url` exists, otherwise stdio).
 3. The first request triggers the `initialize` handshake (with 120s timeout for
    stdio to allow npx installs).
 4. After handshake, `notifications/initialized` is sent.
-5. `tools/list`, `resources/list`, `prompts/list` are called once and cached
-   as `ToolSpec` objects.
-6. `loadMcpToolSpecs` returns `{ specs, entries, dispose }`.
-7. `specs` are passed to `createDefaultDispatcher(mcpToolSpecs)` alongside
-   builtin tools.
+5. `tools/list` is called and converted to `ToolSpec` objects; it is called
+   again whenever the server sends `notifications/tools/list_changed`.
+6. `loadMcpToolSpecs` returns `{ specs, entries, dispose, registry }`.
+7. Either `specs` (a snapshot, including the resource tools) are passed to
+   `createDefaultDispatcher(specs)`, or — for list refreshes and tool search —
+   `createMcpAwareDispatcher(registry)` replaces that dispatcher; the agent loop
+   re-reads its catalog whenever the registry's revision moves.
 8. On session end, `dispose()` kills all child processes and cancels in-flight
    HTTP requests.
 

@@ -9,9 +9,11 @@ import {
   type PermissionRule,
   type ProviderToolCall,
   type TokenUsage,
+  type ToolDefinitionForModel,
   type ToolResult,
 } from "@seekforge/shared";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { asAdaptiveToolDispatcher } from "../mcp/adaptive.js";
 import type { ChatProvider, RetryInfo } from "../provider/index.js";
 import type { UsageBus } from "./usage-bus.js";
 import type { RuntimeClient } from "../runtime/index.js";
@@ -862,18 +864,26 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           ...(depth === 0 && deps.persistRule ? { persistRule: deps.persistRule } : {}),
         };
 
-        const allToolDefs =
+        const rosterToolDefs =
           roster.length > 0
             ? [
-                ...deps.dispatcher.list(),
                 buildDispatchToolDefinition(roster),
                 buildDispatchTeamToolDefinition(roster),
                 buildAgentResultToolDefinition(),
                 buildAgentSendToolDefinition(),
               ]
-            : deps.dispatcher.list();
+            : [];
         const allowedToolSet = deps.allowedTools ? new Set(deps.allowedTools) : undefined;
-        const toolDefs = allowedToolSet ? allToolDefs.filter((tool) => allowedToolSet.has(tool.name)) : allToolDefs;
+        // An adaptive dispatcher (MCP registry) can change its catalog mid-run and
+        // defer schemas; an exact allowedTools list is already a fixed catalog.
+        const adaptiveDispatcher = allowedToolSet ? undefined : asAdaptiveToolDispatcher(deps.dispatcher);
+        const listToolDefs = (): ToolDefinitionForModel[] => {
+          const listed = adaptiveDispatcher ? adaptiveDispatcher.listForBudget(budgetTokens) : deps.dispatcher.list();
+          const all = rosterToolDefs.length > 0 ? [...listed, ...rosterToolDefs] : listed;
+          return allowedToolSet ? all.filter((tool) => allowedToolSet.has(tool.name)) : all;
+        };
+        let toolDefsRevision = adaptiveDispatcher?.revision();
+        let toolDefs = listToolDefs();
         let usage = ZERO_USAGE;
         /**
          * The running total, including anything recorded outside the loop since
@@ -1060,6 +1070,11 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             if ((WRAPUP_THRESHOLDS as readonly number[]).includes(turnsLeft) && !wrapupInjected.has(turnsLeft)) {
               wrapupInjected.add(turnsLeft);
               messages.push({ role: "user", content: buildWrapupNudge(turnsLeft) });
+            }
+            // A server changed its tool list, or tool_search loaded schemas.
+            if (adaptiveDispatcher && adaptiveDispatcher.revision() !== toolDefsRevision) {
+              toolDefsRevision = adaptiveDispatcher.revision();
+              toolDefs = listToolDefs();
             }
             // Tool schemas are serialized into every provider request. Keep the
             // full catalog while it is modest, but trim oversized MCP catalogs
@@ -1371,7 +1386,9 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                     ok: false,
                     error: {
                       code: "tool_not_advertised",
-                      message: `Tool ${tc.name} was not advertised for this provider turn`,
+                      message:
+                        adaptiveDispatcher?.unadvertisedHint(tc.name, requestToolNames) ??
+                        `Tool ${tc.name} was not advertised for this provider turn`,
                     },
                   },
                 };
