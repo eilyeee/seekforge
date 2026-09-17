@@ -87,8 +87,11 @@ Agent 启动的命令会收到一份移除了凭据环境变量的父环境副�
 **路径约束**（`packages/core/src/tools/sandbox.ts`）基于 realpath，因此符号链接逃逸、`..` 以及指向根目录之外的绝对路径都会被拒绝：
 
 - `resolveInsideWorkspace` 对工作区和最深的已存在祖先目录取 realpath，再断言包含关系（`sandbox.ts:42`；抛出 `outside_workspace`，`:63`）。
-- 读取额外拒绝敏感文件（`.env`、`*.pem`、`*.key`、SSH 密钥、包管理器/netrc 凭据文件）以及敏感相对路径（`.seekforge/config.json`、`.seekforge/triggers.json`、`.git/config`）。`@path` 任务展开在内容进入模型前应用同一策略。
+- 读取额外拒绝敏感文件（`.env`、`*.pem`、`*.key`、SSH 密钥、包管理器/netrc 凭据文件）以及敏感相对路径（`.seekforge/config.json`、`.seekforge/triggers.json`、`.git/config`）。`@path` 任务展开在内容进入模型前应用同一策略。`search_text` 按相对工作区的路径检查每个文件，因此以 `.seekforge` 或 `.git` 为根的搜索同样无法触及这些文件。
+- 规则文件（`AGENTS.md`、`CLAUDE.md`、`.seekforge/rules/`）可以 `@import` 其他文件，但仓库中的文件只能导入工作区内的文件（不能用 `@~/…`、绝对路径或指向外部的符号链接），任何规则文件都不能导入敏感文件。仓库也无法让你加载 `~/.claude/CLAUDE.md`（`claudeCompat` 仅限用户级配置）。
 - 写入额外拒绝 `.git/` 下的一切：`resolveForWrite`（`sandbox.ts:83`）。
+- 在 agent 运行中，`apply_patch` 和 `write_file(overwrite)` 会拒绝本会话中尚未读取过的已有文件，以及自上次读取或写入后内容已变化的文件；检查发生在显示权限提示之前，并在写入前再做一次（`tools/file-ledger.ts`）。这是准确性防护而非授权边界：会话转录旁的读取记录与转录本身一样属于工作区状态。
+- `read_file` 只从工作区之外的绝对 `PATH` 条目运行 `pdftotext`/`pdfinfo`，并使用去除机密的环境变量和超时，因此检出的代码无法提供解析其自身 PDF 的程序。
 
 **操作系统级命令沙箱**（`packages/core/src/tools/os-sandbox.ts`，可选启用）包装 `/bin/sh -c`，使 shell 命令无法写出工作区之外，还可以切断网络：
 

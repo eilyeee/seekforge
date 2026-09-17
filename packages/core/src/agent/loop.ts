@@ -84,7 +84,8 @@ import { buildHookContext, runHooks, type HookConfig, type HookOutcome } from ".
 import { classifyAgentError } from "./errors.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { buildCommandRoster, loadUserCommands } from "./commands.js";
-import { collectProjectRules } from "./rules.js";
+import { type ClaudeCompat, createRuleActivation, loadProjectRules, RULE_TRIGGER_TOOLS } from "./rules.js";
+import { openSessionFileLedger, saveSessionFileLedger } from "./session-file-ledger.js";
 import { appendCheckpoint } from "./session-rewind.js";
 import {
   createSessionTrace,
@@ -322,6 +323,11 @@ export type AgentCoreDeps = {
    * Guidance only: apply_patch stays fully available either way.
    */
   editFormat?: "patch" | "whole";
+  /**
+   * Which Claude Code instruction files join AGENTS.md (see rules.ts). Default
+   * "project". Only a user-owned config layer may set it.
+   */
+  claudeCompat?: ClaudeCompat;
   /**
    * User-configured shell hooks. preToolUse/postToolUse reach the dispatcher
    * via ToolContext and fire around every tool run (nested subagent runs
@@ -697,6 +703,16 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             title: `skills: ${skillSelections.map((selection) => selection.skill.id).join(", ")}`,
           });
         }
+        // Dispatched subagents run under their own prompt, which carries no
+        // project rules, so they get no mid-run rules either.
+        const projectRules =
+          input.systemPromptOverride === undefined
+            ? loadProjectRules(input.projectPath, {
+                task: input.task,
+                ...(deps.claudeCompat ? { claudeCompat: deps.claudeCompat } : {}),
+              })
+            : undefined;
+        const ruleActivation = projectRules ? createRuleActivation(input.projectPath, projectRules) : undefined;
         if (resuming) {
           messages = loadSessionMessages(input.projectPath, sessionId);
           runTurnIndex = messages.filter((m) => m.role === "user").length;
@@ -713,7 +729,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                     workspace: input.projectPath,
                     mode: input.mode,
                     plan: input.plan,
-                    projectRules: collectProjectRules(input.projectPath, undefined, input.task),
+                    projectRules: projectRules?.text,
                     memoryBrief: memoryFor(input.task),
                     skillBrief: buildSkillBrief(skillSelections, deps.skillBriefMaxChars),
                     subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
@@ -746,7 +762,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               workspace: input.projectPath,
               mode: input.mode,
               plan: input.plan,
-              projectRules: collectProjectRules(input.projectPath, undefined, input.task),
+              projectRules: projectRules?.text,
               memoryBrief,
               skillBrief: buildSkillBrief(skillSelections, deps.skillBriefMaxChars),
               subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
@@ -826,9 +842,13 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         // call this run makes, grown in place by enforcePermission when the user
         // answers "yes, don't ask again". Not persisted — it dies with the run.
         const sessionAllowlist: string[] = [];
+        // Read-before-edit guard. Each run has its own (a parent re-reads what a
+        // subagent changed), seeded with what earlier runs of this session read.
+        const fileLedger = openSessionFileLedger(input.projectPath, sessionId, resuming);
         const ctx: ToolContext = {
           sessionId,
           workspace: input.projectPath,
+          fileLedger,
           policy: {
             approvalMode: input.approvalMode,
             mode: input.mode,
@@ -1135,6 +1155,10 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                   droppedTurns: compacted.droppedTurns,
                   summaryTokens: compacted.summaryTokens,
                 });
+                // Rules loaded mid-run live in transient notes; put back any
+                // the dropped middle held.
+                const rulesAgain = ruleActivation?.reinject(messages);
+                if (rulesAgain) messages.push({ role: "user", content: rulesAgain.message });
                 // #2+: a plan published earlier may have been in the dropped
                 // middle. Re-inject the current plan (transient, like the other
                 // nudges) so a long-horizon task keeps its checklist across
@@ -1571,6 +1595,30 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               trace.message(toolMsg);
             }
 
+            // Rules for the files this turn touched (subdirectory AGENTS.md,
+            // path-scoped rules files), once each. Transient like the other
+            // harness notes: a resumed run loads them again on first touch.
+            if (ruleActivation) {
+              for (let i = 0; i < turnCalls.length; i++) {
+                const result = callResults[i]!;
+                if (result.ok && result.meta?.path && RULE_TRIGGER_TOOLS.has(turnCalls[i]!.name)) {
+                  ruleActivation.touch(result.meta.path);
+                }
+              }
+              const activated = ruleActivation.takePending();
+              if (activated && activated.origins.length > 0) {
+                yield emit({ type: "step.started", title: `rules: ${activated.origins.join(", ")}` });
+                messages.push({ role: "user", content: activated.message });
+              }
+              if (activated && activated.skipped.length > 0) {
+                yield emit({
+                  type: "notice",
+                  level: "warn",
+                  message: `Rules not loaded (rules size limit reached): ${activated.skipped.join(", ")}`,
+                });
+              }
+            }
+
             // Stuck detection: if a tool call failed with the SAME (name+args) as
             // one that already failed this run, the model is looping. The arg
             // signature is canonicalized (sorted keys) so reordered-but-equal
@@ -1776,6 +1824,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           // return() resolve with done=false and suspend the generator before
           // leases and lifecycle hooks are released.
           await cleanupDispatches();
+          saveSessionFileLedger(input.projectPath, sessionId, fileLedger);
           queue.end();
           // A caller-provided manager outlives the run (multi-turn sessions).
           if (!deps.background) ctx.background?.disposeAll();

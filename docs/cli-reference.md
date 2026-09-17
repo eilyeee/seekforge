@@ -91,8 +91,10 @@ per-hunk selection in the CLI terminal (`Pick hunks (e.g. 0,2)`), in the TUI
 (per-hunk checkboxes), and in the desktop modal.
 
 When the user selects only a subset of hunks, the agent receives the filtered
-edits and applies only those. Single-edit `apply_patch` calls remain all-or-nothing
-for backward compatibility.
+edits and applies only those, and is told to re-read the file before editing it
+again. Single-edit `apply_patch` calls remain all-or-nothing
+for backward compatibility. An edit with `replaceAll: true` is one hunk, marked
+`(every occurrence)` in its preview.
 
 ## Settings layering
 

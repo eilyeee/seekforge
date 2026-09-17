@@ -194,6 +194,17 @@ describe("path-scoped subdir AGENTS.md", () => {
     const merged = collectProjectRules(workspace, home, "look at node_modules/some-pkg/index.js");
     expect(merged ?? "").not.toContain("NODE-MODULES-RULE");
   });
+
+  it("does not scan into dot or gitignored directories", () => {
+    writeFileSync(join(workspace, ".gitignore"), "generated/\n");
+    writeSubdir(".venv/lib", "VENV-RULE");
+    writeSubdir("generated/api", "GENERATED-RULE");
+    writeSubdir("src/api", "SRC-RULE");
+    const merged = collectProjectRules(workspace, home, "check .venv/lib/x.py and generated/api/y.ts and src/api/z.ts");
+    expect(merged).toContain("SRC-RULE");
+    expect(merged).not.toContain("VENV-RULE");
+    expect(merged).not.toContain("GENERATED-RULE");
+  });
 });
 
 // ---------------------------------------------------------------------------

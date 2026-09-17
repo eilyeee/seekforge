@@ -14,7 +14,9 @@ the SeekForge feature you already know from another tool.
 | Model setting (`--model`, `model:` in config) | `model` config key + `--model`/`-m` flag; `provider` selects the endpoint preset; `modelPricing` supplies per-model costs. |
 | Config file (`.aider.conf.yml`, `.clinerules`, `settings.json`, `config.toml`) | `.seekforge/config.json` (project) + `~/.seekforge/config.json` (global) + `.seekforge/config.local.json` (gitignored). See [Configuration](configuration.md). |
 | API key env var | `DEEPSEEK_API_KEY` (or `ARK_API_KEY` for the Ark provider); also the `apiKey` config key. |
-| Project instructions (`CONVENTIONS.md`, `.clinerules`, `CLAUDE.md`, `AGENTS.md`) | `AGENTS.md` (created by `seekforge init`), plus curated `.seekforge/memory/project.md` memory. |
+| Project instructions (`CONVENTIONS.md`, `.clinerules`, `CLAUDE.md`, `AGENTS.md`) | `AGENTS.md` (created by `seekforge init`), plus curated `.seekforge/memory/project.md` memory. Claude Code's `CLAUDE.md` files are read too — see [below](#coming-from-claude-code). |
+| Path-scoped rules (`.claude/rules/*.md` with `paths:`) | `.seekforge/rules/**/*.md` with the same `paths:` frontmatter; `.claude/rules/` is read as well. |
+| `@path` imports in instruction files | Supported in every rules file; project files may only import inside the workspace. |
 | MCP servers | `mcpServers` config + `seekforge mcp add/list/remove`. See [MCP](mcp.md). |
 | Slash commands / custom commands | Built-in slash commands + custom commands under `.seekforge/commands/`. `description:` frontmatter and `$ARGUMENTS` work on every surface; `` !`shell` `` interpolation is expanded by the CLI REPL (`seekforge` with no command) and the server, **not** by the TUI. See the [TUI README](../apps/tui/README.md#custom-commands) for the file format. |
 | Subagents / specialist agents | `dispatch_agent` roster — `seekforge agent list/show/import`, definitions under `.seekforge/agents/`. |
@@ -23,6 +25,30 @@ the SeekForge feature you already know from another tool.
 | Permission / approval modes (auto-approve, plan mode) | Approval modes `auto` / `acceptEdits` / `confirm` / `manual`; `-y`, `--permission-mode`, `permissionRules`. Plan mode is not an approval mode — `--plan` (or `--permission-mode plan`) runs read-only under `confirm`. |
 | Cost / token tracking | Built-in for DeepSeek; `modelPricing` + `maxCostUsd` budget for other providers; `seekforge models`, TUI `/usage`. |
 | Headless / scripting mode | `seekforge -p "<prompt>"` with `--output-format json|stream-json`. See [CLI reference](cli-reference.md). |
+
+## Coming from Claude Code
+
+Your instruction files keep working without changes:
+
+- `CLAUDE.md`, `.claude/CLAUDE.md` and `CLAUDE.local.md` load next to
+  `AGENTS.md` / `AGENTS.local.md` (the `AGENTS` file of each tier first;
+  identical content once, so a `CLAUDE.md` symlinked to or importing
+  `AGENTS.md` is not duplicated).
+- A subdirectory's `CLAUDE.md` loads the first time the agent reads or edits a
+  file below it, as a subdirectory `AGENTS.md` does.
+- `.claude/rules/**/*.md` loads like `.seekforge/rules/`: always without
+  `paths:`, on the first matching file with it.
+- `~/.claude/CLAUDE.md` is read only if you opt in with
+  `"claudeCompat": "all"` in `~/.seekforge/config.json`; `"off"` stops reading
+  Claude files altogether. A repository cannot change this setting.
+- Imports differ in one way: a project file cannot import `@~/…` or anything
+  outside the workspace. Move such content into `~/.seekforge/AGENTS.md` or
+  `~/.claude/CLAUDE.md`, where home-directory imports work.
+
+The edit tools follow the same discipline as Claude Code's: the agent must read
+a file in the session before changing it, and re-read it after it changed on
+disk. See [Configuration → Project rules](configuration.md#project-rules) and
+[File tools](configuration.md#file-tools).
 
 ## What's distinctive about SeekForge
 

@@ -211,6 +211,7 @@ describe("checkpoint + rewind (agent loop integration)", () => {
   it("first apply_patch records the original; second edit adds no entry; rewind restores", async () => {
     writeFileSync(join(ws, "a.txt"), "one two");
     const agent = agentWith([
+      response({ toolCalls: [toolCall("read_file", { path: "a.txt" })], finishReason: "tool_calls" }),
       response({
         toolCalls: [toolCall("apply_patch", { path: "a.txt", edits: [{ oldString: "one", newString: "1" }] })],
         finishReason: "tool_calls",
@@ -258,6 +259,7 @@ describe("checkpoint + rewind (agent loop integration)", () => {
   it("a resumed run re-checkpoints the path with its turn; full rewind still restores the FIRST original", async () => {
     writeFileSync(join(ws, "a.txt"), "v-original");
     const first = agentWith([
+      response({ toolCalls: [toolCall("read_file", { path: "a.txt" })], finishReason: "tool_calls" }),
       response({
         toolCalls: [toolCall("write_file", { path: "a.txt", content: "v-run1", overwrite: true })],
         finishReason: "tool_calls",
@@ -298,6 +300,7 @@ describe("checkpoint + rewind (agent loop integration)", () => {
   it("rewindSessionToTurn undoes only the resumed turn's changes", async () => {
     writeFileSync(join(ws, "a.txt"), "v-original");
     const first = agentWith([
+      response({ toolCalls: [toolCall("read_file", { path: "a.txt" })], finishReason: "tool_calls" }),
       response({
         toolCalls: [toolCall("write_file", { path: "a.txt", content: "v-run1", overwrite: true })],
         finishReason: "tool_calls",

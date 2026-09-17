@@ -20,6 +20,7 @@ import type { RuntimeClient } from "../runtime/index.js";
 import type { BackgroundTasks } from "./background.js";
 import type { HookConfig } from "../hooks/index.js";
 import type { SandboxLevel } from "./os-sandbox.js";
+import type { FileLedger } from "./file-ledger.js";
 
 export type ToolContext = {
   sessionId: string;
@@ -107,6 +108,13 @@ export type ToolContext = {
    * it against a workspace that may have moved on.
    */
   prepared?: unknown;
+  /**
+   * What the model has read or written this run (see file-ledger.ts). When
+   * present, apply_patch and write_file(overwrite) refuse to change an existing
+   * file the model has not read, or that changed since it last did. Absent =
+   * unguarded, the behavior for SDK callers and `mcp-serve`.
+   */
+  fileLedger?: FileLedger;
 };
 
 export interface ToolDispatcher {
@@ -152,6 +160,9 @@ export type {
   BackgroundTaskSummary,
   BackgroundTaskEvent,
 } from "./background.js";
+export { createFileLedger } from "./file-ledger.js";
+export type { FileLedger, FileStamp } from "./file-ledger.js";
+export { WorkspaceIgnore } from "./gitignore.js";
 export { applyEdits, closestRegion } from "./edits.js";
 export type { SearchReplaceEdit } from "./edits.js";
 export { zodToJsonSchema } from "./json-schema.js";

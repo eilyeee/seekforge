@@ -16,4 +16,13 @@ describe("buildAgentCoreDeps", () => {
       memoryAutoApproveConfidence,
     });
   });
+
+  it.each(["off", "project", "all"] as const)("passes claudeCompat %s through", (claudeCompat) => {
+    expect(buildAgentCoreDeps({ apiKey: "test", claudeCompat })).toMatchObject({ claudeCompat });
+  });
+
+  it("omits claudeCompat when unset and rejects an unknown mode", () => {
+    expect(buildAgentCoreDeps({ apiKey: "test" })).not.toHaveProperty("claudeCompat");
+    expect(() => buildAgentCoreDeps({ apiKey: "test", claudeCompat: "yes" as never })).toThrow(/claudeCompat/);
+  });
 });

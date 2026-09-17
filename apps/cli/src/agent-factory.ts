@@ -173,6 +173,7 @@ export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
         lintCommand: config.lintCommand,
         autoLint: config.autoLint,
         editFormat: config.editFormat,
+        claudeCompat: config.claudeCompat,
       },
       {
         onReasonerFallback: () =>

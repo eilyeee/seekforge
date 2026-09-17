@@ -22,6 +22,10 @@ export const COMMON_CONFIG_KEYS = [
   "lintCommand",
   "autoLint",
   "editFormat",
+  // Which Claude Code instruction files join AGENTS.md. Absent from
+  // PROJECT_PREFERENCE_KEYS: a repository must not opt a user into loading
+  // ~/.claude/CLAUDE.md.
+  "claudeCompat",
   "locale",
   "runRetentionMaxCount",
   "runRetentionMaxAgeDays",

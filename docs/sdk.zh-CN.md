@@ -228,5 +228,7 @@ checkout 后会拒绝旧检查点，而不会复用另一个工作区产生的�
 - **Runtime**——`deps.runtime = createRuntimeClient({ binPath })` 把文件 I/O 与命令执行委托给 Rust 后端。
 - **沙箱 / 放行清单 / 权限规则**——`deps.sandbox`、`deps.commandAllowlist`、`deps.permissionRules` 决定命令执行方式与权限门禁行为。
 - **记忆提取**——`deps.extractMemory: true` 在任务结束后运行记忆提取；`deps.memoryAutoApproveConfidence` 自动批准高置信度的事实。
+- **项目规则**——`deps.claudeCompat`（`"off"` / `"project"` / `"all"`）决定哪些 Claude Code 指令文件与 `AGENTS.md` 一起加载；参见 [Configuration → 项目规则](configuration.zh-CN.md#项目规则)。
+- **先读后改**——`createAgentCore` 的运行会自动为 `apply_patch` 和 `write_file(overwrite)` 加上防护。自行调用调度器时，在 `ToolContext` 中传入 `fileLedger: createFileLedger()` 即可获得同样的防护；不传则编辑不受此限制。
 
 字段级的精确契约请阅读 `packages/core/src/agent/loop.ts` 中的 `AgentCoreDeps` 类型。
