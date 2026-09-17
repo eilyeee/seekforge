@@ -1,7 +1,7 @@
 {
   "name": "seekforge-vscode",
   "displayName": "SeekForge",
-  "description": "Thin VS Code client for a local SeekForge server",
+  "description": "Chat, review, and IDE bridge for a local SeekForge server",
   "version": "1.0.0",
   "private": true,
   "license": "MIT",
@@ -30,63 +30,34 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:seekforge.setToken",
-    "onCommand:seekforge.newTask",
-    "onCommand:seekforge.resumeSession",
-    "onCommand:seekforge.showDiff",
-    "onCommand:seekforge.showLoop",
-    "onCommand:seekforge.showOutput",
-    "onView:seekforge.loops"
+    "onStartupFinished"
   ],
   "main": "./src/extension.cjs",
   "scripts": {
     "test": "node --test test/*.test.cjs",
     "package": "pnpm dlx @vscode/vsce@3.6.0 package --no-dependencies"
   },
-  "dependencies": {
+  "devDependencies": {
     "ws": "^8.18.0"
   },
   "contributes": {
-    "commands": [
-      {
-        "command": "seekforge.setToken",
-        "title": "SeekForge: Set Server Token"
-      },
-      {
-        "command": "seekforge.newTask",
-        "title": "SeekForge: New Task"
-      },
-      {
-        "command": "seekforge.resumeSession",
-        "title": "SeekForge: Resume Session"
-      },
-      {
-        "command": "seekforge.showDiff",
-        "title": "SeekForge: Show Workspace Diff"
-      },
-      {
-        "command": "seekforge.reviewMemory",
-        "title": "SeekForge: Review Memory Candidates"
-      },
-      {
-        "command": "seekforge.showSession",
-        "title": "SeekForge: Open Session Transcript"
-      },
-      {
-        "command": "seekforge.showOutput",
-        "title": "SeekForge: Show Activity Output"
-      },
-      {
-        "command": "seekforge.showLoop",
-        "title": "SeekForge: Open Loop"
-      },
-      {
-        "command": "seekforge.refreshLoops",
-        "title": "SeekForge: Refresh Loops",
-        "icon": "$(refresh)"
-      }
-    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "seekforge",
+          "title": "SeekForge",
+          "icon": "media/seekforge.svg"
+        }
+      ]
+    },
     "views": {
+      "seekforge": [
+        {
+          "type": "webview",
+          "id": "seekforge.chat",
+          "name": "Chat"
+        }
+      ],
       "explorer": [
         {
           "id": "seekforge.loops",
@@ -95,12 +66,128 @@
         }
       ]
     },
+    "commands": [
+      {
+        "command": "seekforge.focusChat",
+        "category": "SeekForge",
+        "title": "Focus Chat"
+      },
+      {
+        "command": "seekforge.newTask",
+        "category": "SeekForge",
+        "title": "New Chat",
+        "icon": "$(add)"
+      },
+      {
+        "command": "seekforge.openChatInEditor",
+        "category": "SeekForge",
+        "title": "Open Chat in Editor Tab",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "seekforge.resumeSession",
+        "category": "SeekForge",
+        "title": "Resume Session",
+        "icon": "$(history)"
+      },
+      {
+        "command": "seekforge.insertSelection",
+        "category": "SeekForge",
+        "title": "Add Selection to Chat"
+      },
+      {
+        "command": "seekforge.stopRun",
+        "category": "SeekForge",
+        "title": "Stop the Running Task"
+      },
+      {
+        "command": "seekforge.startServer",
+        "category": "SeekForge",
+        "title": "Start Server for This Workspace"
+      },
+      {
+        "command": "seekforge.stopServer",
+        "category": "SeekForge",
+        "title": "Stop the Server Started by VS Code"
+      },
+      {
+        "command": "seekforge.setToken",
+        "category": "SeekForge",
+        "title": "Set Server Token"
+      },
+      {
+        "command": "seekforge.showDiff",
+        "category": "SeekForge",
+        "title": "Show Workspace Diff"
+      },
+      {
+        "command": "seekforge.reviewMemory",
+        "category": "SeekForge",
+        "title": "Review Memory Candidates"
+      },
+      {
+        "command": "seekforge.showSession",
+        "category": "SeekForge",
+        "title": "Open Session Transcript"
+      },
+      {
+        "command": "seekforge.showOutput",
+        "category": "SeekForge",
+        "title": "Show Activity Output"
+      },
+      {
+        "command": "seekforge.showLoop",
+        "category": "SeekForge",
+        "title": "Open Loop"
+      },
+      {
+        "command": "seekforge.refreshLoops",
+        "category": "SeekForge",
+        "title": "Refresh Loops",
+        "icon": "$(refresh)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "seekforge.focusChat",
+        "key": "ctrl+escape",
+        "mac": "cmd+escape"
+      },
+      {
+        "command": "seekforge.insertSelection",
+        "key": "ctrl+alt+k",
+        "mac": "cmd+alt+k",
+        "when": "editorTextFocus"
+      }
+    ],
     "menus": {
       "view/title": [
+        {
+          "command": "seekforge.newTask",
+          "when": "view == seekforge.chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "seekforge.resumeSession",
+          "when": "view == seekforge.chat",
+          "group": "navigation@2"
+        },
+        {
+          "command": "seekforge.openChatInEditor",
+          "when": "view == seekforge.chat",
+          "group": "navigation@3"
+        },
         {
           "command": "seekforge.refreshLoops",
           "when": "view == seekforge.loops",
           "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "seekforge.insertSelection",
+          "when": "editorHasSelection && resourceScheme == file",
+          "group": "seekforge@1"
         }
       ]
     },
@@ -109,14 +196,42 @@
       "properties": {
         "seekforge.serverUrl": {
           "type": "string",
-          "default": "http://127.0.0.1:3847",
-          "description": "URL of `seekforge serve`."
+          "default": "http://127.0.0.1:7373",
+          "scope": "machine",
+          "markdownDescription": "URL of `seekforge serve` (its default port is 7373). User settings only: the saved token is sent to this address, so a repository's settings cannot redirect it."
+        },
+        "seekforge.serveCommand": {
+          "type": "string",
+          "default": "seekforge",
+          "scope": "machine",
+          "markdownDescription": "Executable that **SeekForge: Start Server for This Workspace** runs as `<command> serve <folders> --port <port>`. User settings only."
         },
         "seekforge.token": {
           "type": "string",
           "default": "",
           "description": "Deprecated plaintext token. Run `SeekForge: Set Server Token` to store it in VS Code SecretStorage.",
           "deprecationMessage": "Use `SeekForge: Set Server Token`; existing values are migrated to SecretStorage automatically."
+        },
+        "seekforge.context.includeSelection": {
+          "type": "boolean",
+          "default": true,
+          "description": "Attach the active editor's selection to chat messages while the chat's Context toggle is on."
+        },
+        "seekforge.context.includeOpenFiles": {
+          "type": "boolean",
+          "default": true,
+          "description": "List the open editor tabs (up to 50, workspace files only) in chat messages while the Context toggle is on."
+        },
+        "seekforge.context.includeDiagnostics": {
+          "type": "boolean",
+          "default": true,
+          "description": "Attach the active file's error diagnostics (up to 30) to chat messages while the Context toggle is on."
+        },
+        "seekforge.ideBridge.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "markdownDescription": "Run the loopback IDE bridge that the SeekForge TUI connects to. It listens on 127.0.0.1 only and writes its address and token to `~/.seekforge/ide/<port>.json` (owner-only)."
         }
       }
     }

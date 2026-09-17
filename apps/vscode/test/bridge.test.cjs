@@ -19,7 +19,6 @@ const {
   describeRule,
   permissionSummary,
   readStoredToken,
-  taskWithEditorContext,
   usageSummary,
   websocketUrl,
   withWorkspace,
@@ -29,7 +28,7 @@ const {
 
 test("builds an authenticated websocket URL without preserving unrelated query state", () => {
   assert.equal(websocketUrl("https://agent.example/base/", "a b"), "wss://agent.example/base/ws?token=a%20b");
-  assert.equal(websocketUrl("http://127.0.0.1:3847", ""), "ws://127.0.0.1:3847/ws");
+  assert.equal(websocketUrl("http://127.0.0.1:7373", ""), "ws://127.0.0.1:7373/ws");
 });
 
 test("rejects non-HTTP server URLs and normalizes trailing state", () => {
@@ -62,15 +61,6 @@ test("fails closed when the server does not host the selected workspace", async 
 
   await assert.rejects(bridge.workspaceId("/repo/second"), /does not host the VS Code workspace/);
   assert.equal(await bridge.workspaceId("/repo/first/"), "first");
-});
-
-test("includes only active files inside the workspace", () => {
-  const editor = {
-    document: { uri: { fsPath: "/repo/src/app.ts" }, getText: () => "const selected = true;" },
-    selection: {},
-  };
-  assert.match(taskWithEditorContext("review", editor, "/repo"), /@src\/app\.ts/);
-  assert.equal(taskWithEditorContext("review", editor, "/other"), "review");
 });
 
 test("permission prompts surface raw commands and paths, and route diffs to a document", () => {
@@ -586,4 +576,326 @@ test("the Loop event vocabulary does not drift between this extension and the de
 
   const stale = [...notInReport].filter((type) => !declared.has(type));
   assert.deepEqual(stale, [], "the deliberate-omission list names LoopEvent types that no longer exist");
+});
+
+// ---------------------------------------------------------------------------
+// Server defaults, session listing, connection problems
+// ---------------------------------------------------------------------------
+
+const {
+  DEFAULT_SERVER_URL,
+  MAX_FEEDBACK_CHARS,
+  SERVER_PROMPT_TIMEOUT_MS,
+  connectionProblem,
+  isLoopbackHttpUrl,
+  permissionChoices,
+  permissionResponse,
+  permissionView,
+  planPreview,
+  serverUrlPort,
+} = require("../src/bridge.cjs");
+
+test("the default server URL is the port `seekforge serve` actually listens on", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const repo = path.resolve(__dirname, "..", "..", "..");
+  const cli = fs.readFileSync(path.join(repo, "apps", "cli", "src", "index.ts"), "utf8");
+  const server = fs.readFileSync(path.join(repo, "apps", "server", "src", "index.ts"), "utf8");
+  const cliDefault = /\.option\("--port <n>", "port to listen on \(0 = random\)", "(\d+)"\)/.exec(cli)?.[1];
+  const serverDefault = /server\.listen\(opts\.port \?\? (\d+), "127\.0\.0\.1"/.exec(server)?.[1];
+  assert.ok(cliDefault && serverDefault, "could not read the serve port defaults");
+  assert.equal(serverUrlPort(DEFAULT_SERVER_URL), Number(cliDefault));
+  assert.equal(serverUrlPort(DEFAULT_SERVER_URL), Number(serverDefault));
+
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
+  const setting = manifest.contributes.configuration.properties["seekforge.serverUrl"];
+  assert.equal(setting.default, DEFAULT_SERVER_URL);
+  // The saved token is sent to this URL, so a repository must not be able to set it.
+  assert.equal(setting.scope, "machine");
+  assert.equal(manifest.contributes.configuration.properties["seekforge.serveCommand"].scope, "machine");
+});
+
+test("only a plain-http loopback URL is a server VS Code can start", () => {
+  assert.equal(isLoopbackHttpUrl("http://127.0.0.1:7373"), true);
+  assert.equal(isLoopbackHttpUrl("http://localhost:9000/"), true);
+  assert.equal(isLoopbackHttpUrl("http://[::1]:7373"), true);
+  assert.equal(isLoopbackHttpUrl("https://127.0.0.1:7373"), false);
+  assert.equal(isLoopbackHttpUrl("http://127.0.0.1.evil.example:7373"), false);
+  assert.equal(isLoopbackHttpUrl("not a url"), false);
+  assert.equal(serverUrlPort("http://127.0.0.1"), 80);
+  assert.equal(serverUrlPort("http://127.0.0.1:8123/base"), 8123);
+});
+
+test("lists sessions from the bare array the server returns", async () => {
+  const seen = [];
+  const fetchImpl = async (url) => {
+    seen.push(url);
+    return new Response(JSON.stringify([{ id: "s1", task: "fix it" }, { task: "no id" }, null]), { status: 200 });
+  };
+  const bridge = new SeekForgeBridge({ serverUrl: "http://localhost", token: "t", WebSocketImpl: class {}, fetchImpl });
+  // The old client read `body.sessions`, so every workspace looked empty.
+  assert.deepEqual(await bridge.sessions("repo"), [{ id: "s1", task: "fix it" }]);
+  assert.deepEqual(seen, ["http://localhost/api/sessions?ws=repo"]);
+
+  const wrapped = new SeekForgeBridge({
+    serverUrl: "http://localhost",
+    token: "t",
+    WebSocketImpl: class {},
+    fetchImpl: async () => new Response(JSON.stringify({ sessions: [{ id: "s2" }] }), { status: 200 }),
+  });
+  assert.deepEqual(await wrapped.sessions("repo"), [{ id: "s2" }]);
+});
+
+test("searches workspace files for the @-mention picker with an encoded query", async () => {
+  const seen = [];
+  const fetchImpl = async (url) => {
+    seen.push(url);
+    return new Response(JSON.stringify({ files: ["src/a b.ts", 7], truncated: false }), { status: 200 });
+  };
+  const bridge = new SeekForgeBridge({ serverUrl: "http://localhost", token: "t", WebSocketImpl: class {}, fetchImpl });
+  assert.deepEqual(await bridge.files("repo", "a b&c"), ["src/a b.ts"]);
+  assert.deepEqual(seen, ["http://localhost/api/files?q=a%20b%26c&ws=repo"]);
+});
+
+test("classifies connection failures into what the UI can offer to fix", async () => {
+  const refused = Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+  assert.equal(connectionProblem(refused), "offline");
+  const aggregate = Object.assign(new TypeError("fetch failed"), {
+    cause: { errors: [{ code: "ECONNREFUSED" }, { code: "ECONNREFUSED" }] },
+  });
+  assert.equal(connectionProblem(aggregate), "offline");
+  assert.equal(connectionProblem(Object.assign(new Error("x"), { code: "ECONNREFUSED" })), "offline");
+  assert.equal(connectionProblem(new Error("Unexpected server response: 401")), "unauthorized");
+  assert.equal(connectionProblem(new Error("SeekForge HTTP 500")), "other");
+  assert.equal(connectionProblem(undefined), "other");
+
+  const bridge = new SeekForgeBridge({
+    serverUrl: "http://localhost",
+    token: "bad",
+    WebSocketImpl: class {},
+    fetchImpl: async () => new Response("{}", { status: 401 }),
+  });
+  await assert.rejects(bridge.request("/api/health"), (error) => connectionProblem(error) === "unauthorized");
+});
+
+function fakeSocketClass(script) {
+  return class FakeSocket extends EventEmitter {
+    static instance;
+    sent = [];
+
+    constructor() {
+      super();
+      FakeSocket.instance = this;
+      queueMicrotask(() => {
+        this.emit("open");
+        for (const frame of script) this.emit("message", Buffer.from(JSON.stringify(frame)));
+      });
+    }
+
+    send(payload) {
+      this.sent.push(JSON.parse(payload));
+    }
+
+    close() {
+      this.emit("close");
+    }
+  };
+}
+
+test("a late answer the server refuses does not end the run", async () => {
+  const FakeSocket = fakeSocketClass([
+    { type: "error", code: "unknown_request", message: "no pending permission request: p1" },
+    { type: "event", event: { type: "model.message", content: "still going" } },
+    { type: "idle" },
+  ]);
+  const bridge = new SeekForgeBridge({ serverUrl: "http://localhost", token: "", WebSocketImpl: FakeSocket });
+  const seen = [];
+  await bridge.run({ type: "start", task: "x" }, async (message) => seen.push(message.type));
+  assert.deepEqual(seen, ["error", "event", "idle"]);
+});
+
+test("frames a closing socket still delivers after the run ended are not dispatched", async () => {
+  const FakeSocket = fakeSocketClass([{ type: "hello" }]);
+  const bridge = new SeekForgeBridge({ serverUrl: "http://localhost", token: "", WebSocketImpl: FakeSocket });
+  const controller = new AbortController();
+  const seen = [];
+  const running = bridge.run({ type: "start", task: "x" }, async (message) => seen.push(message.type), {
+    signal: controller.signal,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+  await assert.rejects(running, (error) => error.name === "AbortError");
+  // The server winds down cooperatively and may still send these.
+  FakeSocket.instance.emit("message", Buffer.from(JSON.stringify({ type: "permission.request", requestId: "p9" })));
+  FakeSocket.instance.emit("message", Buffer.from(JSON.stringify({ type: "idle" })));
+  assert.deepEqual(seen, ["hello"]);
+});
+
+test("any other protocol error still fails the run with its code", async () => {
+  const FakeSocket = fakeSocketClass([{ type: "error", code: "busy", message: "a session is already running" }]);
+  const bridge = new SeekForgeBridge({ serverUrl: "http://localhost", token: "", WebSocketImpl: FakeSocket });
+  await assert.rejects(
+    bridge.run({ type: "start", task: "x" }, async () => {}),
+    (error) => error.code === "busy" && /already running/.test(error.message),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Permission review
+// ---------------------------------------------------------------------------
+
+const writeRequest = {
+  toolName: "apply_patch",
+  permission: "write",
+  description: "Edit src/app.ts",
+  path: "src/app.ts",
+  preview: { path: "src/app.ts", diff: "--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1,2 +1,2 @@\n-old\n+new\n same" },
+  hunks: [
+    { index: 0, preview: "- old → + new" },
+    { index: 1, preview: "- a → + b" },
+  ],
+  rememberRule: { action: "allow", tool: "apply_patch", match: "src/app.ts" },
+};
+
+test("session and always grants are hidden when core says it would not honor them", () => {
+  assert.deepEqual(permissionChoices(writeRequest), { allowSession: true, allowAlways: true, hunkIndexes: [0, 1] });
+  const envRequest = { ...writeRequest, sessionGrantable: false };
+  assert.deepEqual(permissionChoices(envRequest), { allowSession: false, allowAlways: false, hunkIndexes: [0, 1] });
+  // No proposed rule, no "always" — a frontend never invents one.
+  const { rememberRule: _rule, ...withoutRule } = writeRequest;
+  assert.equal(permissionChoices(withoutRule).allowAlways, false);
+  assert.equal(permissionChoices(withoutRule).allowSession, true);
+});
+
+test("the permission card carries raw values, the rule verbatim, and diff counts", () => {
+  const view = permissionView("p7", { ...writeRequest, command: "rm -rf ./build && echo `id`" }, 1_000);
+  assert.equal(view.requestId, "p7");
+  assert.equal(view.command, "rm -rf ./build && echo `id`");
+  assert.equal(view.path, "src/app.ts");
+  assert.equal(view.rule, "allow apply_patch: src/app.ts");
+  assert.equal(view.hasDiff, true);
+  assert.deepEqual([view.added, view.removed], [1, 1]);
+  assert.deepEqual(
+    view.hunks.map((hunk) => hunk.index),
+    [0, 1],
+  );
+  assert.equal(view.expiresAt, 1_000 + SERVER_PROMPT_TIMEOUT_MS);
+  assert.equal(view.escalation, false);
+
+  const restricted = permissionView("p8", { ...writeRequest, sessionGrantable: false, escalation: true });
+  assert.equal(restricted.allowSession, false);
+  assert.equal(restricted.allowAlways, false);
+  assert.equal(restricted.rule, undefined);
+  assert.equal(restricted.escalation, true);
+});
+
+test("a permission response cannot grant more than the request offered", () => {
+  assert.deepEqual(permissionResponse("p1", writeRequest, "once"), {
+    type: "permission.response",
+    requestId: "p1",
+    approved: true,
+  });
+  assert.deepEqual(permissionResponse("p1", writeRequest, "session"), {
+    type: "permission.response",
+    requestId: "p1",
+    approved: true,
+    remember: "session",
+  });
+  assert.equal(permissionResponse("p1", writeRequest, "always").remember, "always");
+  const envRequest = { ...writeRequest, sessionGrantable: false };
+  assert.throws(() => permissionResponse("p1", envRequest, "session"), /cannot be allowed for the session/);
+  assert.throws(() => permissionResponse("p1", envRequest, "always"), /cannot be allowed permanently/);
+  assert.throws(() => permissionResponse("p1", writeRequest, "yolo"), /Unknown permission decision/);
+});
+
+test("per-hunk approval only accepts a subset of the offered hunks", () => {
+  assert.deepEqual(permissionResponse("p1", writeRequest, "hunks", { selectedHunks: [1, 0] }).selectedHunks, [0, 1]);
+  for (const selectedHunks of [[], [2], [0, 0], undefined]) {
+    assert.throws(() => permissionResponse("p1", writeRequest, "hunks", { selectedHunks }), /offered edits/);
+  }
+  // A single-hunk request offers no per-hunk choice at all.
+  const single = { ...writeRequest, hunks: [{ index: 0, preview: "x" }] };
+  assert.throws(() => permissionResponse("p1", single, "hunks", { selectedHunks: [0] }), /offered edits/);
+});
+
+test("a denial carries the user's reason, trimmed and bounded", () => {
+  const bare = { type: "permission.response", requestId: "p1", approved: false };
+  assert.deepEqual(permissionResponse("p1", writeRequest, "deny"), bare);
+  assert.deepEqual(permissionResponse("p1", writeRequest, "deny", { feedback: "   " }), bare);
+  const long = permissionResponse("p1", writeRequest, "deny", { feedback: `  ${"x".repeat(5_000)}  ` });
+  assert.equal(long.feedback.length, MAX_FEEDBACK_CHARS);
+  const reason = permissionResponse("p1", writeRequest, "deny", { feedback: " use pnpm instead " });
+  assert.equal(reason.feedback, "use pnpm instead");
+});
+
+test("an exit_plan_mode request shows its plan as markdown instead of a diff", () => {
+  assert.equal(planPreview(writeRequest), undefined);
+  const planned = { toolName: "exit_plan_mode", permission: "write", description: "Leave plan mode" };
+  assert.equal(planPreview({ ...planned, plan: "# Plan\n1. do it" }), "# Plan\n1. do it");
+  assert.equal(planPreview({ ...planned, preview: { plan: "## Steps" } }), "## Steps");
+  const asDiff = { path: "PLAN.md", diff: "--- a/PLAN.md\n+++ b/PLAN.md\n@@ -0,0 +1,2 @@\n+# Plan\n+- step" };
+  assert.equal(planPreview({ ...planned, preview: asDiff }), "# Plan\n- step");
+  assert.equal(planPreview({ ...planned, preview: { path: "PLAN.md", diff: "plain plan" } }), "plain plan");
+  assert.equal(planPreview(planned), undefined);
+  const view = permissionView("p9", { ...planned, preview: { path: "PLAN.md", diff: "# Plan" } });
+  assert.equal(view.plan, "# Plan");
+  // The plan is rendered, not offered as a file diff to open.
+  assert.equal(view.hasDiff, false);
+});
+
+test("a plan-mode exit request shows the plan once, with no session or permanent grant", () => {
+  // The shape core's plan mode sends: the plan raw in `preview`, repeated in
+  // `description` for hosts without preview support.
+  const plan = "# Plan\n\n1. Add the flag\n2. Test it";
+  const request = {
+    toolName: "exit_plan_mode",
+    permission: "write",
+    description: `Leave plan mode and implement this plan (the run continues with edit permissions):\n\n${plan}`,
+    preview: { path: "plan", diff: plan },
+    sessionGrantable: false,
+  };
+  const view = permissionView("p3", request);
+  assert.equal(view.plan, plan);
+  assert.equal(view.description, "Leave plan mode and implement this plan (the run continues with edit permissions):");
+  assert.equal(view.hasDiff, false);
+  assert.equal(view.allowSession, false);
+  assert.equal(view.allowAlways, false);
+  assert.deepEqual(permissionResponse("p3", request, "deny", { feedback: "split step 2" }), {
+    type: "permission.response",
+    requestId: "p3",
+    approved: false,
+    feedback: "split step 2",
+  });
+});
+
+test("clipping fits the bound including the ellipsis and never splits a surrogate pair", () => {
+  const { clipToLength } = require("../src/bridge.cjs");
+  assert.equal(clipToLength("short", 10), "short");
+  assert.equal(clipToLength("abcdef", 4), "abc…");
+  assert.equal(clipToLength("abcdef", 4).length, 4);
+  assert.equal(clipToLength("a😀b", 3), "a…");
+  assert.equal(clipToLength(undefined, 3), "");
+  assert.equal(clipToLength("abc", 0), "…");
+});
+
+test("an oversized permission request still produces a card the webview accepts", () => {
+  const { decodeHostMessage } = require("../media/chat-shared.js");
+  const huge = "x".repeat(500_000);
+  const view = permissionView("p1", {
+    toolName: "t".repeat(500),
+    permission: "execute".repeat(20),
+    description: huge,
+    command: huge,
+    path: `/${"p".repeat(5_000)}`,
+    rememberRule: { action: "allow", tool: "run_command", match: huge },
+    hunks: [
+      { index: 0, preview: huge },
+      { index: 1, preview: "😀".repeat(3_000) },
+    ],
+  });
+  const decoded = decodeHostMessage({ type: "permission", pending: view });
+  assert.equal(decoded.ok, true, decoded.error);
+  assert.ok(view.command.endsWith("…"));
+  const plan = permissionView("p2", { toolName: "exit_plan_mode", permission: "write", description: "d", plan: huge });
+  assert.equal(decodeHostMessage({ type: "permission", pending: plan }).ok, true);
 });

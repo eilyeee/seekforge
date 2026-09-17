@@ -1,0 +1,58 @@
+# Example workflow: copy to .github/workflows/seekforge.yml in your repository.
+#
+# A collaborator with write access comments "@seekforge <question>" on an issue
+# or pull request (or opens an issue that mentions it) and SeekForge answers in
+# a comment. "@seekforge fix" on an issue runs `seekforge resolve` and opens a
+# draft pull request; on a pull request from this repository it runs
+# `seekforge resolve-review` and pushes to that branch.
+#
+# Setup: add a repository secret DEEPSEEK_API_KEY (or the key for the provider
+# you choose), then pin the action to a commit SHA of eilyeee/seekforge.
+name: SeekForge
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write # fix runs push a branch
+  issues: write # reactions and comments
+  pull-requests: write # fix runs open or update pull requests
+
+concurrency:
+  # One SeekForge run per issue or pull request at a time.
+  group: seekforge-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  seekforge:
+    # A cheap pre-filter only. The action itself re-checks the phrase as a whole
+    # word and ignores anyone without write access to the repository.
+    if: >-
+      contains(format('{0} {1} {2}', github.event.comment.body, github.event.issue.title, github.event.issue.body), '@seekforge')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: SeekForge
+        # Replace <commit-sha> with a full commit SHA of eilyeee/seekforge.
+        uses: eilyeee/seekforge/.github/actions/seekforge@<commit-sha>
+        with:
+          api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          max-cost: "1.00"
+          seekforge-version: "1.0.0"
+          # provider: anthropic            # then pass secrets.ANTHROPIC_API_KEY as api-key
+          # model: deepseek-v4-pro
+          # trigger-phrase: "@seekforge"
+          # permission-mode: default       # read-only answers
+          # allowed-tools: read_file,search_text,list_files,glob
+          # allow-fix: "false"             # answer only, never push
+          # wait-ci: "true"

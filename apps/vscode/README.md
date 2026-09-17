@@ -1,61 +1,91 @@
 # SeekForge for VS Code
 
-Thin local client for the versioned `seekforge serve` REST/WebSocket contract.
+Chat, permission review, and an IDE bridge for a local `seekforge serve`. The
+full guide is [docs/ide.md](../../docs/ide.md).
 
-1. Start `seekforge serve /path/to/project` and copy its bearer token.
-2. Open the same folder in VS Code.
-3. Set `seekforge.serverUrl`, then run **SeekForge: Set Server Token**. The
-   bearer token is stored in VS Code SecretStorage; legacy `seekforge.token`
-   settings are migrated and removed automatically.
-4. Run **SeekForge: New Task**, **Resume Session**, **Show Workspace Diff**,
-   **Review Memory Candidates**, **Open Session Transcript**, **Open Loop**, or
-   **Show Activity Output**.
+## Connect
 
-The extension streams model output, thinking, tool activity (`⏺ tool(arg)` /
-`⎿ result`), changed files, sub-agent progress, and live command output to the
-SeekForge output channel, and ends a run with the final report and its cost. A
-status-bar item keeps the run state and cost/cache-hit accounting visible after
-the progress notification disappears.
+The extension talks to `http://127.0.0.1:7373`, the address `seekforge serve`
+listens on by default.
 
-Permission prompts always show the raw command or path. A proposed diff opens as
-its own `diff` document beside the editor instead of being squeezed into a modal
-that would elide it, and multi-edit `apply_patch` requests offer **Allow selected
-edits…** to approve individual hunks (dismissing that picker approves nothing).
+- Run **SeekForge: Start Server for This Workspace** to have VS Code run
+  `seekforge serve` for the open folders in a terminal. It saves the printed
+  token to SecretStorage and masks it in the terminal; closing the terminal
+  stops the server. The executable is `seekforge.serveCommand`.
+- Or start `seekforge serve /path/to/project` yourself and run **SeekForge: Set
+  Server Token**. Set `seekforge.serverUrl` if it listens elsewhere.
 
-**Review Memory Candidates** lists the facts a run proposed and is waiting on a
-human for, and approves or rejects one — memory is human-gated by design, and
-the review belongs where the code is. **Open Session Transcript** renders a past
-session as readable Markdown (roles as headers, tool calls named, attachments
-noted) instead of the raw JSONL.
+`seekforge.serverUrl` and `seekforge.serveCommand` can only be set in user
+settings: the token is sent to the first and the second is executed, so a
+repository's settings must not choose them. Legacy `seekforge.token` settings
+are migrated to SecretStorage and removed.
 
-The **SeekForge Loops** view in the Explorer lists the persisted Loops of the
-active workspace with their status, iteration progress and spend against the
-budget; selecting one opens a Markdown report with the verify command, the last
-verify output, delivery state, and the most recent retained lifecycle events
-(the report says how many earlier events it left out). The view is
-**read-only** and refreshes only when you ask it to (the refresh button in its
-title bar): starting, pausing, steering, pruning and deleting a Loop stay with
-the surfaces that own the control plane, and an idle editor window does not poll
-a server you may not be running.
+When nothing answers, the extension offers to start the server or set the
+token. In a multi-root window a conversation belongs to the folder of the
+editor that was active when it started, and the extension refuses to run when
+the server does not host that folder.
 
-It deliberately remains a thin client: orchestration, permissions, traces, and
-workspace coordination stay inside the local SeekForge server.
+## Chat
 
-In a multi-root window, commands target the workspace containing the active
-editor (falling back to the first folder when no editor is active). The extension
-refuses to run when that folder is not hosted by the configured server; it never
-silently falls back to the server's default workspace.
+The **SeekForge** activity-bar view (Cmd+Esc / Ctrl+Esc) is a chat; the ⧉
+button opens more conversations in editor tabs. Assistant text streams as
+rendered markdown, reasoning in a collapsible block, and tool calls as rows
+with their arguments and live output. The footer keeps the session's cost and
+cache-hit accounting, as does the status bar.
 
-REST calls have a 15-second timeout. Active WebSocket runs have a 30-minute
-safety timeout and the VS Code progress notification is cancellable; cancelling
-sends the server's `cancel` frame before closing the local socket. The extension
-does not replay an interrupted edit run automatically.
+Pick Ask, Edit, or Plan, and an approval mode (Confirm each, Accept edits,
+Auto) per message. Follow-up messages continue the same session; ⟲ resumes a
+stored one; **Execute plan** turns a finished plan into an edit run; Stop
+cancels. Type `@` to mention a file, and use **+ Selection** (Cmd+Alt+K /
+Ctrl+Alt+K) to attach the selected lines. With **Context** on, the active
+selection, open files, and the active file's errors are attached too. Agent
+questions can be answered with an option or, when allowed, free text.
 
-Build a local VSIX with `pnpm --filter seekforge-vscode package`, or install the
-`seekforge-vscode-<version>.vsix` attached to each GitHub release
-(`code --install-extension <file>`). Its version is bumped by
+## Permission review
+
+Requests appear as cards that always show the raw command and path. **Open
+diff** uses VS Code's diff editor on read-only documents; multi-edit patches
+can be approved per edit; **Allow for session** and **Always allow** appear
+only when core will honor them (the rule "always" would write is shown
+verbatim); **Deny with reason** tells the agent what to do instead. A plan the
+agent asks to execute is rendered as markdown.
+
+The chat page runs under a nonce-only Content Security Policy with no remote
+resources, validates every message in both directions, and builds all content
+as DOM text — model output is never interpreted as HTML.
+
+## IDE bridge
+
+While active, the extension serves the editor's context (active file,
+selection, open files, diagnostics) and can open diffs and files for local
+SeekForge processes such as the terminal UI. It listens on `127.0.0.1` only,
+requires the bearer token from its owner-only lock file under
+`~/.seekforge/ide/`, and refuses browser origins and non-loopback Host headers.
+Disable it with `seekforge.ideBridge.enabled`. The contract is in
+[docs/ide.md](../../docs/ide.md#the-ide-bridge).
+
+## Other commands
+
+**Show Workspace Diff**, **Review Memory Candidates** (memory stays
+human-gated), **Open Session Transcript** (readable Markdown instead of the raw
+JSONL), **Show Activity Output**, and the read-only **SeekForge Loops** Explorer
+view, which lists persisted Loops with status, progress and spend and refreshes
+only when you ask. Starting, pausing, steering and deleting Loops stay with the
+surfaces that own the control plane.
+
+REST calls time out after 15 seconds; runs have a 30-minute safety timeout.
+Cancelling sends the server's `cancel` frame before closing the socket, and an
+interrupted edit run is never replayed automatically.
+
+## Build and release
+
+The extension is plain CommonJS with no runtime dependencies (its WebSocket
+client is built in). Build a VSIX with `pnpm --filter seekforge-vscode package`,
+or install the `seekforge-vscode-<version>.vsix` attached to each GitHub
+release (`code --install-extension <file>`). Its version is bumped by
 `scripts/release.mjs` together with the CLI, TUI, and desktop app, and the
-release workflow refuses to package a mismatched version.
+release workflow refuses to package a mismatched version. Tests:
+`pnpm --filter seekforge-vscode test`.
 
 Marketplace publishing is deliberately not automated: `vsce publish` needs the
 `publisher` account's personal access token, which is not a repository secret.

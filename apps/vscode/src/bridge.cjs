@@ -2,10 +2,16 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const MAX_SELECTION_CHARS = 20_000;
+/** `seekforge serve` listens here unless --port says otherwise (apps/cli, apps/server). */
+const DEFAULT_SERVER_URL = "http://127.0.0.1:7373";
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_RUN_TIMEOUT_MS = 30 * 60_000;
 /** Tool rows are activity, not transcripts: keep one line readable in the panel. */
 const MAX_EVENT_LINE_CHARS = 400;
+/** Core bounds refusal feedback to this many characters (MAX_DENIAL_FEEDBACK_CHARS). */
+const MAX_FEEDBACK_CHARS = 2_000;
+/** The server denies an unanswered permission request or question after this long. */
+const SERVER_PROMPT_TIMEOUT_MS = 120_000;
 /** The server rejects a history limit above 1000, so never ask for more. */
 const MAX_LOOP_HISTORY_ENTRIES = 500;
 /** History rows rendered in a report — the most recent ones, where the outcome is. */
@@ -33,6 +39,49 @@ function websocketUrl(serverUrl, token) {
   url.pathname = `${url.pathname.replace(/\/$/, "")}/ws`;
   url.search = token ? `?token=${encodeURIComponent(token)}` : "";
   return url.toString();
+}
+
+function httpError(status) {
+  const error = new Error(`SeekForge HTTP ${status}`);
+  error.status = status;
+  return error;
+}
+
+/**
+ * Why a call to the server failed, in the terms the UI acts on: "offline" means
+ * nothing is listening (offer to start the server), "unauthorized" means the
+ * token is wrong (offer to set it). Anything else is reported as it is.
+ */
+function connectionProblem(error) {
+  if (!error || typeof error !== "object") return "other";
+  if (error.status === 401 || error.status === 403) return "unauthorized";
+  const codes = [error.code, error.cause?.code, ...(Array.isArray(error.cause?.errors) ? error.cause.errors : [])].map(
+    (entry) => (typeof entry === "string" ? entry : entry?.code),
+  );
+  if (codes.some((code) => code === "ECONNREFUSED" || code === "ECONNRESET" || code === "EHOSTUNREACH")) {
+    return "offline";
+  }
+  // `ws` reports a rejected upgrade as "Unexpected server response: 401".
+  if (typeof error.message === "string" && /Unexpected server response: 40[13]\b/.test(error.message)) {
+    return "unauthorized";
+  }
+  return "other";
+}
+
+/** True when the URL names this machine over plain http — the only server VS Code can start itself. */
+function isLoopbackHttpUrl(serverUrl) {
+  try {
+    const url = new URL(normalizeServerUrl(serverUrl));
+    return url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/** The port a loopback server URL names (http default 80 when omitted). */
+function serverUrlPort(serverUrl) {
+  const url = new URL(normalizeServerUrl(serverUrl));
+  return url.port === "" ? 80 : Number(url.port);
 }
 
 function abortError(message) {
@@ -76,17 +125,6 @@ function workspaceRootForEditor(workspaceApi, editor) {
   return active?.uri?.fsPath ?? workspaceApi?.workspaceFolders?.[0]?.uri?.fsPath;
 }
 
-function taskWithEditorContext(task, editor, workspaceRoot) {
-  if (!editor || !workspaceRoot) return task;
-  const file = editor.document?.uri?.fsPath;
-  if (typeof file !== "string") return task;
-  const relative = path.relative(workspaceRoot, file);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) return task;
-  const selected = editor.document.getText(editor.selection).slice(0, MAX_SELECTION_CHARS);
-  const context = selected ? `\nSelected text from @${relative}:\n\n${selected}` : `\nContext: @${relative}`;
-  return `${task.trim()}${context}`;
-}
-
 /**
  * The raw command/path an approval actually grants. Modal dialogs elide long
  * text, so the diff is shown in its own editor document instead of inlined here
@@ -118,12 +156,166 @@ function hasDiffPreview(request) {
 function permissionHunkItems(request) {
   const hunks = Array.isArray(request?.hunks) ? request.hunks : [];
   if (hunks.length < 2) return [];
-  return hunks.map((hunk) => ({
-    label: `Hunk ${hunk.index + 1}`,
-    detail: clipLine(hunk.preview, 200),
-    index: hunk.index,
-    picked: true,
-  }));
+  return hunks
+    .filter((hunk) => Number.isSafeInteger(hunk?.index) && hunk.index >= 0)
+    .map((hunk) => ({
+      label: `Hunk ${hunk.index + 1}`,
+      detail: clipLine(hunk.preview, 200),
+      index: hunk.index,
+      picked: true,
+    }));
+}
+
+/**
+ * What an approver may answer, derived only from what core put on the request.
+ * "For this session" and "always" both disappear when core says it would not
+ * honor a session grant (`sessionGrantable: false` — core would silently
+ * downgrade the answer to allow-once), and "always" additionally needs the rule
+ * core proposed: a frontend never offers a persistence it made up.
+ */
+function permissionChoices(request) {
+  const grantable = request?.sessionGrantable !== false;
+  const rule = request?.rememberRule;
+  return {
+    allowSession: grantable,
+    allowAlways: grantable && typeof rule === "object" && rule !== null && typeof rule.tool === "string",
+    hunkIndexes: permissionHunkItems(request).map((item) => item.index),
+  };
+}
+
+/** A unified diff (as core renders previews) reduced to the lines it adds. */
+function addedLines(diff) {
+  const lines = diff.split("\n");
+  if (!lines[0]?.startsWith("--- ") || !lines[1]?.startsWith("+++ ")) return diff;
+  return lines
+    .slice(2)
+    .filter((line) => line.startsWith("+") || line.startsWith(" "))
+    .map((line) => line.slice(1))
+    .join("\n");
+}
+
+/**
+ * The plan an `exit_plan_mode` approval is asking about, as markdown. The plan
+ * travels as that request's preview; the field it lands in is read defensively
+ * so the reviewer sees the plan rather than a one-line description of it.
+ */
+function planPreview(request) {
+  if (request?.toolName !== "exit_plan_mode") return undefined;
+  const preview = request.preview;
+  for (const candidate of [request.plan, preview?.plan, preview?.markdown, preview?.content]) {
+    if (typeof candidate === "string" && candidate.trim() !== "") return candidate;
+  }
+  if (typeof preview?.diff === "string" && preview.diff.trim() !== "") return addedLines(preview.diff);
+  return undefined;
+}
+
+/** Added/removed line counts of a preview diff, headers excluded. */
+function diffStats(diff) {
+  let added = 0;
+  let removed = 0;
+  for (const line of String(diff ?? "").split("\n")) {
+    if (line.startsWith("+++ ") || line.startsWith("--- ")) continue;
+    if (line.startsWith("+")) added += 1;
+    else if (line.startsWith("-")) removed += 1;
+  }
+  return { added, removed };
+}
+
+/**
+ * At most `max` UTF-16 units, ellipsis included, never splitting a surrogate
+ * pair. The webview rejects a field longer than its bound, so a clipped value
+ * must fit the very bound it was clipped to.
+ */
+function clipToLength(text, max) {
+  const value = String(text ?? "");
+  if (value.length <= max) return value;
+  let end = Math.max(0, max - 1);
+  const code = value.charCodeAt(end - 1);
+  if (code >= 0xd800 && code <= 0xdbff) end -= 1;
+  return `${value.slice(0, end)}…`;
+}
+
+const clip = clipToLength;
+
+/**
+ * The permission card the chat renders. Raw command and path are carried
+ * verbatim (only length-bounded) because the approver must see exactly what
+ * the approval grants, never a paraphrase.
+ */
+function permissionView(requestId, request, receivedAt = Date.now()) {
+  const choices = permissionChoices(request);
+  const plan = planPreview(request);
+  const hasDiff = plan === undefined && hasDiffPreview(request);
+  const stats = hasDiff ? diffStats(request.preview.diff) : { added: 0, removed: 0 };
+  return {
+    requestId,
+    toolName: clip(request?.toolName ?? "tool", 200),
+    permission: clip(request?.permission ?? "", 40),
+    // A plan request repeats the plan in its description for hosts without
+    // preview support; the card renders the plan itself, so keep one line.
+    description:
+      plan === undefined
+        ? clip(request?.description ?? "", 4_000)
+        : clipLine(String(request?.description ?? "").split("\n")[0], 400),
+    ...(typeof request?.command === "string" ? { command: clip(request.command, 400_000) } : {}),
+    ...(typeof request?.path === "string" ? { path: clip(request.path, 4_096) } : {}),
+    ...(choices.allowAlways ? { rule: clip(describeRule(request.rememberRule), 4_000) } : {}),
+    ...(plan !== undefined ? { plan: clip(plan, 400_000) } : {}),
+    allowSession: choices.allowSession,
+    allowAlways: choices.allowAlways,
+    hasDiff,
+    escalation: request?.escalation === true,
+    added: stats.added,
+    removed: stats.removed,
+    hunks: permissionHunkItems(request).map((item) => ({ index: item.index, preview: item.detail })),
+    expiresAt: receivedAt + SERVER_PROMPT_TIMEOUT_MS,
+  };
+}
+
+/**
+ * Turns a decision from the chat into the `permission.response` frame. It is
+ * re-checked here against the request itself, so a UI bug (or a forged webview
+ * message) cannot widen an approval: a session or always grant the request did
+ * not offer, or a hunk index it did not list, is refused rather than sent.
+ */
+function permissionResponse(requestId, request, decision, details = {}) {
+  const choices = permissionChoices(request);
+  switch (decision) {
+    case "once":
+      return { type: "permission.response", requestId, approved: true };
+    case "session":
+      if (!choices.allowSession) throw new Error("This request cannot be allowed for the session.");
+      return { type: "permission.response", requestId, approved: true, remember: "session" };
+    case "always":
+      if (!choices.allowAlways) throw new Error("This request cannot be allowed permanently.");
+      return { type: "permission.response", requestId, approved: true, remember: "always" };
+    case "hunks": {
+      const offered = new Set(choices.hunkIndexes);
+      const picked = Array.isArray(details.selectedHunks) ? details.selectedHunks : [];
+      if (picked.length === 0 || new Set(picked).size !== picked.length || picked.some((i) => !offered.has(i))) {
+        throw new Error("Pick at least one of the offered edits.");
+      }
+      return {
+        type: "permission.response",
+        requestId,
+        approved: true,
+        selectedHunks: [...picked].sort((a, b) => a - b),
+      };
+    }
+    case "deny": {
+      // Feedback rides along only on a denial; core appends it to the refusal
+      // the model reads. Servers that predate it ignore the extra field.
+      const feedback = typeof details.feedback === "string" ? details.feedback.trim() : "";
+      return {
+        type: "permission.response",
+        requestId,
+        approved: false,
+        ...(feedback ? { feedback: feedback.slice(0, MAX_FEEDBACK_CHARS) } : {}),
+      };
+    }
+    default:
+      throw new Error(`Unknown permission decision: ${String(decision)}`);
+  }
 }
 
 function clipLine(text, max = MAX_EVENT_LINE_CHARS) {
@@ -470,7 +662,7 @@ class SeekForgeBridge {
         ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
         signal: controller.signal,
       });
-      if (!response.ok) throw new Error(`SeekForge HTTP ${response.status}`);
+      if (!response.ok) throw httpError(response.status);
       return await response.json();
     } catch (error) {
       if (controller.signal.aborted) throw abortError("SeekForge request was cancelled or timed out");
@@ -513,9 +705,22 @@ class SeekForgeBridge {
     });
   }
 
+  /**
+   * Stored sessions, newest first. The server answers with a bare array
+   * (`listSessions`); an older client read `body.sessions` and so always
+   * reported "no sessions". The object form is still accepted.
+   */
   async sessions(workspaceId, options = {}) {
     const body = await this.request(withWorkspace("/api/sessions", workspaceId), options);
-    return Array.isArray(body?.sessions) ? body.sessions : [];
+    const list = Array.isArray(body) ? body : Array.isArray(body?.sessions) ? body.sessions : [];
+    return list.filter((session) => typeof session?.id === "string" && session.id.length > 0);
+  }
+
+  /** Workspace-relative paths matching `query`, for the chat's @-mention picker. */
+  async files(workspaceId, query, options = {}) {
+    const pathname = `/api/files?q=${encodeURIComponent(query)}`;
+    const body = await this.request(withWorkspace(pathname, workspaceId), options);
+    return Array.isArray(body?.files) ? body.files.filter((file) => typeof file === "string") : [];
   }
 
   /**
@@ -626,6 +831,9 @@ class SeekForgeBridge {
         socket.send(JSON.stringify(frame));
       });
       socket.on("message", async (data) => {
+        // A closing socket can still deliver frames; they belong to a run
+        // this caller has already been told is over.
+        if (settled) return;
         let message;
         try {
           message = JSON.parse(String(data));
@@ -639,7 +847,13 @@ class SeekForgeBridge {
           return;
         }
         if (message.type === "idle") finish();
-        if (message.type === "error") finish(new Error(message.message));
+        // A late answer to a prompt the server already timed out is refused with
+        // `unknown_request`; the run itself goes on, so the client must too.
+        if (message.type === "error" && message.code !== "unknown_request") {
+          const error = new Error(message.message);
+          error.code = message.code;
+          finish(error);
+        }
       });
       socket.on("error", (error) => finish(error));
       socket.on("close", () => {
@@ -677,32 +891,48 @@ function formatTranscript(meta, messages) {
 module.exports = {
   DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_RUN_TIMEOUT_MS,
+  DEFAULT_SERVER_URL,
   MAX_EVENT_LINE_CHARS,
+  MAX_FEEDBACK_CHARS,
   MAX_LOOP_HISTORY_ENTRIES,
   MAX_LOOP_HISTORY_PAGES,
   MAX_LOOP_HISTORY_ROWS,
   MAX_SELECTION_CHARS,
+  SERVER_PROMPT_TIMEOUT_MS,
   SeekForgeBridge,
+  canonicalWorkspacePath,
   clipLine,
+  clipToLength,
+  connectionProblem,
+  describeRule,
+  diffStats,
+  fencedBlock,
   formatAgentEvent,
   formatDuration,
   formatLoopEvent,
   formatLoopReport,
   formatTranscript,
+  formatTokens,
   hasDiffPreview,
+  isLoopbackHttpUrl,
   loopCost,
   loopOutcome,
   loopProgress,
   loopRow,
   normalizeServerUrl,
-  describeRule,
+  permissionChoices,
   permissionHunkItems,
+  permissionResponse,
   permissionSummary,
-  usageSummary,
+  permissionView,
+  planPreview,
   readStoredToken,
-  taskWithEditorContext,
+  serverUrlPort,
+  toolArgsSummary,
+  toolResultSummary,
+  usageSummary,
   websocketUrl,
   withWorkspace,
-  writeStoredToken,
   workspaceRootForEditor,
+  writeStoredToken,
 };
