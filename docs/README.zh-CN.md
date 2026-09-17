@@ -10,7 +10,10 @@
 - [CLI 参考](cli-reference.zh-CN.md) — `run` / `ask` / `serve` 及全部 flag
   （`--profile`、`--output-style`、`--permission-mode` 等）。
 - [配置](configuration.zh-CN.md) — 配置层级与优先级、profile、权限规则、
-  hook（含 JSON 输出协议）、输出风格、MCP 服务器、沙箱，以及 TUI 状态栏。
+  hook（含 JSON 输出协议）、输出风格、MCP 服务器、沙箱、TUI 状态栏、
+  `apiKeyHelper`，以及代理与自定义 CA。
+- [遥测](telemetry.zh-CN.md) — 可选开启的 OpenTelemetry 导出（OTLP/HTTP JSON），
+  包含 token、成本、工具决策与会话的指标和事件。
 - [MCP](mcp.zh-CN.md) — Model Context Protocol 服务器（stdio + Streamable HTTP）、
   资源、提示词，以及 `${ENV}` 请求头展开。
 - [插件](plugins.zh-CN.md) — 一等 skill/agent/MCP/hook 扩展包、绑定摘要的审批、

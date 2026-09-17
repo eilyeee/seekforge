@@ -316,17 +316,17 @@ edit the same workspace concurrently; read-only ask runs remain parallel.
 ```jsonc
 {"type": "start",  "task": "...", "mode": "edit"|"ask", "approvalMode": "auto"|"confirm", "plan": true?, "ws": "<id>"?,
                    "continuation": {"maxSlices": 4, "noProgressLimit": 5}?,
-                   "model": "deepseek-v4-pro"?, "thinking": true?, "reasoningEffort": "high"|"max"?}
+                   "model": "deepseek-v4-pro"?, "thinking": true?, "reasoningEffort": "low"|"medium"|"high"|"max"?}
 {"type": "send",   "sessionId": "...", "task": "...", "mode": "edit"?, "ws": "<id>"?,   // continue; mode overrides
                    "continuation": {"maxSlices": 4, "noProgressLimit": 5}?,
-                   "model": "..."?, "thinking": true?, "reasoningEffort": "high"|"max"?} // the session's own (plan -> execute)
+                   "model": "..."?, "thinking": true?, "reasoningEffort": "low"|"medium"|"high"|"max"?} // the session's own (plan -> execute)
 {"type": "permission.response", "requestId": "p1", "approved": true}
 {"type": "question.answer", "id": "q1", "answer": "Option A"} // answer a pending question.request
 {"type": "loop", "task": "...", "verifyCommand": "pnpm test", "maxIterations": 8?, "budget": 0.5?,
                  "verificationPlan": [{"id":"types","command":"pnpm typecheck","required":true,"timeoutMs":120000}]?,
                  "stablePasses": 2?, "flakyRetries": 1?, "maxNoProgressRecoveries": 1?, "rollbackOnRegression": false?,
                  "requirementMode": "quick"|"analyze"|"confirm"?, "ws": "<id>"?,
-                 "model": "..."?, "thinking": true?, "reasoningEffort": "high"|"max"?}
+                 "model": "..."?, "thinking": true?, "reasoningEffort": "low"|"medium"|"high"|"max"?}
                  // quick: verifier-only; analyzed modes also require acceptance evidence
 {"type": "loop.resume", "loopId": "loop-...", "addedIterations": 2?, "addedBudget": 0.25?, "approveRequirements": true?, "ws": "<id>"?}
 {"type": "subagent.steer", "dispatchId": "ag-1", "message": "focus on the parser tests"}
@@ -342,7 +342,7 @@ edit the same workspace concurrently; read-only ask runs remain parallel.
 `start`, `send`, and `loop`: when present they win over the workspace config for
 that run/loop only (a fresh agent/provider is assembled; nothing is written to
 config). Omitted fields fall back to config. Invalid values (empty model,
-non-boolean thinking, an effort other than `"high"`/`"max"`) →
+non-boolean thinking, an effort other than `"low"`/`"medium"`/`"high"`/`"max"`) →
 `{"type":"error","code":"bad_frame"}`. On `loop`, `maxIterations` must be a
 positive integer, `budget` a finite positive number, and `requirementMode` one
 of `quick|analyze|confirm` when present (else `bad_frame`). Resume cannot change

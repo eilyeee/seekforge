@@ -300,13 +300,38 @@ describe("V4 thinking mode", () => {
     const { buildRequestBody } = await import("../../src/provider/mapping.js");
     const req = { messages: [{ role: "user" as const, content: "hi" }] };
     const v4 = buildRequestBody("deepseek-v4-pro", req, false, { thinking: true, reasoningEffort: "max" });
-    expect(v4.thinking).toEqual({ type: "enabled", reasoning_effort: "max" });
+    expect(v4.thinking).toEqual({ type: "enabled" });
+    expect(v4.reasoning_effort).toBe("max");
     const off = buildRequestBody("deepseek-v4-flash", req, false, { thinking: false });
     expect(off.thinking).toEqual({ type: "disabled" });
     const legacy = buildRequestBody("deepseek-chat", req, false, { thinking: true });
     expect(legacy.thinking).toBeUndefined();
     const unset = buildRequestBody("deepseek-v4-pro", req, false, {});
     expect(unset.thinking).toBeUndefined();
+  });
+
+  it("sends DeepSeek's own effort levels, running medium as high", async () => {
+    const { buildRequestBody } = await import("../../src/provider/mapping.js");
+    const req = { messages: [{ role: "user" as const, content: "hi" }] };
+    const sent = (["low", "medium", "high", "max"] as const).map(
+      (reasoningEffort) => buildRequestBody("deepseek-v4-flash", req, false, { reasoningEffort }).reasoning_effort,
+    );
+    expect(sent).toEqual(["low", "high", "high", "max"]);
+    // An effort level turns thinking on, so it would contradict thinking: false.
+    const off = buildRequestBody("deepseek-v4-flash", req, false, { thinking: false, reasoningEffort: "max" });
+    expect(off.thinking).toEqual({ type: "disabled" });
+    expect(off).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("treats the V4.1 model ids as thinking models", async () => {
+    const { buildRequestBody } = await import("../../src/provider/mapping.js");
+    const req = { messages: [{ role: "user" as const, content: "hi" }] };
+    expect(buildRequestBody("deepseek-flash", req, false, { thinking: false }).thinking).toEqual({ type: "disabled" });
+    expect(buildRequestBody("deepseek-pro", req, false, { reasoningEffort: "low" })).toMatchObject({
+      thinking: { type: "enabled" },
+      reasoning_effort: "low",
+    });
+    expect(buildRequestBody("deepseek-flasher", req, false, { thinking: true })).not.toHaveProperty("thinking");
   });
 
   it("maps reasoning_content from responses", async () => {
@@ -353,7 +378,8 @@ describe("provider capabilities gating", () => {
       { thinking: true, reasoningEffort: "max" },
       { thinking: true, cacheHitTokens: true, costAccounting: true, balance: true },
     );
-    expect(body.thinking).toEqual({ type: "enabled", reasoning_effort: "max" });
+    expect(body.thinking).toEqual({ type: "enabled" });
+    expect(body.reasoning_effort).toBe("max");
   });
 
   it("reports costUsd: 0 when capabilities.costAccounting is false", () => {

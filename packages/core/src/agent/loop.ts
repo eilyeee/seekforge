@@ -70,6 +70,7 @@ import {
   shrinkToolResultsToFit,
 } from "./context.js";
 import { nextFinalizeNudge, type FinalizeKind } from "./finalize.js";
+import { observeSessionEvent, observeToolCall, withTelemetrySession } from "../telemetry/index.js";
 import {
   ZERO_USAGE,
   addUsage,
@@ -543,6 +544,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         const trace = createSessionTrace(input.projectPath, sessionId);
         const emit = (e: AgentEvent): AgentEvent => {
           trace.event(e);
+          observeSessionEvent(e, { sessionId, depth, task: input.task, resumed: resuming });
           return e;
         };
 
@@ -838,7 +840,10 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             ...(deps.allowedTools ? { allowedTools: deps.allowedTools } : {}),
           },
           confirm: confirmWithNotify,
-          log: (entry) => trace.toolCall(entry),
+          log: (entry) => {
+            trace.toolCall(entry);
+            observeToolCall(entry, sessionId);
+          },
           runtime: deps.runtime,
           hooks: deps.hooks,
           sandbox: deps.sandbox,
@@ -1173,7 +1178,9 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                     deps.onReasoningDelta,
                   )
                 : provider.chat({ messages, tools: requestTools, signal: runSignal });
-            const providerRequest = deps.retryBus ? deps.retryBus.run(routeRetry, requestProvider) : requestProvider();
+            const providerRequest = withTelemetrySession(sessionId, () =>
+              deps.retryBus ? deps.retryBus.run(routeRetry, requestProvider) : requestProvider(),
+            );
             const res = await abortablePromise(
               providerRequest,
               runSignal,

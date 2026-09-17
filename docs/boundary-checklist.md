@@ -4915,3 +4915,24 @@ a flaky verifier, not a bad bound.
 - **Caught:** by reading the call chain from a validator to its consumer while
   merging five copies of the validator. Neither `scripts/` gate can see this
   class: the value is a number of the right type and the code compiles.
+
+## 425. A process-wide network switch silently overrides a per-request connection guarantee
+
+`web_fetch` resolves a host, refuses private addresses, and then pins the socket
+to the address it checked, so a second DNS answer cannot redirect it. Starting
+Node with `--use-env-proxy` (which the launcher now does when `HTTPS_PROXY` is
+set) makes the *global* HTTP agent send every request to the proxy, which
+resolves the name itself — and the pinned `lookup` is never consulted. Nothing
+failed: the request succeeded, through a path the check no longer described.
+
+- **Do:** a request whose safety depends on *where* it connects must name its
+  own agent/dispatcher instead of inheriting the process default. Defaults are
+  configured by flags, environment and other modules you do not see.
+- **Do:** when adding a process-wide network setting (proxy, CA store, global
+  dispatcher), list every connection that carries its own guarantee — pinning,
+  loopback-only, mTLS — and decide for each whether the setting may apply.
+- **Do:** test it by making the default hostile in-process (a proxied
+  `http.globalAgent`) and asserting the guarded request still reaches the
+  checked address; asserting "no proxy variable set" proves nothing.
+- **Caught:** by a probe of `http.request` under `--use-env-proxy` while adding
+  the proxy launcher; the lookup override printed nothing.

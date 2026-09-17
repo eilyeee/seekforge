@@ -383,6 +383,12 @@ export type TokenUsage = {
    * explain.
    */
   cacheWriteTokens?: number;
+  /**
+   * Completion tokens spent on reasoning (a subset of completionTokens), where
+   * the endpoint reports them separately. Optional for the same reason as
+   * cacheWriteTokens; it is a breakdown, never an addition to the bill.
+   */
+  reasoningTokens?: number;
   costUsd: number;
 };
 
@@ -397,6 +403,7 @@ export const ZERO_USAGE: TokenUsage = {
 /** Field-wise sum of two usage records (returns a new object). */
 export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
   const cacheWriteTokens = (a.cacheWriteTokens ?? 0) + (b.cacheWriteTokens ?? 0);
+  const reasoningTokens = (a.reasoningTokens ?? 0) + (b.reasoningTokens ?? 0);
   return {
     promptTokens: a.promptTokens + b.promptTokens,
     completionTokens: a.completionTokens + b.completionTokens,
@@ -404,6 +411,7 @@ export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
     // Absent stays absent: a provider that never reports cache writes should
     // not start reporting zero of them once its usage is summed.
     ...(a.cacheWriteTokens !== undefined || b.cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
+    ...(a.reasoningTokens !== undefined || b.reasoningTokens !== undefined ? { reasoningTokens } : {}),
     costUsd: a.costUsd + b.costUsd,
   };
 }
@@ -411,11 +419,13 @@ export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
 /** Field-wise difference a - b (returns a new object). */
 export function subtractUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
   const cacheWriteTokens = (a.cacheWriteTokens ?? 0) - (b.cacheWriteTokens ?? 0);
+  const reasoningTokens = (a.reasoningTokens ?? 0) - (b.reasoningTokens ?? 0);
   return {
     promptTokens: a.promptTokens - b.promptTokens,
     completionTokens: a.completionTokens - b.completionTokens,
     cacheHitTokens: a.cacheHitTokens - b.cacheHitTokens,
     ...(a.cacheWriteTokens !== undefined || b.cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
+    ...(a.reasoningTokens !== undefined || b.reasoningTokens !== undefined ? { reasoningTokens } : {}),
     costUsd: a.costUsd - b.costUsd,
   };
 }
@@ -776,7 +786,7 @@ export type ServerConfig = {
   sandbox?: "off" | "read-only" | "workspace-write" | "restricted";
   compaction?: "mechanical" | "llm";
   thinking?: boolean;
-  reasoningEffort?: "high" | "max" | null;
+  reasoningEffort?: ReasoningEffort | null;
   /** Model used for plan-mode generation (empty = follow the default model). */
   planModel?: string;
   /** Re-run a failed task with a stronger model/effort once before giving up. */
@@ -2145,11 +2155,24 @@ export type ApiErrorCode =
   | "invalid_steering"
   | "steering_queue_full";
 
+/**
+ * Reasoning-effort levels a user can ask for, lowest first. Each wire protocol
+ * translates a level into what its endpoint accepts (core's provider/effort.ts)
+ * and clamps or omits one a model has no counterpart for, so a level is a
+ * request, not a promise that every endpoint has four settings.
+ */
+export const REASONING_EFFORTS = ["low", "medium", "high", "max"] as const;
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
+export function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return typeof value === "string" && (REASONING_EFFORTS as readonly string[]).includes(value);
+}
+
 /** Per-run model/thinking overrides (win over server config for that run only). */
 export type RunOverrides = {
   model?: string;
   thinking?: boolean;
-  reasoningEffort?: "high" | "max";
+  reasoningEffort?: ReasoningEffort;
   /** Output style name (built-in or custom); resolved server-side. */
   outputStyle?: string;
   /** Run-local OS sandbox override; absent keeps the project configuration. */

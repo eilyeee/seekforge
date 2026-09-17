@@ -20,6 +20,7 @@
  */
 
 import type { ChatResponse } from "@seekforge/shared";
+import { getApiKeyFromHelper, invalidateApiKeyHelper } from "@seekforge/shared/api-key-helper";
 import { MAX_TIMER_DELAY_MS } from "@seekforge/shared/timers";
 import { onAbortOnce } from "../util/abort.js";
 import * as crypto from "node:crypto";
@@ -30,8 +31,20 @@ import { DeepSeekApiError, fetchWithRetry, isRetryableError, readJsonResponseBou
 import { DEEPSEEK_CAPABILITIES } from "./types.js";
 import type { ChatProvider, ChatRequest, ProviderConfig, RetryInfo } from "./types.js";
 import { MAX_PROVIDER_RESPONSE_BYTES } from "./protocol-limits.js";
+import { structuredOutputFor } from "./structured-output.js";
 
-export type { ProviderConfig, ChatRequest, ChatProvider, RetryInfo, ProviderCapabilities } from "./types.js";
+export type {
+  ProviderConfig,
+  ChatRequest,
+  ChatProvider,
+  RetryInfo,
+  ProviderCapabilities,
+  ResponseFormat,
+  StructuredOutputSupport,
+} from "./types.js";
+export { structuredOutputFor } from "./structured-output.js";
+export { proxyDoctorCheck, type ProxyProbe } from "./proxy.js";
+export type { EffortDialect } from "./effort.js";
 export { DEEPSEEK_CAPABILITIES } from "./types.js";
 export {
   PROVIDER_PRESETS,
@@ -53,6 +66,7 @@ export {
   type WireStreamSession,
 } from "./protocols/index.js";
 export { DeepSeekApiError } from "./http.js";
+export { ApiKeyHelperError } from "@seekforge/shared/api-key-helper";
 export { MAX_PROVIDER_RESPONSE_BYTES } from "./protocol-limits.js";
 export {
   fetchBalance,
@@ -143,7 +157,8 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
   const protocol = resolveWireProtocol(config.protocol);
   const baseUrl = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
   const url = protocol.endpoint(baseUrl);
-  const headers = protocol.headers(config.apiKey);
+  const staticHeaders = protocol.headers(config.apiKey);
+  const apiKeyHelper = config.apiKeyHelper;
   const thinking = {
     ...(config.thinking !== undefined ? { thinking: config.thinking } : {}),
     ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
@@ -160,7 +175,8 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
     .update(
       JSON.stringify({
         baseUrl,
-        apiKey: config.apiKey,
+        // A helper's key rotates; the helper is what names the account.
+        ...(apiKeyHelper !== undefined ? { apiKeyHelper } : { apiKey: config.apiKey }),
         model,
         // The protocol changes the request AND the response shape, so two
         // configs that differ only by it are not interchangeable cache entries.
@@ -173,6 +189,29 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
       }),
     )
     .digest("hex");
+
+  /**
+   * Send with the key to use now: the configured one, or the helper's current
+   * answer. A 401 on a helper's key runs the helper once more — the key may
+   * have been rotated or revoked since it was fetched — and retries only if
+   * that produced a different key.
+   */
+  async function withCurrentKey<T>(
+    signal: AbortSignal | undefined,
+    send: (headers: Record<string, string>) => Promise<T>,
+  ): Promise<T> {
+    if (apiKeyHelper === undefined) return send(staticHeaders);
+    const key = await getApiKeyFromHelper(apiKeyHelper, signal);
+    try {
+      return await send(protocol.headers(key));
+    } catch (err) {
+      if (!(err instanceof DeepSeekApiError) || err.status !== 401) throw err;
+      invalidateApiKeyHelper(apiKeyHelper, key);
+      const fresh = await getApiKeyFromHelper(apiKeyHelper, signal);
+      if (fresh === key) throw err;
+      return send(protocol.headers(fresh));
+    }
+  }
 
   /**
    * Run the request against the primary model with the normal retry loop. If
@@ -188,11 +227,13 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
   ): Promise<{ result: T; effectiveModel: string }> {
     const primaryBody = JSON.stringify(protocol.buildBody(model, req, stream, thinking, capabilities));
     try {
-      const result = await fetchWithRetry(
-        url,
-        { method: "POST", headers, body: primaryBody, signal: req.signal },
-        { ...retryOpts, timeoutBody: !stream, label: protocol.errorLabel },
-        handleResponse,
+      const result = await withCurrentKey(req.signal, (headers) =>
+        fetchWithRetry(
+          url,
+          { method: "POST", headers, body: primaryBody, signal: req.signal },
+          { ...retryOpts, timeoutBody: !stream, label: protocol.errorLabel },
+          handleResponse,
+        ),
       );
       return { result, effectiveModel: model };
     } catch (err) {
@@ -211,11 +252,13 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
       const fallbackBody = JSON.stringify(protocol.buildBody(fallbackModel, req, stream, thinking, capabilities));
       try {
         // maxRetries: 0 → exactly one fallback attempt, no retry storm.
-        const result = await fetchWithRetry(
-          url,
-          { method: "POST", headers, body: fallbackBody, signal: req.signal },
-          { maxRetries: 0, timeoutBody: !stream, label: protocol.errorLabel },
-          handleResponse,
+        const result = await withCurrentKey(req.signal, (headers) =>
+          fetchWithRetry(
+            url,
+            { method: "POST", headers, body: fallbackBody, signal: req.signal },
+            { maxRetries: 0, timeoutBody: !stream, label: protocol.errorLabel },
+            handleResponse,
+          ),
         );
         return { result, effectiveModel: fallbackModel };
       } catch {
@@ -287,5 +330,12 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
     return session.finish();
   }
 
-  return { model, cacheIdentity, chat, chatStream };
+  const structuredOutput = structuredOutputFor(protocol.id, capabilities, model);
+  return {
+    model,
+    cacheIdentity,
+    ...(structuredOutput !== undefined ? { structuredOutput } : {}),
+    chat,
+    chatStream,
+  };
 }

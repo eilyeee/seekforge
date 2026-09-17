@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type * as HttpModule from "node:http";
 import { createServer } from "node:http";
+import { createRequire } from "node:module";
 import { ToolError } from "../../src/tools/errors.js";
 import {
   assertPublicResolvedUrl,
@@ -206,6 +208,57 @@ describe("resolved-address and redirect SSRF checks", () => {
       });
     }
   });
+
+  // Under --use-env-proxy the global agent sends every request to the proxy,
+  // which resolves the host itself: the pinned address would be bypassed.
+  it.skipIf(!process.allowedNodeEnvironmentFlags.has("--use-env-proxy"))(
+    "stays on the pinned address when the global agent is proxied",
+    async () => {
+      const proxied: string[] = [];
+      const target = createServer((req, res) => res.end(`direct ${req.url}`));
+      const proxy = createServer((req, res) => {
+        proxied.push(req.url ?? "");
+        res.end("via proxy");
+      });
+      const listen = (server: ReturnType<typeof createServer>) =>
+        new Promise<number>((resolve) =>
+          server.listen(0, "127.0.0.1", () => resolve((server.address() as { port: number }).port)),
+        );
+      const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+      // The ESM namespace is frozen; the CommonJS exports object is what requests read.
+      const http = createRequire(import.meta.url)("node:http") as typeof HttpModule;
+      const original = http.globalAgent;
+      http.globalAgent = new http.Agent({
+        proxyEnv: { HTTP_PROXY: `http://127.0.0.1:${proxyPort}` },
+      } as HttpModule.AgentOptions);
+      try {
+        // The global agent really is proxied here…
+        const viaGlobal = await new Promise<string>((resolve, reject) => {
+          http
+            .get(`http://example.test:${targetPort}/probe`, (res) => {
+              let body = "";
+              res.on("data", (chunk) => (body += chunk));
+              res.on("end", () => resolve(body));
+            })
+            .on("error", reject);
+        });
+        expect(viaGlobal).toBe("via proxy");
+        // …and web_fetch's transport does not use it.
+        const url = new URL(`http://example.test:${targetPort}/docs`);
+        const response = await pinnedTransport(
+          url,
+          [{ address: "127.0.0.1", family: 4 }],
+          new AbortController().signal,
+        );
+        expect(await response.text()).toBe("direct /docs");
+        expect(proxied).toEqual([`http://example.test:${targetPort}/probe`]);
+      } finally {
+        http.globalAgent = original;
+        target.close();
+        proxy.close();
+      }
+    },
+  );
 
   it("enforces the response cap while streaming", async () => {
     await expect(readResponseBody(new Response("x".repeat(1024)), 100)).rejects.toThrow(/exceeds 100 bytes/i);

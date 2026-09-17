@@ -13,6 +13,8 @@ function fallbackPricingFor(model: string): ModelPricing | undefined {
 export type UsageTokens = Pick<TokenUsage, "promptTokens" | "completionTokens" | "cacheHitTokens"> & {
   /** Prompt tokens written to the cache; billed above the miss rate where a provider says so. */
   cacheWriteTokens?: number;
+  /** Completion tokens spent reasoning; a breakdown only, never priced separately. */
+  reasoningTokens?: number;
 };
 
 /**

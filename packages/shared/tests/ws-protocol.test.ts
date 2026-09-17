@@ -111,11 +111,18 @@ describe("WS client protocol decoder", () => {
     });
   });
 
+  it.each(["low", "medium", "high", "max"])("accepts reasoningEffort %s as a run override", (reasoningEffort) => {
+    expect(
+      parseClientFrame({ type: "start", task: "go", mode: "ask", approvalMode: "confirm", reasoningEffort }, limits),
+    ).toMatchObject({ ok: true, frame: { reasoningEffort } });
+  });
+
   it("rejects every malformed optional override", () => {
     for (const override of [
       { model: "" },
       { thinking: "yes" },
-      { reasoningEffort: "low" },
+      { reasoningEffort: "xhigh" },
+      { reasoningEffort: "High" },
       { outputStyle: "" },
       { sandbox: "unrestricted" },
       { ws: 7 },

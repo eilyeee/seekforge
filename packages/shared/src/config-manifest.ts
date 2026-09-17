@@ -1,6 +1,8 @@
 /** Runtime config-key manifest shared by typo detection across frontends. */
 export const COMMON_CONFIG_KEYS = [
   "apiKey",
+  // User-owned only (it runs a command); absent from PROJECT_PREFERENCE_KEYS.
+  "apiKeyHelper",
   "model",
   "baseUrl",
   "provider",

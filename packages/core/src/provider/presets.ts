@@ -6,6 +6,8 @@
  * /user/balance) are disabled.
  */
 
+import type { ReasoningEffort } from "@seekforge/shared";
+import { apiKeyHelperFor } from "@seekforge/shared/api-key-helper";
 import { ANTHROPIC_MODELS, DEFAULT_BASE_URL, type ModelPricing, OPENAI_MODELS } from "./constants.js";
 import type { WireProtocolId } from "./protocols/types.js";
 import { DEEPSEEK_CAPABILITIES, type ProviderCapabilities, type ProviderConfig, type RetryInfo } from "./types.js";
@@ -51,11 +53,19 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
   anthropic: {
     baseUrl: "https://api.anthropic.com/v1",
     protocol: "anthropic",
-    capabilities: { thinking: true, cacheHitTokens: true, costAccounting: true, balance: false, images: true },
+    capabilities: {
+      thinking: true,
+      cacheHitTokens: true,
+      costAccounting: true,
+      balance: false,
+      images: true,
+      structuredOutput: "json_schema",
+    },
     models: ANTHROPIC_MODELS,
   },
   // The presets below are generic OpenAI-compatible endpoints. The DeepSeek-only
-  // thinking body and /user/balance are off for all of them.
+  // thinking body and /user/balance are off for all of them; a reasoning-effort
+  // level reaches only the two whose parameter is known (`effortDialect`).
   //
   // Cost is answered per endpoint by whoever can answer it honestly: OpenAI
   // publishes a price list, so that preset uses it; OpenRouter states the charge
@@ -78,7 +88,17 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
     // the price table below bills those tokens at a tenth. costAccounting is on
     // because that table is OpenAI's own published one — a model missing from
     // it still reports "unknown" rather than borrowing a neighbor's rate.
-    capabilities: { thinking: false, cacheHitTokens: true, costAccounting: true, balance: false, images: true },
+    // `reasoningEffort` travels as `reasoning_effort`, for the gpt-5 families
+    // whose accepted levels are known (see ../effort.ts).
+    capabilities: {
+      thinking: false,
+      cacheHitTokens: true,
+      costAccounting: true,
+      balance: false,
+      images: true,
+      effortDialect: "openai",
+      structuredOutput: "json_schema",
+    },
     // Short representative catalog; users can point at any OpenAI model id.
     models: [...OPENAI_MODELS],
   },
@@ -94,6 +114,8 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
     // every request in usage.cost, and it reports cached reads and writes
     // alongside it. costAccounting stays false — there is no built-in table for
     // 400 models from a dozen vendors — but cost is real here, not 0.
+    // `reasoningEffort` travels as OpenRouter's own `reasoning.effort`, which
+    // the router translates for whichever model the id names.
     capabilities: {
       thinking: false,
       cacheHitTokens: true,
@@ -101,6 +123,7 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
       balance: false,
       images: true,
       usageCost: true,
+      effortDialect: "openrouter",
     },
     // Short representative catalog; OpenRouter exposes many more model ids.
     models: ["anthropic/claude-opus-5", "openai/gpt-5.6-sol", "deepseek/deepseek-v4-pro"],
@@ -149,10 +172,12 @@ function withInlineImages(
 export function resolveProviderConfig(input: {
   provider?: string;
   apiKey: string;
+  /** Explicit helper; unset looks up the helper that issued `apiKey`, if any. */
+  apiKeyHelper?: string;
   baseUrl?: string;
   model?: string;
   thinking?: boolean;
-  reasoningEffort?: "high" | "max";
+  reasoningEffort?: ReasoningEffort;
   streamIdleTimeoutMs?: number;
   streamTimeoutMs?: number;
   onRetry?: (info: RetryInfo) => void;
@@ -163,8 +188,12 @@ export function resolveProviderConfig(input: {
   const preset = resolveProviderPreset(input.provider);
   const baseUrl = input.baseUrl ?? preset?.baseUrl;
   const capabilities = withInlineImages(preset?.capabilities, input.inlineImages);
+  // A key the config merge got from a helper is recognized here, so every
+  // construction site keeps it refreshable without carrying the command along.
+  const apiKeyHelper = input.apiKeyHelper ?? apiKeyHelperFor(input.apiKey);
   return {
     apiKey: input.apiKey,
+    ...(apiKeyHelper !== undefined ? { apiKeyHelper } : {}),
     ...(baseUrl !== undefined ? { baseUrl } : {}),
     // The protocol travels with the preset, never with the URL: pointing a
     // preset at a proxy keeps the wire format it was chosen for.

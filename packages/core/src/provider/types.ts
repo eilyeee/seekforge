@@ -1,5 +1,6 @@
-import type { ChatMessage, ChatResponse, ToolDefinitionForModel } from "@seekforge/shared";
+import type { ChatMessage, ChatResponse, ReasoningEffort, ToolDefinitionForModel } from "@seekforge/shared";
 import type { ModelPricing } from "./constants.js";
+import type { EffortDialect } from "./effort.js";
 import type { WireProtocolId } from "./protocols/types.js";
 
 /**
@@ -60,6 +61,41 @@ export type ProviderCapabilities = {
    * `modelPricing`, which is an explicit override of what the bill says.
    */
   usageCost?: boolean;
+  /**
+   * How this OpenAI-compatible endpoint takes a `reasoningEffort` level when
+   * the DeepSeek thinking body does not apply (see ./effort.ts). Unset: it
+   * takes none, and the level is not sent — the default for every endpoint
+   * whose models have not been checked.
+   */
+  effortDialect?: EffortDialect;
+  /**
+   * What the endpoint can promise for `ChatRequest.responseFormat` (see
+   * ./structured-output.ts, which also narrows it per model). Unset: nothing,
+   * and the field is not sent.
+   */
+  structuredOutput?: StructuredOutputSupport;
+};
+
+/**
+ * `json_schema`: decoding is constrained to the schema. `json_object`: the
+ * reply is valid JSON, and the schema is the caller's to state and check.
+ */
+export type StructuredOutputSupport = "json_schema" | "json_object";
+
+/**
+ * Ask for the reply as JSON matching `schema`. Honored as far as
+ * `ChatProvider.structuredOutput` says; the caller validates the result either
+ * way. Every object in the schema should set `additionalProperties: false` and
+ * list all its properties in `required` — the schema-enforcing endpoints
+ * reject one that does not.
+ */
+export type ResponseFormat = {
+  type: "json_schema";
+  /** Schema name, 1-64 of `[A-Za-z0-9_-]` (OpenAI requires one). */
+  name: string;
+  schema: Record<string, unknown>;
+  /** OpenAI strict decoding; default true. Anthropic always enforces. */
+  strict?: boolean;
 };
 
 /** Full DeepSeek-direct capability set (the default when `capabilities` is unset). */
@@ -68,10 +104,19 @@ export const DEEPSEEK_CAPABILITIES: ProviderCapabilities = {
   cacheHitTokens: true,
   costAccounting: true,
   balance: true,
+  structuredOutput: "json_object",
 };
 
 export type ProviderConfig = {
   apiKey: string;
+  /**
+   * Shell command that prints the API key (the user's `apiKeyHelper`). When
+   * set, every request sends the helper's current key — re-run once it is
+   * older than SEEKFORGE_API_KEY_HELPER_TTL_MS, and once more after a 401 —
+   * and `apiKey` is only the first answer. resolveProviderConfig fills it for
+   * a key the config merge obtained from a helper.
+   */
+  apiKeyHelper?: string;
   baseUrl?: string;
   /**
    * Wire protocol to speak. Comes from the preset (see presets.ts); unset means
@@ -98,8 +143,11 @@ export type ProviderConfig = {
    * deepseek-v4-* models — legacy models reject the parameter.
    */
   thinking?: boolean;
-  /** V4 reasoning effort ("low"/"medium" map to "high" server-side). */
-  reasoningEffort?: "high" | "max";
+  /**
+   * Requested reasoning effort. Each protocol maps it to what the endpoint and
+   * model accept, clamping or omitting it (see ./effort.ts); unset sends none.
+   */
+  reasoningEffort?: ReasoningEffort;
   /**
    * If set, after the primary `model` exhausts its retry budget on a *retryable*
    * error (HTTP 429 / 5xx / network), the request makes ONE final attempt with
@@ -133,6 +181,8 @@ export type ChatRequest = {
   tools?: ToolDefinitionForModel[];
   temperature?: number;
   maxTokens?: number;
+  /** Structured output; see ResponseFormat and ChatProvider.structuredOutput. */
+  responseFormat?: ResponseFormat;
   /** Cancels the active request, response-body read, retry wait, or stream read. */
   signal?: AbortSignal;
 };
@@ -148,4 +198,6 @@ export interface ChatProvider {
   readonly model: string;
   /** Opaque identity for response-affecting endpoint/provider/tenant config. */
   readonly cacheIdentity?: string;
+  /** What `ChatRequest.responseFormat` gets on this provider's model; unset = nothing. */
+  readonly structuredOutput?: StructuredOutputSupport;
 }

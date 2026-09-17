@@ -53,8 +53,17 @@ describe("resolveProviderPreset", () => {
       "https://api.openai.com/v1",
       ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"],
       // Its own published price list ships with SeekForge, and it reports
-      // cached input under prompt_tokens_details.
-      { thinking: false, cacheHitTokens: true, costAccounting: true, balance: false, images: true },
+      // cached input under prompt_tokens_details. Its gpt-5 families take
+      // `reasoning_effort`.
+      {
+        thinking: false,
+        cacheHitTokens: true,
+        costAccounting: true,
+        balance: false,
+        images: true,
+        effortDialect: "openai",
+        structuredOutput: "json_schema",
+      },
     ],
     [
       "ollama",
@@ -67,7 +76,8 @@ describe("resolveProviderPreset", () => {
       "openrouter",
       "https://openrouter.ai/api/v1",
       ["anthropic/claude-opus-5", "openai/gpt-5.6-sol", "deepseek/deepseek-v4-pro"],
-      // No table could track its catalog; it states the charge per request.
+      // No table could track its catalog; it states the charge per request,
+      // and translates its own `reasoning.effort` per upstream model.
       {
         thinking: false,
         cacheHitTokens: true,
@@ -75,6 +85,7 @@ describe("resolveProviderPreset", () => {
         balance: false,
         images: true,
         usageCost: true,
+        effortDialect: "openrouter",
       },
     ],
   ] as const)("returns the %s OpenAI-compatible preset, case-insensitively", (name, baseUrl, models, capabilities) => {
@@ -141,6 +152,7 @@ describe("resolveProviderPreset", () => {
       costAccounting: true,
       balance: false,
       images: true,
+      structuredOutput: "json_schema",
     });
     expect(preset?.models).toContain("claude-opus-5");
     expect(resolveProviderPreset("Anthropic")).toBe(preset);

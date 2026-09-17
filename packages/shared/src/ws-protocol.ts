@@ -1,5 +1,5 @@
 import { isRecord } from "./guards.js";
-import type { ClientFrame, RunOverrides } from "./index.js";
+import { type ClientFrame, isReasoningEffort, type RunOverrides } from "./index.js";
 import { parseLoopVerificationPlan } from "./loop-verification-contract.js";
 
 export type ClientFrameLimits = {
@@ -35,8 +35,8 @@ function parseOverrides(frame: RecordValue): { value: RunOverrides } | { error: 
   if (thinking !== undefined && typeof thinking !== "boolean") {
     return { error: "thinking must be a boolean when present" };
   }
-  if (reasoningEffort !== undefined && reasoningEffort !== "high" && reasoningEffort !== "max") {
-    return { error: 'reasoningEffort must be "high" or "max" when present' };
+  if (reasoningEffort !== undefined && !isReasoningEffort(reasoningEffort)) {
+    return { error: 'reasoningEffort must be "low", "medium", "high" or "max" when present' };
   }
   if (outputStyle !== undefined && (typeof outputStyle !== "string" || outputStyle.length === 0)) {
     return { error: "outputStyle must be a non-empty string when present" };

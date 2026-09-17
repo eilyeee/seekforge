@@ -1,6 +1,6 @@
 import { lookup } from "node:dns/promises";
-import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
+import { Agent as HttpAgent, request as httpRequest } from "node:http";
+import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { isIP, type LookupFunction } from "node:net";
 import { Readable } from "node:stream";
 import { z } from "zod";
@@ -221,6 +221,10 @@ export function checkFetchUrl(raw: string): URL {
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
+/** Agents with no proxy configuration: web_fetch always connects to the address it validated. */
+const directHttpAgent = new HttpAgent();
+const directHttpsAgent = new HttpsAgent();
+
 /**
  * A single non-redirect-following GET. `addresses` (from assertPublicResolvedUrl)
  * pins the socket to a pre-validated IP; null means the host is already an IP
@@ -240,7 +244,8 @@ export type PinnedTransport = (
  * way to pin without the undici package, hence the native client here.
  */
 export const pinnedTransport: PinnedTransport = async (url, addresses, signal) => {
-  const request = url.protocol === "https:" ? httpsRequest : httpRequest;
+  const https = url.protocol === "https:";
+  const request = https ? httpsRequest : httpRequest;
   const pinned = addresses?.[0];
   const lookupOverride: LookupFunction | undefined =
     pinned === undefined
@@ -261,6 +266,10 @@ export const pinnedTransport: PinnedTransport = async (url, addresses, signal) =
         method: "GET",
         headers: { "user-agent": "seekforge-agent", host: url.host },
         signal,
+        // Never the global agent: under --use-env-proxy it sends the request to
+        // HTTP(S)_PROXY, which resolves the host itself and skips `lookup` —
+        // the pinned, pre-validated address would stop being the one reached.
+        agent: https ? directHttpsAgent : directHttpAgent,
         ...(lookupOverride ? { lookup: lookupOverride } : {}),
       },
       (res) => {

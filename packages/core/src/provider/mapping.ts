@@ -9,12 +9,15 @@ import type {
   ChatMessage,
   ChatResponse,
   ProviderToolCall,
+  ReasoningEffort,
   TokenUsage,
   ToolDefinitionForModel,
 } from "@seekforge/shared";
 import type { ModelPricing } from "./constants.js";
 import { estimateCostUsd, type UsageTokens } from "./cost.js";
-import type { ChatRequest, ProviderCapabilities } from "./types.js";
+import { deepseekEffort, openAiCompatibleEffort } from "./effort.js";
+import { openAiResponseFormat, structuredOutputFor } from "./structured-output.js";
+import { type ChatRequest, DEEPSEEK_CAPABILITIES, type ProviderCapabilities } from "./types.js";
 import { isRecord } from "../util/guards.js";
 import { withPairedToolCalls } from "./tool-pairing.js";
 import {
@@ -58,6 +61,8 @@ export type WireUsage = {
   prompt_cache_miss_tokens?: number;
   /** OpenAI-compatible spelling of the cache-hit count (`prompt_cache_hit_tokens` on DeepSeek). */
   prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+  /** Reasoning share of completion_tokens (DeepSeek, OpenAI, OpenRouter). */
+  completion_tokens_details?: { reasoning_tokens?: number };
   /** USD the endpoint says it charged for this request (OpenRouter). */
   cost?: number;
 };
@@ -76,10 +81,10 @@ export type WireChatCompletion = {
   usage?: WireUsage | null;
 };
 
-/** Request-side thinking controls (DeepSeek V4 only). */
+/** Request-side thinking controls; each wire protocol decides their shape. */
 export type ThinkingOptions = {
   thinking?: boolean;
-  reasoningEffort?: "high" | "max";
+  reasoningEffort?: ReasoningEffort;
 };
 
 export class ProviderProtocolError extends Error {
@@ -92,9 +97,13 @@ export class ProviderProtocolError extends Error {
 /** Generous protocol ceiling that still keeps arithmetic and persisted usage bounded. */
 export const MAX_PROVIDER_USAGE_TOKENS = 1_000_000_000;
 
-/** thinking.{type,reasoning_effort} is only valid on deepseek-v4-* models. */
+/**
+ * DeepSeek's thinking body is only valid on the V4 generation: `deepseek-v4-*`
+ * and the unversioned `deepseek-flash` / `deepseek-pro` ids it moved to with
+ * V4.1. The legacy `deepseek-chat` / `deepseek-reasoner` reject it.
+ */
 export function supportsThinking(model: string): boolean {
-  return model.startsWith("deepseek-v4");
+  return model.startsWith("deepseek-v4") || /^deepseek-(?:flash|pro)(?:-|$)/.test(model);
 }
 
 // --- request mapping --------------------------------------------------------
@@ -218,6 +227,11 @@ export function buildRequestBody(
   if (req.tools && req.tools.length > 0) body.tools = toWireTools(req.tools);
   if (req.temperature !== undefined) body.temperature = req.temperature;
   if (req.maxTokens !== undefined) body.max_tokens = req.maxTokens;
+  if (req.responseFormat) {
+    const support = structuredOutputFor("openai", capabilities ?? DEEPSEEK_CAPABILITIES, model);
+    const format = openAiResponseFormat(req.responseFormat, support);
+    if (format !== undefined) body.response_format = format;
+  }
   if (stream) body.stream_options = { include_usage: true };
   // V4 thinking mode. Note: reasoning_content from responses is never echoed
   // back (toWireMessages builds from our ChatMessage, which has no such
@@ -227,10 +241,14 @@ export function buildRequestBody(
     supportsThinking(model) &&
     (thinking?.thinking !== undefined || thinking?.reasoningEffort)
   ) {
-    body.thinking = {
-      type: thinking.thinking === false ? "disabled" : "enabled",
-      ...(thinking.reasoningEffort ? { reasoning_effort: thinking.reasoningEffort } : {}),
-    };
+    body.thinking = { type: thinking.thinking === false ? "disabled" : "enabled" };
+    // A top-level sibling of `thinking`, not a field inside it. Any level turns
+    // thinking on, so it is left out when thinking was asked to be off.
+    if (thinking.reasoningEffort && thinking.thinking !== false) {
+      body.reasoning_effort = deepseekEffort(thinking.reasoningEffort);
+    }
+  } else if (capabilities?.effortDialect && thinking?.reasoningEffort && thinking.thinking !== false) {
+    Object.assign(body, openAiCompatibleEffort(capabilities.effortDialect, model, thinking.reasoningEffort));
   }
   return body;
 }
@@ -320,7 +338,7 @@ export function mapUsage(
   capabilities?: ProviderCapabilities,
   modelPricing?: Record<string, ModelPricing>,
 ): TokenUsage {
-  const tokenCount = (field: Exclude<keyof WireUsage, "prompt_tokens_details">): number =>
+  const tokenCount = (field: Exclude<keyof WireUsage, "prompt_tokens_details" | "completion_tokens_details">): number =>
     validUsageCount(raw?.[field], field);
   // Validate every token field the wire protocol can report, including the
   // miss count that cost accounting derives from prompt minus cache-hit tokens.
@@ -348,6 +366,11 @@ export function mapUsage(
   // meaningful where reads are read at all.
   const writes = reads > 0 || detailsWritten > 0 ? Math.min(detailsWritten, tokens.promptTokens - reads) : 0;
   if ((capabilities?.cacheHitTokens ?? true) && writes > 0) tokens.cacheWriteTokens = writes;
+  const reasoning = validUsageCount(
+    raw?.completion_tokens_details?.reasoning_tokens,
+    "completion_tokens_details.reasoning_tokens",
+  );
+  if (reasoning > 0) tokens.reasoningTokens = Math.min(reasoning, tokens.completionTokens);
   return priceUsage(tokens, model, capabilities, modelPricing, reportedCost(raw, capabilities));
 }
 
