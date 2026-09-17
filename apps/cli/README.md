@@ -82,14 +82,20 @@ pair them with `-y`.
 ```bash
 seekforge mcp add fs npx -y @modelcontextprotocol/server-filesystem .   # add (project)
 seekforge mcp add -g github npx @modelcontextprotocol/server-github      # add (global ~/.seekforge)
+seekforge mcp add --transport http -g --trust docs https://docs.example/mcp  # remote, trusted
+seekforge mcp import                                                     # copy from Claude Desktop / Code
 seekforge mcp list --tools                                               # list + tool descriptions
+seekforge mcp approve fs                                                 # let a project server connect here
 seekforge mcp remove fs                                                  # remove
 ```
 
-Everything after the server name is the command + its args verbatim (so its own
-flags like `-y` are kept). New servers are **untrusted** by default and are not
-connected during Agent startup. Review the command, then set `"trusted": true`
-on the entry in `.seekforge/config.json` to enable automatic connection.
+Options go before the server name; everything after it is the command + its
+args verbatim (so its own flags like `-y` are kept). New servers are not
+connected during Agent startup until someone vouches for them: a server in
+`~/.seekforge/config.json` needs `"trusted": true` (or `mcp add --trust`), and a
+server the checkout defines — `.seekforge/config.json`, `config.local.json`, or
+Claude Code's `.mcp.json` — needs `seekforge mcp approve <name>` for this
+workspace. See [docs/mcp.md](../../docs/mcp.md).
 
 ### Updating
 

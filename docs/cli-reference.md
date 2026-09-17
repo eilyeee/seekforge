@@ -107,6 +107,7 @@ config layers and env/CLI flags:
 | selected `--profile` overlay (if any) | ↑ |
 | `.seekforge/config.local.json` (personal, gitignored) | ↑ |
 | `.seekforge/config.json` (project) | ↑ |
+| `.mcp.json` (Claude Code project servers; `mcpServers` only) | ↑ |
 | `~/.seekforge/config.json` (global) | lowest |
 
 For deep-merge fields (`mcpServers`, `permissionRules`, `hooks`), the settings
@@ -167,6 +168,29 @@ the user store and leaves it disabled until its exact digest is approved.
 | `plugin remove <id>` | Uninstall and remove approval state. |
 
 See [Plugins](plugins.md) for the manifest and security model.
+
+## MCP commands
+
+`seekforge mcp` manages MCP servers. Servers the checkout defines
+(`.seekforge/config.json`, `config.local.json`, `.mcp.json`) connect only after
+they are approved for the workspace; servers in your user config connect when
+marked `trusted`.
+
+| Command | What it does |
+| --- | --- |
+| `mcp list [--tools] [-y]` | Start trusted/approved servers and list their tools; pending repository servers are shown, not started. `-y` pre-authorizes the folder. |
+| `mcp get <name>` | Show a server's definition (unexpanded), transport and standing. Starts nothing. |
+| `mcp add [-t stdio\|http\|sse] [-s user\|project\|local] [-g] [-e K=V]… [-H "K: V"]… [--trust] <name> <command-or-url…>` | Add a server. `--trust` writes `trusted: true` (user scope) or approves it for this workspace (project/local). |
+| `mcp add-json [-s …] [-g] [--trust] <name> '<json>'` | Add one definition in Claude Code's JSON format. |
+| `mcp import [--from claude-desktop\|claude-code] [-y] [--no-trust]` | Preview and copy servers from Claude Desktop / Claude Code into the user config (trusted unless `--no-trust`). |
+| `mcp approve <name> [-y]` | Approve a repository-defined server for this workspace after showing its definition. |
+| `mcp reject <name>` | Keep a repository-defined server from connecting in this workspace. |
+| `mcp reset-project-choices` | Forget every approve/reject decision for this workspace. |
+| `mcp remove <name> [-s …] [-g]` | Remove a server from a scope (alias `rm`). |
+| `mcp login <name> [-y]` / `mcp logout <name>` | Interactive OAuth for a remote server / forget its stored credential. |
+| `mcp-serve [--allow-write]` | Run SeekForge itself as an MCP server on stdio. |
+
+See [MCP](mcp.md) for transports, `${VAR}` expansion, approvals and tool search.
 
 ## GitHub issue and review workflows
 

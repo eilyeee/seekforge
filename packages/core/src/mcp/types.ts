@@ -2,20 +2,40 @@
 
 import type { PermissionName } from "@seekforge/shared";
 
+/** The wire a server speaks. `sse` is the legacy 2024-11-05 HTTP+SSE transport. */
+export type McpTransportKind = "stdio" | "http" | "sse";
+
+/**
+ * Who stands behind a server definition, which decides what the definition may
+ * reach on this machine (see launch.ts):
+ * - `user` — written in a layer the repository cannot write;
+ * - `project` — written by the checkout and approved by the user for this
+ *   workspace, exactly as it reads now;
+ * - `untrusted` — written by the checkout and approved by nobody.
+ */
+export type McpServerTrust = "user" | "project" | "untrusted";
+
 /**
  * One entry under `mcpServers` in .seekforge/config.json (Claude Code-compatible).
- * Exactly one transport applies per server: `url` present → Streamable HTTP,
- * otherwise `command` (stdio).
+ * Exactly one transport applies per server: `type` when present, otherwise
+ * `url` present → Streamable HTTP, otherwise `command` (stdio).
  */
 export type McpServerConfig = {
+  /**
+   * Transport, spelled the way Claude Code's `.mcp.json` spells it. Absent →
+   * inferred from `url` (Streamable HTTP) or `command` (stdio). `"sse"` is the
+   * only way to select the legacy HTTP+SSE transport.
+   */
+  type?: McpTransportKind;
   /** Executable to spawn for the stdio transport (e.g. "npx"). */
   command?: string;
   args?: string[];
-  /** Extra environment variables; merged over process.env (stdio only). */
+  /** Extra environment variables; merged over the inherited environment (stdio only). */
   env?: Record<string, string>;
   /**
-   * Streamable HTTP endpoint (e.g. "https://example.com/mcp"). Presence
-   * selects the HTTP transport; `command`/`args`/`env` are then ignored.
+   * HTTP endpoint (e.g. "https://example.com/mcp"). Presence selects the
+   * Streamable HTTP transport unless `type` says otherwise; `command`/`args`/
+   * `env` are then ignored.
    */
   url?: string;
   /**
@@ -71,6 +91,9 @@ export type McpResource = {
   description?: string;
   mimeType?: string;
 };
+
+/** One part of a resources/read result. */
+export type McpResourceContent = { uri?: string; mimeType?: string; text?: string; blob?: string };
 
 /** One declared argument of a prompt (from prompts/list). */
 export type McpPromptArgument = {

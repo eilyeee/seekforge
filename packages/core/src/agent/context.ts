@@ -153,6 +153,10 @@ const ESSENTIAL_TOOL_NAMES = new Set([
   "dispatch_team",
   "agent_result",
   "agent_send",
+  // The only way out of a plan run; trimming it strands the run read-only.
+  "exit_plan_mode",
+  // The only way to reach a deferred MCP tool; trimming it strands them all.
+  "tool_search",
 ]);
 
 /**

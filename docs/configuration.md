@@ -844,20 +844,23 @@ the failure is reported rather than swallowed.
 ### `mcpServers`
 
 MCP (Model Context Protocol) servers — Claude Code-compatible. Each entry maps
-a server name to its configuration. Two transport modes are supported:
+a server name to its configuration. Three transports are supported: stdio,
+Streamable HTTP, and the legacy HTTP+SSE transport:
 
 ```typescript
 type McpServerConfig = {
+  /** Transport as Claude Code spells it; absent → "http" when url is set, else "stdio". */
+  type?: "stdio" | "http" | "sse";
   /** Executable for stdio transport (e.g. "npx"). */
   command?: string;
   args?: string[];
-  /** Extra env vars merged over process.env (stdio only). */
+  /** Extra env vars merged over the inherited environment (stdio only). */
   env?: Record<string, string>;
-  /** Streamable HTTP URL. Presence selects HTTP; command/args/env ignored. */
+  /** Streamable HTTP (or, with type "sse", legacy SSE) URL; command/args/env ignored. */
   url?: string;
-  /** Extra HTTP headers sent on every request (HTTP only). */
+  /** Extra HTTP headers sent on every request (HTTP/SSE only). */
   headers?: Record<string, string>;
-  /** Optional OAuth refresh-token flow; every string supports ${ENV_VAR}. */
+  /** Optional OAuth refresh-token flow. */
   oauth?: {
     tokenEndpoint: string;
     clientId: string;
@@ -870,8 +873,12 @@ type McpServerConfig = {
 };
 ```
 
-Exactly one transport applies per server: if `url` is present, HTTP transport
-is used; otherwise `command` defines a stdio subprocess.
+Exactly one transport applies per server: `type` when given; otherwise, if
+`url` is present, Streamable HTTP is used, and otherwise `command` defines a
+stdio subprocess. `command`, `args`, `env` values, `url`, `headers` and `oauth`
+values may use `${VAR}` / `${VAR:-default}`; they expand only for servers from a
+user-owned layer and for project servers you approved (see
+[MCP](mcp.md#11-configuration)).
 
 ```json
 {
@@ -900,12 +907,34 @@ timeouts, and non-2xx checks apply to both ordinary requests and responses to
 server-initiated requests.
 
 Servers are merged per name across config layers (later wins):
-**settings > project > global**.
-Project/local entries always lose `trusted`; to enable automatic connection,
-put the complete reviewed entry in global config or explicit settings.
+**settings > local > project > `.mcp.json` > global**. `.mcp.json` at the
+workspace root is Claude Code's project server file; only its server fields are
+read. Project, local and `.mcp.json` entries always lose `trusted` and can never
+take a name a user-owned layer defines. They connect automatically only after
+you approve the exact definition for the workspace (`seekforge mcp approve`),
+and a stdio server approved that way starts with secret-looking environment
+variables removed unless its own `env` names them. Entries in global config or
+explicit settings connect automatically when they carry `trusted: true`.
 
-Settable via `config set`? **No** — use `seekforge mcp add/list/remove` or
-edit the file directly.
+Settable via `config set`? **No** — use `seekforge mcp add/add-json/import/remove`
+or edit the file directly.
+
+### `mcpToolSearchThreshold`
+
+Percentage (0–100, default `10`) of a request's context budget that the
+connected MCP servers' tool definitions may take before they are deferred:
+past it, MCP tools are advertised by name and one-line summary inside a
+`tool_search` tool, which loads full schemas for later turns. `0` always defers
+MCP tools, `100` never does. Built-in tools are never deferred. A value outside
+0–100 is rejected when the MCP servers load. See
+[MCP → Tool search](mcp.md#110-tool-search-deferred-mcp-tools).
+
+```json
+{ "mcpToolSearchThreshold": 20 }
+```
+
+User-owned: a repository config cannot set it. Settable via `config set`?
+**No** — edit the file directly.
 
 ### `hooks`
 

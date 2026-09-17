@@ -10,13 +10,17 @@ import {
   exchangeMcpAuthorizationCode,
   type McpOAuthClient,
   type McpOAuthMetadata,
+  type McpServerConfig,
+  type McpServerTrust,
+  projectMcpServerStatus,
   readMcpOAuthCallback,
   recordMcpOAuthTokens,
   registerMcpOAuthClient,
+  resolveMcpServerConfig,
 } from "@seekforge/core";
 import { dim, fail } from "../colors.js";
 import { ensureWorkspaceAuthorized } from "./run.js";
-import { loadConfig, resolveConfig } from "../config.js";
+import { resolveConfig } from "../config.js";
 import { t } from "../i18n.js";
 
 const AUTHORIZATION_TIMEOUT_MS = 5 * 60_000;
@@ -98,6 +102,28 @@ async function startLoopbackReceiver(state: string, signal: AbortSignal): Promis
 }
 
 /**
+ * The named server as it would be contacted: `${VAR}` references in its url
+ * expand only for a definition the user owns or approved for this workspace
+ * (see launch.ts), so a repository cannot steer the login through the
+ * environment. The same url keys the stored credential the transport reads.
+ */
+function effectiveServer(
+  projectPath: string,
+  name: string,
+): { server: McpServerConfig; resolved: McpServerConfig; fromRepository: boolean } | undefined {
+  const { config, mcpOrigins } = resolveConfig(projectPath);
+  const server = config.mcpServers?.[name];
+  if (!server) return undefined;
+  const fromRepository = mcpOrigins[name] === "repository";
+  const trust: McpServerTrust = !fromRepository
+    ? "user"
+    : projectMcpServerStatus(projectPath, name, server) === "approved"
+      ? "project"
+      : "untrusted";
+  return { server, resolved: resolveMcpServerConfig(server, trust), fromRepository };
+}
+
+/**
  * `seekforge mcp login <name>` — run the interactive OAuth 2.1 authorization
  * code flow (PKCE) against a configured remote MCP server, then store the
  * refresh token outside the shared config file.
@@ -107,13 +133,13 @@ export async function mcpLoginCommand(
   opts: { scope?: string; clientId?: string; clientSecret?: string; yes?: boolean } = {},
 ): Promise<void> {
   const projectPath = process.cwd();
-  const { config, mcpOrigins } = resolveConfig(projectPath);
-  const server = config.mcpServers?.[name];
-  if (!server) {
+  const found = effectiveServer(projectPath, name);
+  if (!found) {
     fail(t("cmd.mcpLogin.unknownServer", { name }), { hint: t("cmd.mcpLogin.unknownServerHint") });
     return;
   }
-  const serverUrl = server.url;
+  const { server, fromRepository } = found;
+  const serverUrl = found.resolved.url;
   if (!serverUrl) {
     fail(t("cmd.mcpLogin.notRemote", { name }));
     return;
@@ -123,7 +149,7 @@ export async function mcpLoginCommand(
   // discovery against it, registers a client, and opens a browser at whatever
   // authorization page it names. You picked the name; the checkout picked where
   // it points. Same folder-access consent `mcp list` and `run` take.
-  if (mcpOrigins[name] === "repository") {
+  if (fromRepository) {
     console.log(t("cmd.mcpLogin.fromRepository", { name, url: serverUrl }));
     if (!(await ensureWorkspaceAuthorized(projectPath, { yes: opts.yes === true, machine: false }))) return;
   }
@@ -208,8 +234,7 @@ export async function mcpLoginCommand(
 
 /** `seekforge mcp logout <name>` — forget a stored OAuth credential. */
 export function mcpLogoutCommand(name: string): void {
-  const config = loadConfig(process.cwd());
-  const url = config.mcpServers?.[name]?.url;
+  const url = effectiveServer(process.cwd(), name)?.resolved.url;
   const removed = url ? deleteMcpOAuthCredential(name, url) : deleteMcpOAuthCredential(name);
   console.log(removed ? t("cmd.mcpLogin.removed", { name }) : t("cmd.mcpLogin.nothingStored", { name }));
 }

@@ -9,9 +9,11 @@ import {
   type PermissionRule,
   type ProviderToolCall,
   type TokenUsage,
+  type ToolDefinitionForModel,
   type ToolResult,
 } from "@seekforge/shared";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { asAdaptiveToolDispatcher } from "../mcp/adaptive.js";
 import {
   assertAutoCompactThreshold,
   assertModelContextWindows,
@@ -914,22 +916,31 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           ...(depth === 0 && deps.persistRule ? { persistRule: deps.persistRule } : {}),
         };
 
-        const allToolDefs =
+        const rosterToolDefs =
           roster.length > 0
             ? [
-                ...deps.dispatcher.list(),
                 buildDispatchToolDefinition(roster),
                 buildDispatchTeamToolDefinition(roster),
                 buildAgentResultToolDefinition(),
                 buildAgentSendToolDefinition(),
               ]
-            : deps.dispatcher.list();
+            : [];
         const allowedToolSet = deps.allowedTools ? new Set(deps.allowedTools) : undefined;
-        let toolDefs = allowedToolSet ? allToolDefs.filter((tool) => allowedToolSet.has(tool.name)) : allToolDefs;
-        if (planMode && (!allowedToolSet || allowedToolSet.has(EXIT_PLAN_MODE_TOOL))) {
-          toolDefs = [...toolDefs, buildExitPlanModeToolDefinition()];
-        }
+        let exitPlanModeOffered = planMode && (!allowedToolSet || allowedToolSet.has(EXIT_PLAN_MODE_TOOL));
+        // An adaptive dispatcher (MCP registry) can change its catalog mid-run and
+        // defer schemas; an exact allowedTools list is already a fixed catalog.
+        const adaptiveDispatcher = allowedToolSet ? undefined : asAdaptiveToolDispatcher(deps.dispatcher);
+        const listToolDefs = (budget: number): ToolDefinitionForModel[] => {
+          const listed = adaptiveDispatcher ? adaptiveDispatcher.listForBudget(budget) : deps.dispatcher.list();
+          const all = rosterToolDefs.length > 0 ? [...listed, ...rosterToolDefs] : listed;
+          const allowed = allowedToolSet ? all.filter((tool) => allowedToolSet.has(tool.name)) : all;
+          return exitPlanModeOffered ? [...allowed, buildExitPlanModeToolDefinition()] : allowed;
+        };
+        let toolDefsRevision = adaptiveDispatcher?.revision();
+        let toolDefsBudget = contextBudgetFor(provider.model).budget;
+        let toolDefs = listToolDefs(toolDefsBudget);
         const retireExitPlanMode = (): void => {
+          exitPlanModeOffered = false;
           toolDefs = toolDefs.filter((tool) => tool.name !== EXIT_PLAN_MODE_TOOL);
         };
         // Files this run read or changed, for re-attachment after compaction.
@@ -1134,6 +1145,16 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             }
             // The budget follows the model this request goes to.
             const { budget: budgetTokens, compactAt: compactAtTokens } = contextBudgetFor(provider.model);
+            // A server changed its tool list, tool_search loaded schemas, or a
+            // model switch moved the budget deferral is measured against.
+            if (
+              adaptiveDispatcher &&
+              (adaptiveDispatcher.revision() !== toolDefsRevision || budgetTokens !== toolDefsBudget)
+            ) {
+              toolDefsRevision = adaptiveDispatcher.revision();
+              toolDefsBudget = budgetTokens;
+              toolDefs = listToolDefs(budgetTokens);
+            }
             // Tool schemas are serialized into every provider request. Keep the
             // full catalog while it is modest, but trim oversized MCP catalogs
             // deterministically and reserve the remaining window for messages.
@@ -1460,7 +1481,9 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                     ok: false,
                     error: {
                       code: "tool_not_advertised",
-                      message: `Tool ${tc.name} was not advertised for this provider turn`,
+                      message:
+                        adaptiveDispatcher?.unadvertisedHint(tc.name, requestToolNames) ??
+                        `Tool ${tc.name} was not advertised for this provider turn`,
                     },
                   },
                 };

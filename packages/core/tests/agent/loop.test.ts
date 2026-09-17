@@ -481,6 +481,71 @@ describe("agent loop", () => {
     });
   });
 
+  it("re-reads an adaptive dispatcher's catalog when its revision moves, and relays its hint", async () => {
+    const provider = fakeProvider([
+      response({ toolCalls: [{ id: "c1", name: "deferred_tool", argumentsJson: "{}" }], finishReason: "tool_calls" }),
+      response({ toolCalls: [{ id: "c2", name: "loader", argumentsJson: "{}" }], finishReason: "tool_calls" }),
+      response({ toolCalls: [{ id: "c3", name: "deferred_tool", argumentsJson: "{}" }], finishReason: "tool_calls" }),
+      response({ content: "done" }),
+    ]);
+    let revision = 1;
+    const budgets: number[] = [];
+    const executed: string[] = [];
+    const loader = { name: "loader", description: "loads", parameters: {} };
+    const deferred = { name: "deferred_tool", description: "deferred", parameters: {} };
+    const dispatcher = {
+      revision: () => revision,
+      list: () => [loader, deferred],
+      listForBudget: (budget: number) => {
+        budgets.push(budget);
+        return revision > 1 ? [loader, deferred] : [loader];
+      },
+      unadvertisedHint: (name: string, advertised: ReadonlySet<string>) =>
+        advertised.has("loader") ? `load ${name} first` : undefined,
+      execute: async (call: ToolCall): Promise<ToolResult> => {
+        executed.push(call.name);
+        if (call.name === "loader") revision++;
+        return { ok: true };
+      },
+    };
+    const agent = createAgentCore({ provider, dispatcher, confirm: async () => true, contextWindowTokens: 50_000 });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    expect(provider.requests.map((req) => req.tools?.map((tool) => tool.name))).toEqual([
+      ["loader"],
+      ["loader"],
+      ["loader", "deferred_tool"],
+      ["loader", "deferred_tool"],
+    ]);
+    // Listed once per revision, not once per turn.
+    expect(budgets).toHaveLength(2);
+    expect(budgets[0]).toBeGreaterThan(0);
+    expect(executed).toEqual(["loader", "deferred_tool"]);
+    const first = events.find((event) => event.type === "tool.completed");
+    expect(first).toMatchObject({
+      result: { ok: false, error: { code: "tool_not_advertised", message: "load deferred_tool first" } },
+    });
+  });
+
+  it("uses the plain catalog of an adaptive dispatcher when the run has an exact allowedTools list", async () => {
+    const provider = fakeProvider([response({ content: "done" })]);
+    const tool = { name: "read_file", description: "read", parameters: {} };
+    let adaptiveCalls = 0;
+    const dispatcher = {
+      revision: () => 1,
+      list: () => [tool],
+      listForBudget: () => {
+        adaptiveCalls++;
+        return [];
+      },
+      unadvertisedHint: () => undefined,
+      execute: async (): Promise<ToolResult> => ({ ok: true }),
+    };
+    const agent = createAgentCore({ provider, dispatcher, confirm: async () => true, allowedTools: ["read_file"] });
+    await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    expect(adaptiveCalls).toBe(0);
+    expect(provider.requests[0]!.tools?.map((t) => t.name)).toEqual(["read_file"]);
+  });
+
   it("returns an invalid_json tool result for malformed argumentsJson", async () => {
     const provider = fakeProvider([
       response({

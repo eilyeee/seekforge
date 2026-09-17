@@ -3,9 +3,11 @@ import { isRecord } from "../util/guards.js";
 import { McpError } from "./errors.js";
 import { abortablePromise, onAbortOnce } from "../util/abort.js";
 import { createMcpHttpTransport } from "./http.js";
+import { createMcpSseTransport } from "./sse.js";
 import { createBoundedLineReader, MAX_MCP_MESSAGE_BYTES } from "./framing.js";
+import { defaultMcpServerTrust, mcpChildEnv, mcpTransportOf, resolveMcpServerConfig } from "./launch.js";
 import { clientCapabilities, createServerRequestResponder, type McpServerRequestHandlers } from "./server-requests.js";
-import type { McpPrompt, McpResource, McpServerConfig, McpTool } from "./types.js";
+import type { McpPrompt, McpResource, McpResourceContent, McpServerConfig, McpServerTrust, McpTool } from "./types.js";
 import { SEEKFORGE_VERSION } from "../version.js";
 
 export { McpError };
@@ -13,7 +15,14 @@ export { McpError };
 export type McpClientOptions = {
   /** Server name (config key) — used in log prefixes and error messages. */
   name: string;
+  /** The definition as written — `${VAR}` references unexpanded. */
   config: McpServerConfig;
+  /**
+   * Who stands behind `config`; decides whether its `${VAR}` references expand
+   * and what environment a stdio child inherits (see launch.ts). Defaults to
+   * `user` for a `trusted: true` entry and `untrusted` otherwise.
+   */
+  trust?: McpServerTrust;
   /** Default per-request timeout. */
   requestTimeoutMs?: number;
   /**
@@ -56,6 +65,8 @@ export type McpClient = {
    * RESOURCE_READ_MAX_CHARS.
    */
   readResource(uri: string, signal?: AbortSignal): Promise<string>;
+  /** resources/read with every content part preserved (text uncapped, blobs as base64). */
+  readResourceDetailed?(uri: string, signal?: AbortSignal): Promise<McpResourceContent[]>;
   /** prompts/list — missing result.prompts is treated as an empty list. */
   listPrompts(signal?: AbortSignal): Promise<McpPrompt[]>;
   /**
@@ -119,7 +130,7 @@ export type McpContentPart = {
 export type McpToolCallResult = { text: string; content: McpContentPart[]; structuredContent?: unknown };
 type ContentPart = McpContentPart;
 type CallToolResult = { content?: ContentPart[]; structuredContent?: unknown; isError?: boolean };
-type ResourceContent = { uri?: string; mimeType?: string; text?: string; blob?: string };
+type ResourceContent = McpResourceContent;
 type ReadResourceResult = { contents?: ResourceContent[] };
 type PromptMessage = { role?: string; content?: ContentPart | ContentPart[] };
 type GetPromptResult = { description?: string; messages?: PromptMessage[] };
@@ -228,7 +239,7 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
 
     const proc = spawn(command, options.config.args ?? [], {
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, ...options.config.env },
+      env: mcpChildEnv(options.config, options.trust ?? defaultMcpServerTrust(options.config)),
     });
     child = proc;
 
@@ -461,14 +472,48 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
   };
 }
 
+/** A transport for a definition that cannot work: every request fails with the same error. */
+function failingTransport(error: unknown): McpTransport {
+  const failure =
+    error instanceof McpError
+      ? error
+      : new McpError("mcp_config", error instanceof Error ? error.message : String(error));
+  return {
+    request: async () => {
+      throw failure;
+    },
+    dispose: () => {},
+  };
+}
+
 /**
  * MCP client for one configured server. The transport is selected from the
- * config: `url` present → Streamable HTTP (see http.ts), otherwise `command`
- * → stdio child process. Both transports share the request surface below
- * (initialize handshake, tools list/call, resources list/read, dispose).
+ * config (see mcpTransportOf): `type: "sse"` → legacy HTTP+SSE (sse.ts),
+ * `url` → Streamable HTTP (http.ts), otherwise `command` → stdio child
+ * process. All transports share the request surface below (initialize
+ * handshake, tools list/call, resources list/read, dispose).
+ *
+ * `${VAR}` references are expanded here, once, according to `trust`; the
+ * transports only ever see the definition they are allowed to use. A
+ * definition that cannot be used (unknown `type`, `sse` without a url) does not
+ * throw here — every request fails with the configuration error instead, so a
+ * loader creating many clients is never taken down by one bad entry.
  */
 export function createMcpClient(options: McpClientOptions): McpClient {
-  const transport: McpTransport = options.config.url ? createMcpHttpTransport(options) : createStdioTransport(options);
+  const trust = options.trust ?? defaultMcpServerTrust(options.config);
+  let transport: McpTransport;
+  try {
+    const kind = mcpTransportOf(options.config);
+    const resolved: McpClientOptions = { ...options, trust, config: resolveMcpServerConfig(options.config, trust) };
+    transport =
+      kind === "sse"
+        ? createMcpSseTransport(resolved)
+        : kind === "http"
+          ? createMcpHttpTransport(resolved)
+          : createStdioTransport(resolved);
+  } catch (error) {
+    transport = failingTransport(error);
+  }
   const callToolDetailed = async (
     name: string,
     args: Record<string, unknown>,
@@ -504,8 +549,15 @@ export function createMcpClient(options: McpClientOptions): McpClient {
 
     async readResource(uri: string, signal?: AbortSignal): Promise<string> {
       const res = await transport.request<ReadResourceResult>("resources/read", { uri }, signal);
-      const text = flattenResourceContents(res?.contents ?? []);
+      const text = flattenResourceContents(Array.isArray(res?.contents) ? res.contents : []);
       return capText(text);
+    },
+
+    async readResourceDetailed(uri: string, signal?: AbortSignal): Promise<McpResourceContent[]> {
+      const res = await transport.request<ReadResourceResult>("resources/read", { uri }, signal);
+      return (Array.isArray(res?.contents) ? res.contents : []).filter(
+        (part): part is McpResourceContent => typeof part === "object" && part !== null && !Array.isArray(part),
+      );
     },
 
     async listPrompts(signal?: AbortSignal): Promise<McpPrompt[]> {

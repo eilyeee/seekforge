@@ -7,6 +7,7 @@ import {
   type ConfigLayerOrigin,
   describeConfigMergeReport,
   mergeConfigLayersWithReport,
+  readProjectMcpJsonLayer,
   repositoryConfigLayer,
   userConfigLayer,
 } from "@seekforge/shared/config-layers";
@@ -31,6 +32,11 @@ export type CliConfig = {
   permissionRules?: PermissionRule[];
   /** MCP servers (Claude Code-compatible). Edit the file directly; not settable via `config set`. */
   mcpServers?: Record<string, McpServerConfig>;
+  /**
+   * Share (0-100, default 10) of the context budget MCP tool definitions may
+   * take before they are deferred behind the tool_search tool.
+   */
+  mcpToolSearchThreshold?: number;
   /**
    * User-defined shell hooks fired around tool calls. preToolUse hooks can
    * block a tool (non-zero exit); postToolUse/sessionEnd are advisory. Edit
@@ -433,6 +439,8 @@ export function resolveConfig(
   // credentials/runtime overrides land on top.
   const { config: result, report } = mergeConfigLayersWithReport<CliConfig>([
     userConfigLayer(global),
+    // Claude Code's project server file sits below SeekForge's own project config.
+    readProjectMcpJsonLayer<CliConfig>(projectPath),
     repositoryConfigLayer(project),
     repositoryConfigLayer(local),
     ...profileLayers,

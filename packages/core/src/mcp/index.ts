@@ -28,12 +28,65 @@ export {
   getMcpPrompt,
   listMcpPrompts,
   listMcpResources,
-  loadMcpToolSpecs,
   readMcpResource,
   mcpToolPublicName,
+  MCP_IMAGE_MAX_BYTES,
+  MCP_IMAGES_MAX_PER_RESULT,
 } from "./tools.js";
 export type { McpClientEntry, McpPromptRef, McpResourceRef } from "./tools.js";
-export type { McpPrompt, McpPromptArgument, McpResource, McpServerConfig, McpTool } from "./types.js";
+export {
+  createMcpAwareDispatcher,
+  DEFAULT_MCP_TOOL_SEARCH_THRESHOLD,
+  loadMcpToolSpecs,
+  mcpConnectionDecision,
+} from "./registry.js";
+export type {
+  LoadMcpOptions,
+  McpConnectionDecision,
+  McpRegistry,
+  McpRegistryEvent,
+  McpServerState,
+  McpServerStatus,
+} from "./registry.js";
+export { asAdaptiveToolDispatcher } from "./adaptive.js";
+export type { AdaptiveToolDispatcher } from "./adaptive.js";
+export { LIST_MCP_RESOURCES_TOOL, READ_MCP_RESOURCE_TOOL, TOOL_SEARCH_TOOL } from "./meta-tools.js";
+export {
+  approveProjectMcpServer,
+  formatMcpServerDefinition,
+  listPendingProjectMcpServers,
+  listProjectMcpServers,
+  mcpServerDigest,
+  projectMcpApprovalsPath,
+  projectMcpServerStatus,
+  rejectProjectMcpServer,
+  resetProjectMcpChoices,
+} from "./approvals.js";
+export type { ProjectMcpDecision, ProjectMcpServer, ProjectMcpServerStatus } from "./approvals.js";
+export {
+  McpDefinitionError,
+  parseMcpEnvAssignment,
+  parseMcpHeaderAssignment,
+  parseMcpServerDefinition,
+  validateMcpServerName,
+} from "./definition.js";
+export {
+  defaultMcpServerTrust,
+  expandMcpEnvRefs,
+  mcpChildEnv,
+  mcpTransportOf,
+  resolveMcpServerConfig,
+} from "./launch.js";
+export type {
+  McpPrompt,
+  McpPromptArgument,
+  McpResource,
+  McpResourceContent,
+  McpServerConfig,
+  McpServerTrust,
+  McpTool,
+  McpTransportKind,
+} from "./types.js";
 export {
   buildMcpAuthorizationUrl,
   createMcpOAuthState,

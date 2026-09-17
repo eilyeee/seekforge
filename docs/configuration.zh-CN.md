@@ -764,20 +764,22 @@ global/settings 层可以包含两种 action。
 ### `mcpServers`
 
 MCP（Model Context Protocol）服务器——与 Claude Code 兼容。每个条目把一个
-服务器名映射到其配置。支持两种传输模式：
+服务器名映射到其配置。支持三种传输：stdio、Streamable HTTP 以及旧版 HTTP+SSE：
 
 ```typescript
 type McpServerConfig = {
+  /** Transport as Claude Code spells it; absent → "http" when url is set, else "stdio". */
+  type?: "stdio" | "http" | "sse";
   /** Executable for stdio transport (e.g. "npx"). */
   command?: string;
   args?: string[];
-  /** Extra env vars merged over process.env (stdio only). */
+  /** Extra env vars merged over the inherited environment (stdio only). */
   env?: Record<string, string>;
-  /** Streamable HTTP URL. Presence selects HTTP; command/args/env ignored. */
+  /** Streamable HTTP (or, with type "sse", legacy SSE) URL; command/args/env ignored. */
   url?: string;
-  /** Extra HTTP headers sent on every request (HTTP only). */
+  /** Extra HTTP headers sent on every request (HTTP/SSE only). */
   headers?: Record<string, string>;
-  /** Optional OAuth refresh-token flow; every string supports ${ENV_VAR}. */
+  /** Optional OAuth refresh-token flow. */
   oauth?: {
     tokenEndpoint: string;
     clientId: string;
@@ -790,8 +792,11 @@ type McpServerConfig = {
 };
 ```
 
-每个服务器恰好使用一种传输：如果存在 `url`，就使用 HTTP 传输；否则由
-`command` 定义一个 stdio 子进程。
+每个服务器恰好使用一种传输：写了 `type` 就用它；否则存在 `url` 时使用
+Streamable HTTP，再否则由 `command` 定义一个 stdio 子进程。`command`、`args`、
+`env` 的值、`url`、`headers` 与 `oauth` 的值都可以使用 `${VAR}` / `${VAR:-default}`；
+只有来自用户级配置层的服务器、以及你已批准的项目服务器才会展开这些引用（见
+[MCP](mcp.zh-CN.md#11-配置)）。
 
 ```json
 {
@@ -817,12 +822,29 @@ HTTP 404/405 会干净地回退到请求作用域响应。refresh-token OAuth �
 OAuth 刷新、超时和非 2xx 检查。
 
 服务器在各配置层之间按名称合并（后者覆盖前者）：
-**settings > project > global**。
-项目/local 条目的 `trusted` 始终会被移除；要启用自动连接，请把完整且已审查的
-条目放入全局配置或显式 settings。
+**settings > local > project > `.mcp.json` > global**。工作区根目录下的 `.mcp.json`
+是 Claude Code 的项目服务器文件，只读取其中的服务器字段。项目、local 与 `.mcp.json`
+条目的 `trusted` 始终会被移除，且永远不能占用用户级配置层已定义的名字。它们只有在你为
+该工作区批准了这份确切的定义（`seekforge mcp approve`）之后才会自动连接；以这种方式批准的
+stdio 服务器启动时会去掉看似密钥的环境变量，除非它自己的 `env` 点名了它们。全局配置或
+显式 settings 中的条目带有 `trusted: true` 时自动连接。
 
-可通过 `config set` 设置？**不可以** —— 使用 `seekforge mcp add/list/remove`
+可通过 `config set` 设置？**不可以** —— 使用 `seekforge mcp add/add-json/import/remove`
 或直接编辑文件。
+
+### `mcpToolSearchThreshold`
+
+已连接 MCP 服务器的工具定义在被延迟加载之前，最多可占请求上下文预算的百分比
+（0–100，默认 `10`）：超过后，MCP 工具只以名称和一行摘要的形式列在 `tool_search`
+工具的描述中，由它为后续轮次加载完整 schema。`0` 总是延迟 MCP 工具，`100` 从不延迟。
+内置工具永不延迟。超出 0–100 的值会在加载 MCP 服务器时被拒绝。见
+[MCP → 工具搜索](mcp.zh-CN.md#110-工具搜索延迟加载的-mcp-工具)。
+
+```json
+{ "mcpToolSearchThreshold": 20 }
+```
+
+仅限用户级配置：仓库配置无法设置它。可通过 `config set` 设置？**不可以** —— 直接编辑文件。
 
 ### `hooks`
 

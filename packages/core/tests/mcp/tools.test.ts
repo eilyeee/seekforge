@@ -6,10 +6,10 @@ import {
   getMcpPrompt,
   listMcpPrompts,
   listMcpResources,
-  loadMcpToolSpecs,
   mcpToolPublicName,
   readMcpResource,
 } from "../../src/mcp/tools.js";
+import { loadMcpToolSpecs } from "../../src/mcp/registry.js";
 import { createDefaultDispatcher, createDispatcher } from "../../src/tools/index.js";
 import { call, makeCtx, makeWorkspace } from "../tools/helpers.js";
 import { writeFixtureServer } from "./fixture.js";
@@ -202,8 +202,10 @@ describe("dispatch through createDefaultDispatcher", () => {
     expect(res.data).toEqual({
       content: 'echo:{"text":"hi"}\n[image content]',
       structuredContent: { echoed: { text: "hi" } },
-      attachments: [{ type: "image", mimeType: "image/png", encodedBytes: 8 }],
+      attachments: [{ type: "image", mimeType: "image/png", encodedBytes: 8, attached: true }],
     });
+    // The image itself travels as a tool-result image, not inside the data.
+    expect(res.images).toEqual([{ mediaType: "image/png", dataBase64: "deadbeef", label: "fake/echo" }]);
     // approvalMode "auto": "env" still confirms — exactly one prompt.
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toMatchObject({
@@ -311,7 +313,12 @@ describe("loadMcpToolSpecs", () => {
       broken: { command: "/nonexistent/seekforge-no-such-binary", trusted: true },
     });
     try {
-      expect(specs.map((s) => s.name)).toEqual(["mcp__fake__echo", "mcp__fake__boom"]);
+      expect(specs.map((s) => s.name)).toEqual([
+        "mcp__fake__echo",
+        "mcp__fake__boom",
+        "list_mcp_resources",
+        "read_mcp_resource",
+      ]);
     } finally {
       dispose();
     }
@@ -336,7 +343,12 @@ describe("loadMcpToolSpecs", () => {
     });
     try {
       expect(entries.map((entry) => entry.serverName)).toEqual(["fake"]);
-      expect(specs.map((spec) => spec.name)).toEqual(["mcp__fake__echo", "mcp__fake__boom"]);
+      expect(specs.map((spec) => spec.name)).toEqual([
+        "mcp__fake__echo",
+        "mcp__fake__boom",
+        "list_mcp_resources",
+        "read_mcp_resource",
+      ]);
     } finally {
       dispose();
     }
