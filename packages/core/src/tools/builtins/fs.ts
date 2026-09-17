@@ -7,10 +7,11 @@ import { applyEdits } from "../edits.js";
 import {
   DEFAULT_IGNORE_DIRS,
   isSensitiveBasename,
-  isSensitiveRelPath,
+  isSensitiveNestedPath,
   resolveForRead,
   resolveForWrite,
   resolveInsideWorkspace,
+  toolPathRoot,
 } from "../sandbox.js";
 import { truncateHeadTail } from "../text.js";
 import { unifiedDiff } from "../diff.js";
@@ -56,12 +57,12 @@ function joinRel(a: string, b: string): string {
  * path is how the model looks inside it.
  */
 function ignoreFor(
-  ctx: ToolContext,
+  scopeRoot: string,
   root: string,
   includeIgnored: boolean | undefined,
 ): { matcher: WorkspaceIgnore; rootRel: string; frame: IgnoreFrame } | undefined {
   if (includeIgnored) return undefined;
-  const matcher = WorkspaceIgnore.forWorkspace(ctx.workspace);
+  const matcher = WorkspaceIgnore.forWorkspace(scopeRoot);
   const rootRel = matcher.relativePath(root);
   return { matcher, rootRel, frame: matcher.frameFor(rootRel) };
 }
@@ -93,7 +94,8 @@ function precheckLocalView(ctx: ToolContext, relPath: string): void {
   let resolved: string;
   let stat: fs.Stats | undefined;
   try {
-    resolved = resolveForWrite(ctx.workspace, relPath);
+    const target = toolPathRoot(ctx, relPath, "write");
+    resolved = resolveForWrite(target.root, target.path);
     stat = fs.statSync(resolved, { throwIfNoEntry: false });
   } catch {
     return; // run() reports the path problem itself
@@ -117,7 +119,8 @@ function precheckLocalView(ctx: ToolContext, relPath: string): void {
  */
 function readCurrentForPreview(ctx: ToolContext, relPath: string): string | null {
   try {
-    const resolved = resolveForRead(ctx.workspace, relPath);
+    const target = toolPathRoot(ctx, relPath, "read");
+    const resolved = resolveForRead(target.root, target.path);
     return readUtf8FileBoundedSync(resolved, MAX_TOOL_FILE_BYTES);
   } catch {
     return null;
@@ -273,14 +276,13 @@ const listFiles = defineTool({
     path: args.path ?? ".",
   }),
   async run(args, ctx) {
+    const target = toolPathRoot(ctx, args.path ?? ".", "list");
     if (ctx.runtime) {
-      const res = await callRuntime<{ entries: string[]; truncated: boolean }>(
-        ctx.runtime,
-        "list_files",
-        ctx.workspace,
-        { path: args.path ?? ".", maxDepth: args.maxDepth ?? 10 },
-      );
-      const entries = args.includeIgnored ? res.entries : dropIgnoredEntries(ctx, args.path ?? ".", res.entries);
+      const res = await callRuntime<{ entries: string[]; truncated: boolean }>(ctx.runtime, "list_files", target.root, {
+        path: target.path,
+        maxDepth: args.maxDepth ?? 10,
+      });
+      const entries = args.includeIgnored ? res.entries : dropIgnoredEntries(target, res.entries);
       return {
         // The same in-band sentinel the local walk appends. Without it the two
         // backends of one tool answer differently: a runtime-backed session
@@ -293,12 +295,12 @@ const listFiles = defineTool({
         meta: { truncated: res.truncated },
       };
     }
-    const root = resolveInsideWorkspace(ctx.workspace, args.path ?? ".");
+    const root = resolveInsideWorkspace(target.root, target.path);
     if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
       throw new ToolError("not_found", `Not a directory: ${args.path ?? "."}`);
     }
     const maxDepth = args.maxDepth ?? 10;
-    const { entries, truncated } = walkEntries(root, maxDepth, ignoreFor(ctx, root, args.includeIgnored));
+    const { entries, truncated } = walkEntries(root, maxDepth, ignoreFor(target.root, root, args.includeIgnored));
     if (truncated) entries.push(`... [truncated at ${MAX_LIST_ENTRIES} entries]`);
     return {
       data: { entries, count: entries.length, truncated },
@@ -313,10 +315,10 @@ const listFiles = defineTool({
  * backend. Best effort: a listing root that cannot be resolved here is
  * returned unfiltered.
  */
-function dropIgnoredEntries(ctx: ToolContext, listPath: string, entries: string[]): string[] {
+function dropIgnoredEntries(target: { root: string; path: string }, entries: string[]): string[] {
   let ignore: ReturnType<typeof ignoreFor>;
   try {
-    ignore = ignoreFor(ctx, resolveInsideWorkspace(ctx.workspace, listPath), false);
+    ignore = ignoreFor(target.root, resolveInsideWorkspace(target.root, target.path), false);
   } catch {
     return entries;
   }
@@ -405,11 +407,12 @@ const readFile = defineTool({
     path: args.path,
   }),
   async run(args, ctx) {
+    const target = toolPathRoot(ctx, args.path, "read");
     const ext = path.extname(args.path).toLowerCase();
     // Binary formats are read from the local filesystem even in a runtime
     // session, as image_analyze does: the runtime protocol carries text only.
     if (IMAGE_EXTENSIONS.has(ext)) {
-      const resolved = resolveForRead(ctx.workspace, args.path);
+      const resolved = resolveForRead(target.root, target.path);
       const stat = statRegularFile(resolved, args.path);
       const { data, images, bytes } = readImage(resolved, args.path);
       // Local sessions only: behind a runtime, writes compare against text the
@@ -425,7 +428,7 @@ const readFile = defineTool({
     let content: string;
     let pdfInfo: { pages: string; totalPages?: number; note?: string } | undefined;
     if (isPdf) {
-      const resolved = resolveForRead(ctx.workspace, args.path);
+      const resolved = resolveForRead(target.root, target.path);
       const stat = statRegularFile(resolved, args.path);
       if (stat.size > MAX_PDF_FILE_BYTES) {
         throw new ToolError("too_large", `PDF exceeds ${MAX_PDF_FILE_BYTES} bytes: ${args.path}`);
@@ -443,13 +446,13 @@ const readFile = defineTool({
         ...(pdf.truncated ? { note: "The extracted text was cut short; read a smaller page range." } : {}),
       };
     } else if (ctx.runtime) {
-      const res = await callRuntime<{ content: string }>(ctx.runtime, "read_file", ctx.workspace, {
-        path: args.path,
+      const res = await callRuntime<{ content: string }>(ctx.runtime, "read_file", target.root, {
+        path: target.path,
       });
       content = res.content;
       ctx.fileLedger?.set(ledgerKey(ctx, args.path), stampFor(content));
     } else {
-      const resolved = resolveForRead(ctx.workspace, args.path);
+      const resolved = resolveForRead(target.root, target.path);
       // stat BEFORE reading: a stamp may pair older metadata with newer bytes
       // (the next check then falls back to the hash) but never the reverse.
       const stat = statRegularFile(resolved, args.path);
@@ -625,7 +628,8 @@ const searchText = defineTool({
     path: args.path ?? ".",
   }),
   async run(args, ctx) {
-    const root = resolveInsideWorkspace(ctx.workspace, args.path ?? ".");
+    const target = toolPathRoot(ctx, args.path ?? ".", "list");
+    const root = resolveInsideWorkspace(target.root, target.path);
     if (!fs.existsSync(root)) {
       throw new ToolError("not_found", `Path not found: ${args.path ?? "."}`);
     }
@@ -663,13 +667,20 @@ const searchText = defineTool({
       // keep the raw path if it can't be resolved
     }
     const sessionsDir = path.join(workspaceReal, ".seekforge", "sessions");
-    // The sensitive-path policy is keyed by WORKSPACE-relative paths. The
+    // The sensitive-path policy is keyed by paths relative to the root the
+    // search belongs to (the workspace, or an additional directory). The
     // reported `file` is relative to the search root, so searching
     // `.seekforge` reported "config.json" — and the check, fed that, let the
     // provider key through.
-    const rootRel = path.relative(workspaceReal, root).split(path.sep).join("/");
+    let scopeReal = target.root;
+    try {
+      scopeReal = fs.realpathSync(target.root);
+    } catch {
+      // keep the raw root; resolveInsideWorkspace above already validated it
+    }
+    const rootRel = path.relative(scopeReal, root).split(path.sep).join("/");
     const rootIsFile = fs.statSync(root).isFile();
-    const ignore = rootIsFile ? undefined : ignoreFor(ctx, root, args.includeIgnored);
+    const ignore = rootIsFile ? undefined : ignoreFor(target.root, root, args.includeIgnored);
 
     const matches: SearchMatch[] = [];
     const filesWithMatches: string[] = [];
@@ -687,7 +698,7 @@ const searchText = defineTool({
         return;
       }
       if (!stat.isFile() || stat.size > MAX_SEARCHABLE_FILE_BYTES) return;
-      if (isSensitiveBasename(path.basename(filePath)) || isSensitiveRelPath(wsRel)) return;
+      if (isSensitiveBasename(path.basename(filePath)) || isSensitiveNestedPath(wsRel)) return;
       let buf: Buffer;
       try {
         buf = readFileBoundedSync(filePath, MAX_SEARCHABLE_FILE_BYTES);
@@ -826,11 +837,12 @@ async function runtimeBeforeContent(
   opts?: { signal?: AbortSignal },
 ): Promise<string | null> {
   try {
+    const target = toolPathRoot(ctx, relPath, "read");
     const res = await callRuntime<{ content: string }>(
       ctx.runtime!,
       "read_file",
-      ctx.workspace,
-      { path: relPath },
+      target.root,
+      { path: target.path },
       opts?.signal ? { signal: opts.signal } : undefined,
     );
     return res.content;
@@ -878,20 +890,23 @@ const writeFile = defineTool({
   },
   async run(args, ctx) {
     const ledger = ctx.fileLedger;
+    // Outside the workspace the checkpoint records the absolute path, which
+    // rewind reports as skipped rather than restoring into the workspace.
+    const target = toolPathRoot(ctx, args.path, "write");
     if (ctx.runtime) {
       const guarded = ledger !== undefined && args.overwrite === true;
       const before = ctx.checkpoint || guarded ? await runtimeBeforeContent(ctx, args.path) : null;
       if (guarded && before !== null) runtimeGuard(ctx, args.path)?.(before);
-      ctx.checkpoint?.(args.path, before);
-      await callRuntime<{ path: string }>(ctx.runtime, "write_file", ctx.workspace, {
-        path: args.path,
+      ctx.checkpoint?.(target.path, before);
+      await callRuntime<{ path: string }>(ctx.runtime, "write_file", target.root, {
+        path: target.path,
         content: args.content,
         overwrite: args.overwrite ?? false,
       });
       recordWritten(ledger, ledgerKey(ctx, args.path), args.content);
       return { data: { path: args.path, bytesWritten: Buffer.byteLength(args.content, "utf8") } };
     }
-    const resolved = resolveForWrite(ctx.workspace, args.path);
+    const resolved = resolveForWrite(target.root, target.path);
     const exists = fs.existsSync(resolved);
     if (exists && !args.overwrite) {
       throw new ToolError("exists", `File already exists: ${args.path} (pass overwrite:true to replace)`);
@@ -906,10 +921,10 @@ const writeFile = defineTool({
       assertCurrentView(ledger, resolved, args.path, { stat: expected, content: currentBytes });
     }
     if (ctx.checkpoint) {
-      ctx.checkpoint(args.path, exists ? currentBytes().toString("utf8") : null);
+      ctx.checkpoint(target.path, exists ? currentBytes().toString("utf8") : null);
     }
     fs.mkdirSync(path.dirname(resolved), { recursive: true });
-    const fd = openVerifiedWrite(ctx.workspace, args.path, resolved, {
+    const fd = openVerifiedWrite(target.root, target.path, resolved, {
       create: true,
       exclusive: !args.overwrite && !exists,
       ...(expected ? { expected } : {}),
@@ -1001,12 +1016,13 @@ const applyPatch = defineTool({
     // proposed as a whole, so it must look again before its next edit.
     const partial = args.edits.length < requested;
     const ledger = ctx.fileLedger;
+    const target = toolPathRoot(ctx, args.path, "edit");
     if (ctx.runtime) {
       const replacesAll = args.edits.some((e) => e.replaceAll);
       const key = ledgerKey(ctx, args.path);
       const before = ctx.checkpoint || ledger || replacesAll ? await runtimeBeforeContent(ctx, args.path) : undefined;
       if (typeof before === "string") runtimeGuard(ctx, args.path)?.(before);
-      if (ctx.checkpoint) ctx.checkpoint(args.path, before ?? null);
+      if (ctx.checkpoint) ctx.checkpoint(target.path, before ?? null);
       let next: string | undefined;
       let data: unknown;
       if (replacesAll) {
@@ -1014,15 +1030,15 @@ const applyPatch = defineTool({
         // patch is applied here and written back whole.
         if (before === null || before === undefined) throw new ToolError("not_found", `File not found: ${args.path}`);
         next = applyEdits(before, args.edits);
-        await callRuntime<{ path: string }>(ctx.runtime, "write_file", ctx.workspace, {
-          path: args.path,
+        await callRuntime<{ path: string }>(ctx.runtime, "write_file", target.root, {
+          path: target.path,
           content: next,
           overwrite: true,
         });
         data = { path: args.path, editsApplied: args.edits.length };
       } else {
-        data = await callRuntime<{ path: string; editsApplied: number }>(ctx.runtime, "apply_patch", ctx.workspace, {
-          path: args.path,
+        data = await callRuntime<{ path: string; editsApplied: number }>(ctx.runtime, "apply_patch", target.root, {
+          path: target.path,
           edits: args.edits,
         });
         // The runtime applied exact unique matches, which is what applyEdits
@@ -1039,9 +1055,9 @@ const applyPatch = defineTool({
       }
       return { data: withPartialNote(data, partial) };
     }
-    const resolved = resolveForWrite(ctx.workspace, args.path);
+    const resolved = resolveForWrite(target.root, target.path);
     // Editing implies reading current content back into hints: same read rules apply.
-    resolveForRead(ctx.workspace, args.path);
+    resolveForRead(target.root, target.path);
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
       throw new ToolError("not_found", `File not found: ${args.path}`);
     }
@@ -1052,8 +1068,8 @@ const applyPatch = defineTool({
     const content = raw.toString("utf8");
     // applyEdits throws on no_match/ambiguous before anything is written.
     const next = applyEdits(content, args.edits);
-    ctx.checkpoint?.(args.path, content);
-    const fd = openVerifiedWrite(ctx.workspace, args.path, resolved, { create: false, exclusive: false, expected });
+    ctx.checkpoint?.(target.path, content);
+    const fd = openVerifiedWrite(target.root, target.path, resolved, { create: false, exclusive: false, expected });
     try {
       replaceFileContents(fd, next);
       if (partial) ledger?.delete(resolved);

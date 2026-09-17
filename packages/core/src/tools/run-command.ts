@@ -6,7 +6,13 @@ import { ToolError } from "./errors.js";
 import { onAbortOnce } from "../util/abort.js";
 import { killProcessTree } from "../util/process-tree.js";
 import { scrubSecretEnv } from "../util/scrub-env.js";
-import { buildSandboxSpec, sandboxedShell, type SandboxLevel } from "./os-sandbox.js";
+import {
+  buildSandboxSpec,
+  resolveSandboxNetwork,
+  sandboxedShell,
+  type SandboxLevel,
+  type SandboxProfile,
+} from "./os-sandbox.js";
 
 export type CommandPermission = "readonly" | "execute" | "env" | "dangerous";
 
@@ -191,6 +197,15 @@ function parseShellSegment(source: string, start = 0, terminator?: ")" | "`"): S
   }
   finishInvocation();
   return { invocations, next: source.length };
+}
+
+/**
+ * Every simple command a shell line would run, as unquoted words — the parts
+ * of a compound line and of each command substitution. Parsing only: nothing
+ * is expanded.
+ */
+export function shellInvocations(command: string): string[][] {
+  return parseShellSegment(command).invocations;
 }
 
 function gitArgumentRuns(command: string): string[][] {
@@ -638,7 +653,7 @@ const EXIT_DRAIN_GRACE_MS = 100;
 
 export type RunShellOptions = {
   /** OS-level sandbox; "off"/absent = plain /bin/sh (current behavior). */
-  sandbox?: SandboxLevel | undefined;
+  sandbox?: SandboxLevel | SandboxProfile | undefined;
   /** Workspace root the sandbox allows writes in. Defaults to `cwd`. */
   workspace?: string | undefined;
   /**
@@ -665,10 +680,29 @@ const SANDBOX_DENIAL_PATTERNS: readonly string[] = [
   "sandbox",
 ];
 
+/**
+ * What a client prints when the sandbox took its network away: seatbelt also
+ * blocks the resolver, and a CONNECT refused by the allowlist proxy reaches
+ * most tools only as a bare 403. Genuine DNS failures look the same, which is
+ * why these count only when the sandbox restricts the network.
+ */
+const NETWORK_DENIAL_PATTERNS: readonly string[] = [
+  "could not resolve host",
+  "enotfound",
+  "eai_again",
+  "temporary failure in name resolution",
+  "name or service not known",
+  "nodename nor servname",
+  "connect tunnel failed",
+  "tunnel connection failed",
+  "403 forbidden",
+];
+
 /** True when a failed command's combined output looks like an OS-sandbox denial. */
-export function looksLikeSandboxDenial(output: string): boolean {
+export function looksLikeSandboxDenial(output: string, options: { networkRestricted?: boolean } = {}): boolean {
   const lower = output.toLowerCase();
-  return SANDBOX_DENIAL_PATTERNS.some((p) => lower.includes(p));
+  if (SANDBOX_DENIAL_PATTERNS.some((p) => lower.includes(p))) return true;
+  return options.networkRestricted === true && NETWORK_DENIAL_PATTERNS.some((p) => lower.includes(p));
 }
 
 /**
@@ -678,13 +712,19 @@ export function looksLikeSandboxDenial(output: string): boolean {
  * bwrap); throws ToolError("sandbox_unavailable") instead of silently
  * running unsandboxed when the wrapper cannot be built.
  */
-export function runShellCommand(
+export async function runShellCommand(
   command: string,
   cwd: string,
   timeoutMs: number,
   options: RunShellOptions = {},
 ): Promise<ShellResult> {
-  const { sandbox, workspace = cwd, onOutput, signal } = options;
+  const { workspace = cwd, onOutput, signal } = options;
+  if (signal?.aborted) {
+    return Promise.reject(new ToolError("cancelled", "Command cancelled"));
+  }
+  // An allowlist sandbox needs its proxy listening before the wrapper can name
+  // the port; callers that resolved it already pass the endpoint through.
+  const sandbox = await resolveSandboxNetwork(options.sandbox);
   if (signal?.aborted) {
     return Promise.reject(new ToolError("cancelled", "Command cancelled"));
   }

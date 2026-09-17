@@ -572,20 +572,28 @@ describe("allow-for-session confirm channel", () => {
     expect(requests).toHaveLength(1); // no new prompt
   });
 
-  it("remember:session for a non-command tool remembers the tool name", async () => {
+  it("remember:session for a file tool covers that directory only", async () => {
     const ws = makeWorkspace();
+    fs.mkdirSync(path.join(ws, "src", "sub"), { recursive: true });
     const sessionAllowlist: string[] = [];
     const { confirm, requests } = scriptedConfirm({ allow: true, remember: "session" });
     const ctx = makeCtx(ws, {
       policy: { approvalMode: "confirm", sessionAllowlist },
       confirm,
     });
-    const first = await dispatcher.execute(call("write_file", { path: "a.txt", content: "x" }), ctx);
+    const first = await dispatcher.execute(call("write_file", { path: "src/a.txt", content: "x" }), ctx);
     expect(first.ok).toBe(true);
-    expect(sessionAllowlist).toContain("write_file");
-    const second = await dispatcher.execute(call("write_file", { path: "b.txt", content: "y" }), ctx);
+    expect(sessionAllowlist).not.toContain("write_file");
+    const second = await dispatcher.execute(call("write_file", { path: "src/b.txt", content: "y" }), ctx);
     expect(second.ok).toBe(true);
-    expect(requests).toHaveLength(1); // only the first prompted
+    expect(requests).toHaveLength(1); // same directory: no new prompt
+    await dispatcher.execute(call("write_file", { path: "src/sub/c.txt", content: "z" }), ctx);
+    await dispatcher.execute(call("write_file", { path: "top.txt", content: "z" }), ctx);
+    await dispatcher.execute(
+      call("apply_patch", { path: "src/a.txt", edits: [{ oldString: "x", newString: "w" }] }),
+      ctx,
+    );
+    expect(requests).toHaveLength(4); // a subdirectory, the parent, and another tool each prompt
   });
 
   it("a different command still prompts (prefix match only)", async () => {

@@ -1,4 +1,4 @@
-import { serveMcp } from "@seekforge/core";
+import { parseSandboxNetworkPolicy, sandboxForRun, serveMcp } from "@seekforge/core";
 import { configureCliTools } from "../agent-factory.js";
 import { loadConfig } from "../config.js";
 import { t } from "../i18n.js";
@@ -65,6 +65,11 @@ export async function mcpServeCommand(opts: McpServeOptions): Promise<void> {
     `${t("cmd.mcpServe.header", { mode: readOnly ? t("cmd.mcpServe.readOnly") : t("cmd.mcpServe.fullAccess"), workspace })}\n`,
   );
 
+  // The same sandbox an agent run gets: a sandboxNetwork allowlist narrows it.
+  const sandbox = sandboxForRun(
+    config.sandbox,
+    config.sandboxNetwork !== undefined ? { network: parseSandboxNetworkPolicy(config.sandboxNetwork) } : {},
+  );
   const server = serveMcp({
     workspace,
     readOnly,
@@ -73,7 +78,7 @@ export async function mcpServeCommand(opts: McpServeOptions): Promise<void> {
     ...(config.permissionRules ? { permissionRules: config.permissionRules } : {}),
     ...(config.commandAllowlist ? { commandAllowlist: config.commandAllowlist } : {}),
     ...(config.hooks ? { hooks: config.hooks } : {}),
-    ...(config.sandbox ? { sandbox: config.sandbox } : {}),
+    ...(sandbox !== undefined ? { sandbox } : {}),
   });
 
   try {

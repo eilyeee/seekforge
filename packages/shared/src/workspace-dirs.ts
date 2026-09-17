@@ -1,9 +1,12 @@
 /**
- * Extra read-only directory support (`/add-dir` in the TUI, `--add-dir` in the
- * CLI) — the genuinely shared half of what used to be parallel copies in
- * apps/tui/src/workspace-dirs.ts and apps/cli/src/workspace-dirs.ts:
- * normalization of an extra-dir argument plus @-reference expansion against
- * those dirs. App-specific extras stay in the apps (the TUI keeps its
+ * Extra directory support (`/add-dir` in the TUI, `--add-dir` in the CLI,
+ * `additionalDirectories` in user config) — the genuinely shared half of what
+ * used to be parallel copies in apps/tui/src/workspace-dirs.ts and
+ * apps/cli/src/workspace-dirs.ts: normalization of an extra-dir argument plus
+ * @-reference expansion against those dirs. Core validates the directories it
+ * lets the file tools use with the same normalizeExtraDir
+ * (resolveAdditionalDirectories), so both halves agree on what a granted
+ * directory is. App-specific extras stay in the apps (the TUI keeps its
  * scanExtraDirs file-picker scan and formatExtraDirLines display helper).
  *
  * NODE-ONLY: reads the filesystem, so it lives behind the "./workspace-dirs"

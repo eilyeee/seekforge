@@ -4,6 +4,8 @@ import { redactSecrets } from "./redact.js";
 import { truncateHeadTail } from "./text.js";
 import { callRuntime } from "./runtime-backend.js";
 import { looksLikeSandboxDenial, runShellCommand, type ShellResult } from "./run-command.js";
+import { networkProxyAt, type BlockedConnection } from "./network-proxy.js";
+import { resolveSandboxNetwork, sandboxProxyEndpoint, sandboxRestrictsNetwork } from "./os-sandbox.js";
 import type { ToolContext } from "./index.js";
 
 /**
@@ -102,6 +104,11 @@ export async function executeCommandInWorkspace(
     };
   }
 
+  const sandbox = await resolveSandboxNetwork(ctx.sandbox);
+  const proxyEndpoint = sandboxProxyEndpoint(sandbox);
+  const proxy = proxyEndpoint !== undefined ? networkProxyAt(proxyEndpoint.port) : undefined;
+  const blockedMark = proxy?.blockedCount() ?? 0;
+
   const execute = async (sandbox: typeof ctx.sandbox): Promise<ShellResult> => {
     try {
       return await shellRunner(command, cwd, timeoutMs, {
@@ -123,9 +130,13 @@ export async function executeCommandInWorkspace(
     }
   };
 
-  const settle = (res: ShellResult, sandboxEscalated: boolean): CommandExecution => {
+  const settle = (
+    res: ShellResult,
+    sandboxEscalated: boolean,
+    blocked: readonly BlockedConnection[] = [],
+  ): CommandExecution => {
     const out = bound(res.stdout);
-    const err = bound(res.stderr);
+    const err = bound(res.stderr + blockedNote(blocked));
     return {
       exitCode: res.exitCode,
       stdout: out.text,
@@ -136,19 +147,29 @@ export async function executeCommandInWorkspace(
     };
   };
 
-  const res = await execute(ctx.sandbox);
+  const res = await execute(sandbox);
+  // Refusals the allowlist proxy logged while this command ran. The proxy is
+  // shared by the process, so a concurrent command's refusal can land here
+  // too; that only ever adds a note and an offer the user still has to accept.
+  const blocked = proxy?.blockedSince(blockedMark) ?? [];
 
   // Sandbox escalation (Codex-style): when the policy sandbox is active and the
   // failure output looks like a sandbox denial (not a genuine command error),
   // offer ONE unsandboxed retry. confirm decides — auto-deny modes simply keep
   // the original failure. sandbox_unavailable setup errors throw above and
   // never reach this path.
-  const sandboxActive = ctx.sandbox !== undefined && ctx.sandbox !== "off";
-  if (sandboxActive && res.exitCode !== 0 && looksLikeSandboxDenial(`${res.stdout}\n${res.stderr}`)) {
+  const sandboxActive = sandbox !== undefined && sandbox !== "off";
+  const deniedBySandbox =
+    blocked.length > 0 ||
+    looksLikeSandboxDenial(`${res.stdout}\n${res.stderr}`, { networkRestricted: sandboxRestrictsNetwork(sandbox) });
+  if (sandboxActive && res.exitCode !== 0 && deniedBySandbox) {
     const approved = await ctx.confirm({
       toolName,
       permission: "execute",
-      description: "Command failed inside the sandbox — retry WITHOUT sandbox?",
+      description:
+        blocked.length > 0
+          ? `Command failed inside the sandbox, which blocked network access to ${blockedHosts(blocked)} — retry WITHOUT sandbox?`
+          : "Command failed inside the sandbox — retry WITHOUT sandbox?",
       command,
       // This request is otherwise shaped exactly like an ordinary `execute`
       // approval, so a host whose confirm auto-answers would undo the sandbox
@@ -164,5 +185,15 @@ export async function executeCommandInWorkspace(
     }
   }
 
-  return settle(res, false);
+  return settle(res, false, blocked);
+}
+
+function blockedHosts(blocked: readonly BlockedConnection[]): string {
+  return [...new Set(blocked.map((entry) => `${entry.host}:${entry.port}`))].slice(0, 5).join(", ");
+}
+
+/** A line the model can act on (ask for the domain) instead of guessing at a bare 403. */
+function blockedNote(blocked: readonly BlockedConnection[]): string {
+  if (blocked.length === 0) return "";
+  return `\n[SeekForge sandbox] blocked network access to ${blockedHosts(blocked)} (not allowed by sandboxNetwork)\n`;
 }

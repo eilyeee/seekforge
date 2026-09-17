@@ -19,7 +19,7 @@ import { builtinTools } from "./builtins/index.js";
 import type { RuntimeClient } from "../runtime/index.js";
 import type { BackgroundTasks } from "./background.js";
 import type { HookConfig, HookPromptEvaluator, ToolHookFeedback } from "../hooks/index.js";
-import type { SandboxLevel } from "./os-sandbox.js";
+import type { SandboxLevel, SandboxProfile } from "./os-sandbox.js";
 import type { SkillSession } from "../skills/invocation.js";
 import type { CheckpointOrigin, ShellCheckpointNote } from "./shell-checkpoint.js";
 import type { FileLedger } from "./file-ledger.js";
@@ -72,9 +72,16 @@ export type ToolContext = {
   background?: BackgroundTasks;
   /**
    * OS-level sandbox wrapper for run_command (seatbelt on darwin, bwrap on
-   * linux). "off" or absent = current behavior (no wrapper).
+   * linux). "off" or absent = current behavior (no wrapper). A profile adds
+   * writable roots or a domain allowlist (see sandboxForRun).
    */
-  sandbox?: SandboxLevel;
+  sandbox?: SandboxLevel | SandboxProfile;
+  /**
+   * Absolute directories outside the workspace that the file tools may read
+   * and write, under the same permission levels as the workspace. Granted by
+   * the user (CLI flag, TUI command, user config) — never by repository config.
+   */
+  additionalDirectories?: readonly string[];
   /**
    * User-configured hooks. The dispatcher fires preToolUse (before the
    * permission prompt), permissionRequest (in place of a prompt it can
@@ -161,9 +168,11 @@ export type { PermissionDecision, PermissionOutcome } from "./permissions.js";
 export {
   DEFAULT_IGNORE_DIRS,
   isSensitiveBasename,
+  resolveAdditionalDirectories,
   resolveForRead,
   resolveForWrite,
   resolveInsideWorkspace,
+  toolPathRoot,
 } from "./sandbox.js";
 export { redactSecrets } from "./redact.js";
 export {
@@ -175,8 +184,29 @@ export {
   runShellCommand,
   TEST_COMMAND_TIMEOUT_MS,
 } from "./run-command.js";
-export { buildSandboxSpec, composeSandboxProfiles, probeSandboxCapabilities, sandboxedShell } from "./os-sandbox.js";
-export type { SandboxCapabilityProbe, SandboxLevel, SandboxProfile, SandboxSpec } from "./os-sandbox.js";
+export {
+  buildSandboxSpec,
+  composeSandboxProfiles,
+  probeSandboxCapabilities,
+  resolveSandboxNetwork,
+  sandboxedShell,
+  sandboxForRun,
+} from "./os-sandbox.js";
+export type {
+  SandboxCapabilityProbe,
+  SandboxLevel,
+  SandboxNetwork,
+  SandboxNetworkAllowlist,
+  SandboxProfile,
+  SandboxSpec,
+} from "./os-sandbox.js";
+export {
+  hostWithinDomain,
+  parseSandboxNetworkPolicy,
+  SandboxNetworkConfigError,
+  type SandboxNetworkPolicy,
+} from "./network-policy.js";
+export { ensureNetworkProxy, type BlockedConnection, type NetworkProxy } from "./network-proxy.js";
 export { createBackgroundTasks } from "./background.js";
 export type {
   BackgroundTaskExitNotice,

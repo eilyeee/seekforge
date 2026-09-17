@@ -210,6 +210,8 @@ export function buildAgentDeps(
         inlineImages: config.inlineImages,
         commandAllowlist: config.commandAllowlist,
         sandbox: opts.overrides?.sandbox ?? config.sandbox,
+        sandboxNetwork: config.sandboxNetwork,
+        additionalDirectories: config.additionalDirectories,
         compaction: config.compaction,
         autoCompactThreshold: config.autoCompactThreshold,
         modelContextWindows: config.modelContextWindows,

@@ -15,8 +15,9 @@
  *     tool-call loop, so it falls back to the main provider (the CLI hooks
  *     `onReasonerFallback` to print its warning; TUI/server stay silent);
  *   - the drift-prone conditional config→deps spread: sandbox (dropping
- *     "off") / compaction / autoCompactThreshold / modelContextWindows /
- *     planModel / escalateOnFailure /
+ *     "off"; a validated sandboxNetwork allowlist folds into it) /
+ *     additionalDirectories / compaction / autoCompactThreshold /
+ *     modelContextWindows / planModel / escalateOnFailure /
  *     memoryAutoApproveConfidence / lintCommand (non-blank) / autoLint
  *     (explicit false only) / editFormat / claudeCompat, plus the unconditional
  *     commandAllowlist passthrough.
@@ -55,6 +56,8 @@ import {
 import { withProviderTelemetry } from "../telemetry/index.js";
 import { createRetryBus, type AgentCoreDeps, type RetryBus } from "./loop.js";
 import { CLAUDE_COMPAT_MODES, type ClaudeCompat } from "./rules.js";
+import { parseSandboxNetworkPolicy } from "../tools/network-policy.js";
+import { sandboxForRun } from "../tools/os-sandbox.js";
 
 /**
  * Provider-construction inputs common to the main provider and the per-model
@@ -142,6 +145,15 @@ export type BuildAgentCoreDepsInput = Omit<ProviderBuildInput, "onRetry"> & {
   commandAllowlist?: string[];
   /** OS-level command sandbox; "off" (or unset) adds no key. */
   sandbox?: "off" | "read-only" | "workspace-write" | "restricted";
+  /**
+   * Raw `sandboxNetwork` config: a domain allowlist for sandboxed commands.
+   * Validated here (a malformed one throws rather than leaving the network
+   * open) and folded into `sandbox` as a profile. With `sandbox` unset it
+   * implies "workspace-write"; with `sandbox: "off"` it is not enforced.
+   */
+  sandboxNetwork?: unknown;
+  /** Absolute directories the file tools may also use (user-owned sources only). */
+  additionalDirectories?: string[];
   compaction?: "mechanical" | "llm";
   /** Fraction (0, 1] of the context budget at which compaction starts. */
   autoCompactThreshold?: number;
@@ -188,6 +200,7 @@ export type AgentCoreDepsCommon = Pick<
   | "provider"
   | "commandAllowlist"
   | "sandbox"
+  | "additionalDirectories"
   | "compaction"
   | "autoCompactThreshold"
   | "modelContextWindows"
@@ -242,6 +255,9 @@ export function buildAgentCoreDeps(
   const memoryMaintenance = resolveMemoryMaintenanceConfig(input.memoryMaintenance);
   assertAutoCompactThreshold(input.autoCompactThreshold);
   assertModelContextWindows(input.modelContextWindows);
+  const sandbox = sandboxForRun(input.sandbox, {
+    ...(input.sandboxNetwork !== undefined ? { network: parseSandboxNetworkPolicy(input.sandboxNetwork) } : {}),
+  });
   // One retry bus shared by every provider this factory builds; the active
   // run routes its retries into the agent event stream (provider.retry).
   const retryBus = createRetryBus();
@@ -277,7 +293,10 @@ export function buildAgentCoreDeps(
       return buildProvider({ ...perModelInput, ...options }, model);
     },
     commandAllowlist: input.commandAllowlist,
-    ...(input.sandbox && input.sandbox !== "off" ? { sandbox: input.sandbox } : {}),
+    ...(sandbox !== undefined && sandbox !== "off" ? { sandbox } : {}),
+    ...(input.additionalDirectories && input.additionalDirectories.length > 0
+      ? { additionalDirectories: [...input.additionalDirectories] }
+      : {}),
     ...(input.compaction ? { compaction: input.compaction } : {}),
     ...(input.autoCompactThreshold !== undefined ? { autoCompactThreshold: input.autoCompactThreshold } : {}),
     ...(input.modelContextWindows !== undefined ? { modelContextWindows: { ...input.modelContextWindows } } : {}),

@@ -31,16 +31,18 @@ Project files are repository-owned input, including `.seekforge/config.json`,
 `.seekforge/config.local.json`, and profiles declared in either file. They may
 set ordinary preferences (`model`, `models`, `compaction`, `thinking`,
 `reasoningEffort`, `planModel`, `editFormat`, UI preferences, and similar
-non-authoritative fields), add `deny` permission rules, and declare untrusted
-MCP servers for explicit inspection.
+non-authoritative fields), add `deny` and `ask` permission rules, and declare
+untrusted MCP servers for explicit inspection.
 
 They cannot supply credentials or credential destinations (`apiKey`,
 `provider`, `baseUrl`), execute startup/runtime commands (`apiKeyHelper`,
 `runtimeBin`, hooks, `statusLine`, `lintCommand`, `verifyCommand`), auto-authorize actions
-(`commandAllowlist`, `allow` permission rules, MCP `trusted`), weaken the
-sandbox, raise spending limits (including how much context each request carries:
-`modelContextWindows`, `autoCompactThreshold`), auto-approve memory, change audit
-retention, or opt you into reading `~/.claude/CLAUDE.md` (`claudeCompat`).
+(`commandAllowlist`, `allow` permission rules, MCP `trusted`), change the
+sandbox (`sandbox`, `sandboxNetwork`), grant access outside the project
+(`additionalDirectories`), raise spending limits (including how much context
+each request carries: `modelContextWindows`, `autoCompactThreshold`),
+auto-approve memory, change audit retention, or opt you into reading
+`~/.claude/CLAUDE.md` (`claudeCompat`).
 Automatic memory maintenance is also user-owned because it can archive project
 facts. Those settings must come from `~/.seekforge/config.json`, environment
 variables, or an explicitly selected `--settings` file. A project MCP definition
@@ -349,12 +351,95 @@ If the requested sandbox mechanism is unavailable at runtime, the session fails
 hard — it never silently falls back to unsandboxed execution. A
 denial-looking sandbox failure prompts once before retrying unsandboxed.
 
+With a write-capable level (`workspace-write`, `restricted`), the
+[`additionalDirectories`](#additionaldirectories) are writable inside the
+sandbox too; under `read-only` they stay read-only. To allow only some network
+destinations instead of all or none, add [`sandboxNetwork`](#sandboxnetwork).
+
 ```json
 { "sandbox": "workspace-write" }
 ```
 
 Settable via `config set`? **Yes, with `--global`** — validated against `off` / `read-only` /
 `workspace-write` / `restricted`.
+
+### `sandboxNetwork`
+
+A domain allowlist for sandboxed commands, between the all-or-nothing network
+of `workspace-write` and `restricted`.
+
+```json
+{
+  "sandbox": "workspace-write",
+  "sandboxNetwork": {
+    "allowedDomains": ["registry.npmjs.org", "*.github.com", "github.com"],
+    "deniedDomains": ["gist.github.com"]
+  }
+}
+```
+
+- `example.com` allows exactly that host; `*.example.com` allows its
+  subdomains but not `example.com` itself (list both when you need both). IP
+  literals and `localhost` must be listed exactly. Schemes, ports, paths and a
+  bare `*` are rejected. `deniedDomains` (optional, same syntax) wins over an
+  allow pattern. Any port on an allowed host is reachable.
+- The proxy resolves an allowed name once and connects only to those
+  addresses. A name matched only by a `*.` pattern is refused if it resolves to
+  a loopback, unspecified or link-local address (such as the cloud metadata
+  endpoint); list a name exactly if it is meant to reach this machine. Private
+  network ranges are not blocked.
+- Commands run with `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` (and their
+  lower-case forms) pointing at a local proxy SeekForge starts on first use;
+  the OS sandbox blocks every other connection, so a tool that ignores those
+  variables (or speaks something other than HTTP/HTTPS, such as `git@` SSH)
+  has no network. `localhost`, `127.0.0.1` and `::1` are in `NO_PROXY`.
+- A refused request gets `403 Blocked by SeekForge sandbox`; the command's
+  result names the blocked `host:port`, and a failed command offers the usual
+  one-time unsandboxed retry.
+- The allowlist only narrows. With `sandbox` unset it implies
+  `workspace-write`; with `read-only` or `workspace-write` it replaces their
+  open network; with `restricted` the network stays fully blocked; with
+  `sandbox: "off"` it is not enforced.
+- If SeekForge itself runs behind an `http://` proxy (`http_proxy` /
+  `https_proxy` / `all_proxy`, honoring `no_proxy`), allowed traffic is
+  forwarded through it.
+- On Linux the sandbox's separate network namespace is bridged to the proxy by a
+  small forwarder that runs the host's `node` inside the sandbox. On macOS,
+  commands cannot open or reach other local ports while an allowlist is active.
+- A malformed value is an error when the agent is built — it is never dropped,
+  because dropping it would leave `workspace-write`'s network open.
+
+This is a user-owned setting: repository config and repository profiles cannot
+set it. Settable via `config set`? **No** — edit your global config (or a
+`--settings` file) directly.
+
+### `additionalDirectories`
+
+Absolute directories outside the project that the file tools may also use —
+the config-file form of `--add-dir` / `/add-dir`.
+
+```json
+{ "additionalDirectories": ["~/code/shared-lib", "/srv/fixtures"] }
+```
+
+- `read_file`, `list_files`, `search_text`, `glob`, `write_file`,
+  `apply_patch`, `notebook_read`, `notebook_edit` and `image_analyze` accept
+  paths inside them (the model is told to use absolute paths). Writes need the
+  same approval as in the workspace; `acceptEdits` applies.
+- Secret files (`.env`, keys, `.seekforge/config.json`, `.git/config`, …) stay
+  unreadable at any depth, and nothing under a `.git` directory is writable.
+  Symlinks that leave every granted directory are refused.
+- Entries are validated on every run: `~` expands to your home directory,
+  relative paths resolve against the project, and a missing path, a file, or a
+  directory inside the project is skipped with a warning. Each directory is
+  pinned to its real (symlink-resolved) location.
+- With a write-capable `sandbox` level, commands may write there too.
+- Rewind does not restore files in these directories; it reports them as
+  skipped.
+
+This is a user-owned setting: repository config and repository profiles cannot
+set it. Settable via `config set`? **No** — edit your global config (or a
+`--settings` file) directly.
 
 ### `compaction`
 
@@ -838,39 +923,78 @@ settings directly. It is intentionally not accepted by CLI `config set`.
 
 ### `permissionRules`
 
-Fine-grained allow/deny permission rules that augment the built-in 5-level
+Fine-grained allow/ask/deny permission rules that augment the built-in 5-level
 permission policy. Each rule is an object:
 
 ```typescript
 type PermissionRule = {
-  action: "allow" | "deny";
-  /** Tool name or "*" for any tool. */
+  action: "allow" | "deny" | "ask";
+  /** Tool name, or a `*` glob over tool names ("*", "mcp__github__*"). */
   tool: string;
-  /**
-   * Prefix matched against the classified command (run_command family)
-   * or path (fs tools). Absent = matches any call of that tool.
-   */
+  /** What the call must match (see below). Absent = any call of that tool. */
   match?: string;
 };
 ```
 
-**Evaluation order**: First matching rule of each action category wins. Deny
-rules are scanned before allow rules, so a matching deny always blocks (even
-readonly tools). Allow rules never override ask-mode blocking and never rescue
-`"dangerous"`-classified calls.
+**Actions**:
+
+- `deny` blocks the call at every level, including read-only tools, without
+  asking.
+- `ask` always asks — even for a read-only tool, and even when an allow rule,
+  a "don't ask again" answer or an approval mode (`auto` included) would have
+  run the call. The answer covers only that call: the prompt offers neither
+  "for this session" nor "always". An ask rule never rescues a denied call.
+- `allow` runs a matching call without asking — including `env` (L3) tools,
+  which is how you pre-approve one docs domain. Allow rules never override
+  ask-mode blocking and never rescue `"dangerous"`-classified calls, and they
+  never apply to a shell command with control syntax (`&&`, `;`, `|`,
+  redirects, `$(…)`, newlines).
+
+**Evaluation order**: deny rules first, then ask rules, then allow rules; the
+first matching rule of each action wins.
+
+**What `match` means** depends on what the tool does:
+
+| Tool kind | `match` | Example |
+| --- | --- | --- |
+| Shell commands (`run_command`, `run_tests`, `task_kill`) | Prefix on a word boundary (`pnpm test` covers `pnpm test --watch`, not `pnpm test-all`), or a pattern with `*` wildcards matched against the whole command. An allow pattern must start with a literal program name. | `"npm run *"`, `"git push *"` |
+| URL tools (`web_fetch`, `browser_navigate`, classified as `GET <url>`) | A URL prefix compared by scheme, host and path (so `GET https://docs.example.com` never covers `docs.example.com.evil.net`), or `domain:<host>` for a host and all its subdomains | `"GET https://docs.example.com/guide"`, `"domain:example.com"` |
+| File tools | A path prefix on a directory boundary, or a glob if it contains `*` or `?` (`**` spans directories; `[` and `{` are literal). Paths inside the workspace are compared relative to it, whether the call used a relative or an absolute path. | `"src"`, `"src/**"`, `"**/*.env"`, `"docs/*.md"` |
+| Other tools with a command (`web_search`'s `SEARCH <query>`, MCP's `mcp:<server>/<tool>`) | Plain prefix | `"mcp:github/"` |
+
+Deny and ask rules fail closed: a command rule is also tested against every
+command of a compound line (`cd x && git push` meets `"git push *"`), ignoring
+leading `NAME=value` assignments and a program's directory; a path rule also
+matches where a symlink really points; a glob also matches the directory it
+names; a URL rule also matches a URL that does not parse. Allow rules match
+only what they say: a path must match both as written and as it really
+resolves, so a symlink inside an allowed directory does not extend it.
+
+Compatibility: a `*` in an existing command rule used to be a literal
+character and is now a wildcard. The permission prompt never proposes a rule
+containing `*` for "always allow".
 
 Rules from different config layers are concatenated rather than replaced.
-Repository layers contribute `deny` rules only; trusted global/settings layers
-may contain both actions.
+Repository layers contribute `deny` and `ask` rules only; trusted
+global/settings layers may contain all three actions.
 
 ```json
 {
   "permissionRules": [
-    { "action": "deny", "tool": "run_command", "match": "rm -rf /" },
-    { "action": "allow", "tool": "run_command", "match": "pnpm build" }
+    { "action": "deny", "tool": "*", "match": "**/*.pem" },
+    { "action": "ask", "tool": "run_command", "match": "npm publish*" },
+    { "action": "allow", "tool": "run_command", "match": "pnpm build" },
+    { "action": "allow", "tool": "web_fetch", "match": "domain:docs.example.com" },
+    { "action": "allow", "tool": "mcp__github__*" }
   ]
 }
 ```
+
+#### Refusing with a reason
+
+When a frontend lets you type a note while refusing, the note (trimmed, at
+most 2,000 characters) is appended to the denial the model reads — "The user
+said: …" — so its next attempt can follow it instead of guessing.
 
 Settable via `config set`? **No** — edit the file directly, or let the
 permission prompt write one for you (below).
@@ -885,6 +1009,13 @@ Every permission prompt offers three answers, not two:
 | `a` | Allow for session | allow this and similar calls for the rest of the run (not persisted) |
 | `A` | Always allow | writes the rule to `~/.seekforge/config.json` |
 
+"Similar" is deliberately narrow. For a shell command it means the same
+command, optionally with more arguments. For a file tool it means the same tool
+on a file directly in the same directory (resolved through symlinks):
+approving `src/a.ts` covers `src/b.ts` but not `src/sub/c.ts`, the parent
+directory, or another tool. For `env` (L3) tools, and for any call an `ask`
+rule matched, the session option is not offered at all.
+
 The third answer appears only when the prompt also shows the rule it would
 write, and the rule shown is exactly what lands in the file. Core decides
 whether to propose one at all; a frontend that has not been given a rule does
@@ -896,23 +1027,24 @@ the account running the server. That is the same trust domain: the server binds
 the account that started it. It is deliberately narrower than what
 you may write by hand:
 
-- **Shell commands only** (`run_command`, `task_kill`). A command is an identity
-  you still recognize a year later, and an allow rule matches it on a token
-  boundary, so `pnpm test` never covers `pnpm test-all`. The other rule
-  subjects have no such anchor: a URL rule is matched by an unanchored prefix
-  on purpose — that is what makes a hand-written docs-domain rule cover its
-  sub-paths — which is far too wide for a rule generated from one URL the model
-  happened to request. Paths are excluded for the neighboring reason: a path is
-  a location whose contents change under a grant that outlives them, and
-  `acceptEdits` is the deliberate way to edit freely.
+- **Shell commands only** (`run_command`, `run_tests`, `task_kill`). A command
+  is an identity you still recognize a year later, and an allow rule matches it
+  on a token boundary, so `pnpm test` never covers `pnpm test-all`. The other
+  rule subjects are poorer anchors: a URL prefix rule deliberately covers every
+  sub-path of what it names, which is far too wide for a rule generated from
+  one URL the model happened to request. Paths are excluded for the
+  neighboring reason: a path is a location whose contents change under a grant
+  that outlives them, and `acceptEdits` is the deliberate way to edit freely.
 - **Never a compound command.** `pnpm test && curl … | sh` is not offered,
   because an allow rule never matches a command containing shell control
   syntax: the rule would save, read as a grant, and never fire.
+- **Never a command containing `*`.** It would be read back as a wildcard and
+  grant more than the command you approved.
 - **Never `dangerous`.** Those calls are refused before any prompt.
 
 The rule is always written to your own `~/.seekforge/config.json`, never the
-project's — a repository layer contributes `deny` rules only, so an allow rule
-written there would save and then be stripped on every load. The confirmation
+project's — a repository layer contributes `deny` and `ask` rules only, so an
+allow rule written there would save and then be stripped on every load. The confirmation
 notice names the file, because a permission that outlives the run is one you
 have to be able to find and delete. If the write fails (unparseable config,
 read-only home), the approval degrades to session scope and the run continues;
@@ -1389,7 +1521,7 @@ Three fields merge across layers rather than replace:
 | Field | Merge strategy |
 | --- | --- |
 | `mcpServers` | Per-server key merge, **provenance-aware**. Repository layers (`.seekforge/config.json`, `config.local.json`, and profiles in either) may introduce new server names but never override a name a user-owned layer defines; their entries always lose `trusted` and any `permission`/`toolPermissions` looser than `write`. Only a complete user-owned entry can enable automatic connection. This holds on every surface — CLI, TUI, `seekforge serve`, and Desktop through the server — because all four merge through the same layer algebra, which takes each layer's origin as part of its type. Only the CLI prints the narrowing; the others enforce it silently. |
-| `permissionRules` | Concatenated higher-precedence first, but repository layers contribute only valid `deny` rules. |
+| `permissionRules` | Concatenated higher-precedence first, but repository layers contribute only valid `deny` and `ask` rules. |
 | `hooks` | Per-stage concatenation across trusted layers: global → settings. Repository hooks are ignored. |
 
 If a higher layer supplies the wrong runtime shape for one of these fields, that
@@ -1436,7 +1568,8 @@ The remaining keys — `planModel`, `escalateOnFailure`, `maxCostUsd`,
 `verifyCommand`, `autoVerify`, `lintCommand`, `autoLint`,
 `editFormat`, `claudeCompat`, `finalizeReview`, `guardNoProgress`,
 `memoryAutoApproveConfidence`, `memoryMaintenance`, `permissionRules`,
-`mcpServers`, `hooks` — are **not settable** via `config set`. They must be
+`sandboxNetwork`, `additionalDirectories`, `mcpServers`, `hooks` — are **not
+settable** via `config set`. They must be
 edited directly in the JSON config file, configured through Desktop/Server where
 supported, or managed through their dedicated subcommands (`seekforge mcp
 add|list|remove` for MCP servers).

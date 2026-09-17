@@ -102,9 +102,10 @@ export type PermissionRequest = {
  * may return a plain boolean (the original contract — `true`=allow once,
  * `false`=deny) OR this object to also grow the run's session allowlist:
  * `{ allow: true, remember: "session" }` means "yes, and don't ask again this
- * session" — enforcePermission then pushes the classified command prefix
- * (run_command/task_kill) or the tool name into policy.sessionAllowlist so
- * subsequent matching calls auto-allow. `remember` is ignored when allow is
+ * session" — enforcePermission then pushes a grant (the classified command
+ * prefix for shell tools, the approved path's directory for file tools, else
+ * the tool) into policy.sessionAllowlist so subsequent matching calls
+ * auto-allow. `remember` is ignored when allow is
  * false. Additive: the boolean form keeps working unchanged.
  *
  * `remember: "always"` additionally asks the host to PERSIST the approval as a
@@ -136,11 +137,20 @@ export type ConfirmResult =
  */
 export type PermissionRule = {
   action: "allow" | "deny" | "ask";
-  /** Tool name, or "*" for any tool. */
+  /** Tool name, or a `*` glob over tool names ("*", "mcp__github__*", "browser_*"). */
   tool: string;
   /**
-   * Prefix matched against the classified command (run_command/task_kill)
-   * or path (fs tools); absent = matches any call of that tool.
+   * What the call must match; absent = matches any call of that tool.
+   * - Shell commands (run_command/run_tests/task_kill): a prefix on a token
+   *   boundary, or a pattern with `*` wildcards matched against the whole
+   *   command ("npm run *"). Deny/ask rules also match each command of a
+   *   compound line.
+   * - `GET <url>` calls (web_fetch, browser_navigate): a URL prefix compared by
+   *   scheme, host and path, or `domain:example.com` for a host and its
+   *   subdomains.
+   * - Paths (file tools): a prefix on a path boundary, or a glob with `*`,
+   *   `**` and `?` ("src/**", "docs/*.md"), against the workspace-relative path.
+   * Allow rules match only what they say; deny and ask rules fail closed.
    */
   match?: string;
 };
@@ -155,11 +165,13 @@ export type PermissionPolicy = {
   rules?: PermissionRule[];
   /**
    * In-memory, run-scoped allowlist grown by "allow-for-session" confirmations
-   * (confirm returning `{ allow: true, remember: "session" }`). For
-   * run_command/task_kill it holds classified command PREFIXES; for other
-   * write/execute tools it holds bare tool names. A subsequent matching call
-   * auto-allows without re-prompting. Mutated in place by enforcePermission, so
-   * the caller MUST pass a single array shared across a session's tool calls.
+   * (confirm returning `{ allow: true, remember: "session" }`). For shell tools
+   * (run_command/run_tests/task_kill) it holds classified command PREFIXES; for
+   * file tools, the tool plus the directory of the approved path; for other
+   * write/execute tools, the tool. Core owns the entry format — treat entries
+   * as opaque. A subsequent matching call auto-allows without re-prompting.
+   * Mutated in place by enforcePermission, so the caller MUST pass a single
+   * array shared across a session's tool calls.
    * NOT persisted (unlike commandAllowlist/rules) — it dies with the run.
    *
    * `env`-level tools are deliberately excluded: a bare tool name cannot carry

@@ -80,6 +80,10 @@ export type ServerConfig = {
   inlineImages?: boolean;
   /** OS-level command sandbox (off when unset). */
   sandbox?: "off" | "read-only" | "workspace-write" | "restricted";
+  /** Domain allowlist for sandboxed commands (user-owned; core validates it). */
+  sandboxNetwork?: { allowedDomains: string[]; deniedDomains?: string[] };
+  /** Directories outside the project the file tools may also use (user-owned). */
+  additionalDirectories?: string[];
   /** Context compaction strategy: "llm" summarizes via the model (default mechanical). */
   compaction?: "mechanical" | "llm";
   /** Fraction (0, 1] of the context budget at which compaction starts (default 0.9). User-owned. */
@@ -162,9 +166,9 @@ export type ServerConfig = {
   /** MCP servers (Claude Code-compatible). Edit the file directly; not settable via `config set`. */
   mcpServers?: Record<string, McpServerConfig>;
   /**
-   * Fine-grained allow/deny permission rules. First match of each action
-   * category wins (deny scanned before allow); repository layers may only add
-   * deny rules. Edit trusted rules in user config.
+   * Fine-grained allow/ask/deny permission rules. First match of each action
+   * category wins (deny, then ask, then allow); repository layers may only add
+   * deny and ask rules. Edit trusted rules in user config.
    */
   permissionRules?: PermissionRule[];
   /** Terminal run history cap (default 500). Non-terminal runs are always retained. */

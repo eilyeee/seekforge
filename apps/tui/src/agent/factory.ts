@@ -111,6 +111,8 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
         inlineImages: config.inlineImages,
         commandAllowlist: config.commandAllowlist,
         sandbox: config.sandbox,
+        sandboxNetwork: config.sandboxNetwork,
+        additionalDirectories: config.additionalDirectories,
         compaction: config.compaction,
         autoCompactThreshold: config.autoCompactThreshold,
         modelContextWindows: config.modelContextWindows,
