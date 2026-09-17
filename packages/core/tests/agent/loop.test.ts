@@ -1888,3 +1888,98 @@ describe("auto-lint on completion", () => {
     expect(events.some((e) => e.type === "notice" && e.message.includes("Auto-linting"))).toBe(true);
   });
 });
+
+describe("agent loop: hook wiring", () => {
+  let workspace: string;
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-hooks-"));
+  });
+  afterEach(() => {
+    rmSync(workspace, { recursive: true, force: true });
+  });
+
+  const input = () => ({ projectPath: workspace, task: "do it", mode: "edit" as const, approvalMode: "auto" as const });
+
+  it("evaluates a prompt hook on the entry's routed model and bills its tokens", async () => {
+    const routed: string[] = [];
+    const hookModel = fakeProvider([response({ content: '{"ok": true}' })]);
+    const agent = createAgentCore({
+      provider: fakeProvider([response({ content: "done" })]),
+      providerForModel: (model) => {
+        routed.push(model);
+        return hookModel;
+      },
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+      hooks: { sessionStart: [{ type: "prompt", prompt: "Proceed?", model: "fast" }] },
+    });
+    const events = await collect(agent.runTask(input()));
+    expect(routed).toEqual(["fast"]);
+    const completed = events.find((e) => e.type === "session.completed") as Extract<
+      AgentEvent,
+      { type: "session.completed" }
+    >;
+    expect(completed.report.usage.promptTokens).toBe(2 * USAGE.promptTokens);
+  });
+
+  it("delivers tool-stage hook feedback: context beside the result, notices, and a run stop", async () => {
+    const executed: string[] = [];
+    const dispatcher: ToolDispatcher = {
+      list: () => [{ name: "read_file", description: "d", parameters: {} }],
+      execute: async (call, ctx) => {
+        executed.push(call.id);
+        ctx.onHookFeedback?.({
+          stage: "postToolUse",
+          context: ["this file is generated"],
+          notices: ["postToolUse hook: heads up"],
+          stopRun: "hook budget spent",
+        });
+        return { ok: true, data: { content: "x" } };
+      },
+    };
+    const agent = createAgentCore({
+      provider: fakeProvider([
+        response({
+          toolCalls: [
+            { id: "c1", name: "read_file", argumentsJson: '{"path":"a"}' },
+            { id: "c2", name: "read_file", argumentsJson: '{"path":"b"}' },
+          ],
+          finishReason: "tool_calls",
+        }),
+      ]),
+      dispatcher,
+      confirm: async () => true,
+    });
+    const events = await collect(agent.runTask(input()));
+    expect(executed).toEqual(["c1"]);
+    expect(events).toContainEqual({ type: "notice", level: "info", message: "postToolUse hook: heads up" });
+    expect(events.find((e) => e.type === "session.failed")).toMatchObject({
+      error: { code: "stopped_by_hook", message: "hook budget spent" },
+    });
+    const created = events.find((e) => e.type === "session.created") as Extract<
+      AgentEvent,
+      { type: "session.created" }
+    >;
+    const tools = loadSessionMessages(workspace, created.sessionId).filter((m) => m.role === "tool");
+    expect(tools[0]!.content).toContain("<hook-context>\nthis file is generated\n</hook-context>");
+    expect(tools[1]!.content).toContain("stopped_by_hook");
+  });
+
+  it("lets a stop hook keep the run going once, then finishes", async () => {
+    const provider = fakeProvider([response({ content: "first" }), response({ content: "second" })]);
+    const blockOnce = [
+      "input=$(cat)",
+      `case "$input" in *'"stopHookActive":true'*) exit 0;; esac`,
+      `printf '%s' '{"decision":"block","reason":"verify first"}'`,
+    ].join("; ");
+    const agent = createAgentCore({
+      provider,
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+      hooks: { stop: [{ command: blockOnce }] },
+    });
+    const events = await collect(agent.runTask(input()));
+    expect(provider.requests).toHaveLength(2);
+    expect(events.find((e) => e.type === "session.completed")).toMatchObject({ report: { summary: "second" } });
+  });
+});

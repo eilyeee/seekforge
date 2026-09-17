@@ -55,6 +55,8 @@ ID 只能使用小写字母、数字与连字符；版本使用 SemVer 语法，
 构建元数据部分（`1.2.0-rc.1+build.7`）。贡献根目录必须是受限于
 插件内的相对目录。MCP server 会以 `<plugin-id>__<server-name>` 对外暴露，避免歧义冲突。
 当用户配置与插件 MCP 同名时，用户配置优先；插件 hook 先于用户配置 hook 运行。
+hook 条目与用户 [hook](hooks.zh-CN.md) 使用相同的类型、阶段与校验，但插件的 `http`
+hook 不得列出 `allowedEnvVars`。
 
 插件贡献的 MCP server 只拥有其清单显式声明的连接信任。`trusted` 在这里与其它位置
 一样默认为 `false`，因此上面的 `docs` server 会被列出，但不会被自动连接；清单里显式

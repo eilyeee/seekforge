@@ -4110,3 +4110,20 @@ router 式路由却没扫段分派式；读了 `CliConfig` 却没读 `TuiConfig`
   真正抓住它的那条。
 - **发现位置：** 在合并五份校验器副本时，顺着校验器到其消费者的调用链读出来的。
   `scripts/` 下两道门禁都看不见这一类：值的类型正确，代码也能编译。
+
+## 425. 用来排序的列表不能兼作过滤器
+
+`mergeConfigLayers` 接受一个可选的 `hookStages` 列表，说是「只用于保持键的顺序」，
+实际却通过遍历这个列表来构建合并后的 hook。TUI 和服务端传入的是各自沿用的旧顺序，
+于是当 hook 阶段从九个增加到十三个时，四个新阶段在 CLI 中合并正常，在 TUI 和服务端
+却悄无声息地消失了——没有报错，hook 就是从来不执行。`mergePluginHooks` 也是同样的
+结构，用的是它自己本地的一份列表副本。
+
+- **正确做法：** 参数若是为了排序而存在，就把它没列出的项追加在已列出项之后。顺序的
+  含义是「这些排在前面」，而不是「只要这些」。
+- **正确做法：** 从唯一的所有者（`@seekforge/shared` 中的 `HOOK_STAGES`）推导全集，
+  而不是依赖一份下次新增时会被遗忘的本地副本。
+- **正确做法：** 针对传入自定义列表的那个界面写测试，并使用一个列表中没有的项。
+- **发现位置：** 新增 `postToolUseFailure`、`permissionRequest`、`subagentStart` 与
+  `postCompact` 时，在 `packages/shared/src/config-layers.ts` 和
+  `packages/core/src/plugins/load.ts` 中发现。

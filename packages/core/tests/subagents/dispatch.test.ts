@@ -514,3 +514,62 @@ describe("dispatch_agent (loop-level)", () => {
     expect(events.some((event) => event.type === "session.completed")).toBe(true);
   });
 });
+
+describe("dispatch prompts and subagent hooks", () => {
+  let workspace: string;
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), "seekforge-dispatch-hooks-"));
+  });
+  afterEach(() => {
+    rmSync(workspace, { recursive: true, force: true });
+  });
+
+  const input = () => ({ projectPath: workspace, task: "go", mode: "edit" as const, approvalMode: "confirm" as const });
+
+  it("lets a permissionRequest hook approve a dispatch and subagentStart add context", async () => {
+    let prompted = 0;
+    const provider = fakeProvider([
+      dispatchCall("fixer", "fix the parser"),
+      response({ content: "sub done" }),
+      response({ content: "ok" }),
+    ]);
+    const agent = createAgentCore({
+      provider,
+      dispatcher: fakeDispatcher(),
+      confirm: async () => {
+        prompted++;
+        return false;
+      },
+      subagents: [fixer],
+      hooks: {
+        permissionRequest: [{ command: `printf '%s' '{"decision":"allow"}'` }],
+        subagentStart: [{ command: `printf '%s' '{"additionalContext":"parser is in src/p.ts"}'` }],
+      },
+    });
+    const events = await collect(agent.runTask(input()));
+    expect(prompted).toBe(0);
+    expect(toolCompleted(events, "dispatch_agent")[0]!.result.ok).toBe(true);
+    const nestedTask = provider.requests[1]!.messages.find((m) => m.role === "user")!.content;
+    expect(nestedTask).toBe("fix the parser\n\n<hook-context>\nparser is in src/p.ts\n</hook-context>");
+  });
+
+  it("lets a permissionRequest hook refuse a dispatch without asking", async () => {
+    let prompted = 0;
+    const agent = createAgentCore({
+      provider: fakeProvider([dispatchCall("fixer", "fix it"), response({ content: "ok" })]),
+      dispatcher: fakeDispatcher(),
+      confirm: async () => {
+        prompted++;
+        return true;
+      },
+      subagents: [fixer],
+      hooks: { permissionRequest: [{ command: `printf '%s' '{"decision":"deny","reason":"not today"}'` }] },
+    });
+    const events = await collect(agent.runTask(input()));
+    expect(prompted).toBe(0);
+    expect(toolCompleted(events, "dispatch_agent")[0]!.result.error).toEqual({
+      code: "hook_blocked",
+      message: "Blocked by permissionRequest hook: not today",
+    });
+  });
+});

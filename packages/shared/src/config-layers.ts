@@ -49,6 +49,7 @@ import {
   PERMISSION_LEVEL,
   type PermissionName,
   type PermissionRule,
+  sanitizeHookEntries,
 } from "./index.js";
 
 export const MAX_CONFIG_FILE_BYTES = 1_000_000;
@@ -124,7 +125,9 @@ export type MergeConfigLayersOptions = {
    * HOOK_STAGES. Only affects the KEY INSERTION ORDER of the merged hooks
    * object (observable through JSON serialization) — the TUI and server
    * historically iterate with sessionEnd third and pass their own order to
-   * stay byte-identical; the CLI matches the default.
+   * stay byte-identical; the CLI matches the default. Stages the list omits
+   * are still merged, after the listed ones: an order is not a filter, and a
+   * stage added later must not vanish from a surface that predates it.
    */
   hookStages?: readonly HookStage[];
   /**
@@ -188,15 +191,6 @@ function isPermissionRule(value: unknown): value is PermissionRule {
     (value.action === "allow" || value.action === "deny" || value.action === "ask") &&
     typeof value.tool === "string" &&
     (value.match === undefined || typeof value.match === "string")
-  );
-}
-
-function isHookEntry(value: unknown): value is HookEntry {
-  if (!isRecord(value)) return false;
-  return (
-    typeof value.command === "string" &&
-    (value.match === undefined || typeof value.match === "string") &&
-    (value.pattern === undefined || typeof value.pattern === "string")
   );
 }
 
@@ -445,7 +439,10 @@ export function mergeConfigLayersWithReport<T extends BaseConfigShape>(
   tagged: readonly ConfigLayer<T>[],
   opts: MergeConfigLayersOptions = {},
 ): { config: T; report: ConfigMergeReport } {
-  const hookStages = opts.hookStages ?? HOOK_STAGES;
+  const hookStages = [
+    ...(opts.hookStages ?? HOOK_STAGES),
+    ...HOOK_STAGES.filter((stage) => !(opts.hookStages ?? HOOK_STAGES).includes(stage)),
+  ];
   const layers = tagged.map((layer) => layer.config);
 
   // mcpServers merges per server name (later layer wins) — except that a
@@ -474,7 +471,9 @@ export function mergeConfigLayersWithReport<T extends BaseConfigShape>(
       if (!isRecord(layer.hooks)) return [];
       hasHooks = true;
       const entries = layer.hooks[stage];
-      return Array.isArray(entries) ? entries.filter(isHookEntry) : [];
+      // Validated here, once, for every surface: a malformed entry (unknown
+      // type, unsafe matcher, out-of-range timeout, non-http url) never runs.
+      return sanitizeHookEntries(entries);
     });
     if (merged.length > 0) hooks[stage] = merged;
   }

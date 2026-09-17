@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { HookEntry } from "@seekforge/core";
+import { BLOCKING_HOOK_STAGES, HOOK_STAGES, hookEntryLabel } from "@seekforge/shared";
 import { formatDurationCoarse, kfmt } from "./format.js";
 import type { TuiConfig } from "./config.js";
 import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
@@ -243,21 +244,8 @@ export function formatPermissionLines(p: PermissionSurfaceInput): string[] {
 // /hooks
 // ---------------------------------------------------------------------------
 
-/** HookConfig declaration order; payload table lives in @seekforge/core. */
-const HOOK_STAGE_ORDER = [
-  "preToolUse",
-  "postToolUse",
-  "sessionStart",
-  "userPromptSubmit",
-  "preCompact",
-  "stop",
-  "subagentStop",
-  "notification",
-  "sessionEnd",
-] as const;
-
-/** Stages where a non-zero hook exit blocks the tool call / run. */
-const BLOCKING_STAGES: ReadonlySet<string> = new Set(["preToolUse", "userPromptSubmit"]);
+/** Stages where a failing hook blocks the tool call / run. */
+const BLOCKING_STAGES: ReadonlySet<string> = new Set(BLOCKING_HOOK_STAGES);
 
 /**
  * One line per configured hook — "preToolUse (blocking): <command>" with the
@@ -266,11 +254,11 @@ const BLOCKING_STAGES: ReadonlySet<string> = new Set(["preToolUse", "userPromptS
  */
 export function formatHookLines(hooks: TuiConfig["hooks"]): string[] {
   const lines: string[] = [];
-  for (const stage of HOOK_STAGE_ORDER) {
+  for (const stage of HOOK_STAGES) {
     const entries: HookEntry[] = hooks?.[stage] ?? [];
     const blocking = BLOCKING_STAGES.has(stage) ? " (blocking)" : "";
     for (const entry of entries) {
-      lines.push(`${stage}${blocking}: ${cap(entry.command, 60)}`);
+      lines.push(`${stage}${blocking}: ${cap(hookEntryLabel(entry), 60)}`);
     }
   }
   if (lines.length === 0) {

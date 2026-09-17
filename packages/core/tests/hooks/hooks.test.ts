@@ -364,19 +364,18 @@ describe("runHooks", () => {
     expect(outcomes[0]!.outputTail).toContain("denied by preToolUse hook");
   });
 
-  it('preToolUse stdout {"decision":"allow"} short-circuits the remaining hooks', async () => {
+  it('preToolUse {"decision":"allow"} does not skip later hooks: a later block still wins', async () => {
+    // An allow now answers the permission prompt, so it must not be able to
+    // silence a later hook that would refuse the call.
     const outcomes = await runHooks(
       "preToolUse",
-      [
-        { command: `echo '{"decision":"allow"}'` },
-        { command: "touch allow-should-skip; exit 1" }, // would block if it ran
-      ],
+      [{ command: `echo '{"decision":"allow"}'` }, { command: "touch later-ran; exit 1" }],
       payload({ toolName: "read_file", path: "a.ts" }),
     );
-    expect(outcomes).toHaveLength(1);
-    expect(outcomes[0]!.ok).toBe(true);
-    expect(outcomes[0]!.decision).toBe("allow");
-    expect(existsSync(join(workspace, "allow-should-skip"))).toBe(false);
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes[0]).toMatchObject({ ok: true, decision: "allow" });
+    expect(outcomes[1]!.ok).toBe(false);
+    expect(existsSync(join(workspace, "later-ran"))).toBe(true);
   });
 
   it("malformed JSON / non-decision stdout on preToolUse is ignored", async () => {
@@ -519,6 +518,7 @@ describe("runHooks", () => {
 
 describe("buildHookContext", () => {
   const outcome = (overrides: Partial<HookOutcome>): HookOutcome => ({
+    type: "command",
     command: "echo",
     ok: true,
     exitCode: 0,

@@ -434,7 +434,7 @@ does, and applies it to the tool calls the MCP client makes:
 | Key | Effect on `mcp-serve` |
 |---|---|
 | `permissionRules` | Applied. A deny rule blocks at every level, including a read-only call, and never prompts. In full mode an allow rule pre-authorizes a tool, `env` tools included. |
-| `hooks` | Applied. `preToolUse` runs before every tool call and a non-zero exit blocks it; `updatedInput` rewrites are re-validated and re-permission-checked as usual. |
+| `hooks` | Applied. `preToolUse` runs before every tool call and a non-zero exit blocks it; `updatedInput` rewrites are re-validated and re-permission-checked as usual. In full mode a hook's `allow` answers the prompt this transport otherwise refuses, as an allow rule does. `prompt` hooks cannot be evaluated here (there is no model), so they fail — and block on `preToolUse`. See [Hooks](hooks.md). |
 | `sandbox` | Applied to `run_command` / `run_tests` in full mode. An unavailable sandbox mechanism fails the command rather than running it unsandboxed. |
 | `commandAllowlist` | Applied, though it changes nothing here: full mode already auto-approves `execute`, and read-only mode forbids it. |
 | `visionModel`, `webSearch`, `browserProfile` | Configured, but by default nothing here reaches them: `image_analyze`, `web_search`, `web_fetch` and `browser_navigate` all classify as `env` and are refused. They take effect only if one of your `permissionRules` allows that tool. |

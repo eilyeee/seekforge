@@ -764,44 +764,41 @@ OAuth 刷新、超时和非 2xx 检查。
 
 ### `hooks`
 
-用户级 shell hook，在 agent 生命周期的各个阶段触发。hook 通过 stdin
-接收一个包含阶段名和相关上下文（`sessionId`、`workspace`、`toolName`、
-`args`、`command`、`path` 等）的 JSON 负载。
+用户级 hook，在 agent 运行的固定时点执行——每次工具调用前后、权限提示时、会话开始/结束时、压缩前后，以及智能体即将结束时。**完整参考见 [Hook](hooks.zh-CN.md)**；这里只是摘要。
 
 ```typescript
-type HookConfig = {
-  /** Fires before every tool call. Non-zero exit *blocks* the tool with a reason. */
-  preToolUse?: HookEntry[];
-  /** Fires after every tool call (receives `{ ok, errorCode }` — never raw output). */
-  postToolUse?: HookEntry[];
-  /** Fires when a session starts. */
-  sessionStart?: HookEntry[];
-  /** Fires when the user submits a prompt. stdout is injected into the task as context. */
-  userPromptSubmit?: HookEntry[];
-  /** Fires before context compaction. */
-  preCompact?: HookEntry[];
-  /** Fires when the agent receives a stop signal (Ctrl+C). */
-  stop?: HookEntry[];
-  /** Fires when a subagent stops. */
-  subagentStop?: HookEntry[];
-  /** Fires for non-blocking notifications. */
-  notification?: HookEntry[];
-  /** Fires when the session ends. Receives final session status. */
-  sessionEnd?: HookEntry[];
-};
+type HooksConfig = Partial<Record<HookStage, HookEntry[]>>;
+
+type HookStage =
+  | "preToolUse"          // before every tool call, before any permission prompt — can refuse, allow, ask, rewrite
+  | "permissionRequest"   // a call is about to prompt — can answer allow / deny for you
+  | "postToolUse"         // after every tool call — receives the redacted result; can add model context
+  | "postToolUseFailure"  // after a tool call that failed
+  | "sessionStart"        // a top-level run starts — JSON additionalContext joins the task
+  | "userPromptSubmit"    // for the task — can refuse the run; stdout joins the task as context
+  | "preCompact"          // before compaction — can cancel a manual one
+  | "postCompact"         // after compaction
+  | "stop"                // the agent is about to finish — decision "block" keeps it working
+  | "subagentStart"       // a dispatched subagent starts — JSON additionalContext joins its task
+  | "subagentStop"        // a dispatched subagent finished
+  | "notification"        // a permission prompt / ask_user question is shown
+  | "sessionEnd";         // the top-level session ended
 
 type HookEntry = {
-  /** Tool name this hook applies to, or "*" for any (default "*"). */
-  match?: string;
-  /** Prefix matched against the classified command or path. Absent = any. */
-  pattern?: string;
-  /** Shell command, run via `/bin/sh -c` with cwd = workspace. */
-  command: string;
+  type?: "command" | "http" | "prompt"; // default "command"
+  match?: string;     // tool / agent names: "*", "write_file|apply_patch", or an anchored regex
+  pattern?: string;   // prefix of the raw command or path
+  timeout?: number;   // seconds, 0 < timeout ≤ 600 (default 10; prompt 30)
+  command?: string;   // command: run via /bin/sh -c, event JSON on stdin
+  url?: string;       // http: POST target (http/https, redirects not followed)
+  headers?: Record<string, string>; // http: ${VAR} expands only names in allowedEnvVars
+  allowedEnvVars?: string[];
+  prompt?: string;    // prompt: condition a model checks; $ARGUMENTS marks the event
+  model?: string;
 };
 ```
 
-**阻断型阶段**：`preToolUse` 和 `userPromptSubmit` —— 非零退出会阻止工具调用
-或运行继续。其余阶段均为顾问性质（日志、通知、遥测）。
+**阻断型阶段**：`preToolUse` 和 `userPromptSubmit` —— 失败的 hook（非零退出、非 `2xx` 响应、超时、没有判定）会拒绝该调用或本次运行。其余阶段只记录失败并继续。
 
 ```json
 {
@@ -815,7 +812,7 @@ type HookEntry = {
     ],
     "sessionEnd": [
       {
-        "command": "echo 'session $SESSION_ID ended' >> /tmp/seekforge.log"
+        "command": "echo \"session ended in $SEEKFORGE_PROJECT_DIR\" >> /tmp/seekforge.log"
       }
     ]
   }
@@ -823,42 +820,24 @@ type HookEntry = {
 ```
 
 hook 条目会在可信配置层间对**所有**阶段按阶段拼接：**global → settings**。
-仓库 hook 不生效；桌面端 Hook 编辑器写入 `~/.seekforge/config.json`。
+仓库 hook 不生效；不合法的条目在加载配置时被丢弃。桌面端 Hook 编辑器写入 `~/.seekforge/config.json`。
 
 可通过 `config set` 设置？**不可以** —— 直接编辑文件。
 
-#### preToolUse JSON stdout 协议
+#### Hook 输出协议
 
-以 0 退出的 `preToolUse` hook 可以在 stdout 上打印一个 JSON 对象来控制本次
-调用（任何不是 JSON 对象的输出都会被忽略，回到普通的退出码行为）。
-旧版形态和 Claude Code 形态都被接受：
+成功的 hook 可以输出（或响应）一个 JSON 对象；全部字段见 [Hook → 输出协议](hooks.zh-CN.md#输出协议)。简要如下：
 
-| 字段 | 位置 | 效果 |
-| --- | --- | --- |
-| `decision` | 顶层（`"allow"` / `"deny"`） | `deny` 阻止本次调用（`reason` 作为阻止原因）。`allow` 显式放行，并**跳过剩余的 `preToolUse` hook**。 |
-| `hookSpecificOutput.permissionDecision` | 嵌套（`"allow"` / `"deny"` / `"ask"`） | 与 `decision` 相同，外加 `"ask"` —— 显式交回正常权限流程，并继续运行后续 hook。顶层的 `permissionDecision` 也会被读取。 |
-| `permissionDecisionReason` / `reason` | 嵌套 / 顶层 | 拒绝时向用户展示的可读原因。 |
-| `updatedInput` | 顶层或 `hookSpecificOutput` 之下 | 替换工具参数。分发器在工具运行前应用它们，并**对新参数重新做工具 schema 校验和权限检查**。无效替换会让调用以 `invalid_hook_args` 失败，绝不会退回执行原始输入。仅限 `preToolUse`。 |
-| `continue` | 顶层（布尔值） | `false` 阻止本次调用（等同于 deny），以 `systemMessage` 作为原因。所有阶段都会解析，但只在 `preToolUse` 和 `userPromptSubmit` 上起阻断作用。 |
-| `systemMessage` | 顶层（字符串） | 作为提示展示给用户；`continue: false` 阻断时也作为阻止原因。所有阶段都会解析。 |
-| `additionalContext` / `hookSpecificOutput.additionalContext` | 顶层 / 嵌套（字符串） | 作为上下文注入提示词——由 `userPromptSubmit` 和 `sessionStart` 使用。缺省时，这些阶段回退为使用 hook 的原始 stdout。 |
-
-```json
-{
-  "hookSpecificOutput": {
-    "permissionDecision": "allow",
-    "permissionDecisionReason": "vetted command"
-  }
-}
-```
-
-```json
-{ "hookSpecificOutput": { "updatedInput": { "path": "safe.txt" } } }
-```
-
-`userPromptSubmit`（或 `sessionStart`）hook 通过 `additionalContext`
-——缺省时用其去除首尾空白的 stdout ——贡献上下文，这些内容以
-`<hook-context>…</hook-context>` 块的形式追加到任务上（上限 8000 字符）。
+| 字段 | 效果 |
+| --- | --- |
+| `permissionDecision` / `decision`（`preToolUse`） | `deny` 不经提示直接拒绝；`allow` 代为回答策略本会显示的提示（`ask` 规则要求的提示、复合 shell 命令除外）；`ask` 强制为本次调用弹出提示。所有 `preToolUse` hook 都会执行——后面的 `deny` 优先于前面的 `allow`。 |
+| `updatedInput`（`preToolUse`） | 替换参数：重新按工具 schema 校验、重新分类并重新做权限检查。不合法的替换会让调用以 `invalid_hook_args` 失败。 |
+| `hookSpecificOutput.decision.behavior`（`permissionRequest`） | 代你回答 `allow` / `deny`。 |
+| `decision: "block"` + `reason` | `userPromptSubmit`：拒绝本次运行。`stop`：让智能体继续工作（`stopHookActive` 标记重复触发；每次运行最多 5 次）。`postToolUse(Failure)`：原因附在工具结果旁交给模型。`preCompact`：取消手动压缩。 |
+| `additionalContext` | 给模型的上下文：追加到任务（`sessionStart`、`userPromptSubmit`）、子智能体任务（`subagentStart`）或工具结果旁（`postToolUse(Failure)`），包在经过转义的 `<hook-context>` 块中。 |
+| `continue: false` + `stopReason` | 在工具阶段之后结束运行、拒绝提示 / 运行、取消手动压缩；`stopReason` 会显示给你。 |
+| `systemMessage` | 作为提示显示给你。 |
+| `suppressOutput` | 不把该 hook 的输出放进对话记录。 |
 
 ### `visionModel`
 
@@ -1157,6 +1136,9 @@ Hook 不是通过配置拿到这些值的；hook 运行器会把它们设置在�
 | --- | --- |
 | `SEEKFORGE_HOOK_STAGE` | 触发本次 hook 的生命周期阶段。 |
 | `SEEKFORGE_TOOL` | 触发工具的名称；阶段与工具无关时为空字符串。 |
+| `SEEKFORGE_PROJECT_DIR` | 会话所在的工作区目录（也是 hook 的工作目录）。 |
+
+这些变量只提供给 `command` hook；`http` 与 `prompt` hook 从 JSON 事件中获得同样的信息。
 
 statusline 命令会收到另一组变量——见[状态栏](#状态栏)。
 

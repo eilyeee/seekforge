@@ -36,13 +36,21 @@ function toConfig(draft: Draft): HooksConfig {
   const out: HooksConfig = {};
   for (const stage of HOOK_STAGES) {
     const entries = draft[stage]
-      .filter((e) => e.command.trim() !== "")
-      // Strip the client-only `id` so the payload stays {command, match?, pattern?}.
-      .map((e) => ({
-        command: e.command.trim(),
-        ...(e.match && e.match.trim() !== "" ? { match: e.match.trim() } : {}),
-        ...(e.pattern && e.pattern.trim() !== "" ? { pattern: e.pattern.trim() } : {}),
-      }));
+      .filter((e) => (e.type !== undefined && e.type !== "command") || (e.command ?? "").trim() !== "")
+      // Strip the client-only `id`. Entries of other hook types (http, prompt)
+      // are not editable here and pass through unchanged, so a save never
+      // drops them.
+      .map(
+        ({ id: _id, ...e }): HookEntry =>
+          e.type !== undefined && e.type !== "command"
+            ? e
+            : {
+                command: (e.command ?? "").trim(),
+                ...(e.match && e.match.trim() !== "" ? { match: e.match.trim() } : {}),
+                ...(e.pattern && e.pattern.trim() !== "" ? { pattern: e.pattern.trim() } : {}),
+                ...(e.timeout !== undefined ? { timeout: e.timeout } : {}),
+              },
+      );
     if (entries.length > 0) out[stage] = entries;
   }
   return out;

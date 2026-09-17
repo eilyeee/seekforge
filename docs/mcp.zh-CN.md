@@ -376,7 +376,7 @@ MCP 客户端发起的工具调用上：
 | 配置键 | 对 `mcp-serve` 的作用 |
 |---|---|
 | `permissionRules` | 生效。deny 规则在任何权限级别上都会拦截（包括只读调用），且从不提示。完整模式下 allow 规则会预先授权某个工具，`env` 类工具也不例外。 |
-| `hooks` | 生效。`preToolUse` 在每次工具调用前运行，非零退出即拦截该调用；`updatedInput` 改写会照常重新校验并重新做权限检查。 |
+| `hooks` | 生效。`preToolUse` 在每次工具调用前运行，非零退出即拦截该调用；`updatedInput` 改写会照常重新校验并重新做权限检查。在完整模式下，hook 的 `allow` 会代为回答本传输原本会拒绝的提示，与 allow 规则一致。这里无法评估 `prompt` hook（没有模型），因此它们会失败——在 `preToolUse` 上即拦截。见 [Hook](hooks.zh-CN.md)。 |
 | `sandbox` | 在完整模式下对 `run_command` / `run_tests` 生效。沙箱机制不可用时命令直接失败，而不会退化为无沙箱执行。 |
 | `commandAllowlist` | 生效，但在这里不产生任何差别：完整模式本就自动放行 `execute`，只读模式则一律禁止。 |
 | `visionModel`、`webSearch`、`browserProfile` | 会被配置，但默认没有任何调用能触达它们：`image_analyze`、`web_search`、`web_fetch` 与 `browser_navigate` 都分类为 `env`，一律被拒绝。只有当你的 `permissionRules` 明确允许了对应工具时它们才会生效。 |

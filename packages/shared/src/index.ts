@@ -6,6 +6,7 @@
 import type { LoopVerificationStage } from "./loop-verification-contract.js";
 
 export * from "./guards.js";
+export * from "./hooks.js";
 export * from "./loop-verification-contract.js";
 
 // ---------------------------------------------------------------------------
@@ -1023,25 +1024,7 @@ export type SlashCommand = {
 /** GET /api/commands response. */
 export type CommandsResponse = { commands: SlashCommand[] };
 
-/** The nine hook stages, mirroring core's HookStage. */
-export const HOOK_STAGES = [
-  "preToolUse",
-  "postToolUse",
-  "sessionStart",
-  "userPromptSubmit",
-  "preCompact",
-  "stop",
-  "subagentStop",
-  "notification",
-  "sessionEnd",
-] as const;
-export type HookStage = (typeof HOOK_STAGES)[number];
-
-/** One shell hook entry (matches core's HookEntry). */
-export type HookEntry = { command: string; match?: string; pattern?: string };
-
-/** Project hooks config: stage → entries. */
-export type HooksConfig = Partial<Record<HookStage, HookEntry[]>>;
+// Hook stages, entries and their validation: see ./hooks.ts (re-exported above).
 
 /** One content-search hit (GET /api/search); col/len locate the match in text. */
 export type SearchHit = { path: string; line: number; text: string; col: number; len: number };

@@ -3,6 +3,12 @@ import { createHash } from "node:crypto";
 import { abortablePromise } from "../util/abort.js";
 import { loadSessionMessages, rewriteSessionMessages } from "./trace.js";
 import { acquireSessionLease } from "./session-lease.js";
+import {
+  createPromptHookEvaluator,
+  runManualCompactionHooks,
+  type CompactionBlocked,
+  type CompactionHookOptions,
+} from "../hooks/index.js";
 
 /**
  * CJK ranges where one character roughly equals one token under most
@@ -592,13 +598,32 @@ export type LlmCompactSessionResult = {
  *
  * Frontends (the TUI /compact <focus> command) can wire this later — a
  * follow-up; today only the auto-compact site in the loop passes a focus.
+ *
+ * Passing `hooks` (the user's config hooks) fires preCompact with reason
+ * "manual" and the focus — which may block, resolving `{ blocked: true,
+ * reason }` with nothing changed — and postCompact afterwards. Prompt hooks
+ * are evaluated with `provider` unless `hooks.evaluate` says otherwise.
  */
+export function llmCompactSessionNow(
+  workspace: string,
+  sessionId: string,
+  provider: SummaryProvider,
+  focus?: string,
+): Promise<LlmCompactSessionResult | null>;
+export function llmCompactSessionNow(
+  workspace: string,
+  sessionId: string,
+  provider: SummaryProvider,
+  focus: string | undefined,
+  hooks: CompactionHookOptions,
+): Promise<LlmCompactSessionResult | CompactionBlocked | null>;
 export async function llmCompactSessionNow(
   workspace: string,
   sessionId: string,
   provider: SummaryProvider,
   focus?: string,
-): Promise<LlmCompactSessionResult | null> {
+  hooks?: CompactionHookOptions,
+): Promise<LlmCompactSessionResult | CompactionBlocked | null> {
   const lease = acquireSessionLease(workspace, sessionId);
   try {
     let messages: ChatMessage[];
@@ -608,18 +633,31 @@ export async function llmCompactSessionNow(
       return null;
     }
     const beforeTokens = estimateMessagesTokens(messages);
-    // Budget 0 forces compaction whenever the message shape allows it; null on
-    // a too-short session OR any provider failure/empty summary.
-    const compacted = await llmCompactMessages(provider, messages, 0, focus !== undefined ? { focus } : undefined);
-    if (!compacted) return null;
+    const compact = async (): Promise<LlmCompactSessionResult | null> => {
+      // Budget 0 forces compaction whenever the message shape allows it; null
+      // on a too-short session OR any provider failure/empty summary.
+      const compacted = await llmCompactMessages(provider, messages, 0, {
+        ...(focus !== undefined ? { focus } : {}),
+        ...(hooks?.signal ? { signal: hooks.signal } : {}),
+      });
+      if (!compacted) return null;
 
-    rewriteSessionMessages(workspace, sessionId, compacted.messages, lease);
-    return {
-      droppedTurns: compacted.droppedTurns,
-      beforeTokens,
-      afterTokens: estimateMessagesTokens(compacted.messages),
-      ...(compacted.usage ? { usage: compacted.usage } : {}),
+      rewriteSessionMessages(workspace, sessionId, compacted.messages, lease);
+      return {
+        droppedTurns: compacted.droppedTurns,
+        beforeTokens,
+        afterTokens: estimateMessagesTokens(compacted.messages),
+        ...(compacted.usage ? { usage: compacted.usage } : {}),
+      };
     };
+    if (hooks === undefined) return await compact();
+    // Hooks fire only for a session that can actually be compacted.
+    if (!compactMessages(messages, 0)) return null;
+    return await runManualCompactionHooks(
+      { sessionId, workspace, ...(focus !== undefined ? { focus } : {}) },
+      { ...hooks, evaluate: hooks.evaluate ?? createPromptHookEvaluator(() => provider) },
+      compact,
+    );
   } finally {
     lease.release();
   }

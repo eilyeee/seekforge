@@ -67,8 +67,8 @@ describe("dispatcher hook integration", () => {
       result: { ok: true, errorCode: null },
       workspace,
     });
-    // ok/errorCode only — never the raw tool output.
-    expect(JSON.stringify(payload.result)).not.toContain("hello");
+    // The tool's response travels with the outcome.
+    expect(payload.result.response.content).toContain("hello");
   });
 
   it("postToolUse carries the error code when the tool fails, and never blocks", async () => {
