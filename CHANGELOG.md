@@ -2,6 +2,195 @@
 
 ## Unreleased
 
+### Screenshots reached the dispatcher and stopped there
+
+`browser_screenshot` has returned `{ data, images }` since the vision round, but
+the dispatcher rebuilt every result from `data` and `meta` alone, so the model
+never saw a single one. A tool's images now survive dispatch — which is also the
+path `read_file` images and MCP image results take to the model.
+
+### The context window was the same for every model
+
+`contextWindowTokens` defaulted to 128K and no app set it, so a 1M-token Claude or DeepSeek V4 run compacted at a tenth of what it could hold. The window is now looked up per request model, and a plan run on a different model is budgeted against that model. The table (`provider/constants.ts`) lists only windows that were checked, so OpenAI models stay at the 128K default. The new user-owned `modelContextWindows` key overrides it. Compaction also starts before the budget, at `autoCompactThreshold` (0.9 by default). Below the budget it runs only when that gets the conversation back under the threshold; otherwise a tail that is itself too large would be re-summarized on every turn, at a model call each time. Micro-compaction used to count only user turns, so a headless `-p` run — one turn, fifty tool rounds — never cleared anything; it now also clears outputs older than the last four tool rounds. After a full compaction, the plan and fresh copies of the files the run was working on come back as harness-provided context, bounded and redacted, instead of the model having to read them all again.
+
+### Plans can be approved from inside the run
+
+A plan run now offers `exit_plan_mode`. The plan goes through the ordinary permission prompt, verbatim. Approval switches the same run to edit mode under the approval mode the user already chose. A refusal with feedback sends the feedback back for a revised plan; a bare refusal, or a host that cannot ask, leaves the run read-only. `update_plan` steps can carry an `activeForm` for frontends to show while a step runs.
+
+### Rewind now covers what shell commands changed
+
+Rewind used to undo only file-tool edits: a `sed -i`, a code generator or a `git checkout -- file` run through `run_command` stayed after `seekforge rewind`. In a git work tree, each command that can write now runs between two git probes, so rewind restores the files it changed and deletes the ones it created. The limits are recorded rather than implied: outside git, over the size limits, background commands, binary files and history rewrites each leave a note, and `seekforge rewind` prints them as warnings. The same comparison feeds `file.changed`, which now also reports notebook and LSP edits. Background commands, which the model could only poll, now tell the session that started them when they exit.
+
+### The agent could search its way to your API key
+
+`search_text` checked sensitive files by their path relative to the *search root*. Pointing it at `.seekforge` (or naming `.seekforge/config.json` itself) turned that file into `config.json`, which is not on the list, so a match returned the provider key. The check now uses the workspace-relative path, whatever path the result displays.
+
+### File tools that know what your repository ignores
+
+`list_files`, `search_text` and `glob` skipped a fixed list of directories and searched everything else, generated output included. They now follow your `.gitignore` files (root and nested) and `.git/info/exclude`, with git's negation, directory-only, anchoring and `**` rules, and a repository's ignore files when you open one of its subdirectories. `includeIgnored: true`, or naming an ignored directory as the path, still reaches ignored content; the fixed list remains the floor.
+
+### Read before you write
+
+`apply_patch` and `write_file` with `overwrite` now refuse an existing file the agent has not read in the session, or one that changed on disk since it last looked. The check runs before you are asked to approve and again just before writing, and compares content, so a `touch` is not a change. Every follow-up message is a new run, so what the agent read is carried across the session as hashes, not reset each turn. `apply_patch` also gains `replaceAll`, and `read_file` now shows images to models that accept them and reads PDF text through poppler's `pdftotext`.
+
+### CLAUDE.md, imports, and rules that load when the work gets there
+
+Claude Code's instruction files now load beside `AGENTS.md`, identical content once. `~/.claude/CLAUDE.md` loads only if you set `"claudeCompat": "all"`, which a repository cannot do. Rules files can `@import` others, confined to the workspace and never a sensitive file. `.seekforge/rules/` files with `paths:`, and a subdirectory's `AGENTS.md`, load the first time the agent reads or edits a file they cover, not only when the task happens to name the path.
+
+### Permission rules that say exactly what they mean
+
+`ask` rules and refusal feedback shipped last round without a word in the
+guides; both are documented now. Rules also learned the shapes people actually
+write: `tool` may be a glob (`mcp__github__*`, `browser_*`), a command rule may
+use `*` (`npm run *`, `git push *`), a file rule may be a glob (`src/**`,
+`**/*.env`, `docs/*.md`), and `domain:example.com` covers a host and its
+subdomains for web_fetch and browser_navigate.
+
+The asymmetry is the design. An allow wildcard is anchored at both ends, must
+start with a literal program name (`* --version` matches nothing), and never
+matches a line with shell control syntax. Deny and ask rules fail closed: they
+are also tested against every command of a compound line, with leading
+`NAME=value` assignments and a program's directory stripped, so
+`cd x && GIT_TRACE=1 /usr/bin/git push` meets a deny on `git push *` — and so
+does a plain deny on `curl` for `echo ok && curl …`, which it used to miss.
+
+Three holes closed on the way. A URL allow rule was an unanchored string
+prefix, so `GET https://docs.example.com` approved
+`https://docs.example.com.evil.net/` and `https://docs.example.com@evil.net/`;
+URL rules now compare scheme, host, port and path. A path deny rule missed the
+same file named by absolute path or through a symlink; paths are now compared
+relative to the workspace, as written and as they really resolve (an allow
+rule must match both). And `run_tests`, which runs whatever command it is
+given, was matched like a URL tool — an unanchored prefix that also matched
+`pnpm test; touch pwned`, and a "don't ask again" that approved every later
+test command. It is a shell tool now.
+
+Compatibility: a `*` in an existing command rule used to be a literal and is
+now a wildcard; "always allow" never proposes a rule containing one.
+
+### "Don't ask again" on an edit no longer means every file
+
+A session grant for write_file or apply_patch remembered the bare tool name,
+so one keypress on `README.md` approved `.github/workflows/ci.yml` for the rest
+of the run. It now covers the same tool on files directly in the approved
+file's physical directory — not subdirectories, not the parent, not a symlinked
+folder inside it. The directory, not the exact file, because "create these
+three files here" is the common case and an exact-file grant would make the
+answer useless for it. Grants of different kinds now live in separate
+namespaces: approving `write_file` no longer also approved
+`run_command("write_file …")`.
+
+### Directories outside the project, for the file tools too
+
+`--add-dir` and `/add-dir` only ever fed `@`-references. Core now accepts
+`additionalDirectories` (also a user-owned config key; a repository cannot set
+it): read_file, list_files, search_text, glob, write_file, apply_patch, the
+notebook tools and image_analyze work inside them under the same prompts,
+rules and approval modes as the workspace. A granted directory is usually a
+parent of other projects, so secret files and `.git` stay protected at every
+depth; symlinks that leave every granted root are still refused; the paths are
+re-validated on every run and pinned to their real location; runtime-backed
+sessions hand the Runtime the granted directory as its root; the OS sandbox
+makes them writable when the level writes; rewind reports them as skipped
+rather than restoring them. The model is told the directories exist.
+
+### A network sandbox between everything and nothing
+
+`sandboxNetwork: { allowedDomains, deniedDomains? }` narrows a sandboxed
+command's network to named hosts (`example.com`, `*.example.com`). Commands get
+HTTP(S)_PROXY pointing at a local proxy SeekForge starts on first use; it
+forwards CONNECT tunnels and plain HTTP only to allowed hosts, resolves an
+allowed name once and connects only to what it resolved, refuses a name that
+only a `*.` pattern covers when it resolves to loopback or link-local (the
+metadata endpoint included), and chains through the process's own `http://`
+proxy when there is one. The kernel refuses everything else: seatbelt
+allows only the proxy's loopback port, and on Linux bwrap's empty network
+namespace is bridged to the proxy's unix socket by a small forwarder that runs
+inside it. A refusal answers `403 Blocked by SeekForge sandbox`, is named in the
+command's result, and triggers the usual one-time unsandboxed-retry offer. An
+allowlist only narrows — `restricted` stays offline, an unset level becomes
+`workspace-write`, `off` stays off — and a malformed one stops the agent from
+being built instead of leaving the network open. This also puts the dead
+`SandboxProfile.writablePaths` / `composeSandboxProfiles` to work.
+
+### Hooks that decide before the prompt, and three ways to write one
+
+A `preToolUse` hook used to run only after the permission prompt had been answered, so its `allow` could never spare you a prompt and its `deny` still asked first. It now runs after the absolute refusals — deny rules, ask mode, the dangerous-command denylist — and before anyone is asked: `deny` refuses outright, `allow` answers the prompt the policy would have shown, `ask` forces one for that call. An `allow` has an allow rule's reach and its limits: it never answers a prompt an `ask` rule demands, and never covers a shell command with control syntax. Every `preToolUse` hook now runs, so a later deny beats an earlier allow. A new `permissionRequest` stage can answer a tool's or a dispatch's prompt for you.
+
+Hooks can also be `http` (POST the event, read the response with the same protocol, no redirects, `${VAR}` in headers only for names in `allowedEnvVars`) or `prompt` (a single-turn model check whose `{"ok": false}` blocks and whose `{"ok": true}` approves nothing). Entries take a `timeout`, and `match` accepts `Edit|Write` lists and anchored regexes, refusing ones that could backtrack without bound.
+
+`postToolUse` now receives the tool's redacted result, and its `additionalContext` or block reason reaches the model beside the result, labeled as your hook's output. `stop` can keep the agent working (`stopHookActive` marks a repeat; five per run at most). `sessionStart` context finally reaches the task. `postToolUseFailure`, `subagentStart` and `postCompact` are new, manual compaction fires `preCompact` / `postCompact`, `continue: false` ends the run with its `stopReason`, and command hooks get `SEEKFORGE_PROJECT_DIR`. The config merge used to build hooks only for the stages a surface listed — the TUI and server list their own nine — so the new stages would have silently vanished there; an order list is no longer a filter.
+
+### Subagents grew to Claude Code's shape
+
+Agent files now accept lists and nested maps, and the fields `disallowedTools`, `permissionMode`, `isolation`, `skills`, `effort`, `color`, `mcpServers` and `hooks`. Claude Code's `.claude/agents/*.md` load in place, with tool names mapped to today's tools. A repository's agent files can only tighten: a looser permission mode is clamped to the parent's, their hooks are dropped, and no agent gets a tool its parent lacks. Edit agents no longer write the same checkout at once. With `isolation: worktree` an edit agent works in its own git worktree, and its diff goes through the parent's write rules and approval prompt before it touches your files; a change that isn't applied stays on its branch for review. A host holding a session-scoped dispatch manager keeps background agents alive past the run that started them, and the next turn learns how they ended. Dispatched agents can send short `agent_report` progress lines. Separately, merging a worktree no longer fails in repositories that gitignore `.seekforge/`.
+
+### Claude Code skills drop in, and the model can load a skill itself
+
+A skill no longer needs `skill.json`: `SKILL.md` frontmatter supplies Claude Code's fields, and `skill.json` still wins for the fields it sets. `.claude/skills` is read in every project; `~/.claude/skills` is read once you set `claudeUserSkills`. The system prompt now lists what the model may load, and `invoke_skill` returns a skill's instructions with Claude Code's argument substitution. It never runs `` !`command` `` blocks. Lexical selection still pre-loads its excerpt but skips skills that opted out of model invocation.
+
+### What an active skill may do to permissions depends on who wrote it
+
+`disallowed-tools` denies at every scope, widening to the whole tool when an entry cannot be matched exactly. `allowed-tools` pre-approves only for builtin, user and enabled-plugin skills. A project skill is repository content: it may restrict and never grant. A grant is exact or absent, so Claude Code's exact `Bash(npm test)` is not quietly turned into a prefix rule. Rules live on the activating run's policy and reach subagents it dispatches. `context: fork` runs through the ordinary dispatch path under a skill-specific id, and an editing fork is approved as a write.
+
+### Plugins from anywhere, including Claude Code's
+
+A directory with `.claude-plugin/plugin.json` is read as a plugin, and its commands, output styles, hooks, MCP and language servers are mapped. What doesn't map is listed instead of guessed. Plugins also install from git (commit recorded) or an https archive (sha256 recorded; links, traversal paths and set-id bits are refused before `tar`/`unzip` sees the archive). `plugin marketplace add|remove|list` plus `plugin install name@market` read Claude Code's `marketplace.json`, and never run `npm` or `command` sources. Every install still waits for `plugin enable`. Plugins can now contribute `<plugin>:<command>` slash commands and output styles, and language servers join the new user-only `lspServers` key, which replaces the built-in server for the extensions it names.
+
+### MCP servers a checkout defines now wait for you, and the client caught up with Claude Code
+
+A repository could always *name* MCP servers; it could never mark them trusted, so the only way to use one was copying it into your global config. Claude Code's `.mcp.json` is now read too, and every server a checkout defines — there, in `.seekforge/config.json` or `config.local.json` — connects automatically once you approve that exact definition for that workspace (`seekforge mcp approve`). The approval lives in your SeekForge home, keyed by the workspace and a digest of the definition as written, so an edited definition is pending again. `mcp list` shows pending servers and no longer starts them, even with `-y`; `mcp get`, `mcp reject` and `mcp reset-project-choices` round it out.
+
+**Header references were an exfiltration channel.** `${VAR}` in MCP headers expanded for every server, including one a clone defined and you merely clicked "test" on. Expansion — now also in `command`, `args`, `env`, `url` and `oauth`, with `${VAR:-default}` — happens only for your own servers and approved ones, and the approval prompt shows the template, never the value. An approved project stdio server also starts without secret-looking environment variables unless its own `env` names them.
+
+`mcp add` takes `--transport http|sse`, `--header`, `--env`, `--scope` and `--trust`; `mcp add-json` takes Claude Code's format; `mcp import` copies Claude Desktop and Claude Code servers after listing them, marked trusted because they already ran under your own configuration (`--no-trust` otherwise). The legacy HTTP+SSE transport is supported, and it refuses a message endpoint on another origin, since those POSTs carry your bearer token.
+
+For the agent: a server's `tools/list_changed` now reaches the running loop on its next turn; `list_mcp_resources` and `read_mcp_resource` let the model read resources itself; image results arrive as images rather than descriptors; and past `mcpToolSearchThreshold` (10% of the budget by default) MCP tools are listed by name behind a `tool_search` tool that loads schemas on demand. A call to a tool that was never loaded now says how to load it instead of only "not advertised".
+
+### Effort, telemetry, rotating keys and proxies reach the provider
+
+`reasoningEffort` now takes `low`, `medium`, `high` or `max`, and each provider receives the nearest level it actually accepts instead of a value it may ignore: DeepSeek's documented top-level `reasoning_effort` (the field used to ride inside `thinking`, where the API reference does not put it), Anthropic's `output_config.effort` (skipped for models that take none), OpenAI's `reasoning_effort` for the gpt-5 families whose levels are known, and OpenRouter's `reasoning.effort`. A model nobody has checked gets no level at all — an unknown field is a 400 on a strict endpoint.
+
+`apiKeyHelper` names a command that prints the key. It lives in user config only, runs once per process and again when the key ages out or the provider answers 401, and never shows up in a log or an error.
+
+`SEEKFORGE_ENABLE_TELEMETRY=1` exports token, cost, tool-decision and session metrics and events to your own collector over OTLP/HTTP JSON, with no new dependency and nothing sent anywhere by default.
+
+Node's `fetch` ignores `HTTPS_PROXY` unless the process was started with `--use-env-proxy`, and it cannot be switched on later. The `seekforge` launchers now restart themselves in place with the flag when a proxy is set. Doing so exposed that `web_fetch`'s pinned connection would have silently followed the proxy and let it resolve the name again; it now always connects to the address it checked. Providers also gained a `responseFormat` seam for structured output (OpenAI `json_schema`, Anthropic `output_config.format`, DeepSeek `json_object`).
+
+### `seekforge` opens the TUI, and the REPL stopped ignoring your flags
+
+Bare `seekforge` in a terminal now opens the TUI — the in-process copy of `seekforge-tui`, so Ctrl+Z still suspends the whole job — after the same folder-access question the REPL always asked. `seekforge chat`, `--classic`, `SEEKFORGE_CLASSIC_REPL=1`, piped input, and any flag the TUI cannot honor yet keep the classic REPL, and a note says which flag decided it. That REPL used to receive four of the root flags and drop the rest: `-c`, `--resume`, `--permission-mode`, `--add-dir`, `--mcp-config`, the system-prompt and tool flags all reach it now, and flags that only mean something to `-p` are refused instead of ignored. It also learned `!<command>` (the output joins your next message, framed as data), `/compact <focus>` through the configured provider, and `/rename`. Two things it had been doing wrong the whole time: Ctrl+C at a terminal never reached the process — readline turned it into its own event and, with nobody listening, closed itself, so the REPL quit instead of cancelling the turn — and piped lines that arrived between prompts were silently dropped.
+
+`run`, `ask` and `-p` gained `--session-id`, `--fork-session`, `--agents` (validated like `AGENT.md`), `--system-prompt-file`, `--append-system-prompt-file`, `--debug [filter]`, and `--json-schema`: a validated `structured_output`, with `error_max_structured_output_retries` when no attempt validates. `run` and `-p` gained `--worktree [name]`. A replacement system prompt no longer silently drops `--append-system-prompt` and `--output-style`. Permission prompts accept `a` (only when a session grant is possible) and `n: <reason>`, which reaches the model with the refusal. `sessions show` and `sessions rename` are new. `update` now upgrades npm, pnpm and Volta installs against the official registry after asking — and it compares the right version: the bundled copy resolved `package.json` one directory too high and had been reporting `0.0.0` since it shipped. The published `seekforge-tui` crashed on its first render for a related reason: the CLI bundled it with a tsconfig that has no `jsx` setting.
+
+### The TUI caught up on management and launch
+
+`seekforge-tui` now takes the interactive flags the CLI takes: `--resume`, `--permission-mode`, `-y`, `--add-dir`, `--settings`, `--profile`, `--mcp-config`, `--strict-mcp-config`, `--append-system-prompt` and `--verbose`, and an unknown flag stops the launch instead of being ignored. `/permissions`, `/mcp`, `/agents`, `/hooks`, `/skills` and `/plugins` open panels instead of printing: rules are listed by source and added or deleted (the project file takes deny and ask only), MCP servers show why they failed and reconnect one at a time, and agents are created from a short form. `/sessions` searches, previews and renames, and `/rename` names the current session. Custom commands now read their files through core, like the REPL and the server — namespaces, `$1`..`$9`, `model`, `allowed-tools` and `` !`shell` `` all work — and a file can no longer take a built-in's name. The permission prompt takes a reason with a denial, scrolls long diffs and plans, and no longer offers a grant core would drop. Every key binding can now be changed, including chords; bad entries are reported, and Alt+P and Alt+T open the model picker and toggle thinking. `/ide` connects to an editor bridge and attaches bounded, untrusted editor context to each prompt. Fixed along the way: `/compact <focus>` ignored the configured provider, Esc never matched a key binding, and an "always allow" rule only applied after a restart.
+
+### The workbench keeps working while the agent does
+
+The Desktop used to stop you at the edge of a run: the composer went grey, the diff was read-only, and anything outside the chat meant another window. Messages typed during a run now queue above the composer and go out as the next turns; a run lost to a dropped connection holds its queue until you say so, because sending it anyway would start work you never saw begin. The Changes view stages, unstages and reverts whole files or single hunks, and the server applies a hunk only if its own fresh diff still contains it byte for byte — a stale view can refuse, but it cannot apply a different change. The Git view pushes (never forced; the refspec is built on the server, and the branch you were shown must still be the one checked out) and opens pull requests through `gh`, and both processes end when the request goes away. A bottom dock adds a workspace terminal — a real PTY borrowed from the system `script` — and a preview frame that accepts only loopback addresses and never the workbench's own.
+
+Settings gained a permission-rules editor. Project scope offers only deny and ask, and says why: an allow rule in a cloned repository is a repository granting itself permissions. Writing through the same owner as "Always allow" exposed a drift: the server's other global-settings writes locked the user config under a private name, so they never excluded the CLI or TUI editing the same file; they now share one lease. Subagents can be created and edited — validated by core's parser before the write and core's loader after it, with frontmatter the form does not understand kept line for line. A permission refusal can carry a reason the model reads, grants core would silently downgrade are no longer offered, plans arrive as Markdown to approve, and sessions and tabs can be named.
+
+### The VS Code extension could not reach a default server — or start at all
+
+A fresh install talked to port 3847 while `seekforge serve` listens on 7373. The release VSIX is built with `vsce --no-dependencies`, which leaves `node_modules` behind, so its `require("ws")` failed before the first command ran. And "Open Session Transcript" read `body.sessions` from a route that returns a bare array, so every workspace looked empty. The default now matches the server (a test reads both), the WebSocket client is built in, and both session shapes are read. A late answer to a prompt the server had already timed out no longer ends the run either: the server refuses it with `unknown_request` and carries on, and now so does the client.
+
+### A chat next to the code
+
+The extension grew a chat view, in the sidebar and in editor tabs: streaming markdown, collapsible reasoning, tool rows with live output, a cost/token footer, Stop, ask/edit/plan modes, approval modes, Execute plan, follow-ups on the same session, a resume list, `@file` mentions, attached selections, and free-text answers to agent questions. The page runs under a nonce-only CSP with no remote resources; every message is validated in both directions, and markdown becomes a tree of text nodes, so nothing a model writes is ever HTML. VS Code can also start `seekforge serve` itself, saving the printed token and masking it in the terminal. `serverUrl` and `serveCommand` are user-settings only, because a repository must not choose where the token goes or what VS Code executes.
+
+Permission requests now open in the native diff editor over read-only documents. Multi-edit patches can be approved per edit, and a denial can carry a reason. "For this session" and "Always" appear only when core will honor them.
+
+### An IDE bridge for the terminal
+
+Each VS Code window serves its selection, open files and diagnostics on `127.0.0.1`, and can show diffs and files on request. Discovery is an owner-only lock file under `~/.seekforge/ide/`. Requests need its token, compared in constant time; browser origins and non-loopback Host headers are refused, which defeats DNS rebinding. Bodies are capped as they arrive, and a window only removes a lock file it still owns.
+
+### `@seekforge` in issues and pull requests
+
+A reusable GitHub Action answers a collaborator's `@seekforge` question in a comment, or runs `resolve` / `resolve-review` when asked to fix. Only people with write access can start it, and bots and edits never do. Every input is validated, event text never reaches a shell, and the token never appears on a command line. The posted answer has secrets scrubbed and the trigger phrase broken up, so the action can't talk to itself.
+
 ### `mcp login` sent your browser wherever the checkout said
 
 `mcp list` gained a folder-access gate last round because listing servers runs
