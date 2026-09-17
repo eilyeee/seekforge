@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { z } from "zod";
 import { ToolError } from "../errors.js";
 import { DEFAULT_IGNORE_DIRS, resolveInsideWorkspace } from "../sandbox.js";
+import { type IgnoreFrame, WorkspaceIgnore } from "../gitignore.js";
 import { defineTool, type ToolSpec } from "../registry.js";
 import { compareByCodePoints } from "@seekforge/shared";
 
@@ -138,19 +139,30 @@ const globSchema = z.object({
       'Glob pattern matched against workspace-relative paths, e.g. "**/*.test.ts", "src/**/*.{ts,tsx}". "**" crosses directories, "*" does not cross "/".',
     ),
   path: z.string().optional().describe("Base directory to search under, relative to the workspace root (default '.')."),
+  includeIgnored: z
+    .boolean()
+    .optional()
+    .describe(
+      "Also match .gitignore'd paths (default false). node_modules/.git/dist-style and dot directories stay skipped; pass one as path to look inside it.",
+    ),
 });
 
 /**
  * Walk `root`, collecting files whose path (relative to the walk base) matches
- * `re`. Reuses list_files's ignore behavior: DEFAULT_IGNORE_DIRS and dot-dirs
- * are skipped, symlinked directories are not followed. Path-only — no file
- * contents are read, so this stays synchronous like list_files.
+ * `re`. Reuses list_files's ignore behavior: DEFAULT_IGNORE_DIRS, dot-dirs and
+ * (unless `ignore` is absent) .gitignore'd paths are skipped, symlinked
+ * directories are not followed. Path-only — no file contents are read, so this
+ * stays synchronous like list_files.
  */
-function walkGlob(root: string, re: RegExp): { matches: Array<{ rel: string; mtimeMs: number }>; truncated: boolean } {
+function walkGlob(
+  root: string,
+  re: RegExp,
+  ignore: { matcher: WorkspaceIgnore; rootRel: string } | undefined,
+): { matches: Array<{ rel: string; mtimeMs: number }>; truncated: boolean } {
   const matches: Array<{ rel: string; mtimeMs: number }> = [];
   let truncated = false;
 
-  const walk = (dir: string, rel: string): void => {
+  const walk = (dir: string, rel: string, frame: IgnoreFrame | undefined): void => {
     if (truncated) return;
     let dirents: fs.Dirent[];
     try {
@@ -162,12 +174,15 @@ function walkGlob(root: string, re: RegExp): { matches: Array<{ rel: string; mti
       if (truncated) return;
       const childRel = rel === "" ? d.name : `${rel}/${d.name}`;
       const childPath = path.join(dir, d.name);
+      const wsRel = ignore ? (ignore.rootRel === "" ? childRel : `${ignore.rootRel}/${childRel}`) : "";
       if (d.isDirectory()) {
         // Skip ignored dirs, dot-dirs, and symlinked dirs (don't follow).
         if (DEFAULT_IGNORE_DIRS.has(d.name) || d.name.startsWith(".")) continue;
-        walk(childPath, childRel);
+        if (ignore && frame && ignore.matcher.ignores(frame, wsRel, true)) continue;
+        walk(childPath, childRel, ignore ? ignore.matcher.descend(frame!, wsRel) : undefined);
       } else if (d.isFile() || d.isSymbolicLink()) {
         if (!re.test(childRel)) continue;
+        if (ignore && frame && ignore.matcher.ignores(frame, wsRel, false)) continue;
         let mtimeMs = 0;
         try {
           mtimeMs = fs.statSync(childPath).mtimeMs;
@@ -183,14 +198,14 @@ function walkGlob(root: string, re: RegExp): { matches: Array<{ rel: string; mti
     }
   };
 
-  walk(root, "");
+  walk(root, "", ignore ? ignore.matcher.frameFor(ignore.rootRel) : undefined);
   return { matches, truncated };
 }
 
 const glob = defineTool({
   name: "glob",
   description:
-    'Find files by NAME/PATH pattern (not contents). Use this when you know roughly what a file is called or its extension — e.g. "**/*.test.ts", "src/**/*.{ts,tsx}", "**/config.*". Returns workspace-relative paths sorted by modification time (newest first), capped at 1000. "**" crosses directories, "*" does not cross "/". To search inside files for code/text, use search_text instead. Build/dependency and dot directories are skipped.',
+    'Find files by NAME/PATH pattern (not contents). Use this when you know roughly what a file is called or its extension — e.g. "**/*.test.ts", "src/**/*.{ts,tsx}", "**/config.*". Returns workspace-relative paths sorted by modification time (newest first), capped at 1000. "**" crosses directories, "*" does not cross "/". To search inside files for code/text, use search_text instead. Build/dependency and dot directories and .gitignore\'d paths are skipped (includeIgnored:true keeps the latter).',
   schema: globSchema,
   classify: (args) => ({
     permission: "readonly",
@@ -203,7 +218,12 @@ const glob = defineTool({
       throw new ToolError("not_found", `Not a directory: ${args.path ?? "."}`);
     }
     const re = compileGlob(args.pattern);
-    const { matches, truncated } = walkGlob(root, re);
+    let ignore: { matcher: WorkspaceIgnore; rootRel: string } | undefined;
+    if (!args.includeIgnored) {
+      const matcher = WorkspaceIgnore.forWorkspace(ctx.workspace);
+      ignore = { matcher, rootRel: matcher.relativePath(root) };
+    }
+    const { matches, truncated } = walkGlob(root, re, ignore);
     // Newest first; ties broken by path for a stable order.
     // Deterministic tie-break: equal mtimes must not reorder by locale.
     matches.sort((a, b) => b.mtimeMs - a.mtimeMs || compareByCodePoints(a.rel, b.rel));

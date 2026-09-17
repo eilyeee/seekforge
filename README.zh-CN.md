@@ -178,10 +178,13 @@ Markdown/JSON/JUnit 报告。每周的 workflow 用 nightly 套件对照已提�
 - **完成时验证与评审（可选）**：设置了 `verifyCommand` 后，循环在完成时
   自动运行它并把失败喂回去修复；开启 `finalizeReview` 后，会对 diff 派出
   一个只读**评审**子代理。
-- **编辑是 search/replace 补丁**（`oldString` 必须唯一匹配），原子应用——
-  对 LLM 而言远比 unified diff 可靠。当 `apply_patch` 包含**多个编辑**时，
+- **编辑是 search/replace 补丁**（`oldString` 必须唯一匹配，或用 `replaceAll`
+  替换每一处），原子应用——对 LLM 而言远比 unified diff 可靠。agent 必须在本会话中
+  读取过文件才能修改它，文件在磁盘上变化后需要重读。当 `apply_patch` 包含**多个编辑**时，
   权限提示支持逐 hunk 选择（CLI 中逐个批准/拒绝，TUI 复选框，桌面弹窗）。
   单编辑调用保持整体通过/拒绝。
+- **文件工具**会跳过 `.gitignore` 忽略的内容（可用 `includeIgnored` 覆盖）；
+  `read_file` 还能把图片交给支持图片的模型查看，并通过 `pdftotext` 读取 PDF 文本。
 - **上下文管理器**让长会话保持在模型窗口内：微压缩先清理旧工具输出，然后
   把对话中段折叠成摘要——机械式，或配 `"compaction": "llm"` 用模型总结
   （失败时回退机械式）。prompt 前缀保持稳定以命中 DeepSeek 上下文缓存
@@ -216,8 +219,11 @@ Markdown/JSON/JUnit 报告。每周的 workflow 用 nightly 套件对照已提�
   prompt、工具白名单、可选模型和轮次预算；治理/评审类 agent 只读。只读
   （`ask`/`--plan`）会话不能派出 edit agent。
 - **权限规则**：配置里的 `permissionRules` 按工具添加 allow/deny 条目，
-  支持命令/路径前缀；deny 永远优先。规则文件按
-  `~/.seekforge/AGENTS.md` → `AGENTS.md` → `AGENTS.local.md` 合并。
+  支持命令/路径前缀；deny 永远优先。
+- **项目规则**按 `~/.seekforge/AGENTS.md` → `AGENTS.md` → `AGENTS.local.md`
+  合并（外加 Claude Code 的 `CLAUDE.md` 系列文件），支持 `@path` 导入；子目录的
+  `AGENTS.md` 和带 `paths:` 的 `.seekforge/rules/` 文件会在 agent 处理匹配文件时加载。
+  见[项目规则](docs/configuration.zh-CN.md#项目规则)。
 - **记忆**：每个 edit 会话结束后用一次额外模型调用蒸馏持久事实作为
   *候选*；在你 `seekforge memory approve` 之前，任何内容都不会进入长期
   记忆（`.seekforge/memory/project.md`）。相关记忆以简报形式注入后续

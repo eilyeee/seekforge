@@ -113,7 +113,9 @@ seekforge run "rename the User type to Account everywhere" -m deepseek-v4-pro -y
 
 **Tips:**
 - Edits to existing files go through `apply_patch` (verbatim search/replace);
-  the agent re-reads on a failed patch.
+  the agent re-reads on a failed patch, and must have read a file in the
+  session before it may change it. A rename inside one file is a single edit
+  with `replaceAll: true`.
 - Set `planModel` in config so `/plan` and `--plan` escalate to a stronger model
   on the same endpoint. See
   [Configuration → planModel](configuration.md#planmodel).
@@ -276,6 +278,39 @@ system prompt is replaced (`--system-prompt`), and in plain ask mode — so
 reports invalid installations.
 
 **Tips:** see the [Skills guide](skills.md) for format, selection, risk, and diagnostics.
+
+---
+
+## Give part of the repo its own rules
+
+**Goal:** conventions that apply only when the agent works in one area, without
+paying for them in every prompt.
+
+```bash
+# Rules for everything under packages/api/ — loaded once the agent touches a file there:
+printf '# API package\n- Validate request bodies with zod.\n' > packages/api/AGENTS.md
+
+# Rules selected by file pattern, anywhere in the repo:
+mkdir -p .seekforge/rules
+cat > .seekforge/rules/migrations.md <<'EOF'
+---
+paths:
+  - "db/migrations/**/*.sql"
+---
+Never edit a migration that has been released; add a new one.
+@docs/db-conventions.md
+EOF
+```
+
+**Tips:**
+- A rules file without `paths:` loads in every session, like `AGENTS.md`.
+- `@docs/db-conventions.md` pulls that file in; imports stay inside the
+  workspace.
+- Coming from Claude Code? `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md`
+  and `.claude/rules/` are read as they are. Set `"claudeCompat": "all"` in
+  `~/.seekforge/config.json` to also load `~/.claude/CLAUDE.md`. See
+  [Configuration → Project rules](configuration.md#project-rules).
+- The TUI and CLI show a `rules: <files>` step when a rule loads mid-run.
 
 ---
 

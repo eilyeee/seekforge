@@ -86,7 +86,7 @@ seekforge run "rename the User type to Account everywhere" -m deepseek-v4-pro -y
 ```
 
 **提示：**
-- 对既有文件的编辑都经过 `apply_patch`（逐字的 search/replace）；补丁失败时 agent 会重新读取文件。
+- 对既有文件的编辑都经过 `apply_patch`（逐字的 search/replace）；补丁失败时 agent 会重新读取文件，而且必须在本会话中读取过文件后才能修改它。同一文件内的重命名只需一个带 `replaceAll: true` 的编辑。
 - 在配置中设置 `planModel`，可让 `/plan` 和 `--plan` 在同一 endpoint 上升级到更强的模型。参见 [Configuration → planModel](configuration.zh-CN.md#planmodel)。
 - 在 TUI 中用 `/plan <task>` 可获得同样的“计划-确认-执行”流程。
 - plan 运行会向 agent 提供 `exit_plan_mode` 工具。计划完成后，agent 通过普通的权限确认提交计划，确认界面逐字展示计划原文。批准后，**同一次运行**切换到编辑模式——你选择的审批模式（`-y`、`acceptEdits`、confirm）仍决定哪些操作无需询问——agent 随即开始实施。拒绝则运行保持只读：拒绝时填写的反馈会返回给 agent，供其修改后重新提交；不带反馈的拒绝会让该工具在本次运行剩余时间内不再可用，agent 以计划作为最终回答结束。无法询问用户的宿主（使用机器输出格式的 `-p`、定时任务、触发器）总是拒绝。计划获批后，会话记录的模式变为 `edit`。
@@ -204,6 +204,37 @@ seekforge skill enable|disable|remove <id>
 还会报告无效安装。
 
 **提示：** 格式、选择、风险和诊断见[技能指南](skills.zh-CN.md)。
+
+---
+
+## 为仓库的一部分设置专属规则
+
+**目标：** 只在 agent 处理某个区域时生效的约定，不必在每次提示词里都付出成本。
+
+```bash
+# Rules for everything under packages/api/ — loaded once the agent touches a file there:
+printf '# API package\n- Validate request bodies with zod.\n' > packages/api/AGENTS.md
+
+# Rules selected by file pattern, anywhere in the repo:
+mkdir -p .seekforge/rules
+cat > .seekforge/rules/migrations.md <<'EOF'
+---
+paths:
+  - "db/migrations/**/*.sql"
+---
+Never edit a migration that has been released; add a new one.
+@docs/db-conventions.md
+EOF
+```
+
+**提示：**
+- 不带 `paths:` 的规则文件在每个会话中都会加载，与 `AGENTS.md` 相同。
+- `@docs/db-conventions.md` 会引入该文件；导入只能指向工作区内的文件。
+- 从 Claude Code 迁移过来？`CLAUDE.md`、`.claude/CLAUDE.md`、`CLAUDE.local.md`
+  和 `.claude/rules/` 会原样读取。在 `~/.seekforge/config.json` 中设置
+  `"claudeCompat": "all"` 还会加载 `~/.claude/CLAUDE.md`。参见
+  [配置 → 项目规则](configuration.zh-CN.md#项目规则)。
+- 规则在运行中加载时，TUI 和 CLI 会显示一个 `rules: <files>` 步骤。
 
 ---
 

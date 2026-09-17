@@ -271,6 +271,13 @@ All are fields on `AgentCoreDeps` (or discovered from the workspace):
 - **Memory extraction** — `deps.extractMemory: true` runs post-task memory
   extraction; `deps.memoryAutoApproveConfidence` auto-approves high-confidence
   facts.
+- **Project rules** — `deps.claudeCompat` (`"off"` / `"project"` / `"all"`)
+  chooses which Claude Code instruction files join `AGENTS.md`; see
+  [Configuration → Project rules](configuration.md#project-rules).
+- **Read-before-edit** — runs of `createAgentCore` guard `apply_patch` and
+  `write_file(overwrite)` automatically. When you call a dispatcher yourself,
+  pass `fileLedger: createFileLedger()` in the `ToolContext` to get the same
+  guard; without it, edits are unguarded.
 
 For the exact field-by-field contract, read the `AgentCoreDeps` type in
 `packages/core/src/agent/loop.ts`.

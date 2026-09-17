@@ -188,11 +188,16 @@ baseline; see [Evals and the regression gate](docs/EVALS.md).
 - **Verify & review on finish (opt-in)**: with `verifyCommand` set, the loop
   auto-runs it on completion and feeds failures back to fix; with `finalizeReview`
   on, it dispatches a read-only **reviewer** subagent over the diff.
-- **Edits are search/replace patches** (`oldString` must match uniquely),
-  applied atomically — far more reliable than unified diffs for LLMs.
+- **Edits are search/replace patches** (`oldString` must match uniquely,
+  or every occurrence with `replaceAll`), applied atomically — far more
+  reliable than unified diffs for LLMs. The agent must have read a file in the
+  session before changing it, and re-read it if it changed on disk.
   When `apply_patch` contains **more than one edit**, the permission prompt
   offers per-hunk selection (approve/reject individual hunks in the CLI, TUI
   checkboxes, or desktop modal). Single-edit calls stay all-or-nothing.
+- **File tools** skip what your `.gitignore` ignores (`includeIgnored` to
+  override); `read_file` also shows images to models that accept them and
+  reads PDF text through `pdftotext`.
 - **Context manager** keeps long sessions inside the model window:
   micro-compaction clears old tool outputs first, then the middle is folded
   into a digest — mechanically, or by the model with `"compaction": "llm"`
@@ -232,8 +237,12 @@ baseline; see [Evals and the regression gate](docs/EVALS.md).
   are read-only. A read-only (`ask`/`--plan`) session cannot dispatch an
   edit agent.
 - **Permission rules**: `permissionRules` in config add allow/deny entries
-  per tool with command/path prefixes; deny always wins. Rules files merge
-  from `~/.seekforge/AGENTS.md` → `AGENTS.md` → `AGENTS.local.md`.
+  per tool with command/path prefixes; deny always wins.
+- **Project rules** merge from `~/.seekforge/AGENTS.md` → `AGENTS.md` →
+  `AGENTS.local.md` (plus Claude Code's `CLAUDE.md` files), support `@path`
+  imports, and load a subdirectory's `AGENTS.md` or a `.seekforge/rules/` file
+  with `paths:` once the agent works on a matching file. See
+  [Project rules](docs/configuration.md#project-rules).
 - **Memory**: after each edit session one extra model call distills durable
   facts as *candidates*; nothing enters long-term memory (`.seekforge/memory/project.md`)
   until you `seekforge memory approve` it. Relevant memory is injected into

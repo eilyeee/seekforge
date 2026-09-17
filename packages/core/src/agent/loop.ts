@@ -108,7 +108,8 @@ import {
 import { classifyAgentError } from "./errors.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { buildCommandRoster, loadUserCommands } from "./commands.js";
-import { collectProjectRules } from "./rules.js";
+import { type ClaudeCompat, createRuleActivation, loadProjectRules, RULE_TRIGGER_TOOLS } from "./rules.js";
+import { openSessionFileLedger, saveSessionFileLedger } from "./session-file-ledger.js";
 import { appendCheckpoint, appendShellCheckpointNote } from "./session-rewind.js";
 import {
   approvedResult,
@@ -372,6 +373,11 @@ export type AgentCoreDeps = {
    * Guidance only: apply_patch stays fully available either way.
    */
   editFormat?: "patch" | "whole";
+  /**
+   * Which Claude Code instruction files join AGENTS.md (see rules.ts). Default
+   * "project". Only a user-owned config layer may set it.
+   */
+  claudeCompat?: ClaudeCompat;
   /**
    * User-configured hooks (docs/hooks.md). The tool stages reach the
    * dispatcher via ToolContext and fire around every tool call (nested
@@ -805,6 +811,16 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             title: `skills: ${skillSelections.map((selection) => selection.skill.id).join(", ")}`,
           });
         }
+        // Dispatched subagents run under their own prompt, which carries no
+        // project rules, so they get no mid-run rules either.
+        const projectRules =
+          input.systemPromptOverride === undefined
+            ? loadProjectRules(input.projectPath, {
+                task: input.task,
+                ...(deps.claudeCompat ? { claudeCompat: deps.claudeCompat } : {}),
+              })
+            : undefined;
+        const ruleActivation = projectRules ? createRuleActivation(input.projectPath, projectRules) : undefined;
         // The one composition of the regular system prompt: the initial build,
         // the resume rebuild, and the plan-approval rebuild differ only in the
         // mode and the carried-over plan.
@@ -814,7 +830,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               workspace: input.projectPath,
               mode,
               plan,
-              projectRules: collectProjectRules(input.projectPath, undefined, input.task),
+              projectRules: projectRules?.text,
               memoryBrief: memoryFor(input.task),
               skillBrief: buildSkillBrief(skillSelections, deps.skillBriefMaxChars),
               ...(skillListing ? { skillListing } : {}),
@@ -923,9 +939,13 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         // call this run makes, grown in place by enforcePermission when the user
         // answers "yes, don't ask again". Not persisted — it dies with the run.
         const sessionAllowlist: string[] = [];
+        // Read-before-edit guard. Each run has its own (a parent re-reads what a
+        // subagent changed), seeded with what earlier runs of this session read.
+        const fileLedger = openSessionFileLedger(input.projectPath, sessionId, resuming);
         const ctx: ToolContext = {
           sessionId,
           workspace: input.projectPath,
+          fileLedger,
           policy: {
             approvalMode: input.approvalMode,
             mode: input.mode,
@@ -1349,6 +1369,10 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                   ),
                 );
                 throwIfCancelled();
+                // Rules loaded mid-run live in transient notes; put back any
+                // the dropped middle held.
+                const rulesAgain = ruleActivation?.reinject(messages);
+                if (rulesAgain) messages.push({ role: "user", content: rulesAgain.message });
                 // The dropped middle held the plan and the file contents the run
                 // was working from. Re-attach the current plan and, when turns
                 // were actually dropped, fresh copies of the most recent files —
@@ -1912,6 +1936,30 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               throw new AgentLimitError("stopped_by_hook", hookStopRequest);
             }
 
+            // Rules for the files this turn touched (subdirectory AGENTS.md,
+            // path-scoped rules files), once each. Transient like the other
+            // harness notes: a resumed run loads them again on first touch.
+            if (ruleActivation) {
+              for (let i = 0; i < turnCalls.length; i++) {
+                const result = callResults[i]!;
+                if (result.ok && result.meta?.path && RULE_TRIGGER_TOOLS.has(turnCalls[i]!.name)) {
+                  ruleActivation.touch(result.meta.path);
+                }
+              }
+              const activated = ruleActivation.takePending();
+              if (activated && activated.origins.length > 0) {
+                yield emit({ type: "step.started", title: `rules: ${activated.origins.join(", ")}` });
+                messages.push({ role: "user", content: activated.message });
+              }
+              if (activated && activated.skipped.length > 0) {
+                yield emit({
+                  type: "notice",
+                  level: "warn",
+                  message: `Rules not loaded (rules size limit reached): ${activated.skipped.join(", ")}`,
+                });
+              }
+            }
+
             // A skill invoked this turn may ask for another model for the rest
             // of the run; the session only records the request when the host
             // can build providers (providerForModel).
@@ -2111,6 +2159,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           // return() resolve with done=false and suspend the generator before
           // leases and lifecycle hooks are released.
           await cleanupDispatches();
+          saveSessionFileLedger(input.projectPath, sessionId, fileLedger);
           queue.end();
           // A caller-provided manager outlives the run (multi-turn sessions).
           if (!deps.background) ctx.background?.disposeAll();

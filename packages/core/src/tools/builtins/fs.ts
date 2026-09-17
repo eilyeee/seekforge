@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "zod";
-import { compareByCodePoints, DEFAULT_LIMITS } from "@seekforge/shared";
+import { type ChatImage, compareByCodePoints, DEFAULT_LIMITS } from "@seekforge/shared";
 import { ToolError } from "../errors.js";
 import { applyEdits } from "../edits.js";
 import {
@@ -22,6 +22,9 @@ import { compileGlob } from "./glob.js";
 import { defineTool, type PreparedCall, type ToolSpec } from "../registry.js";
 import type { ToolContext } from "../index.js";
 import { FileTooLargeError, readFileBoundedSync, readUtf8FileBoundedSync } from "../../util/fs.js";
+import { assertCurrentView, type FileLedger, stampFor } from "../file-ledger.js";
+import { type IgnoreFrame, WorkspaceIgnore } from "../gitignore.js";
+import { extractPdfText } from "../pdf.js";
 
 const MAX_LIST_ENTRIES = 500;
 const DEFAULT_SEARCH_MATCHES = 1000;
@@ -29,6 +32,83 @@ const MAX_SEARCH_MATCHES = 5000;
 const MAX_SEARCHABLE_FILE_BYTES = 1_000_000;
 const MAX_TOOL_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_CONTEXT_LINES = 10;
+/**
+ * Ceiling on an image read_file attaches. Its base64 form (4MB) stays inside
+ * both the per-image limit the transcript accepts on replay (agent/trace.ts)
+ * and the 5MB per-image limit of the strictest vision API we speak to.
+ */
+const MAX_READ_IMAGE_BYTES = 3 * 1024 * 1024;
+const MAX_PDF_FILE_BYTES = 50 * 1024 * 1024;
+
+const INCLUDE_IGNORED_DESCRIPTION =
+  "Also include .gitignore'd paths (default false). node_modules/.git/dist-style directories stay skipped; pass one as path to look inside it.";
+
+function joinRel(a: string, b: string): string {
+  if (a === "") return b;
+  if (b === "") return a;
+  return `${a}/${b}`;
+}
+
+/**
+ * The ignore matcher for a walk rooted at `root` (a resolved path inside the
+ * workspace), or undefined when the caller asked to include ignored paths.
+ * Rules apply to what is BELOW the root: naming an ignored directory as the
+ * path is how the model looks inside it.
+ */
+function ignoreFor(
+  ctx: ToolContext,
+  root: string,
+  includeIgnored: boolean | undefined,
+): { matcher: WorkspaceIgnore; rootRel: string; frame: IgnoreFrame } | undefined {
+  if (includeIgnored) return undefined;
+  const matcher = WorkspaceIgnore.forWorkspace(ctx.workspace);
+  const rootRel = matcher.relativePath(root);
+  return { matcher, rootRel, frame: matcher.frameFor(rootRel) };
+}
+
+/** Where the ledger files a path: the physical file locally, the logical path behind a runtime. */
+function ledgerKey(ctx: ToolContext, resolvedOrRel: string): string {
+  return ctx.runtime ? `runtime:${path.resolve(ctx.workspace, resolvedOrRel)}` : resolvedOrRel;
+}
+
+function readBoundedOrTooLarge(resolved: string, relPath: string): Buffer {
+  try {
+    return readFileBoundedSync(resolved, MAX_TOOL_FILE_BYTES);
+  } catch (error) {
+    if (error instanceof FileTooLargeError) {
+      throw new ToolError("too_large", `File exceeds ${MAX_TOOL_FILE_BYTES} bytes: ${relPath}`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * The read-before-edit check, run from `prepare` so a write the ledger will
+ * refuse never reaches the approval prompt. `run` checks again: the file can
+ * change while the user is deciding.
+ */
+function precheckLocalView(ctx: ToolContext, relPath: string): void {
+  const ledger = ctx.fileLedger;
+  if (!ledger || ctx.runtime) return;
+  let resolved: string;
+  let stat: fs.Stats | undefined;
+  try {
+    resolved = resolveForWrite(ctx.workspace, relPath);
+    stat = fs.statSync(resolved, { throwIfNoEntry: false });
+  } catch {
+    return; // run() reports the path problem itself
+  }
+  if (!stat?.isFile()) return;
+  try {
+    assertCurrentView(ledger, resolved, relPath, {
+      stat,
+      content: () => readFileBoundedSync(resolved, MAX_TOOL_FILE_BYTES),
+    });
+  } catch (error) {
+    if (error instanceof ToolError) throw error;
+    // An unreadable file is run()'s to report.
+  }
+}
 
 /**
  * Reads the current content of a workspace file for a diff preview at classify
@@ -81,25 +161,43 @@ function buildPreview(
  * back to a bare allow/deny because no diff ever arrives. The read is async, so
  * it belongs in `prepare` — it runs after the call is classified and after the
  * policy has had its chance to refuse, but before the user is asked.
+ *
+ * `guard` sees the same content and may refuse the write outright; unlike the
+ * preview itself, its refusal is not swallowed.
  */
 async function runtimePreview(
   ctx: ToolContext,
   relPath: string,
   computeAfter: (before: string | null) => string,
+  guard?: (before: string | null) => void,
 ): Promise<PreparedCall> {
   if (!ctx.runtime) return {};
+  let before: string | null;
   try {
-    const before = await runtimeBeforeContent(ctx, relPath, { signal: ctx.signal });
+    before = await runtimeBeforeContent(ctx, relPath, { signal: ctx.signal });
+  } catch {
+    // Best effort, exactly like the local preview: a failure here must never
+    // stop the write the user may still approve.
+    return {};
+  }
+  guard?.(before);
+  try {
     // Match the local path's bound: a file too big to read locally is too big
     // to render as a prompt either.
     if (before !== null && Buffer.byteLength(before, "utf8") > MAX_TOOL_FILE_BYTES) return {};
     const preview = renderPreview(relPath, before, computeAfter(before));
     return preview ? { review: { preview } } : {};
   } catch {
-    // Best effort, exactly like the local preview: a failure here must never
-    // stop the write the user may still approve.
     return {};
   }
+}
+
+function runtimeGuard(ctx: ToolContext, relPath: string): ((before: string | null) => void) | undefined {
+  const ledger = ctx.fileLedger;
+  if (!ledger) return undefined;
+  return (before) => {
+    if (before !== null) assertCurrentView(ledger, ledgerKey(ctx, relPath), relPath, { content: () => before });
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -115,13 +213,18 @@ const listFilesSchema = z.object({
     .max(100)
     .optional()
     .describe("Maximum recursion depth (0-100, default 10); lower it for a quick overview."),
+  includeIgnored: z.boolean().optional().describe(INCLUDE_IGNORED_DESCRIPTION),
 });
 
-function walkEntries(root: string, maxDepth: number): { entries: string[]; truncated: boolean } {
+function walkEntries(
+  root: string,
+  maxDepth: number,
+  ignore: ReturnType<typeof ignoreFor>,
+): { entries: string[]; truncated: boolean } {
   const entries: string[] = [];
   let truncated = false;
 
-  const walk = (dir: string, rel: string, depth: number): void => {
+  const walk = (dir: string, rel: string, depth: number, frame: IgnoreFrame | undefined): void => {
     if (truncated || depth > maxDepth) return;
     let dirents: fs.Dirent[];
     try {
@@ -135,29 +238,34 @@ function walkEntries(root: string, maxDepth: number): { entries: string[]; trunc
     dirents.sort((a, b) => compareByCodePoints(a.name, b.name));
     for (const d of dirents) {
       if (truncated) return;
-      if (d.isDirectory() && DEFAULT_IGNORE_DIRS.has(d.name)) continue;
+      const isDir = d.isDirectory();
+      if (isDir && DEFAULT_IGNORE_DIRS.has(d.name)) continue;
       const childRel = rel === "" ? d.name : `${rel}/${d.name}`;
+      const wsRel = ignore ? joinRel(ignore.rootRel, childRel) : "";
+      if (ignore && frame && ignore.matcher.ignores(frame, wsRel, isDir)) continue;
       if (entries.length >= MAX_LIST_ENTRIES) {
         truncated = true;
         return;
       }
-      if (d.isDirectory()) {
+      if (isDir) {
         entries.push(childRel + "/");
-        walk(path.join(dir, d.name), childRel, depth + 1);
+        if (depth + 1 <= maxDepth) {
+          walk(path.join(dir, d.name), childRel, depth + 1, ignore ? ignore.matcher.descend(frame!, wsRel) : undefined);
+        }
       } else {
         entries.push(childRel);
       }
     }
   };
 
-  walk(root, "", 1);
+  walk(root, "", 1, ignore?.frame);
   return { entries, truncated };
 }
 
 const listFiles = defineTool({
   name: "list_files",
   description:
-    "Recursively list files and directories under path; directories end with '/'. Prefer this over search_text when exploring project structure rather than hunting for specific code. Build/dependency directories (node_modules, .git, dist, ...) are skipped and output caps at 500 entries — narrow path or maxDepth if truncated.",
+    "Recursively list files and directories under path; directories end with '/'. Prefer this over search_text when exploring project structure rather than hunting for specific code. Build/dependency directories (node_modules, .git, dist, ...) and .gitignore'd paths are skipped (includeIgnored:true shows the latter) and output caps at 500 entries — narrow path or maxDepth if truncated.",
   schema: listFilesSchema,
   classify: (args) => ({
     permission: "readonly",
@@ -172,13 +280,14 @@ const listFiles = defineTool({
         ctx.workspace,
         { path: args.path ?? ".", maxDepth: args.maxDepth ?? 10 },
       );
+      const entries = args.includeIgnored ? res.entries : dropIgnoredEntries(ctx, args.path ?? ".", res.entries);
       return {
         // The same in-band sentinel the local walk appends. Without it the two
         // backends of one tool answer differently: a runtime-backed session
         // showed exactly 500 entries and nothing in the list saying so.
         data: {
-          entries: res.truncated ? [...res.entries, `... [truncated at ${res.entries.length} entries]`] : res.entries,
-          count: res.entries.length,
+          entries: res.truncated ? [...entries, `... [truncated at ${res.entries.length} entries]`] : entries,
+          count: entries.length,
           truncated: res.truncated,
         },
         meta: { truncated: res.truncated },
@@ -189,7 +298,7 @@ const listFiles = defineTool({
       throw new ToolError("not_found", `Not a directory: ${args.path ?? "."}`);
     }
     const maxDepth = args.maxDepth ?? 10;
-    const { entries, truncated } = walkEntries(root, maxDepth);
+    const { entries, truncated } = walkEntries(root, maxDepth, ignoreFor(ctx, root, args.includeIgnored));
     if (truncated) entries.push(`... [truncated at ${MAX_LIST_ENTRIES} entries]`);
     return {
       data: { entries, count: entries.length, truncated },
@@ -197,6 +306,27 @@ const listFiles = defineTool({
     };
   },
 });
+
+/**
+ * The runtime walks with its own fixed ignore set; apply the workspace's
+ * .gitignore to its answer so one tool does not ignore different things per
+ * backend. Best effort: a listing root that cannot be resolved here is
+ * returned unfiltered.
+ */
+function dropIgnoredEntries(ctx: ToolContext, listPath: string, entries: string[]): string[] {
+  let ignore: ReturnType<typeof ignoreFor>;
+  try {
+    ignore = ignoreFor(ctx, resolveInsideWorkspace(ctx.workspace, listPath), false);
+  } catch {
+    return entries;
+  }
+  if (!ignore) return entries;
+  const { matcher, rootRel } = ignore;
+  return entries.filter((entry) => {
+    const isDir = entry.endsWith("/");
+    return !matcher.isIgnored(joinRel(rootRel, isDir ? entry.slice(0, -1) : entry), isDir, rootRel);
+  });
+}
 
 // ---------------------------------------------------------------------------
 // read_file
@@ -211,12 +341,63 @@ const readFileSchema = z.object({
     .optional()
     .describe("1-based line number to start reading from (combine with limit for large files)."),
   limit: z.number().int().min(1).optional().describe("Maximum number of lines to return."),
+  pages: z
+    .string()
+    .optional()
+    .describe('PDF only: page or inclusive page range to read, e.g. "3" or "1-5" (at most 20 pages per call).'),
 });
+
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+
+/** The image type the bytes actually are — the extension only chose this path. */
+function sniffImageType(bytes: Buffer): ChatImage["mediaType"] | undefined {
+  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    return "image/png";
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  const head = bytes.subarray(0, 12).toString("latin1");
+  if (head.startsWith("GIF87a") || head.startsWith("GIF89a")) return "image/gif";
+  if (head.startsWith("RIFF") && head.slice(8, 12) === "WEBP") return "image/webp";
+  return undefined;
+}
+
+function readImage(resolved: string, relPath: string): { data: unknown; images: ChatImage[]; bytes: Buffer } {
+  let bytes: Buffer;
+  try {
+    bytes = readFileBoundedSync(resolved, MAX_READ_IMAGE_BYTES);
+  } catch (error) {
+    if (error instanceof FileTooLargeError) {
+      throw new ToolError(
+        "too_large",
+        `Image exceeds ${MAX_READ_IMAGE_BYTES} bytes (3MB), too large to attach: ${relPath} — use image_analyze or a smaller copy`,
+      );
+    }
+    throw error;
+  }
+  const mediaType = sniffImageType(bytes);
+  if (!mediaType) {
+    throw new ToolError("unsupported_image", `${relPath} is not a PNG, JPEG, GIF, or WebP image`);
+  }
+  // No "see attached" note: whether the image reaches the model is the
+  // provider's answer, and the provider mapping says so either way.
+  return {
+    data: { path: relPath, type: "image", mediaType, bytes: bytes.length },
+    images: [{ mediaType, dataBase64: bytes.toString("base64"), label: relPath }],
+    bytes,
+  };
+}
+
+function statRegularFile(resolved: string, relPath: string): fs.Stats {
+  if (!fs.existsSync(resolved)) throw new ToolError("not_found", `File not found: ${relPath}`);
+  const stat = fs.statSync(resolved);
+  if (!stat.isFile()) throw new ToolError("not_a_file", `Not a regular file: ${relPath}`);
+  return stat;
+}
 
 const readFile = defineTool({
   name: "read_file",
   description:
-    "Read the UTF-8 text file at path. For large files pass offset (1-based line) and limit to read only the range you need — output beyond 20k chars is head/tail truncated (and a symbol outline of the whole file is returned so you can re-read the right range). Do not re-read a file you have not changed since the last read; the earlier content is still valid.",
+    'Read the file at path (required before editing an existing file). Text: for large files pass offset (1-based line) and limit — output past 20k chars is head/tail truncated with a symbol outline of the file. Images (png/jpg/gif/webp, max 3MB) are attached for you to view. PDFs return their text (needs pdftotext); pass pages, e.g. "1-5", max 20 per call. Do not re-read a file you have not changed since the last read.',
   schema: readFileSchema,
   classify: (args) => ({
     permission: "readonly",
@@ -224,28 +405,57 @@ const readFile = defineTool({
     path: args.path,
   }),
   async run(args, ctx) {
+    const ext = path.extname(args.path).toLowerCase();
+    // Binary formats are read from the local filesystem even in a runtime
+    // session, as image_analyze does: the runtime protocol carries text only.
+    if (IMAGE_EXTENSIONS.has(ext)) {
+      const resolved = resolveForRead(ctx.workspace, args.path);
+      const stat = statRegularFile(resolved, args.path);
+      const { data, images, bytes } = readImage(resolved, args.path);
+      // Local sessions only: behind a runtime, writes compare against text the
+      // runtime returns, which these bytes would never match.
+      if (!ctx.runtime) ctx.fileLedger?.set(resolved, stampFor(bytes, stat));
+      return { data, images };
+    }
+    const isPdf = ext === ".pdf";
+    if (args.pages !== undefined && !isPdf) {
+      throw new ToolError("invalid_input", "pages applies to PDF files only; use offset/limit for text");
+    }
+
     let content: string;
-    if (ctx.runtime) {
+    let pdfInfo: { pages: string; totalPages?: number; note?: string } | undefined;
+    if (isPdf) {
+      const resolved = resolveForRead(ctx.workspace, args.path);
+      const stat = statRegularFile(resolved, args.path);
+      if (stat.size > MAX_PDF_FILE_BYTES) {
+        throw new ToolError("too_large", `PDF exceeds ${MAX_PDF_FILE_BYTES} bytes: ${args.path}`);
+      }
+      const pdf = await extractPdfText({
+        workspace: ctx.workspace,
+        file: resolved,
+        ...(args.pages !== undefined ? { pages: args.pages } : {}),
+        ...(ctx.signal ? { signal: ctx.signal } : {}),
+      });
+      content = pdf.text;
+      pdfInfo = {
+        pages: pdf.first === pdf.last ? String(pdf.first) : `${pdf.first}-${pdf.last}`,
+        ...(pdf.totalPages !== undefined ? { totalPages: pdf.totalPages } : {}),
+        ...(pdf.truncated ? { note: "The extracted text was cut short; read a smaller page range." } : {}),
+      };
+    } else if (ctx.runtime) {
       const res = await callRuntime<{ content: string }>(ctx.runtime, "read_file", ctx.workspace, {
         path: args.path,
       });
       content = res.content;
+      ctx.fileLedger?.set(ledgerKey(ctx, args.path), stampFor(content));
     } else {
       const resolved = resolveForRead(ctx.workspace, args.path);
-      if (!fs.existsSync(resolved)) {
-        throw new ToolError("not_found", `File not found: ${args.path}`);
-      }
-      if (!fs.statSync(resolved).isFile()) {
-        throw new ToolError("not_a_file", `Not a regular file: ${args.path}`);
-      }
-      try {
-        content = readUtf8FileBoundedSync(resolved, MAX_TOOL_FILE_BYTES);
-      } catch (error) {
-        if (error instanceof FileTooLargeError) {
-          throw new ToolError("too_large", `File exceeds ${MAX_TOOL_FILE_BYTES} bytes: ${args.path}`);
-        }
-        throw error;
-      }
+      // stat BEFORE reading: a stamp may pair older metadata with newer bytes
+      // (the next check then falls back to the hash) but never the reverse.
+      const stat = statRegularFile(resolved, args.path);
+      const bytes = readBoundedOrTooLarge(resolved, args.path);
+      content = bytes.toString("utf8");
+      ctx.fileLedger?.set(resolved, stampFor(bytes, stat));
     }
     const fullContent = content; // whole file, before offset/limit slicing
     const totalLines = content.split("\n").length;
@@ -276,7 +486,13 @@ const readFile = defineTool({
     // re-read the right range. Empty for non-code/symbol-less files.
     const outline = truncated ? extractSymbols(args.path, fullContent) : "";
     return {
-      data: { path: args.path, content: text, totalLines, ...(outline ? { outline } : {}) },
+      data: {
+        path: args.path,
+        ...(pdfInfo ? { type: "pdf", ...pdfInfo } : {}),
+        content: text,
+        totalLines,
+        ...(outline ? { outline } : {}),
+      },
       meta: { truncated },
     };
   },
@@ -320,6 +536,7 @@ const searchTextSchema = z.object({
     .max(MAX_SEARCH_MATCHES)
     .optional()
     .describe("Cap on the number of results (default 1000, max 5000)."),
+  includeIgnored: z.boolean().optional().describe(INCLUDE_IGNORED_DESCRIPTION),
 });
 
 function escapeRegExp(s: string): string {
@@ -400,7 +617,7 @@ type SearchMatch = {
 const searchText = defineTool({
   name: "search_text",
   description:
-    'Search file contents by regex pattern (e.g. "function\\s+createUser"). Invalid regex falls back to literal text; unsafe backtracking shapes are rejected. Case-insensitive per line by default; returns {file, line, text} up to 1000 matches (max 5000). Options: glob filters paths; contextLines adds surrounding lines; filesWithMatches returns paths only; multiline spans newlines. Skips binaries, files over 1MB, and ignored dirs. Use glob to find files by name.',
+    'Search file contents by regex pattern (e.g. "function\\s+createUser"). Invalid regex falls back to literal text; unsafe backtracking shapes are rejected. Case-insensitive per line by default; returns {file, line, text} up to 1000 matches (max 5000). Options: glob filters paths; contextLines adds surrounding lines; filesWithMatches returns paths only; multiline spans newlines. Skips binaries, files over 1MB, ignored dirs and .gitignore\'d paths (see includeIgnored). Use glob to find files by name.',
   schema: searchTextSchema,
   classify: (args) => ({
     permission: "readonly",
@@ -446,6 +663,13 @@ const searchText = defineTool({
       // keep the raw path if it can't be resolved
     }
     const sessionsDir = path.join(workspaceReal, ".seekforge", "sessions");
+    // The sensitive-path policy is keyed by WORKSPACE-relative paths. The
+    // reported `file` is relative to the search root, so searching
+    // `.seekforge` reported "config.json" — and the check, fed that, let the
+    // provider key through.
+    const rootRel = path.relative(workspaceReal, root).split(path.sep).join("/");
+    const rootIsFile = fs.statSync(root).isFile();
+    const ignore = rootIsFile ? undefined : ignoreFor(ctx, root, args.includeIgnored);
 
     const matches: SearchMatch[] = [];
     const filesWithMatches: string[] = [];
@@ -454,7 +678,7 @@ const searchText = defineTool({
     /** Count the limiting unit (files in -l mode, otherwise individual matches). */
     const atCap = (): boolean => (args.filesWithMatches ? filesWithMatches.length >= cap : matches.length >= cap);
 
-    const searchFile = (filePath: string, rel: string): void => {
+    const searchFile = (filePath: string, rel: string, wsRel: string): void => {
       if (!matchesGlob(rel)) return;
       let stat: fs.Stats;
       try {
@@ -463,7 +687,7 @@ const searchText = defineTool({
         return;
       }
       if (!stat.isFile() || stat.size > MAX_SEARCHABLE_FILE_BYTES) return;
-      if (isSensitiveBasename(path.basename(filePath)) || isSensitiveRelPath(rel)) return;
+      if (isSensitiveBasename(path.basename(filePath)) || isSensitiveRelPath(wsRel)) return;
       let buf: Buffer;
       try {
         buf = readFileBoundedSync(filePath, MAX_SEARCHABLE_FILE_BYTES);
@@ -528,7 +752,7 @@ const searchText = defineTool({
       }
     };
 
-    const walk = (dir: string, rel: string): void => {
+    const walk = (dir: string, rel: string, frame: IgnoreFrame | undefined): void => {
       if (truncated) return;
       let dirents: fs.Dirent[];
       try {
@@ -544,20 +768,23 @@ const searchText = defineTool({
         if (truncated) return;
         const childRel = rel === "" ? d.name : `${rel}/${d.name}`;
         const childPath = path.join(dir, d.name);
+        const wsRel = joinRel(rootRel, childRel);
         if (d.isDirectory()) {
           if (DEFAULT_IGNORE_DIRS.has(d.name)) continue;
           if (childPath === sessionsDir) continue;
-          walk(childPath, childRel);
+          if (ignore && frame && ignore.matcher.ignores(frame, wsRel, true)) continue;
+          walk(childPath, childRel, ignore ? ignore.matcher.descend(frame!, wsRel) : undefined);
         } else if (d.isFile()) {
-          searchFile(childPath, childRel);
+          if (ignore && frame && ignore.matcher.ignores(frame, wsRel, false)) continue;
+          searchFile(childPath, childRel, wsRel);
         }
       }
     };
 
-    if (fs.statSync(root).isFile()) {
-      searchFile(root, path.basename(root));
+    if (rootIsFile) {
+      searchFile(root, path.basename(root), rootRel);
     } else {
-      walk(root, "");
+      walk(root, "", ignore?.frame);
     }
 
     if (args.filesWithMatches) {
@@ -613,18 +840,33 @@ async function runtimeBeforeContent(
   }
 }
 
+/** Record what a write left on disk, so the model may edit it again without re-reading. */
+function recordWritten(ledger: FileLedger | undefined, key: string, content: string, fd?: number): void {
+  if (!ledger) return;
+  const stat = fd !== undefined ? fs.fstatSync(fd) : undefined;
+  ledger.set(key, stampFor(Buffer.from(content, "utf8"), stat));
+}
+
 const writeFileSchema = z.object({
   path: z.string().describe("File path relative to the workspace root."),
   content: z.string().describe("Complete file content (UTF-8) — replaces the entire file, nothing is merged."),
-  overwrite: z.boolean().optional().describe("Allow replacing an existing file (default false)."),
+  overwrite: z.boolean().optional().describe("Allow replacing an existing file (default false); read the file first."),
 });
 
 const writeFile = defineTool({
   name: "write_file",
   description:
-    "Write content as the COMPLETE file at path (parent directories are created). Whole-file replacement: use only for new files or intentional full rewrites — use apply_patch for any edit to an existing file. Fails if the file already exists unless overwrite is true.",
+    "Write content as the COMPLETE file at path (parent directories are created). Whole-file replacement: use only for new files or intentional full rewrites — use apply_patch for any edit to an existing file. Fails if the file already exists unless overwrite is true, and overwriting needs a prior read_file of it (re-read if it changed since).",
   schema: writeFileSchema,
-  prepare: (args, ctx) => runtimePreview(ctx, args.path, () => args.content),
+  prepare: (args, ctx) => {
+    if (args.overwrite) precheckLocalView(ctx, args.path);
+    return runtimePreview(
+      ctx,
+      args.path,
+      () => args.content,
+      args.overwrite ? runtimeGuard(ctx, args.path) : undefined,
+    );
+  },
   classify: (args, ctx) => {
     const preview = buildPreview(ctx, args.path, () => args.content);
     return {
@@ -635,15 +877,18 @@ const writeFile = defineTool({
     };
   },
   async run(args, ctx) {
+    const ledger = ctx.fileLedger;
     if (ctx.runtime) {
-      if (ctx.checkpoint) {
-        ctx.checkpoint(args.path, await runtimeBeforeContent(ctx, args.path));
-      }
+      const guarded = ledger !== undefined && args.overwrite === true;
+      const before = ctx.checkpoint || guarded ? await runtimeBeforeContent(ctx, args.path) : null;
+      if (guarded && before !== null) runtimeGuard(ctx, args.path)?.(before);
+      ctx.checkpoint?.(args.path, before);
       await callRuntime<{ path: string }>(ctx.runtime, "write_file", ctx.workspace, {
         path: args.path,
         content: args.content,
         overwrite: args.overwrite ?? false,
       });
+      recordWritten(ledger, ledgerKey(ctx, args.path), args.content);
       return { data: { path: args.path, bytesWritten: Buffer.byteLength(args.content, "utf8") } };
     }
     const resolved = resolveForWrite(ctx.workspace, args.path);
@@ -652,15 +897,16 @@ const writeFile = defineTool({
       throw new ToolError("exists", `File already exists: ${args.path} (pass overwrite:true to replace)`);
     }
     const expected = exists ? fs.statSync(resolved) : undefined;
+    let before: Buffer | undefined;
+    const currentBytes = (): Buffer => {
+      before ??= readBoundedOrTooLarge(resolved, args.path);
+      return before;
+    };
+    if (expected && ledger) {
+      assertCurrentView(ledger, resolved, args.path, { stat: expected, content: currentBytes });
+    }
     if (ctx.checkpoint) {
-      try {
-        ctx.checkpoint(args.path, exists ? readUtf8FileBoundedSync(resolved, MAX_TOOL_FILE_BYTES) : null);
-      } catch (error) {
-        if (error instanceof FileTooLargeError) {
-          throw new ToolError("too_large", `File exceeds ${MAX_TOOL_FILE_BYTES} bytes: ${args.path}`);
-        }
-        throw error;
-      }
+      ctx.checkpoint(args.path, exists ? currentBytes().toString("utf8") : null);
     }
     fs.mkdirSync(path.dirname(resolved), { recursive: true });
     const fd = openVerifiedWrite(ctx.workspace, args.path, resolved, {
@@ -670,6 +916,7 @@ const writeFile = defineTool({
     });
     try {
       replaceFileContents(fd, args.content);
+      recordWritten(ledger, resolved, args.content, fd);
     } finally {
       fs.closeSync(fd);
     }
@@ -689,9 +936,13 @@ const applyPatchSchema = z.object({
         oldString: z
           .string()
           .describe(
-            "Exact text copied VERBATIM from the current file (whitespace included); must occur exactly once — include surrounding lines to disambiguate.",
+            "Exact text copied VERBATIM from the current file (whitespace included); must occur exactly once unless replaceAll — include surrounding lines to disambiguate.",
           ),
         newString: z.string().describe("Replacement text, written with the same exactness as oldString."),
+        replaceAll: z
+          .boolean()
+          .optional()
+          .describe("Replace EVERY exact occurrence of oldString (e.g. renaming a variable); default false."),
       }),
     )
     .describe("Search/replace edits, applied in order, all-or-nothing."),
@@ -706,9 +957,17 @@ function previewHunk(text: string): string {
 const applyPatch = defineTool({
   name: "apply_patch",
   description:
-    'Edit the file at path with search/replace edits, applied atomically (any failure writes nothing). Read the file first; each oldString must be copied VERBATIM from its current content (exact whitespace/indentation) and match EXACTLY ONCE — add surrounding lines to make it unique. newString is the replacement. Prefer several small targeted edits over one large rewrite. Example edit: {oldString:"const port = 3000;", newString:"const port = 8080;"}. If a patch fails (no_match/ambiguous), re-read the file and retry with the latest content.',
+    'Edit the file at path with search/replace edits, applied atomically (any failure writes nothing). Read it with read_file first. Each oldString is copied VERBATIM from the current content (exact whitespace) and must match EXACTLY ONCE — add surrounding lines to make it unique — unless replaceAll:true, which replaces every exact occurrence. Prefer several small edits over one large rewrite. Example: {oldString:"const port = 3000;", newString:"const port = 8080;"}. On no_match/ambiguous/file_changed, re-read the file and retry.',
   schema: applyPatchSchema,
-  prepare: (args, ctx) => runtimePreview(ctx, args.path, (before) => applyEdits(before ?? "", args.edits)),
+  prepare: (args, ctx) => {
+    precheckLocalView(ctx, args.path);
+    return runtimePreview(
+      ctx,
+      args.path,
+      (before) => applyEdits(before ?? "", args.edits),
+      runtimeGuard(ctx, args.path),
+    );
+  },
   classify: (args, ctx) => {
     // applyEdits throws on no_match/ambiguous; buildPreview swallows it and the
     // preview is simply omitted — the real run will surface the same error.
@@ -719,32 +978,66 @@ const applyPatch = defineTool({
       args.edits.length > 1
         ? args.edits.map((e, i) => ({
             index: i,
-            preview: `- ${previewHunk(e.oldString)} → + ${previewHunk(e.newString)}`,
+            preview: `- ${previewHunk(e.oldString)} → + ${previewHunk(e.newString)}${e.replaceAll ? " (every occurrence)" : ""}`,
           }))
         : undefined;
+    const replacesAll = args.edits.some((e) => e.replaceAll);
     return {
       permission: "write",
-      description: `Apply ${args.edits.length} edit(s) to ${args.path}`,
+      description: `Apply ${args.edits.length} edit(s) to ${args.path}${replacesAll ? " (replace-all included)" : ""}`,
       path: args.path,
       ...(preview ? { preview } : {}),
       ...(hunks ? { hunks } : {}),
     };
   },
   async run(args, ctx) {
+    const requested = args.edits.length;
     // Per-hunk selection: when the user approved only a subset of edits,
     // filter to just those indices. Empty selection = apply nothing.
     if (ctx.selectedHunks !== undefined) {
       args = { ...args, edits: args.edits.filter((_, i) => ctx.selectedHunks!.includes(i)) };
     }
+    // After a partial application the file holds content the model never
+    // proposed as a whole, so it must look again before its next edit.
+    const partial = args.edits.length < requested;
+    const ledger = ctx.fileLedger;
     if (ctx.runtime) {
-      if (ctx.checkpoint) {
-        ctx.checkpoint(args.path, await runtimeBeforeContent(ctx, args.path));
+      const replacesAll = args.edits.some((e) => e.replaceAll);
+      const key = ledgerKey(ctx, args.path);
+      const before = ctx.checkpoint || ledger || replacesAll ? await runtimeBeforeContent(ctx, args.path) : undefined;
+      if (typeof before === "string") runtimeGuard(ctx, args.path)?.(before);
+      if (ctx.checkpoint) ctx.checkpoint(args.path, before ?? null);
+      let next: string | undefined;
+      let data: unknown;
+      if (replacesAll) {
+        // The runtime protocol's edits are unique-match only, so a replace-all
+        // patch is applied here and written back whole.
+        if (before === null || before === undefined) throw new ToolError("not_found", `File not found: ${args.path}`);
+        next = applyEdits(before, args.edits);
+        await callRuntime<{ path: string }>(ctx.runtime, "write_file", ctx.workspace, {
+          path: args.path,
+          content: next,
+          overwrite: true,
+        });
+        data = { path: args.path, editsApplied: args.edits.length };
+      } else {
+        data = await callRuntime<{ path: string; editsApplied: number }>(ctx.runtime, "apply_patch", ctx.workspace, {
+          path: args.path,
+          edits: args.edits,
+        });
+        // The runtime applied exact unique matches, which is what applyEdits
+        // does first too — so the result is reproducible here.
+        try {
+          next = typeof before === "string" ? applyEdits(before, args.edits) : undefined;
+        } catch {
+          next = undefined;
+        }
       }
-      const res = await callRuntime<{ path: string; editsApplied: number }>(ctx.runtime, "apply_patch", ctx.workspace, {
-        path: args.path,
-        edits: args.edits,
-      });
-      return { data: res };
+      if (ledger) {
+        if (next !== undefined && !partial) recordWritten(ledger, key, next);
+        else ledger.delete(key);
+      }
+      return { data: withPartialNote(data, partial) };
     }
     const resolved = resolveForWrite(ctx.workspace, args.path);
     // Editing implies reading current content back into hints: same read rules apply.
@@ -753,26 +1046,31 @@ const applyPatch = defineTool({
       throw new ToolError("not_found", `File not found: ${args.path}`);
     }
     const expected = fs.statSync(resolved);
-    let content: string;
-    try {
-      content = readUtf8FileBoundedSync(resolved, MAX_TOOL_FILE_BYTES);
-    } catch (error) {
-      if (error instanceof FileTooLargeError) {
-        throw new ToolError("too_large", `File exceeds ${MAX_TOOL_FILE_BYTES} bytes: ${args.path}`);
-      }
-      throw error;
-    }
+    const raw = readBoundedOrTooLarge(resolved, args.path);
+    // The bytes are in hand, so compare content rather than trusting the stat.
+    if (ledger) assertCurrentView(ledger, resolved, args.path, { content: () => raw });
+    const content = raw.toString("utf8");
     // applyEdits throws on no_match/ambiguous before anything is written.
     const next = applyEdits(content, args.edits);
     ctx.checkpoint?.(args.path, content);
     const fd = openVerifiedWrite(ctx.workspace, args.path, resolved, { create: false, exclusive: false, expected });
     try {
       replaceFileContents(fd, next);
+      if (partial) ledger?.delete(resolved);
+      else recordWritten(ledger, resolved, next, fd);
     } finally {
       fs.closeSync(fd);
     }
-    return { data: { path: args.path, editsApplied: args.edits.length } };
+    return { data: withPartialNote({ path: args.path, editsApplied: args.edits.length }, partial) };
   },
 });
+
+function withPartialNote(data: unknown, partial: boolean): unknown {
+  if (!partial || typeof data !== "object" || data === null) return data;
+  return {
+    ...data,
+    note: "The user approved only some of the edits. Re-read the file before editing it again.",
+  };
+}
 
 export const fsTools: ToolSpec[] = [listFiles, readFile, searchText, writeFile, applyPatch];

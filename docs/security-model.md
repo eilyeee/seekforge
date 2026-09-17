@@ -221,8 +221,24 @@ symlink escapes, `..`, and absolute paths outside the root are all rejected:
   package/netrc credential files) and sensitive relative paths
   (`.seekforge/config.json`, `.seekforge/triggers.json`, `.git/config`). The same
   policy is applied to `@path` task expansion before content reaches the model.
+  `search_text` checks each file by its workspace-relative path, so a search
+  rooted at `.seekforge` or `.git` cannot reach those files either.
+- Rules files (`AGENTS.md`, `CLAUDE.md`, `.seekforge/rules/`) may `@import`
+  other files, but a repository file can only import files inside the
+  workspace (no `@~/…`, absolute paths, or symlinks out), and no rules file can
+  import a sensitive file. A repository cannot opt you into loading
+  `~/.claude/CLAUDE.md` (`claudeCompat` is user-owned).
 - Writes additionally refuse anything under `.git/`: `resolveForWrite`
   (`sandbox.ts:83`).
+- In an agent run, `apply_patch` and `write_file(overwrite)` refuse an existing
+  file the agent has not read in the session, or one whose content changed since
+  it last read or wrote it, before the permission prompt is shown and again just
+  before writing (`tools/file-ledger.ts`). This is an accuracy guard, not an
+  authorization boundary: the ledger beside a session transcript is workspace
+  state like the transcript itself.
+- `read_file` runs `pdftotext`/`pdfinfo` only from absolute `PATH` entries
+  outside the workspace, with the secret-scrubbed environment and a timeout, so
+  a checkout cannot supply the binary that parses its own PDFs.
 
 **OS-level command sandbox** (`packages/core/src/tools/os-sandbox.ts`, opt-in)
 wraps `/bin/sh -c` so shell commands cannot write outside the workspace, and can

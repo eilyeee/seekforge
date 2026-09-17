@@ -110,6 +110,8 @@ export type TuiConfig = {
   autoLint?: boolean;
   /** Edit format: "patch" (default) or "whole" (prefer write_file — for weak/local models). */
   editFormat?: "patch" | "whole";
+  /** Claude Code instruction files to load: "project" (default), "all" (+ ~/.claude/CLAUDE.md), "off". */
+  claudeCompat?: "off" | "project" | "all";
 };
 
 function readJson(path: string): TuiConfig {

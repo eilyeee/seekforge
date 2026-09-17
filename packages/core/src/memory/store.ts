@@ -13,6 +13,7 @@ import {
   WorkspaceStateTooLargeError,
   writeWorkspaceStateFileAtomic,
 } from "../util/workspace-state.js";
+import { expandLineImports } from "../util/line-imports.js";
 import { withMemoryTransaction } from "./lease.js";
 
 export { withMemoryTransaction } from "./lease.js";
@@ -353,53 +354,41 @@ export function recordFactRetrieval(workspace: string, briefText: string): void 
 const MAX_IMPORT_DEPTH = 3;
 /** Max total expanded size (chars); imports past this are ignored. */
 const MAX_IMPORT_SIZE = 64 * 1024;
-/** Matches a whole line that is just `@<path>` (optional surrounding spaces). */
-const IMPORT_LINE = /^\s*@(\S+)\s*$/;
 
 /**
- * Expands `@import` lines in `text`. `dir` is the directory the file lives in
- * (the base for relative imports). `visited` tracks already-included absolute
- * paths to break cycles. Returns text with imports inlined.
+ * Expands `@import` lines in `text`, the file `currentFileRel`. Imports resolve
+ * against the including file's directory and must stay under `importRootRel`;
+ * refused, missing and over-budget imports are dropped.
  */
 function expandImports(
   text: string,
   workspaceRoot: string,
   currentFileRel: string,
   importRootRel: string,
-  depth: number,
   visited: Set<string>,
   budget: { remaining: number },
 ): string {
-  const out: string[] = [];
-  for (const line of text.split("\n")) {
-    const m = IMPORT_LINE.exec(line);
-    if (!m || m[1] === undefined) {
-      out.push(line);
-      budget.remaining -= line.length + 1;
-      continue;
-    }
-    // Refuse absolute paths and traversal that escapes the base directory.
-    const spec = m[1];
-    if (path.isAbsolute(spec)) continue;
-    const resolvedRel = path.normalize(path.join(path.dirname(currentFileRel), spec));
-    const rel = path.relative(importRootRel, resolvedRel);
-    if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) continue;
-    if (depth >= MAX_IMPORT_DEPTH) continue;
-    if (visited.has(resolvedRel)) continue; // cycle guard
-    let included: string | undefined;
-    try {
-      included = readMemoryStateFile(workspaceRoot, resolvedRel, MAX_MEMORY_DOCUMENT_BYTES);
-    } catch (error) {
-      if (error instanceof WorkspaceStateTooLargeError) throw error;
-      continue;
-    }
-    if (included === undefined) continue; // missing → skip silently
-    if (budget.remaining <= 0) continue; // size cap reached
-    visited.add(resolvedRel);
-    const expanded = expandImports(included, workspaceRoot, resolvedRel, importRootRel, depth + 1, visited, budget);
-    out.push(expanded);
-  }
-  return out.join("\n");
+  return expandLineImports(text, currentFileRel, {
+    resolve: (spec, fromRel) => {
+      // Refuse absolute paths and traversal that escapes the base directory.
+      if (path.isAbsolute(spec)) return undefined;
+      const resolvedRel = path.normalize(path.join(path.dirname(fromRel), spec));
+      const rel = path.relative(importRootRel, resolvedRel);
+      if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return undefined;
+      return resolvedRel;
+    },
+    read: (rel) => {
+      try {
+        return readMemoryStateFile(workspaceRoot, rel, MAX_MEMORY_DOCUMENT_BYTES);
+      } catch (error) {
+        if (error instanceof WorkspaceStateTooLargeError) throw error;
+        return undefined;
+      }
+    },
+    maxDepth: MAX_IMPORT_DEPTH,
+    budget,
+    visited,
+  });
 }
 
 /** Reads a memory file (if present) and expands any `@import` lines in it. */
@@ -415,7 +404,7 @@ function readMemoryFileExpanded(filePath: string, allowedRoot: string): string |
     const raw = readMemoryStateFile(allowedReal, fileRel, MAX_MEMORY_DOCUMENT_BYTES);
     if (raw === undefined) return undefined;
     const visited = new Set<string>([fileRel]);
-    return expandImports(raw, allowedReal, fileRel, path.dirname(fileRel), 0, visited, {
+    return expandImports(raw, allowedReal, fileRel, path.dirname(fileRel), visited, {
       remaining: MAX_IMPORT_SIZE,
     }).slice(0, MAX_IMPORT_SIZE);
   } catch (error) {

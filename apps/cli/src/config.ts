@@ -174,6 +174,12 @@ export type CliConfig = {
    */
   editFormat?: "patch" | "whole";
   /**
+   * Which Claude Code instruction files join AGENTS.md: "project" (default:
+   * CLAUDE.md, .claude/CLAUDE.md, CLAUDE.local.md, .claude/rules), "all" (also
+   * ~/.claude/CLAUDE.md) or "off". Honored from user-owned layers only.
+   */
+  claudeCompat?: "off" | "project" | "all";
+  /**
    * Default-off: when the agent finishes after editing files, nudge it once to
    * self-review its own diff before completing. Edit the file directly; not
    * settable via `config set`.

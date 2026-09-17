@@ -18,7 +18,7 @@
  *     "off") / compaction / autoCompactThreshold / modelContextWindows /
  *     planModel / escalateOnFailure /
  *     memoryAutoApproveConfidence / lintCommand (non-blank) / autoLint
- *     (explicit false only) / editFormat, plus the unconditional
+ *     (explicit false only) / editFormat / claudeCompat, plus the unconditional
  *     commandAllowlist passthrough.
  *
  * What stays in each app ON TOP of this skeleton (deliberate differences):
@@ -52,6 +52,7 @@ import {
   resolveProviderConfig,
 } from "../provider/index.js";
 import { createRetryBus, type AgentCoreDeps, type RetryBus } from "./loop.js";
+import { CLAUDE_COMPAT_MODES, type ClaudeCompat } from "./rules.js";
 
 /**
  * Provider-construction inputs common to the main provider and the per-model
@@ -151,6 +152,8 @@ export type BuildAgentCoreDepsInput = Omit<ProviderBuildInput, "onRetry"> & {
   /** Only an explicit `false` adds the key (default-on knob). */
   autoLint?: boolean;
   editFormat?: "patch" | "whole";
+  /** Which Claude Code instruction files join AGENTS.md; must come from a user-owned layer. */
+  claudeCompat?: ClaudeCompat;
 };
 
 export type BuildAgentCoreDepsExtras = {
@@ -190,6 +193,7 @@ export type AgentCoreDepsCommon = Pick<
   | "lintCommand"
   | "autoLint"
   | "editFormat"
+  | "claudeCompat"
 > & {
   retryBus: RetryBus & { onRetry: (info: RetryInfo) => void };
   providerForModel: (model: string) => ChatProvider;
@@ -226,6 +230,9 @@ export function buildAgentCoreDeps(
       input.memoryAutoApproveConfidence > 1)
   ) {
     throw new RangeError("memoryAutoApproveConfidence must be a finite number between 0 and 1");
+  }
+  if (input.claudeCompat !== undefined && !CLAUDE_COMPAT_MODES.includes(input.claudeCompat)) {
+    throw new RangeError(`claudeCompat must be one of ${CLAUDE_COMPAT_MODES.join(", ")}`);
   }
   const memoryMaintenance = resolveMemoryMaintenanceConfig(input.memoryMaintenance);
   assertAutoCompactThreshold(input.autoCompactThreshold);
@@ -277,5 +284,6 @@ export function buildAgentCoreDeps(
     ...(typeof input.lintCommand === "string" && input.lintCommand.trim() ? { lintCommand: input.lintCommand } : {}),
     ...(input.autoLint === false ? { autoLint: false } : {}),
     ...(input.editFormat ? { editFormat: input.editFormat } : {}),
+    ...(input.claudeCompat ? { claudeCompat: input.claudeCompat } : {}),
   };
 }

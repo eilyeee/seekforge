@@ -22,6 +22,7 @@ import type { HookConfig, HookPromptEvaluator, ToolHookFeedback } from "../hooks
 import type { SandboxLevel } from "./os-sandbox.js";
 import type { SkillSession } from "../skills/invocation.js";
 import type { CheckpointOrigin, ShellCheckpointNote } from "./shell-checkpoint.js";
+import type { FileLedger } from "./file-ledger.js";
 
 export type ToolContext = {
   sessionId: string;
@@ -132,6 +133,13 @@ export type ToolContext = {
    * skill changes. Absent outside an agent run.
    */
   skills?: SkillSession;
+  /**
+   * What the model has read or written this run (see file-ledger.ts). When
+   * present, apply_patch and write_file(overwrite) refuse to change an existing
+   * file the model has not read, or that changed since it last did. Absent =
+   * unguarded, the behavior for SDK callers and `mcp-serve`.
+   */
+  fileLedger?: FileLedger;
 };
 
 export interface ToolDispatcher {
@@ -180,6 +188,9 @@ export type {
 } from "./background.js";
 export { SHELL_CHECKPOINT_LIMITS } from "./shell-checkpoint.js";
 export type { CheckpointOrigin, ShellCheckpointNote } from "./shell-checkpoint.js";
+export { createFileLedger } from "./file-ledger.js";
+export type { FileLedger, FileStamp } from "./file-ledger.js";
+export { WorkspaceIgnore } from "./gitignore.js";
 export { applyEdits, closestRegion } from "./edits.js";
 export type { SearchReplaceEdit } from "./edits.js";
 export { zodToJsonSchema } from "./json-schema.js";

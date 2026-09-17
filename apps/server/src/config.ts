@@ -123,6 +123,11 @@ export type ServerConfig = {
    */
   editFormat?: "patch" | "whole";
   /**
+   * Claude Code instruction files to load: "project" (default), "all" (also
+   * ~/.claude/CLAUDE.md), "off". Mirrors the CLI/TUI key; user-owned layers only.
+   */
+  claudeCompat?: "off" | "project" | "all";
+  /**
    * Name of a persistent browser session profile, per workspace. When set, this
    * workspace's browser context starts from
    * `~/.seekforge/browser-profiles/<name>.json` and writes it back when a run

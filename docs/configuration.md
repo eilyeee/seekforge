@@ -39,8 +39,8 @@ They cannot supply credentials or credential destinations (`apiKey`,
 `statusLine`, `lintCommand`, `verifyCommand`), auto-authorize actions
 (`commandAllowlist`, `allow` permission rules, MCP `trusted`), weaken the
 sandbox, raise spending limits (including how much context each request carries:
-`modelContextWindows`, `autoCompactThreshold`), auto-approve memory, or change
-audit retention.
+`modelContextWindows`, `autoCompactThreshold`), auto-approve memory, change audit
+retention, or opt you into reading `~/.claude/CLAUDE.md` (`claudeCompat`).
 Automatic memory maintenance is also user-owned because it can archive project
 facts. Those settings must come from `~/.seekforge/config.json`, environment
 variables, or an explicitly selected `--settings` file. A project MCP definition
@@ -687,6 +687,26 @@ to degrade to a one-time **nudge** asking the model to run it instead (mirrors
 ```
 
 Edit the file directly; not settable via `config set`.
+
+### `claudeCompat`
+
+**Default `"project"`.** Which Claude Code instruction files SeekForge reads
+alongside its own `AGENTS.md` files (see [Project rules](#project-rules)):
+
+- `"project"` (default): the workspace's `CLAUDE.md`, `.claude/CLAUDE.md`,
+  `CLAUDE.local.md`, `.claude/rules/**/*.md`, and a subdirectory's `CLAUDE.md`
+  next to its `AGENTS.md`.
+- `"all"`: the above plus your user-level `~/.claude/CLAUDE.md`.
+- `"off"`: none of them; only SeekForge's own files.
+
+```json
+{ "claudeCompat": "all" }
+```
+
+User-owned only: a repository config layer cannot set it, so a checkout can
+never make SeekForge read your `~/.claude/CLAUDE.md`. Put it in
+`~/.seekforge/config.json` (or a `--settings` file). Edit the file directly;
+not settable via `config set`.
 
 ### `finalizeReview`
 
@@ -1356,7 +1376,7 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 The remaining keys — `planModel`, `escalateOnFailure`, `maxCostUsd`,
 `modelPricing`, `modelContextWindows`, `autoCompactThreshold`, `inlineImages`,
 `verifyCommand`, `autoVerify`, `lintCommand`, `autoLint`,
-`editFormat`, `finalizeReview`, `guardNoProgress`,
+`editFormat`, `claudeCompat`, `finalizeReview`, `guardNoProgress`,
 `memoryAutoApproveConfidence`, `memoryMaintenance`, `permissionRules`,
 `mcpServers`, `hooks` — are **not settable** via `config set`. They must be
 edited directly in the JSON config file, configured through Desktop/Server where
@@ -1413,6 +1433,102 @@ These reach `command` hooks only; `http` and `prompt` hooks get the same facts
 in the JSON event.
 
 The statusline command receives its own set — see [Statusline](#statusline).
+
+---
+
+## Project rules
+
+Instruction files are merged into a "Project rules" block in the system prompt.
+Always loaded, in this order (later files are closer to the work and win a
+conflict):
+
+| Order | File | Notes |
+| --- | --- | --- |
+| 1 | `~/.seekforge/AGENTS.md` | Your rules for every project. |
+| 2 | `~/.claude/CLAUDE.md` | Only with [`claudeCompat`](#claudecompat) `"all"`. |
+| 3 | `AGENTS.md` | Project rules, committed. |
+| 4 | `CLAUDE.md`, `.claude/CLAUDE.md` | Claude Code compat (default on). |
+| 5 | `AGENTS.local.md` | Personal overrides — gitignore it. |
+| 6 | `CLAUDE.local.md` | Claude Code compat. |
+| 7 | `.seekforge/rules/**/*.md`, then `.claude/rules/**/*.md` | Rules files **without** `paths:`; sorted by path. |
+
+Loaded when the work gets there, each once per run:
+
+- **A subdirectory's `AGENTS.md`** (and `CLAUDE.md` under compat) is in the
+  system prompt when the task names a path below that directory. Otherwise it
+  is added to the conversation the first time the agent reads or edits a file
+  below it (`read_file`, `write_file`, `apply_patch`, `notebook_read`,
+  `notebook_edit`). Outer directories come before inner ones. Files under
+  dependency, build, dot, or `.gitignore`'d directories are never loaded.
+- **A rules file with `paths:`** is added the first time the agent reads or
+  edits a matching file. `paths` takes glob patterns relative to the workspace
+  (`**` crosses directories, `{a,b}` alternates; a pattern without `/` matches
+  the file name at any depth), as a YAML list, a flow list, or a
+  comma-separated string:
+
+  ```markdown
+  ---
+  paths:
+    - "src/api/**/*.ts"
+    - "*.sql"
+  ---
+  API handlers validate input with zod before touching the database.
+  ```
+
+A mid-run rule arrives as a `[harness]` note before the next model turn, and the
+event stream shows it as a `rules: <files>` step. After a context compaction,
+rules whose note was dropped are added again. On a resumed session they load
+again on first touch.
+
+**Imports.** A line that is exactly `@path` is replaced by that file's content,
+relative to the file that contains it (up to 5 levels deep; cycles and files
+already included are skipped). Lines inside fenced code blocks, and imports that
+cannot be resolved, stay as written. A project file may only import files inside
+the workspace — never `@~/…`, an absolute path, or a symlink out — and no rules
+file may import a sensitive file (`.env`, keys, `.seekforge/config.json`, …).
+User files (`~/.seekforge/AGENTS.md`, `~/.claude/CLAUDE.md`) may import from
+your home directory, including `@~/path`.
+
+**Limits.** A file whose content (imports included) exceeds 256 KiB is skipped
+whole, never injected in part. The system-prompt block is capped at 384 KiB;
+rules added mid-run share a further 64 KiB per run, and a rules file that does
+not fit is reported in a warning notice. Identical content is included once, so
+a `CLAUDE.md` that is a copy of (or imports) `AGENTS.md` costs nothing extra.
+
+Dispatched subagents run under their own prompt and receive none of these files.
+
+---
+
+## File tools
+
+- **`list_files`, `search_text`, `glob`** skip dependency and build directories
+  (`node_modules`, `.git`, `dist`, `build`, `target`, `vendor`, …) and anything
+  your `.gitignore` files (root and nested) or `.git/info/exclude` ignore.
+  Negation (`!`), directory-only (`/` suffix), anchoring, and `**` follow git's
+  rules; a workspace opened at a subdirectory of a repository honors the
+  repository's ignore files. Pass `includeIgnored: true` to include ignored
+  paths, or name an ignored directory as `path` to look inside it. The fixed
+  directory list always applies below the path you name.
+- **`read_file`** returns text as before. Images (`.png`, `.jpg`, `.jpeg`,
+  `.gif`, `.webp`, up to 3 MB, type checked from the bytes) are attached to the
+  result for models that accept images (see [`inlineImages`](#inlineimages-let-the-model-see-a-screenshot-itself)).
+  PDFs return their text page by page through poppler's `pdftotext`
+  (`pages: "1-5"`, at most 20 pages per call; the first 20 by default). Without
+  `pdftotext` on `PATH` the read fails with an install hint; a `pdftotext`
+  inside the workspace is never used.
+- **Read before edit.** In an agent run, `apply_patch` and
+  `write_file` with `overwrite: true` refuse to change an existing file the
+  agent has not read in this session (`file_not_read`), or that changed on disk
+  since it last read or wrote it (`file_changed`, compared by content, so a
+  `touch` does not count). Files the agent wrote itself need no re-read, and
+  creating a new file is unaffected. Follow-up messages in the same session
+  remember what was read. After you approve only some hunks of a patch, the
+  agent must re-read the file before editing it again. SDK callers that drive
+  the tool dispatcher directly, and `seekforge mcp-serve`, are not guarded.
+- **`apply_patch` `replaceAll`.** An edit with `replaceAll: true` replaces every
+  exact occurrence of `oldString` (at least one) instead of requiring a unique
+  match; it never uses the whitespace-tolerant fallback. The per-hunk approval
+  prompt marks such an edit "(every occurrence)".
 
 ---
 

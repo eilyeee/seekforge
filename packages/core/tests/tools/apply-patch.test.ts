@@ -261,4 +261,47 @@ describe("apply_patch", () => {
       expect(content).toContain("return a - b - 0;");
     });
   });
+
+  describe("replaceAll", () => {
+    it("replaces every occurrence and labels the hunk for review", async () => {
+      const { ws, file } = setup();
+      const requests: PermissionRequest[] = [];
+      const res = await dispatcher.execute(
+        call("apply_patch", {
+          path: "math.js",
+          edits: [
+            { oldString: "(a, b)", newString: "(x, y)", replaceAll: true },
+            { oldString: "  return a + b;", newString: "  return x + y;" },
+          ],
+        }),
+        makeCtx(ws, {
+          policy: { approvalMode: "confirm" },
+          confirm: async (req) => {
+            requests.push(req);
+            return true;
+          },
+        }),
+      );
+      expect(res.ok).toBe(true);
+      expect(requests[0]!.hunks![0]!.preview).toContain("every occurrence");
+      expect(requests[0]!.hunks![1]!.preview).not.toContain("every occurrence");
+      expect(requests[0]!.preview?.diff).toContain("+function sub(x, y) {");
+      const content = fs.readFileSync(file, "utf8");
+      expect(content).toContain("function add(x, y) {");
+      expect(content).toContain("function sub(x, y) {");
+      expect(content).toContain("return x + y;");
+    });
+
+    it("keeps the unique-match rule when replaceAll is false", async () => {
+      const { ws } = setup();
+      const res = await dispatcher.execute(
+        call("apply_patch", {
+          path: "math.js",
+          edits: [{ oldString: "(a, b)", newString: "(x, y)", replaceAll: false }],
+        }),
+        makeCtx(ws),
+      );
+      expect(res.error?.code).toBe("ambiguous");
+    });
+  });
 });

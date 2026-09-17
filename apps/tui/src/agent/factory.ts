@@ -120,6 +120,7 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
         lintCommand: config.lintCommand,
         autoLint: config.autoLint,
         editFormat: config.editFormat,
+        claudeCompat: config.claudeCompat,
       },
       {
         // Opt-in disk cache for identical non-streaming calls (evals, subagents).

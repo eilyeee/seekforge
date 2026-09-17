@@ -219,6 +219,7 @@ export function buildAgentDeps(
         lintCommand: config.lintCommand,
         autoLint: config.autoLint,
         editFormat: config.editFormat,
+        claudeCompat: config.claudeCompat,
       },
       {
         // Goes to the server's own log, which is where an operator watching

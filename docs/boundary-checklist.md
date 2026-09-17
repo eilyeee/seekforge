@@ -1232,6 +1232,13 @@ search commands able to read the same secret.
   `@path` expansion, workspace-directory expansion, and command auto-approval.
 - **Caught:** `.seekforge/config.json` and `triggers.json` could reach the model
   through task references or an explicitly targeted `rg` command.
+- **Also caught:** `search_text` fed the relative-path check a path relative to
+  the *search root*, so `path: ".seekforge"` (or the file itself) searched
+  `config.json` and returned the API key. Key the check by workspace-relative
+  path, whatever the display path is.
+- **Also caught (by construction):** `@path` imports in rules files are a new
+  read ingress; they refuse sensitive targets as well as paths outside the
+  workspace.
 
 ## 88. Credential-name matching needs semantic boundaries
 

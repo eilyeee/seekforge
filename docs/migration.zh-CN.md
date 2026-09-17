@@ -12,7 +12,9 @@
 | 模型设置（`--model`、配置中的 `model:`） | `model` 配置键 + `--model`/`-m` flag；`provider` 选择端点预设；`modelPricing` 提供各模型的价格。 |
 | 配置文件（`.aider.conf.yml`、`.clinerules`、`settings.json`、`config.toml`） | `.seekforge/config.json`（项目级）+ `~/.seekforge/config.json`（全局）+ `.seekforge/config.local.json`（已 gitignore）。见[配置](configuration.zh-CN.md)。 |
 | API 密钥环境变量 | `DEEPSEEK_API_KEY`（Ark provider 则为 `ARK_API_KEY`）；也可用 `apiKey` 配置键。 |
-| 项目指令（`CONVENTIONS.md`、`.clinerules`、`CLAUDE.md`、`AGENTS.md`） | `AGENTS.md`（由 `seekforge init` 创建），外加人工筛选的 `.seekforge/memory/project.md` 记忆。 |
+| 项目指令（`CONVENTIONS.md`、`.clinerules`、`CLAUDE.md`、`AGENTS.md`） | `AGENTS.md`（由 `seekforge init` 创建），外加人工筛选的 `.seekforge/memory/project.md` 记忆。Claude Code 的 `CLAUDE.md` 系列文件同样会被读取——见[下文](#从-claude-code-迁移)。 |
+| 按路径生效的规则（带 `paths:` 的 `.claude/rules/*.md`） | 使用相同 `paths:` frontmatter 的 `.seekforge/rules/**/*.md`；`.claude/rules/` 也会被读取。 |
+| 指令文件中的 `@path` 导入 | 所有规则文件都支持；项目文件只能导入工作区内的文件。 |
 | MCP 服务器（`claude mcp add`、`.mcp.json`） | `mcpServers` 配置 + `seekforge mcp add/add-json/list/get/remove`；项目中的 `.mcp.json` 会被读取（每个服务器都需 `seekforge mcp approve`），`seekforge mcp import` 可复制 Claude Desktop / Claude Code 的服务器。见 [MCP](mcp.zh-CN.md)。 |
 | 斜杠命令 / 自定义命令 | 内置斜杠命令 + `.seekforge/commands/` 下的自定义命令。`description:` frontmatter 与 `$ARGUMENTS` 在所有界面都可用；`` !`shell` `` 插值由 CLI REPL（不带子命令的 `seekforge`）与服务端展开，**TUI 不支持**。文件格式见 [TUI README](../apps/tui/README.md#custom-commands)。 |
 | 子智能体 / 专家智能体 | `dispatch_agent` 名册 — `seekforge agent list/show/import`，定义存放于 `.seekforge/agents/`。 |
@@ -21,6 +23,26 @@
 | 权限 / 审批模式（自动批准、plan 模式） | 审批模式 `auto` / `acceptEdits` / `confirm` / `manual`；`-y`、`--permission-mode`、`permissionRules`。plan 不是审批模式——`--plan`（或 `--permission-mode plan`）是在 `confirm` 之下的只读运行。 |
 | 成本 / token 统计 | DeepSeek 内置支持；其他 provider 用 `modelPricing` + `maxCostUsd` 预算；`seekforge models`、TUI `/usage`。 |
 | Headless / 脚本模式 | `seekforge -p "<prompt>"` 配合 `--output-format json|stream-json`。见 [CLI 参考](cli-reference.zh-CN.md)。 |
+
+## 从 Claude Code 迁移
+
+你的指令文件无需修改即可继续使用：
+
+- `CLAUDE.md`、`.claude/CLAUDE.md` 和 `CLAUDE.local.md` 与 `AGENTS.md` /
+  `AGENTS.local.md` 一起加载（每一层先加载 `AGENTS` 文件；相同内容只包含一次，
+  因此符号链接到或导入 `AGENTS.md` 的 `CLAUDE.md` 不会重复）。
+- 子目录中的 `CLAUDE.md` 在 agent 第一次读取或编辑该目录下的文件时加载，
+  与子目录 `AGENTS.md` 相同。
+- `.claude/rules/**/*.md` 的加载方式与 `.seekforge/rules/` 相同：不带 `paths:`
+  的总是加载，带 `paths:` 的在第一次触及匹配文件时加载。
+- 只有在 `~/.seekforge/config.json` 中设置 `"claudeCompat": "all"` 后，才会读取
+  `~/.claude/CLAUDE.md`；设为 `"off"` 则完全不读取 Claude 文件。仓库无法修改这个设置。
+- 导入有一点不同：项目文件不能导入 `@~/…` 或工作区之外的任何文件。请把这类内容移到
+  `~/.seekforge/AGENTS.md` 或 `~/.claude/CLAUDE.md` 中，那里可以导入主目录中的文件。
+
+编辑工具遵循与 Claude Code 相同的纪律：agent 必须在本会话中读取过文件才能修改它，
+文件在磁盘上变化后需要重新读取。参见[配置 → 项目规则](configuration.zh-CN.md#项目规则)
+和[文件工具](configuration.zh-CN.md#文件工具)。
 
 ## SeekForge 的独特之处
 

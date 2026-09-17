@@ -195,3 +195,38 @@ describe("applyEdits — all-or-nothing", () => {
     expect(SRC).toBe(original);
   });
 });
+
+describe("applyEdits — replaceAll", () => {
+  it("replaces every exact occurrence", () => {
+    const out = applyEdits(SRC, [{ oldString: "(a, b)", newString: "(x, y)", replaceAll: true }]);
+    expect(out.match(/\(x, y\)/g)).toHaveLength(2);
+    expect(out).not.toContain("(a, b)");
+  });
+
+  it("accepts a single occurrence", () => {
+    const out = applyEdits(SRC, [{ oldString: "function add", newString: "function plus", replaceAll: true }]);
+    expect(out).toContain("function plus(a, b)");
+  });
+
+  it("is non-overlapping, left to right", () => {
+    expect(applyEdits("aaaa", [{ oldString: "aa", newString: "b", replaceAll: true }])).toBe("bb");
+  });
+
+  it("never falls back to the whitespace-tolerant match", () => {
+    try {
+      applyEdits(SRC, [{ oldString: "return   a + b;", newString: "x", replaceAll: true }]);
+      throw new Error("expected throw");
+    } catch (e) {
+      expect((e as ToolError).code).toBe("no_match");
+      expect((e as ToolError).message).toContain("replaceAll");
+    }
+  });
+
+  it("still rejects an empty oldString", () => {
+    expect(() => applyEdits(SRC, [{ oldString: "", newString: "x", replaceAll: true }])).toThrow(ToolError);
+  });
+
+  it("leaves an ambiguous edit without replaceAll refused", () => {
+    expect(() => applyEdits(SRC, [{ oldString: "(a, b)", newString: "(x, y)" }])).toThrow(/matches 2 times/);
+  });
+});

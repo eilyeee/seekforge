@@ -1,6 +1,11 @@
 import { ToolError } from "./errors.js";
 
-export type SearchReplaceEdit = { oldString: string; newString: string };
+export type SearchReplaceEdit = {
+  oldString: string;
+  newString: string;
+  /** Replace every exact occurrence instead of requiring a unique one. */
+  replaceAll?: boolean;
+};
 
 function countOccurrences(haystack: string, needle: string): number {
   if (needle.length === 0) return 0;
@@ -107,6 +112,10 @@ function findFuzzyRegions(lines: string[], oldLines: string[]): FuzzyRegion[] {
  *     whitespace, and collapsing interior whitespace runs (CRLF-tolerant). If
  *     exactly one contiguous N-line region matches, replace the file's REAL
  *     spanned text with newString. Zero -> `no_match`; more than one -> `ambiguous`.
+ *
+ * An edit with `replaceAll` replaces every EXACT occurrence (at least one) and
+ * never falls back to the whitespace-tolerant match: a loose pattern applied
+ * everywhere is how an edit lands on lines nobody looked at.
  */
 export function applyEdits(content: string, edits: SearchReplaceEdit[]): string {
   let next = content;
@@ -118,6 +127,18 @@ export function applyEdits(content: string, edits: SearchReplaceEdit[]): string 
     }
 
     const count = countOccurrences(next, edit.oldString);
+
+    if (edit.replaceAll) {
+      if (count === 0) {
+        throw new ToolError(
+          "no_match",
+          `Edit ${i + 1}/${edits.length}: oldString not found in file (replaceAll needs an exact match)`,
+          { editIndex: i, hint: closestRegion(next, edit.oldString) },
+        );
+      }
+      next = next.split(edit.oldString).join(edit.newString);
+      continue;
+    }
 
     // 1a. Exact, unique match — preferred.
     if (count === 1) {

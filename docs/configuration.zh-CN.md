@@ -35,7 +35,8 @@ hook 条目会被过滤掉，而低优先级层中的有效值仍然生效。
 启动/运行时命令（`runtimeBin`、hook、`statusLine`、`lintCommand`、
 `verifyCommand`），不能自动授权操作（`commandAllowlist`、`allow` 权限规则、
 MCP `trusted`），也不能削弱 sandbox、提高消费上限（包括每次请求携带多少上下文：
-`modelContextWindows`、`autoCompactThreshold`）、自动批准记忆或改变审计保留策略。
+`modelContextWindows`、`autoCompactThreshold`）、自动批准记忆、改变审计保留策略，
+或让你读取 `~/.claude/CLAUDE.md`（`claudeCompat`）。
 自动记忆整理也属于用户级设置，因为它可以归档项目事实。这些设置必须来自
 `~/.seekforge/config.json`、环境变量或用户显式选择的 `--settings` 文件。
 项目 MCP 定义仍然可见，也可通过显式管理操作测试；但只有完整条目来自用户配置时，
@@ -624,6 +625,25 @@ lint 输出继续运行，让 agent 修复报告的问题。每次运行至多�
 
 直接编辑文件；不可通过 `config set` 设置。
 
+### `claudeCompat`
+
+**默认 `"project"`。** 除 SeekForge 自己的 `AGENTS.md` 系列文件外，还读取哪些
+Claude Code 指令文件（见[项目规则](#项目规则)）：
+
+- `"project"`（默认）：工作区的 `CLAUDE.md`、`.claude/CLAUDE.md`、
+  `CLAUDE.local.md`、`.claude/rules/**/*.md`，以及子目录中与 `AGENTS.md`
+  并列的 `CLAUDE.md`。
+- `"all"`：以上全部，再加上用户级的 `~/.claude/CLAUDE.md`。
+- `"off"`：都不读，只读 SeekForge 自己的文件。
+
+```json
+{ "claudeCompat": "all" }
+```
+
+仅限用户级配置：仓库配置层不能设置它，因此检出的代码永远无法让 SeekForge 读取你的
+`~/.claude/CLAUDE.md`。请写在 `~/.seekforge/config.json`（或 `--settings` 文件）中。
+直接编辑文件；不可通过 `config set` 设置。
+
 ### `finalizeReview`
 
 **默认关闭。** 当 agent 在编辑过文件后收尾时，先对 diff 做一次最终评审再完成。
@@ -1204,7 +1224,7 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 其余的键 —— `planModel`、`escalateOnFailure`、`maxCostUsd`、
 `modelPricing`、`modelContextWindows`、`autoCompactThreshold`、`inlineImages`、
 `verifyCommand`、`autoVerify`、`lintCommand`、`autoLint`、
-`editFormat`、`finalizeReview`、`guardNoProgress`、
+`editFormat`、`claudeCompat`、`finalizeReview`、`guardNoProgress`、
 `memoryAutoApproveConfidence`、`memoryMaintenance`、`permissionRules`、
 `mcpServers`、`hooks` —— **不可**通过 `config set` 设置。必须直接编辑 JSON
 配置文件、在 Desktop/Server 支持时通过其界面配置，或通过专用子命令管理
@@ -1256,6 +1276,87 @@ Hook 不是通过配置拿到这些值的；hook 运行器会把它们设置在�
 这些变量只提供给 `command` hook；`http` 与 `prompt` hook 从 JSON 事件中获得同样的信息。
 
 statusline 命令会收到另一组变量——见[状态栏](#状态栏)。
+
+---
+
+## 项目规则
+
+指令文件会合并成系统提示词中的"项目规则"块。以下文件总是加载，顺序如下
+（越靠后越贴近具体工作，冲突时以后者为准）：
+
+| 顺序 | 文件 | 说明 |
+| --- | --- | --- |
+| 1 | `~/.seekforge/AGENTS.md` | 你对所有项目生效的规则。 |
+| 2 | `~/.claude/CLAUDE.md` | 仅当 [`claudeCompat`](#claudecompat) 为 `"all"`。 |
+| 3 | `AGENTS.md` | 项目规则，随仓库提交。 |
+| 4 | `CLAUDE.md`、`.claude/CLAUDE.md` | Claude Code 兼容（默认开启）。 |
+| 5 | `AGENTS.local.md` | 个人覆盖——请加入 gitignore。 |
+| 6 | `CLAUDE.local.md` | Claude Code 兼容。 |
+| 7 | `.seekforge/rules/**/*.md`，其后 `.claude/rules/**/*.md` | **不带** `paths:` 的规则文件，按路径排序。 |
+
+工作推进到相关位置时才加载，每次运行各加载一次：
+
+- **子目录的 `AGENTS.md`**（兼容模式下还有 `CLAUDE.md`）：任务文本提到该目录下的
+  路径时进入系统提示词；否则在 agent 第一次读取或编辑该目录下的文件时
+  （`read_file`、`write_file`、`apply_patch`、`notebook_read`、`notebook_edit`）
+  加入对话。外层目录先于内层目录。依赖、构建产物、点目录以及被 `.gitignore`
+  忽略的目录中的文件永远不会加载。
+- **带 `paths:` 的规则文件**：agent 第一次读取或编辑匹配的文件时加入对话。
+  `paths` 接受相对工作区的 glob（`**` 跨目录，`{a,b}` 表示多选；不含 `/` 的模式
+  匹配任意深度的文件名），可写成 YAML 列表、方括号列表或逗号分隔字符串：
+
+  ```markdown
+  ---
+  paths:
+    - "src/api/**/*.ts"
+    - "*.sql"
+  ---
+  API handler 在访问数据库前先用 zod 校验输入。
+  ```
+
+运行中加载的规则会在下一轮模型调用前以 `[harness]` 提示加入，事件流中显示为
+`rules: <files>` 步骤。上下文压缩后，被丢弃的规则提示会重新加入。恢复会话后，
+这些规则会在再次触及相关文件时重新加载。
+
+**导入。** 内容恰好为 `@path` 的一行会被替换为该文件的内容，路径相对于所在文件
+（最多 5 层；循环引用和已包含的文件会被跳过）。代码围栏内的行以及无法解析的导入
+保持原样。项目文件只能导入工作区内的文件——不能用 `@~/…`、绝对路径或指向外部的
+符号链接——任何规则文件都不能导入敏感文件（`.env`、密钥、`.seekforge/config.json`
+等）。用户级文件（`~/.seekforge/AGENTS.md`、`~/.claude/CLAUDE.md`）可以导入主目录
+中的文件，包括 `@~/path`。
+
+**上限。** 内容（含导入）超过 256 KiB 的文件整体跳过，绝不部分注入。系统提示词中的
+规则块上限为 384 KiB；运行中加载的规则每次运行另有 64 KiB 额度，放不下的规则文件
+会以警告通知报告。相同内容只包含一次，因此内容与 `AGENTS.md` 相同（或导入它）的
+`CLAUDE.md` 不会额外占用空间。
+
+派发的子 agent 使用自己的提示词，不会收到这些文件。
+
+---
+
+## 文件工具
+
+- **`list_files`、`search_text`、`glob`** 会跳过依赖和构建目录（`node_modules`、
+  `.git`、`dist`、`build`、`target`、`vendor` 等），以及 `.gitignore`（根目录和
+  子目录）或 `.git/info/exclude` 忽略的内容。取反（`!`）、仅目录（`/` 结尾）、
+  锚定和 `**` 遵循 git 的规则；在仓库子目录打开的工作区同样遵循仓库的忽略文件。
+  传入 `includeIgnored: true` 可包含被忽略的路径，或把被忽略的目录作为 `path`
+  传入以查看其内部。固定目录列表在你指定的路径之下始终生效。
+- **`read_file`** 读取文本的行为不变。图片（`.png`、`.jpg`、`.jpeg`、`.gif`、
+  `.webp`，最大 3 MB，按字节内容判断类型）会附加到结果中，供支持图片的模型查看
+  （见 [`inlineImages`](#inlineimages让模型自己看截图)）。PDF 通过 poppler 的
+  `pdftotext` 按页返回文本（`pages: "1-5"`，每次最多 20 页；默认前 20 页）。
+  `PATH` 上没有 `pdftotext` 时读取失败并给出安装提示；工作区内的 `pdftotext`
+  永远不会被使用。
+- **先读后改。** 在 agent 运行中，`apply_patch` 和带 `overwrite: true` 的
+  `write_file` 会拒绝修改本会话中 agent 尚未读取过的已有文件（`file_not_read`），
+  或自上次读取/写入后在磁盘上发生变化的文件（`file_changed`，按内容比较，单纯
+  `touch` 不算变化）。agent 自己写入的文件无需重读，新建文件不受影响。同一会话的
+  后续消息会记住已读取的文件。你只批准补丁的部分 hunk 后，agent 必须先重读该文件
+  才能再次编辑。直接驱动工具调度器的 SDK 调用方和 `seekforge mcp-serve` 不受此限制。
+- **`apply_patch` 的 `replaceAll`。** 带 `replaceAll: true` 的编辑会替换
+  `oldString` 的每一处精确出现（至少一处），而不要求唯一匹配；它从不使用
+  容忍空白的回退匹配。逐 hunk 审批提示会把这类编辑标注为"(every occurrence)"。
 
 ---
 
