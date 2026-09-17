@@ -12,7 +12,13 @@ import {
   type ToolResult,
 } from "@seekforge/shared";
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { ChatProvider, RetryInfo } from "../provider/index.js";
+import {
+  assertAutoCompactThreshold,
+  assertModelContextWindows,
+  resolveContextWindow,
+  type ChatProvider,
+  type RetryInfo,
+} from "../provider/index.js";
 import type { UsageBus } from "./usage-bus.js";
 import type { RuntimeClient } from "../runtime/index.js";
 import {
@@ -85,7 +91,18 @@ import { classifyAgentError } from "./errors.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { buildCommandRoster, loadUserCommands } from "./commands.js";
 import { collectProjectRules } from "./rules.js";
-import { appendCheckpoint } from "./session-rewind.js";
+import { appendCheckpoint, appendShellCheckpointNote } from "./session-rewind.js";
+import {
+  approvedResult,
+  buildExitPlanModeRequest,
+  buildExitPlanModeToolDefinition,
+  declinedResult,
+  EXIT_PLAN_MODE_TOOL,
+  parseExitPlanModeArgs,
+  readExitPlanModeAnswer,
+} from "./plan-mode.js";
+import { buildRestoredContext, createRecentFiles } from "./working-context.js";
+import { backgroundExitMessages, changedPathsOf, type TouchedPath } from "./run-effects.js";
 import {
   createSessionTrace,
   loadSessionMessages,
@@ -164,8 +181,23 @@ export type AgentCoreDeps = {
    */
   askUser?: (q: { question: string; options: string[]; freeText?: boolean }) => Promise<string>;
   limits?: Partial<AgentLimits>;
-  /** Model context window in tokens. DeepSeek: 128K. */
+  /**
+   * Model context window in tokens, for every model this core talks to. Wins
+   * over everything else; unset, the window is resolved per request model:
+   * `modelContextWindows`, then the built-in table (provider/constants.ts),
+   * then a 128K default.
+   */
   contextWindowTokens?: number;
+  /** Context-window overrides keyed by exact model id (config `modelContextWindows`). */
+  modelContextWindows?: Record<string, number>;
+  /**
+   * Fraction (0, 1] of the context budget at which compaction starts
+   * proactively (config `autoCompactThreshold`, default
+   * DEFAULT_AUTO_COMPACT_THRESHOLD). The budget itself stays the hard limit:
+   * shrinking tool outputs in place, and the context_budget_exceeded failure,
+   * still happen only past it.
+   */
+  autoCompactThreshold?: number;
   /**
    * Full-compaction strategy when still over budget after micro-compaction:
    * "llm" summarizes the dropped middle with one extra provider call and
@@ -358,6 +390,9 @@ export type AgentCoreDeps = {
 
 const OUTPUT_RESERVE_TOKENS = 8192;
 
+/** Default `autoCompactThreshold`: compact at 90% of the context budget. */
+export const DEFAULT_AUTO_COMPACT_THRESHOLD = 0.9;
+
 /**
  * Turn counts (remaining) at which the loop nudges the model to wrap up.
  * Injected as TRANSIENT user messages: they go to the provider but are NOT
@@ -440,16 +475,26 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
   if (!Number.isSafeInteger(limits.toolOutputMaxChars) || limits.toolOutputMaxChars < 128) {
     throw new RangeError("toolOutputMaxChars must be a safe integer of at least 128");
   }
-  const windowTokens = deps.contextWindowTokens ?? 131_072;
-  if (!Number.isSafeInteger(windowTokens) || windowTokens <= 0) {
+  if (
+    deps.contextWindowTokens !== undefined &&
+    (!Number.isSafeInteger(deps.contextWindowTokens) || deps.contextWindowTokens <= 0)
+  ) {
     throw new RangeError("contextWindowTokens must be a positive safe integer");
   }
-  // Floor at 1 so a pathologically small contextWindowTokens (where the output
-  // reserve exceeds the whole budget) can't yield a zero/negative budget that
-  // makes the over-budget comparison meaningless; the shrink-to-fit last resort
-  // then still runs against a positive target. (Kept below any realistic budget
-  // so it never affects a normally-configured window.)
-  const budgetTokens = Math.max(1, Math.floor(windowTokens * limits.contextBudgetRatio) - OUTPUT_RESERVE_TOKENS);
+  assertModelContextWindows(deps.modelContextWindows);
+  assertAutoCompactThreshold(deps.autoCompactThreshold);
+  const autoCompactThreshold = deps.autoCompactThreshold ?? DEFAULT_AUTO_COMPACT_THRESHOLD;
+  // Per model, because one run can talk to several (plan routing, escalation).
+  const contextBudgetFor = (model: string): { budget: number; compactAt: number } => {
+    const windowTokens = deps.contextWindowTokens ?? resolveContextWindow(model, deps.modelContextWindows);
+    // Floor at 1 so a pathologically small window (where the output reserve
+    // exceeds the whole budget) can't yield a zero/negative budget that makes
+    // the over-budget comparison meaningless; the shrink-to-fit last resort
+    // then still runs against a positive target. (Kept below any realistic
+    // budget so it never affects a normally-configured window.)
+    const budget = Math.max(1, Math.floor(windowTokens * limits.contextBudgetRatio) - OUTPUT_RESERVE_TOKENS);
+    return { budget, compactAt: Math.max(1, Math.floor(budget * autoCompactThreshold)) };
+  };
   const depth = deps._depth ?? 0;
   const skillSnapshot = deps.skillSnapshot?.map((skill) => ({
     ...skill,
@@ -564,6 +609,9 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           input.plan === true && deps.planModel !== undefined
             ? (deps.providerForModel?.(deps.planModel) ?? deps.provider)
             : deps.provider;
+        // A plan run (read-only ask mode) may leave plan mode through
+        // exit_plan_mode; approval switches THIS run to edit mode.
+        let planMode = input.plan === true && input.mode === "ask";
 
         // Task-relevant memory brief. Gated by deps.injectMemory (default on; the
         // eval's `no-memory` variant flips it off to measure memory's value), and
@@ -572,10 +620,15 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         // Resume is a replay: it still builds + injects the brief, but does NOT
         // bump fact exposure —
         // otherwise resuming would double-count exposure and make resume non-idempotent.
+        // Built once per run: a later system-prompt rebuild (plan approval)
+        // must not record the same exposure twice.
+        let memoryBrief: { value: string | undefined } | undefined;
         const memoryFor = (taskText: string): string | undefined => {
+          if (memoryBrief) return memoryBrief.value;
           if (deps.injectMemory === false) return undefined;
           const brief = buildMemoryBrief(input.projectPath, taskText);
           if (brief && !resuming) recordFactExposure(input.projectPath, brief);
+          memoryBrief = { value: brief };
           return brief;
         };
 
@@ -617,6 +670,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         const meta = {
           id: sessionId,
           task: input.task,
+          // Becomes "edit" when the user approves a plan (exit_plan_mode).
           mode: input.mode,
           createdAt: priorMeta?.createdAt ?? startedAt,
           ...(input.parentAgentId ? { parentAgentId: input.parentAgentId } : {}),
@@ -697,6 +751,28 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             title: `skills: ${skillSelections.map((selection) => selection.skill.id).join(", ")}`,
           });
         }
+        // The one composition of the regular system prompt: the initial build,
+        // the resume rebuild, and the plan-approval rebuild differ only in the
+        // mode and the carried-over plan.
+        const composeSystemPrompt = (mode: "ask" | "edit", plan: boolean | undefined, planItems?: PlanItem[]) =>
+          appendUserPrompt(
+            buildSystemPrompt({
+              workspace: input.projectPath,
+              mode,
+              plan,
+              projectRules: collectProjectRules(input.projectPath, undefined, input.task),
+              memoryBrief: memoryFor(input.task),
+              skillBrief: buildSkillBrief(skillSelections, deps.skillBriefMaxChars),
+              subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
+              commandRoster:
+                depth === 0 ? buildCommandRoster(loadUserCommands(input.projectPath)) || undefined : undefined,
+              ...(planItems ? { planItems } : {}),
+              ...(repoOverview ? { repoOverview } : {}),
+              ...(relevantFiles ? { relevantFiles } : {}),
+              ...(deps.editFormat ? { editFormat: deps.editFormat } : {}),
+            }),
+            input.appendSystemPrompt,
+          );
         if (resuming) {
           messages = loadSessionMessages(input.projectPath, sessionId);
           runTurnIndex = messages.filter((m) => m.role === "user").length;
@@ -706,26 +782,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           if (messages[0]?.role === "system") {
             messages[0] = {
               role: "system",
-              content:
-                input.systemPromptOverride ??
-                appendUserPrompt(
-                  buildSystemPrompt({
-                    workspace: input.projectPath,
-                    mode: input.mode,
-                    plan: input.plan,
-                    projectRules: collectProjectRules(input.projectPath, undefined, input.task),
-                    memoryBrief: memoryFor(input.task),
-                    skillBrief: buildSkillBrief(skillSelections, deps.skillBriefMaxChars),
-                    subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
-                    commandRoster:
-                      depth === 0 ? buildCommandRoster(loadUserCommands(input.projectPath)) || undefined : undefined,
-                    ...(priorPlan ? { planItems: priorPlan } : {}),
-                    ...(repoOverview ? { repoOverview } : {}),
-                    ...(relevantFiles ? { relevantFiles } : {}),
-                    ...(deps.editFormat ? { editFormat: deps.editFormat } : {}),
-                  }),
-                  input.appendSystemPrompt,
-                ),
+              content: input.systemPromptOverride ?? composeSystemPrompt(input.mode, input.plan, priorPlan),
             };
           }
           const continuation: ChatMessage = { role: "user", content: task };
@@ -740,24 +797,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           ];
           for (const m of messages) trace.message(m);
         } else {
-          const memoryBrief = memoryFor(input.task);
-          const systemPrompt = appendUserPrompt(
-            buildSystemPrompt({
-              workspace: input.projectPath,
-              mode: input.mode,
-              plan: input.plan,
-              projectRules: collectProjectRules(input.projectPath, undefined, input.task),
-              memoryBrief,
-              skillBrief: buildSkillBrief(skillSelections, deps.skillBriefMaxChars),
-              subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
-              commandRoster:
-                depth === 0 ? buildCommandRoster(loadUserCommands(input.projectPath)) || undefined : undefined,
-              ...(repoOverview ? { repoOverview } : {}),
-              ...(relevantFiles ? { relevantFiles } : {}),
-              ...(deps.editFormat ? { editFormat: deps.editFormat } : {}),
-            }),
-            input.appendSystemPrompt,
-          );
+          const systemPrompt = composeSystemPrompt(input.mode, input.plan);
           messages = [
             { role: "system", content: systemPrompt },
             { role: "user", content: task },
@@ -844,7 +884,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           sandbox: deps.sandbox,
           background: deps.background ?? createBackgroundTasks(),
           signal: runSignal,
-          checkpoint: (path, before) => {
+          checkpoint: (path, before, origin) => {
             if (checkpointed.has(path)) return;
             checkpointed.add(path);
             appendCheckpoint(input.projectPath, sessionId, {
@@ -852,7 +892,19 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               path,
               before,
               turn: runTurnIndex,
+              ...(origin ? { source: origin.source, command: origin.command } : {}),
             });
+          },
+          recordShellCheckpoint: (note) => {
+            try {
+              appendShellCheckpointNote(input.projectPath, sessionId, {
+                ...note,
+                ts: new Date().toISOString(),
+                turn: runTurnIndex,
+              });
+            } catch {
+              // An audit note must never turn a finished command into a failure.
+            }
           },
           // Only the top-level run may block on the user; nested subagent runs
           // never get the channel (see executeNestedRun).
@@ -873,7 +925,15 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               ]
             : deps.dispatcher.list();
         const allowedToolSet = deps.allowedTools ? new Set(deps.allowedTools) : undefined;
-        const toolDefs = allowedToolSet ? allToolDefs.filter((tool) => allowedToolSet.has(tool.name)) : allToolDefs;
+        let toolDefs = allowedToolSet ? allToolDefs.filter((tool) => allowedToolSet.has(tool.name)) : allToolDefs;
+        if (planMode && (!allowedToolSet || allowedToolSet.has(EXIT_PLAN_MODE_TOOL))) {
+          toolDefs = [...toolDefs, buildExitPlanModeToolDefinition()];
+        }
+        const retireExitPlanMode = (): void => {
+          toolDefs = toolDefs.filter((tool) => tool.name !== EXIT_PLAN_MODE_TOOL);
+        };
+        // Files this run read or changed, for re-attachment after compaction.
+        const recentFiles = createRecentFiles();
         let usage = ZERO_USAGE;
         /**
          * The running total, including anything recorded outside the loop since
@@ -938,11 +998,13 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           });
         const dispatchManager: DispatchManager | undefined =
           roster.length > 0 ? (deps.dispatchManager ?? deps._dispatchManager ?? createDispatchManager()) : undefined;
+        // Kept as one object: approving a plan changes its mode for later dispatches.
+        const dispatchInput: RunAgentTaskInput = { ...input, signal: runSignal };
         const dispatchTools =
           dispatchManager !== undefined
             ? createDispatchTools({
                 deps,
-                input: { ...input, signal: runSignal },
+                input: dispatchInput,
                 roster,
                 depth,
                 confirmQueue,
@@ -1041,6 +1103,15 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             // Surface events from background dispatches between turns.
             for (const ev of queue.drainNow()) yield ev;
 
+            // Background commands that finished since the last turn: told once
+            // each, transiently (like the other harness notes).
+            const exitedTasks = ctx.background?.takeExitNotices(sessionId) ?? [];
+            if (exitedTasks.length > 0) {
+              const note = backgroundExitMessages(exitedTasks);
+              for (const message of note.user) yield emit({ type: "notice", level: "info", message });
+              messages.push({ role: "user", content: note.model });
+            }
+
             // A running subagent receives steering only at this safe point,
             // between provider turns. These messages are transient and therefore
             // do not violate the trace's one-user-message-per-run invariant.
@@ -1061,6 +1132,8 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               wrapupInjected.add(turnsLeft);
               messages.push({ role: "user", content: buildWrapupNudge(turnsLeft) });
             }
+            // The budget follows the model this request goes to.
+            const { budget: budgetTokens, compactAt: compactAtTokens } = contextBudgetFor(provider.model);
             // Tool schemas are serialized into every provider request. Keep the
             // full catalog while it is modest, but trim oversized MCP catalogs
             // deterministically and reserve the remaining window for messages.
@@ -1069,8 +1142,12 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               messages,
               Math.max(1, Math.floor(budgetTokens * 0.3)),
             );
-            const messageBudgetTokens = Math.max(1, budgetTokens - estimateToolDefinitionsTokens(requestTools));
-            if (estimateRequestTokens(messages, requestTools) > budgetTokens) {
+            const toolTokens = estimateToolDefinitionsTokens(requestTools);
+            const messageBudgetTokens = Math.max(1, budgetTokens - toolTokens);
+            // Compaction starts at the threshold, before the hard budget, so a
+            // long run is compacted while there is still room to work with.
+            const compactTargetTokens = Math.max(1, compactAtTokens - toolTokens);
+            if (estimateRequestTokens(messages, requestTools) > compactAtTokens) {
               // Micro-compaction first: blank stale tool outputs (cheap, keeps
               // structure). Full compaction only when that is not enough.
               const micro = clearOldToolResults(messages);
@@ -1078,26 +1155,35 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 messages = micro.messages;
                 yield emit({ type: "context.microcompacted", clearedResults: micro.cleared });
               }
-              // LLM compaction when configured; null (under budget OR provider
-              // failure) falls back to the mechanical digest.
-              let compacted =
-                (deps.compaction === "llm"
-                  ? await llmCompactMessages(provider, messages, messageBudgetTokens, {
-                      ...(deps.compactFocus !== undefined ? { focus: deps.compactFocus } : {}),
-                      signal: runSignal,
-                    })
-                  : null) ?? compactMessages(messages, messageBudgetTokens);
+              // Below the hard budget, compact only when that gets back under the
+              // threshold: a retained tail that is itself over it would otherwise
+              // be re-compacted (and re-summarized) on every turn.
+              const mechanical = compactMessages(messages, compactTargetTokens);
+              const worthCompacting =
+                estimateRequestTokens(messages, requestTools) > budgetTokens ||
+                (mechanical !== null && estimateMessagesTokens(mechanical.messages) <= compactTargetTokens);
+              // LLM compaction when configured; null (under the threshold OR
+              // provider failure) falls back to the mechanical digest.
+              let compacted = worthCompacting
+                ? ((deps.compaction === "llm"
+                    ? await llmCompactMessages(provider, messages, compactTargetTokens, {
+                        ...(deps.compactFocus !== undefined ? { focus: deps.compactFocus } : {}),
+                        signal: runSignal,
+                      })
+                    : null) ?? mechanical)
+                : null;
               if (compacted?.usage) {
                 usage = addUsage(usage, compacted.usage);
                 yield emit({ type: "usage.updated", ...usageWindows() });
                 throwIfCancelled();
               }
-              // Last resort: shrink oversized tool payloads in place so the
-              // provider is never handed an over-budget request. This covers
-              // BOTH cases where compaction alone is insufficient: nothing could
-              // be dropped without orphaning a tool call (compactMessages returned
-              // null), AND a digest was produced but the retained tail still holds
-              // a huge tool result that keeps the total over budget.
+              // Last resort, against the HARD budget only: shrink oversized tool
+              // payloads in place so the provider is never handed an over-budget
+              // request. This covers BOTH cases where compaction alone is
+              // insufficient: nothing could be dropped without orphaning a tool
+              // call (compactMessages returned null), AND a digest was produced
+              // but the retained tail still holds a huge tool result that keeps
+              // the total over budget.
               const afterCompaction = compacted?.messages ?? messages;
               if (estimateMessagesTokens(afterCompaction) > messageBudgetTokens) {
                 const shrunk = shrinkToolResultsToFit(afterCompaction, messageBudgetTokens);
@@ -1125,7 +1211,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 // while messages.jsonl remains the immutable audit source.
                 const persisted = loadSessionMessages(input.projectPath, sessionId);
                 const persistedCompaction =
-                  compactMessages(persisted, messageBudgetTokens) ??
+                  compactMessages(persisted, compactTargetTokens) ??
                   shrinkToolResultsToFit(persisted, messageBudgetTokens);
                 if (persistedCompaction) {
                   writeCompactionSnapshot(input.projectPath, sessionId, persistedCompaction.messages, sessionLease);
@@ -1135,18 +1221,21 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                   droppedTurns: compacted.droppedTurns,
                   summaryTokens: compacted.summaryTokens,
                 });
-                // #2+: a plan published earlier may have been in the dropped
-                // middle. Re-inject the current plan (transient, like the other
-                // nudges) so a long-horizon task keeps its checklist across
-                // compaction. Self-healing — re-added after every compaction.
-                if (lastPlanItems && lastPlanItems.length > 0) {
-                  const mark = { done: "x", in_progress: "~", pending: " " } as const;
-                  const lines = lastPlanItems.map((i) => `- [${mark[i.status]}] ${i.step}`).join("\n");
-                  messages.push({
-                    role: "user",
-                    content: `[harness] Current plan (kept across a context compaction — keep working it):\n${lines}`,
-                  });
-                }
+                // The dropped middle held the plan and the file contents the run
+                // was working from. Re-attach the current plan and, when turns
+                // were actually dropped, fresh copies of the most recent files —
+                // transient, like the other harness notes, and sized to the room
+                // left under the threshold so it cannot trigger the next
+                // compaction by itself. Re-added after every compaction.
+                const room = compactTargetTokens - estimateMessagesTokens(messages);
+                const restored = buildRestoredContext({
+                  workspace: input.projectPath,
+                  recentFiles: compacted.droppedTurns > 0 ? recentFiles.list() : [],
+                  plan: lastPlanItems,
+                  // ~4 chars per token; spend at most half of the room.
+                  maxFileChars: Math.max(0, room) * 2,
+                });
+                if (restored) messages.push({ role: "user", content: restored });
               }
             }
 
@@ -1218,7 +1307,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               // kind fires once, so this adds at most a few turns and always
               // terminates.
               const nudge = nextFinalizeNudge({
-                mode: input.mode,
+                mode: meta.mode,
                 toolCalls: toolCallCount,
                 planItems: lastPlanItems,
                 changedFiles: changedFiles.size,
@@ -1438,10 +1527,60 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               const { args, parseError } = beginCall(tc);
               yield emit({ type: "tool.started", toolName: tc.name, args });
               let result: ToolResult;
+              // Every path this call hands to the checkpoint sink.
+              const touched: TouchedPath[] = [];
               if (parseError) {
                 result = parseError;
               } else if (dispatchManager !== undefined && tc.name === AGENT_RESULT_TOOL) {
                 result = dispatchTools!.handleAgentResult(args);
+              } else if (planMode && tc.name === EXIT_PLAN_MODE_TOOL) {
+                const parsed = parseExitPlanModeArgs(args);
+                if ("error" in parsed) {
+                  result = parsed.error;
+                } else {
+                  const decision = readExitPlanModeAnswer(
+                    await confirmWithNotify(buildExitPlanModeRequest(parsed.plan)),
+                  );
+                  ctx.log?.({
+                    toolName: EXIT_PLAN_MODE_TOOL,
+                    args,
+                    ok: decision.approved,
+                    errorCode: decision.approved ? null : "denied_by_user",
+                    permissionDecision: decision.approved ? "user_approved" : "user_denied",
+                  });
+                  if (!decision.approved) {
+                    if (decision.feedback === "") retireExitPlanMode();
+                    result = declinedResult(decision.feedback);
+                  } else {
+                    planMode = false;
+                    retireExitPlanMode();
+                    // The approval mode the user chose stays; only the
+                    // read-only restriction of plan mode ends.
+                    meta.mode = "edit";
+                    ctx.policy.mode = "edit";
+                    dispatchInput.mode = "edit";
+                    dispatchInput.plan = false;
+                    // Plan-model routing ends with plan mode (an escalation keeps
+                    // its stronger model).
+                    if (!escalated) provider = deps.provider;
+                    if (input.systemPromptOverride === undefined && messages[0]?.role === "system") {
+                      messages[0] = { role: "system", content: composeSystemPrompt("edit", false, lastPlanItems) };
+                    }
+                    writeSessionMeta(input.projectPath, {
+                      ...meta,
+                      status: "running",
+                      updatedAt: new Date().toISOString(),
+                      usage: usageWindows().sessionUsage,
+                      ...(lastPlanItems ? { plan: lastPlanItems } : {}),
+                    });
+                    yield emit({
+                      type: "notice",
+                      level: "info",
+                      message: "Plan approved — continuing in edit mode.",
+                    });
+                    result = approvedResult();
+                  }
+                }
               } else {
                 // Live output: this call gets its own emitOutput that feeds
                 // command.output events into the run's queue (capped per call).
@@ -1449,6 +1588,10 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 const callCtx: ToolContext = {
                   ...ctx,
                   signal: runSignal,
+                  checkpoint: (path, before, origin) => {
+                    touched.push({ path, shell: origin?.source === "shell" });
+                    ctx.checkpoint?.(path, before, origin);
+                  },
                   emitOutput: (stream, chunk) => {
                     if (streamedChunks >= MAX_STREAMED_CHUNKS_PER_CALL) return;
                     streamedChunks++;
@@ -1486,9 +1629,17 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 verifyRanSinceEdit = false;
                 lintRanSinceEdit = false;
               }
-              if (result.ok && result.meta?.path && (tc.name === "apply_patch" || tc.name === "write_file")) {
-                changedFiles.add(result.meta.path);
-                yield emit({ type: "file.changed", path: result.meta.path });
+              if (result.ok && tc.name === "read_file" && typeof result.meta?.path === "string") {
+                recentFiles.touch(result.meta.path);
+              }
+              const changedPaths = changedPathsOf(tc.name, result, touched);
+              for (const { path, viaShellOnly } of changedPaths) {
+                changedFiles.add(path);
+                // A build's outputs are not what the model was working on.
+                if (!viaShellOnly) recentFiles.touch(path);
+                yield emit({ type: "file.changed", path });
+              }
+              if (changedPaths.length > 0) {
                 // New edits invalidate any earlier verify/lint run (finalize gate).
                 if (!mayMutateWorkspace) {
                   workspaceMutationCount++;
@@ -1654,7 +1805,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             ...usageWindows(),
           };
 
-          if (deps.extractMemory && input.mode === "edit") {
+          if (deps.extractMemory && meta.mode === "edit") {
             yield emit({ type: "step.started", title: "extracting memory" });
             try {
               const extraction = await extractMemoryFromSession(deps.provider, {

@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { join, resolve, sep } from "node:path";
-import type { AgentEvent, ChatMessage, SessionStatus, TokenUsage } from "@seekforge/shared";
+import type { AgentEvent, ChatMessage, PlanItem, SessionStatus, TokenUsage } from "@seekforge/shared";
 import { compactMessages, estimateMessagesTokens } from "./context.js";
 import {
   acquireSessionLease,
@@ -152,10 +152,10 @@ export type SessionMeta = {
   parentAgentId?: string;
   /**
    * Latest plan published via update_plan, persisted so a long-horizon task's
-   * checklist survives across resume (restored into the system prompt). Kept
-   * structural to avoid a trace -> tools dependency.
+   * checklist survives across resume (restored into the system prompt). Typed
+   * by the shared contract to avoid a trace -> tools dependency.
    */
-  plan?: { step: string; status: "pending" | "in_progress" | "done" }[];
+  plan?: PlanItem[];
 };
 
 const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -295,7 +295,8 @@ function parseSessionMeta(value: unknown, expectedId: string): SessionMeta | und
           isRecord(item) &&
           typeof item["step"] === "string" &&
           typeof item["status"] === "string" &&
-          PLAN_STATUSES.has(item["status"]),
+          PLAN_STATUSES.has(item["status"]) &&
+          (item["activeForm"] === undefined || typeof item["activeForm"] === "string"),
       ))
   ) {
     return undefined;

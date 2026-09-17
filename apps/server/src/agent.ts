@@ -200,6 +200,8 @@ export function buildAgentDeps(
         commandAllowlist: config.commandAllowlist,
         sandbox: opts.overrides?.sandbox ?? config.sandbox,
         compaction: config.compaction,
+        autoCompactThreshold: config.autoCompactThreshold,
+        modelContextWindows: config.modelContextWindows,
         planModel: config.planModel,
         escalateOnFailure: config.escalateOnFailure,
         memoryAutoApproveConfidence: config.memoryAutoApproveConfidence,

@@ -36,7 +36,8 @@ the base checkout can open.
 
 The copy is deliberately narrow. It carries only the known trace files
 (`session.json`, `messages.jsonl`, `tool-calls.jsonl`, `events.jsonl`,
-`checkpoints.jsonl`, `compaction.json`, `summary.md`), only for sessions that
+`checkpoints.jsonl`, `shell-checkpoints.jsonl`, `compaction.json`,
+`summary.md`), only for sessions that
 were not already there when the run started, and never over a session id the
 base already holds — an isolated run cannot write a file of its own choosing
 into the base's session store, and cannot rewrite an earlier run's record.

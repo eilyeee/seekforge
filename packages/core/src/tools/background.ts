@@ -56,6 +56,21 @@ export type BackgroundTaskEvent = {
 };
 
 /**
+ * A background task that exited and has not been reported to the run that
+ * started it. Carries no output: the model reads that with task_output, so the
+ * harness note that announces the exit never relays command output itself.
+ */
+export type BackgroundTaskExitNotice = {
+  id: string;
+  command: string;
+  /** null when the process was killed or never started. */
+  exitCode: number | null;
+  status: "succeeded" | "failed" | "cancelled";
+  durationMs: number;
+  error?: { code: string; message: string };
+};
+
+/**
  * Per-session manager for long-running background commands (dev servers,
  * watchers). Tasks are spawned detached in their own process group (same
  * pattern as runShellCommand) so kill() can take down the whole tree.
@@ -72,6 +87,12 @@ export type BackgroundTasks = {
     cwd: string;
     sandbox?: SandboxLevel | SandboxProfile | undefined;
     workspace?: string | undefined;
+    /**
+     * Who is told when the task exits (a session id). A manager can outlive a
+     * run and serve several sessions at once (the TUI shares one across tabs),
+     * so a notice goes only to the owner that asked for it. Unset: nobody.
+     */
+    owner?: string | undefined;
   }): { id: string; pid?: number };
   get(id: string): BackgroundTaskSnapshot | undefined;
   /** SIGKILL the task's process group. Idempotent; false for unknown ids. */
@@ -79,6 +100,16 @@ export type BackgroundTasks = {
   list(): BackgroundTaskSummary[];
   /** Kill every still-running task. Called when the session ends. */
   disposeAll(): void;
+  /**
+   * Exited tasks of `owner` not yet reported, oldest exit first. Each task is
+   * returned at most once — here or through acknowledgeExit.
+   */
+  takeExitNotices(owner: string): BackgroundTaskExitNotice[];
+  /**
+   * Marks an exited task as already known to its owner (the model read its
+   * final status with task_output), so no notice repeats it. No-op otherwise.
+   */
+  acknowledgeExit(id: string): void;
 };
 
 type TaskRecord = {
@@ -96,6 +127,9 @@ type TaskRecord = {
   error?: { code: string; message: string };
   /** True once this record has been enqueued for exited-record eviction. */
   retired?: boolean;
+  owner?: string;
+  /** Exit reported to the owner (a notice, or task_output after the exit). */
+  exitReported?: boolean;
 };
 
 function appendRing(cur: string, text: string): string {
@@ -142,7 +176,7 @@ export function createBackgroundTasks(
   }
 
   return {
-    start({ command, cwd, sandbox, workspace = cwd }) {
+    start({ command, cwd, sandbox, workspace = cwd, owner }) {
       if (sandbox !== undefined && sandbox !== "off" && buildSandboxSpec(sandbox, workspace) === null) {
         throw new ToolError("sandbox_unavailable", "sandbox requested but sandbox-exec/bwrap not found on this system");
       }
@@ -166,6 +200,7 @@ export function createBackgroundTasks(
         status: "running",
         exitCode: null,
         killed: false,
+        ...(owner !== undefined ? { owner } : {}),
       };
       tasks.set(id, task);
       options.onEvent?.({ runId, taskId: id, status: "running", attempt: 1, costUsd: 0 });
@@ -250,6 +285,30 @@ export function createBackgroundTasks(
 
     disposeAll() {
       for (const t of tasks.values()) killTask(t);
+    },
+
+    takeExitNotices(owner) {
+      const notices: BackgroundTaskExitNotice[] = [];
+      // exitedOrder is exit order, and holds every exited record still kept.
+      for (const id of exitedOrder) {
+        const t = tasks.get(id);
+        if (!t || t.owner !== owner || t.exitReported || t.status !== "exited") continue;
+        t.exitReported = true;
+        notices.push({
+          id: t.id,
+          command: t.command,
+          exitCode: t.exitCode,
+          status: t.killed ? "cancelled" : t.exitCode === 0 && !t.error ? "succeeded" : "failed",
+          durationMs: (t.endedAt ?? Date.now()) - t.startedAt,
+          ...(t.error ? { error: t.error } : {}),
+        });
+      }
+      return notices;
+    },
+
+    acknowledgeExit(id) {
+      const t = tasks.get(id);
+      if (t && t.status === "exited") t.exitReported = true;
     },
   };
 }

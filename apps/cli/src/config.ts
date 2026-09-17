@@ -41,6 +41,10 @@ export type CliConfig = {
   sandbox?: "off" | "read-only" | "workspace-write" | "restricted";
   /** Context compaction strategy: "llm" summarizes via the model (default mechanical). */
   compaction?: "mechanical" | "llm";
+  /** Fraction (0, 1] of the context budget at which compaction starts (default 0.9). User-owned. */
+  autoCompactThreshold?: number;
+  /** Context-window overrides in tokens, keyed by exact model id. User-owned. */
+  modelContextWindows?: Record<string, number>;
   /** DeepSeek V4 thinking mode (default: API default). /think toggles in the REPL. */
   thinking?: boolean;
   /** V4 reasoning effort: "high" or "max". */

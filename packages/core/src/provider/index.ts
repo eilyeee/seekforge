@@ -41,6 +41,8 @@ export {
 } from "./presets.js";
 export { estimateCostUsd, pricingSourceFor, type PricingSource, type UsageTokens } from "./cost.js";
 export { MODEL_PRICING, DEFAULT_BASE_URL, DEFAULT_MODEL, DEPRECATED_MODELS, type ModelPricing } from "./constants.js";
+export { DEFAULT_CONTEXT_WINDOW_TOKENS, MODEL_CONTEXT_WINDOWS } from "./constants.js";
+export { assertAutoCompactThreshold, assertModelContextWindows, resolveContextWindow } from "./context-window.js";
 export {
   resolveWireProtocol,
   WIRE_PROTOCOLS,

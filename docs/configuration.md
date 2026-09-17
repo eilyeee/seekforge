@@ -38,7 +38,9 @@ They cannot supply credentials or credential destinations (`apiKey`,
 `provider`, `baseUrl`), execute startup/runtime commands (`runtimeBin`, hooks,
 `statusLine`, `lintCommand`, `verifyCommand`), auto-authorize actions
 (`commandAllowlist`, `allow` permission rules, MCP `trusted`), weaken the
-sandbox, raise spending limits, auto-approve memory, or change audit retention.
+sandbox, raise spending limits (including how much context each request carries:
+`modelContextWindows`, `autoCompactThreshold`), auto-approve memory, or change
+audit retention.
 Automatic memory maintenance is also user-owned because it can archive project
 facts. Those settings must come from `~/.seekforge/config.json`, environment
 variables, or an explicitly selected `--settings` file. A project MCP definition
@@ -330,6 +332,79 @@ input is ~10× cheaper).
 ```
 
 Settable via `config set`? **Yes** — validated against `mechanical` / `llm`.
+
+How compaction runs, whichever strategy is set:
+
+- **The budget** is 80% of the request model's context window minus an 8,192-token
+  output reserve. The window is looked up per model (see
+  [`modelContextWindows`](#modelcontextwindows)), so a plan run on a different
+  model is budgeted against that model.
+- **Compaction starts at the threshold** — `autoCompactThreshold` of the budget,
+  90% by default — rather than at the budget itself.
+- **Micro-compaction** replaces tool outputs longer than 200 characters (or
+  carrying an image) with a one-line note naming what to re-run. A result is old
+  when it is before the last two user turns **or** before the last four tool
+  rounds, so a long headless `-p` run — one user turn, many tool rounds — is
+  trimmed too. Messages are rewritten, never removed, so every tool call keeps
+  its result.
+- **Full compaction** keeps the system prompt, the task and the most recent
+  messages, and replaces the middle with the digest.
+- **Working context is restored** after a full compaction: the current plan and
+  fresh copies of up to five files the run most recently read or edited (current
+  on-disk content; at most 8,000 characters each and 24,000 in total, and never
+  more than half of the room left under the threshold). Deleted, binary,
+  sensitive (`.env`, keys, SeekForge's own config) and out-of-workspace files are
+  skipped, and secrets are redacted. The block is marked as harness-provided
+  data and is not written to the session trace.
+- **Past the budget itself**, oversized tool outputs are shrunk in place; a
+  request that still does not fit fails with `context_budget_exceeded`.
+
+### `autoCompactThreshold`
+
+Fraction of the context budget at which compaction starts, greater than 0 and at
+most 1. Default `0.9`. Lower values compact earlier (smaller, cheaper requests,
+more summarization); `1` keeps the old behavior of compacting only once the
+budget itself is exceeded. An invalid value stops the agent from starting with
+an error naming the key.
+
+```json
+{ "autoCompactThreshold": 0.8 }
+```
+
+User-owned: a repository's config cannot set it. Settable via `config set`?
+**No** — edit the file directly.
+
+### `modelContextWindows`
+
+Context windows, in tokens, keyed by the **exact** model id the provider is
+configured with. Use it for a model SeekForge does not know, or to budget a
+large-window model against less than its full window.
+
+```json
+{ "modelContextWindows": { "qwen3-coder": 262144, "claude-opus-5": 400000 } }
+```
+
+Without an entry, the window comes from a built-in table
+(`packages/core/src/provider/constants.ts`), matched by model id or family —
+dated and routed ids such as `claude-opus-5-20260101` or
+`us.anthropic.claude-opus-5-v1:0` find their family:
+
+| Models | Window |
+| --- | --- |
+| `claude-opus-4-6`, `-4-7`, `-4-8`, `claude-opus-5`, `claude-sonnet-4-6`, `claude-sonnet-5`, `claude-fable-5*`, `claude-mythos-5*` | 1,000,000 |
+| `claude-haiku-4-5` and older Claude models | 200,000 |
+| `deepseek-v4-*`, `deepseek-flash` | 1,000,000 |
+| `deepseek-chat`, `deepseek-reasoner` | 131,072 |
+| anything else (including OpenAI models, whose windows were not verified) | 131,072 |
+
+A large window means large requests: a 1M-token model is not compacted until a
+request reaches roughly 710K estimated tokens, and every turn resends what the
+context holds. Lower the window here if that costs more than it helps. Values
+must be positive integers; an invalid entry stops the agent from starting with
+an error naming it.
+
+User-owned: a repository's config cannot set it (a larger window means larger,
+costlier requests). Settable via `config set`? **No** — edit the file directly.
 
 ### `thinking`
 
@@ -1231,7 +1306,8 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 | `reasoningEffort` | enum | `high` / `max` |
 
 The remaining keys — `planModel`, `escalateOnFailure`, `maxCostUsd`,
-`modelPricing`, `inlineImages`, `verifyCommand`, `autoVerify`, `lintCommand`, `autoLint`,
+`modelPricing`, `modelContextWindows`, `autoCompactThreshold`, `inlineImages`,
+`verifyCommand`, `autoVerify`, `lintCommand`, `autoLint`,
 `editFormat`, `finalizeReview`, `guardNoProgress`,
 `memoryAutoApproveConfidence`, `memoryMaintenance`, `permissionRules`,
 `mcpServers`, `hooks` — are **not settable** via `config set`. They must be

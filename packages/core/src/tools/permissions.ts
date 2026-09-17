@@ -167,7 +167,7 @@ async function confirmWithUser(
     }
     return { allowed: true, decision: "user_approved", ...(selectedHunks !== undefined ? { selectedHunks } : {}) };
   }
-  const note = typeof feedback === "string" ? feedback.trim().slice(0, MAX_DENIAL_FEEDBACK_CHARS) : "";
+  const note = denialFeedbackNote(feedback);
   return {
     allowed: false,
     decision: "user_denied",
@@ -179,6 +179,11 @@ async function confirmWithUser(
 
 /** A refusal note is guidance, not a document; bound what reaches the model. */
 const MAX_DENIAL_FEEDBACK_CHARS = 2000;
+
+/** The part of a refusal's `feedback` that reaches the model; "" when there is none. */
+export function denialFeedbackNote(feedback: unknown): string {
+  return typeof feedback === "string" ? feedback.trim().slice(0, MAX_DENIAL_FEEDBACK_CHARS) : "";
+}
 
 /** Collapse runs of whitespace so a rule can't be evaded with extra spaces. */
 function normalizeWhitespace(s: string): string {

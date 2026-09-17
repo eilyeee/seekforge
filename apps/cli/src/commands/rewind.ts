@@ -34,6 +34,8 @@ export function rewindCommand(sessionId: string | undefined, opts: RewindOptions
   for (const p of result.deleted) console.log(`${prefix}${t("status.deletedFile", { path: p })}`);
   for (const s of result.skipped)
     console.log(`${prefix}${t("status.skippedFile", { path: s.path, reason: s.reason })}`);
+  // Shell side effects rewind could not undo; the message itself is core's.
+  for (const warning of result.warnings) console.log(`${prefix}${t("status.rewindWarning", { warning })}`);
 
   const tKey = opts.dryRun ? "status.dryRunRewound" : "status.rewound";
   console.log(

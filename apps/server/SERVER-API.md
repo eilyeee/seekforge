@@ -246,7 +246,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | POST /api/security/findings/:id/status | body `{status, reason?}`; records a validated Finding lifecycle transition |
 | POST /api/security/findings/:id/fix | body `{maxCostUsd, verifyCommand, lintCommand?}`; runs a cost-bounded edit Agent, exact sandboxed checks, and a fresh scan |
 | GET /api/security/export?format=json\|markdown\|sarif | rendered compliance evidence package and filename |
-| POST /api/rewind | body `{sessionId, dryRun?}` → rewindSession result; 404 on unknown session or zero checkpoints |
+| POST /api/rewind | body `{sessionId, dryRun?}` → rewindSession result `{restored, deleted, skipped, warnings}` (`warnings`: shell-command side effects the rewind cannot undo — commands run outside git, over the checkpoint limits or in the background, unrestorable files, moved HEAD); 404 on unknown session or zero checkpoints |
 | PUT /api/config | body `{key, value, global?}` — supports the ordinary CLI config keys plus Server/Desktop structured settings such as `models` and `memoryMaintenance`; nested maintenance fields are strictly validated. Returns 400 on unknown keys or user-owned keys attempted without `global:true`. Project updates share the repository/workspace session guard; global updates use a separate cross-process settings lease; conflicts return 409 `session_busy` |
 | GET /api/triggers | webhook triggers `{id, task, mode, maxCostUsd, secret:"***", enabled}[]` — secrets always masked |
 | POST /api/triggers | body `{id, task, mode:"ask"\|"edit", maxCostUsd, secret, enabled?}` → `201` masked trigger. `maxCostUsd` and `secret` (≥8 chars) are **required**; 400 on missing/invalid, 409 duplicate id |

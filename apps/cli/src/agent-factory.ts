@@ -166,6 +166,8 @@ export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
         commandAllowlist: config.commandAllowlist,
         sandbox: config.sandbox,
         compaction: config.compaction,
+        autoCompactThreshold: config.autoCompactThreshold,
+        modelContextWindows: config.modelContextWindows,
         planModel: config.planModel,
         escalateOnFailure: config.escalateOnFailure,
         memoryAutoApproveConfidence: config.memoryAutoApproveConfidence,

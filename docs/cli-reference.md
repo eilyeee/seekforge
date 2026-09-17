@@ -36,7 +36,7 @@ checks npm for a newer one.
 
 | Flag | Description |
 | --- | --- |
-| `--plan` | Plan first (read-only), confirm, then execute in the same session |
+| `--plan` | Plan first (read-only), confirm, then execute in the same session. The agent may also submit its plan with `exit_plan_mode`; approving that prompt continues the same run in edit mode (see [Cookbook → Refactor across files](cookbook.md#refactor-across-files)) |
 | `--permission-mode <mode>` | `default` / `confirm` — prompt on write/execute; `acceptEdits` — auto-allow in-workspace edits, prompt on commands; `plan` — confirm + plan-first; `bypassPermissions` / `auto` — full auto (like `-y`). Overrides `-y` when set |
 | `--fallback-model <model>` | Model to retry with if the primary is overloaded |
 | `--output-style <style>` | `default` (no change), `concise` (maximally terse), `explanatory` (teach as you answer), `learning` (leave 1–3 pieces for the user), or a custom `.seekforge/output-styles/<name>.md` (see Configuration) |

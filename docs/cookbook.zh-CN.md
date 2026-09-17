@@ -89,6 +89,7 @@ seekforge run "rename the User type to Account everywhere" -m deepseek-v4-pro -y
 - 对既有文件的编辑都经过 `apply_patch`（逐字的 search/replace）；补丁失败时 agent 会重新读取文件。
 - 在配置中设置 `planModel`，可让 `/plan` 和 `--plan` 在同一 endpoint 上升级到更强的模型。参见 [Configuration → planModel](configuration.zh-CN.md#planmodel)。
 - 在 TUI 中用 `/plan <task>` 可获得同样的“计划-确认-执行”流程。
+- plan 运行会向 agent 提供 `exit_plan_mode` 工具。计划完成后，agent 通过普通的权限确认提交计划，确认界面逐字展示计划原文。批准后，**同一次运行**切换到编辑模式——你选择的审批模式（`-y`、`acceptEdits`、confirm）仍决定哪些操作无需询问——agent 随即开始实施。拒绝则运行保持只读：拒绝时填写的反馈会返回给 agent，供其修改后重新提交；不带反馈的拒绝会让该工具在本次运行剩余时间内不再可用，agent 以计划作为最终回答结束。无法询问用户的宿主（使用机器输出格式的 `-p`、定时任务、触发器）总是拒绝。计划获批后，会话记录的模式变为 `edit`。
 
 ---
 
@@ -140,6 +141,7 @@ TUI：`/audit [sessionId]` 会为当前（或指定）会话写出审计报告�
 
 **提示：**
 - `seekforge replay <session-id>` 会把整个会话重新渲染到终端；`seekforge rewind <session-id>` 撤销某个会话的文件改动（建议先 `--dry-run`）。
+- rewind 也会尽力覆盖 `run_command` 造成的改动。在 git 工作树中，每条可能写文件的命令执行前，SeekForge 会记录未提交的文件（保存至多 500 个文件的内容，每个至多 1 MiB，合计至多 16 MiB），执行后再向 git 询问一次：原本已提交且干净的文件从 `HEAD` 恢复，原本已有未提交改动的文件从快照恢复，命令新建的文件会被删除。以下情况**不在**覆盖范围内：在 git 工作树之外、超出上述限制或以 `background: true` 运行的命令；被忽略或敏感的文件；二进制文件或超过 1 MiB 的文件；对 git 历史本身的改动（提交、切换分支、reset —— 这些会被报告）；以及命令运行期间其他进程做出的修改（会被算到该命令头上）。`seekforge rewind` 会为它所撤销回合中的每一处这类缺口打印警告；这些记录保存在会话的 `shell-checkpoints.jsonl` 中。
 
 ---
 

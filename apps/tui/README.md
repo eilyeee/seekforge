@@ -102,7 +102,9 @@ through the CLI (`seekforge graph run|resume <file> --approve <node-id>`),
 because those need the Graph definition file, not just its checkpoint.
 
 Background tasks started with `run_command background:true` survive across
-turns (one shared manager per TUI process; killed on exit). `/compact` folds
+turns (one shared manager per TUI process; killed on exit). When one exits, the
+session that started it is told at its next turn boundary — a notice in the
+transcript and a short note to the agent pointing at `task_output`. `/compact` folds
 the middle of the stored session into a digest immediately. `/init` runs an
 agent task that writes or refreshes AGENTS.md; `/doctor` checks the
 environment (key, node, git, runtime, MCP, editor, clipboard). Permission

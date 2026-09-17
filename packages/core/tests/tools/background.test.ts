@@ -270,3 +270,78 @@ describe("task_output / task_kill via dispatcher", () => {
     }
   });
 });
+
+describe("background exit notices", () => {
+  it("reports each exited task once, to its owner only, oldest exit first", async () => {
+    const ws = makeWorkspace();
+    const bg = createBackgroundTasks();
+    try {
+      const failing = bg.start({ command: "exit 3", cwd: ws, owner: "s1" });
+      const other = bg.start({ command: "true", cwd: ws, owner: "s2" });
+      const unowned = bg.start({ command: "true", cwd: ws });
+      const running = bg.start({ command: TICK_LOOP, cwd: ws, owner: "s1" });
+      await waitFor(() => [failing, other, unowned].every((t) => bg.get(t.id)!.status === "exited"));
+
+      expect(bg.takeExitNotices("s1")).toEqual([
+        expect.objectContaining({ id: failing.id, command: "exit 3", exitCode: 3, status: "failed" }),
+      ]);
+      expect(bg.takeExitNotices("s1")).toEqual([]);
+      expect(bg.takeExitNotices("s2")).toEqual([
+        expect.objectContaining({ id: other.id, exitCode: 0, status: "succeeded" }),
+      ]);
+
+      bg.kill(running.id);
+      await waitFor(() => bg.get(running.id)!.status === "exited");
+      expect(bg.takeExitNotices("s1")).toEqual([
+        expect.objectContaining({ id: running.id, exitCode: null, status: "cancelled" }),
+      ]);
+    } finally {
+      bg.disposeAll();
+    }
+  });
+
+  it("skips a task whose final status the model already read with task_output", async () => {
+    const ws = makeWorkspace();
+    const bg = createBackgroundTasks();
+    const ctx = makeCtx(ws, { background: bg, sessionId: "s1" });
+    try {
+      const started = await dispatcher.execute(call("run_command", { command: "echo hi", background: true }), ctx);
+      const taskId = (started.data as { taskId: string }).taskId;
+      // Polling while it still runs acknowledges nothing.
+      const early = bg.start({ command: "sleep 0.3", cwd: ws, owner: "s1" });
+      await dispatcher.execute(call("task_output", { taskId: early.id }), ctx);
+
+      await waitFor(() => bg.get(taskId)!.status === "exited" && bg.get(early.id)!.status === "exited");
+      const read = await dispatcher.execute(call("task_output", { taskId }), ctx);
+      expect((read.data as { status: string }).status).toBe("exited");
+      expect(bg.takeExitNotices("s1").map((notice) => notice.id)).toEqual([early.id]);
+    } finally {
+      bg.disposeAll();
+    }
+  });
+
+  it("run_command owns its background task by the session id and records no checkpoint for it", async () => {
+    const ws = makeWorkspace();
+    const bg = createBackgroundTasks();
+    const notes: unknown[] = [];
+    const ctx = makeCtx(ws, {
+      background: bg,
+      sessionId: "s-owner",
+      checkpoint: () => {
+        throw new Error("a background command must not be checkpointed");
+      },
+      recordShellCheckpoint: (note) => notes.push(note),
+    });
+    try {
+      const started = await dispatcher.execute(call("run_command", { command: "true", background: true }), ctx);
+      const taskId = (started.data as { taskId: string }).taskId;
+      await waitFor(() => bg.get(taskId)!.status === "exited");
+      expect(bg.takeExitNotices("s-owner").map((notice) => notice.id)).toEqual([taskId]);
+      expect(notes).toEqual([
+        { command: "true", status: "skipped", reason: "background command: its file changes are not checkpointed" },
+      ]);
+    } finally {
+      bg.disposeAll();
+    }
+  });
+});

@@ -99,7 +99,11 @@ runs. Automatic context compaction writes a fingerprinted derivative snapshot;
 resume uses it only while its source prefix still matches. Each compacted summary
 also carries the SHA-256 identity and turn count of its exact dropped segment so
 later audit can correlate the derivative with source history. Context admission
-budgets the complete provider request, including advertised tool schemas.
+budgets the complete provider request, including advertised tool schemas,
+against the context window of the model that request goes to; compaction starts
+at a configurable threshold below that budget. The working context re-attached
+after a compaction and the notice that a background command exited are
+transient harness messages, never written to the trace as user turns.
 Interactive Server/Desktop chat treats `maxAgentTurns` as one bounded execution
 slice rather than the lifetime of a user task. Desktop users select a bounded
 2/4/8-slice policy; each slice stays in the same Core run, session lease, and

@@ -6,6 +6,8 @@ import { resolveInsideWorkspace } from "../sandbox.js";
 import { classifyCommand, normalizeCommand } from "../run-command.js";
 import { executeCommandInWorkspace } from "../shell-execution.js";
 import { defineTool, type ToolSpec } from "../registry.js";
+import { captureShellBaseline, collectShellChanges } from "../shell-checkpoint.js";
+import type { ToolContext } from "../index.js";
 
 // The shell seam is owned by shell-execution.ts, which every command-running
 // tool goes through; re-exported here for the tests that already import it.
@@ -67,22 +69,36 @@ const runCommand = defineTool({
         cwd,
         sandbox: ctx.sandbox,
         workspace: ctx.workspace,
+        owner: ctx.sessionId,
+      });
+      // A background command outlives this call, so no before/after comparison
+      // can bound what it changes; say so rather than imply it was covered.
+      ctx.recordShellCheckpoint?.({
+        command: args.command,
+        status: "skipped",
+        reason: "background command: its file changes are not checkpointed",
       });
       return {
         data: {
           taskId: id,
           command: args.command,
-          note: "running in background; poll with task_output",
+          note: "running in background; you will be told when it exits — check its output with task_output",
         },
       };
     }
 
-    const execution = await executeCommandInWorkspace(ctx, {
-      command: args.command,
-      cwd,
-      timeoutMs,
-      toolName: "run_command",
-    });
+    const run = () =>
+      executeCommandInWorkspace(ctx, {
+        command: args.command,
+        cwd,
+        timeoutMs,
+        toolName: "run_command",
+      });
+    const checkpoint = ctx.checkpoint;
+    const execution =
+      checkpoint && mayWriteFiles(args.command, cls)
+        ? await withShellCheckpoint(ctx, checkpoint, args.command, run)
+        : await run();
     return {
       data: {
         exitCode: execution.exitCode,
@@ -97,6 +113,45 @@ const runCommand = defineTool({
     };
   },
 });
+
+/** Allowlisted programs that only read. Allowlisting already excludes control syntax and rg's unsafe flags. */
+const READ_ONLY_ALLOWLISTED_PROGRAMS = new Set(["pwd", "ls", "rg"]);
+
+/** Whether a classified command could change a file, and so is worth the git probes. */
+function mayWriteFiles(command: string, cls: ReturnType<typeof classifyCommand>): boolean {
+  if (cls.permission === "readonly") return false;
+  return !(cls.allowlisted && READ_ONLY_ALLOWLISTED_PROGRAMS.has(normalizeCommand(command).split(" ")[0]!));
+}
+
+/**
+ * Runs a foreground command between two git probes and hands every file it
+ * changed to the rewind checkpoint. The probes are best-effort: their failure
+ * is recorded as a note and never fails the command itself.
+ */
+async function withShellCheckpoint<T>(
+  ctx: ToolContext,
+  checkpoint: NonNullable<ToolContext["checkpoint"]>,
+  command: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const baseline = await captureShellBaseline(ctx.workspace, ctx.signal ? { signal: ctx.signal } : {});
+  try {
+    return await run();
+  } finally {
+    const changes = await collectShellChanges(ctx.workspace, baseline);
+    let note = changes.note;
+    try {
+      for (const entry of changes.entries) checkpoint(entry.path, entry.before, { source: "shell", command });
+    } catch (error) {
+      // The command already ran; its result must still reach the model.
+      note = {
+        status: "skipped",
+        reason: `could not record checkpoints: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    ctx.recordShellCheckpoint?.({ command, ...note });
+  }
+}
 
 const DEFAULT_TASK_OUTPUT_TAIL_CHARS = 2_000;
 
@@ -129,6 +184,8 @@ const taskOutput = defineTool({
     // slice(-0) is slice(0) — the WHOLE buffer — so tail:0 must short-circuit
     // to empty rather than return everything.
     const lastChars = (s: string): string => (tail === 0 ? "" : s.slice(-tail));
+    // The model has now seen the final status; an exit notice would repeat it.
+    if (task.status === "exited") ctx.background?.acknowledgeExit(task.id);
     return {
       data: {
         taskId: task.id,

@@ -312,6 +312,23 @@ export type ToolDefinitionForModel = {
   parameters: Record<string, unknown>;
 };
 
+export type PlanItemStatus = "pending" | "in_progress" | "done";
+
+/**
+ * One step of the checklist the model publishes with `update_plan` (the tool
+ * result's `data.items`, and `plan` in a session's meta).
+ */
+export type PlanItem = {
+  step: string;
+  status: PlanItemStatus;
+  /**
+   * Present-continuous label for the step while it is in progress ("Running
+   * the tests"). Optional: sessions written before it existed have none, and a
+   * frontend falls back to `step`.
+   */
+  activeForm?: string;
+};
+
 // ---------------------------------------------------------------------------
 // Provider (DeepSeek)
 // ---------------------------------------------------------------------------

@@ -209,6 +209,12 @@ export function estimateRequestTokens(messages: ChatMessage[], tools?: ToolDefin
 const CLEAR_MIN_CHARS = 200;
 const CLEARED_TOOL_CONTENT = '{"ok":true,"note":"[old tool output cleared to save context]"}';
 const DEFAULT_KEEP_LAST_TURNS = 2;
+/**
+ * A headless run is ONE user turn with any number of tool rounds, so the
+ * user-turn rule alone never finds anything old in it. Outputs older than the
+ * last few rounds are cleared too.
+ */
+export const DEFAULT_KEEP_LAST_TOOL_ROUNDS = 4;
 
 /**
  * Arg keys, in priority order, that identify WHAT a tool call acted on — used
@@ -261,30 +267,39 @@ function clearedNoteFor(call: ProviderToolCall | undefined): string {
   return JSON.stringify({ ok: true, note });
 }
 
+/** Index of the `count`-th message from the end that satisfies `hit`; -1 when there are fewer. */
+function nthFromEnd(messages: ChatMessage[], count: number, hit: (m: ChatMessage) => boolean): number {
+  let seen = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (!hit(messages[i]!)) continue;
+    seen++;
+    if (seen === count) return i;
+  }
+  return -1;
+}
+
 /**
- * Micro-compaction: blanks role:"tool" message contents OLDER than the last
- * `keepLastTurns` (default 2) user turns when they exceed 200 chars — or carry
- * an image, whatever their length — replacing them with a short JSON note. Cheaper than full compaction — assistant
- * reasoning and message structure stay intact, only stale tool payloads go.
- * Pure: returns a new array (input untouched) and the number of cleared
- * results. Idempotent — the replacement note is below the length threshold.
+ * Micro-compaction: blanks role:"tool" message contents that are OLD — before
+ * the last `keepLastTurns` (default 2) user turns, or before the last
+ * `keepLastToolRounds` (default 4) assistant tool-call rounds — when they
+ * exceed 200 chars or carry an image, replacing them with a short JSON note.
+ * Cheaper than full compaction: assistant reasoning, provider blocks and the
+ * message list stay intact (a result is rewritten in place, never removed, so
+ * every tool call keeps its result). Pure: returns a new array (input
+ * untouched) and the number of cleared results. Idempotent — the replacement
+ * note is below the length threshold.
  */
 export function clearOldToolResults(
   messages: ChatMessage[],
   keepLastTurns = DEFAULT_KEEP_LAST_TURNS,
+  keepLastToolRounds = DEFAULT_KEEP_LAST_TOOL_ROUNDS,
 ): { messages: ChatMessage[]; cleared: number } {
-  // Boundary: index of the keepLastTurns-th user message from the end. Tool
-  // messages BEFORE it are "old". Fewer user turns than that = nothing is old.
-  let boundary = -1;
-  let seen = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]!.role !== "user") continue;
-    seen++;
-    if (seen === keepLastTurns) {
-      boundary = i;
-      break;
-    }
-  }
+  // Tool messages before the boundary are "old". Either rule may declare a
+  // result old; with fewer turns/rounds than kept, that rule declares nothing.
+  const boundary = Math.max(
+    nthFromEnd(messages, keepLastTurns, (m) => m.role === "user"),
+    nthFromEnd(messages, keepLastToolRounds, (m) => m.role === "assistant" && (m.toolCalls?.length ?? 0) > 0),
+  );
   if (boundary < 0) return { messages, cleared: 0 };
 
   // Tool-call ids are scoped to one assistant turn and providers may reuse
