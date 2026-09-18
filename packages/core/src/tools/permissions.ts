@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { PERMISSION_LEVEL, type PermissionRule } from "@seekforge/shared";
+import { PERMISSION_LEVEL, type PermissionPromptReason, type PermissionRule } from "@seekforge/shared";
 import type { ToolContext } from "./index.js";
 import type { ClassifiedCall } from "./registry.js";
 import { hasShellControlSyntax } from "./run-command.js";
@@ -165,12 +165,14 @@ async function confirmWithUser(
   // An ask rule demands a person for every matching call, so nothing this
   // answer says may cover the next one.
   askRule = false,
+  approvalReason?: PermissionPromptReason,
 ): Promise<PermissionOutcome> {
   const durable = ctx.persistRule && !askRule ? proposeDurableRule(toolName, cls) : undefined;
   const grantable = !askRule && sessionGrantable(cls);
   const answer = await ctx.confirm({
     toolName,
     permission: cls.permission,
+    ...(approvalReason !== undefined ? { approvalReason } : {}),
     description: cls.description,
     // Raw values, never paraphrased — prompt-injection defense.
     ...(cls.command !== undefined ? { command: cls.command } : {}),
@@ -345,7 +347,7 @@ export async function enforcePermission(
   // allowlist and every approval mode. What the user answers is still only
   // this call's answer — see sessionGrantable for what "remember" may cover.
   if (rules.some((r) => r.action === "ask" && matches(r))) {
-    return confirmWithUser(toolName, cls, ctx, true);
+    return confirmWithUser(toolName, cls, ctx, true, "policy_rule");
   }
 
   if (PERMISSION_LEVEL[cls.permission] === 0) {
@@ -399,7 +401,7 @@ export async function enforcePermission(
     case "env":
       // Env changes always require explicit confirmation, even in "auto"/
       // "acceptEdits".
-      return confirmWithUser(toolName, cls, ctx);
+      return confirmWithUser(toolName, cls, ctx, false, "environment");
     default:
       return confirmWithUser(toolName, cls, ctx);
   }

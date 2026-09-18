@@ -787,6 +787,13 @@ test("the permission card carries raw values, the rule verbatim, and diff counts
   assert.equal(restricted.allowAlways, false);
   assert.equal(restricted.rule, undefined);
   assert.equal(restricted.escalation, true);
+
+  const forced = permissionView("p9", {
+    ...writeRequest,
+    approvalReason: "sandbox_escalation",
+    sessionGrantable: false,
+  });
+  assert.equal(forced.notice, "This retry will run without the configured sandbox. It is allowed once only.");
 });
 
 test("a permission response cannot grant more than the request offered", () => {

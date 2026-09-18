@@ -35,6 +35,7 @@ const validFrames = [
     maxNoProgressRecoveries: 1,
     rollbackOnRegression: false,
     priority: 4,
+    approvalMode: "auto",
   },
   {
     type: "loop.resume",
@@ -44,6 +45,7 @@ const validFrames = [
     addedDurationMs: 30_000,
     addedVerifyRuns: 2,
     approveRequirements: true,
+    approvalMode: "confirm",
   },
   { type: "permission.response", requestId: "p1", approved: true, selectedHunks: [0, 2] },
   { type: "question.answer", id: "q1", answer: "yes" },
@@ -78,6 +80,7 @@ const invalidFrames = [
   { type: "loop", task: "fix", verifyCommand: "test", verificationPlan: [{ id: "../bad", command: "test" }] },
   { type: "loop", task: "fix", verifyCommand: "test", verificationPlan: [{ id: "test", command: "" }] },
   { type: "loop", task: "fix", verifyCommand: "test", priority: 11 },
+  { type: "loop", task: "fix", verifyCommand: "test", approvalMode: "manual" },
   {
     type: "loop",
     task: "fix",
@@ -86,6 +89,7 @@ const invalidFrames = [
   },
   { type: "loop.resume", loopId: "../escape" },
   { type: "loop.resume", loopId: "loop-1", addedDurationMs: 0 },
+  { type: "loop.resume", loopId: "loop-1", approvalMode: "manual" },
   { type: "permission.response", requestId: "p1", approved: "yes" },
   { type: "question.answer", id: "q1", answer: 42 },
   { type: "subagent.cancel", dispatchId: "../ag-1" },

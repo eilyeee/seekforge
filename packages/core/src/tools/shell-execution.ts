@@ -171,6 +171,8 @@ export async function executeCommandInWorkspace(
           ? `Command failed inside the sandbox, which blocked network access to ${blockedHosts(blocked)} — retry WITHOUT sandbox?`
           : "Command failed inside the sandbox — retry WITHOUT sandbox?",
       command,
+      // This is deliberately one retry, never a reusable session grant.
+      sessionGrantable: false,
       // This request is otherwise shaped exactly like an ordinary `execute`
       // approval, so a host whose confirm auto-answers would undo the sandbox
       // the user separately configured without anyone deciding to. The flag
@@ -179,6 +181,7 @@ export async function executeCommandInWorkspace(
       // never SILENT, not that it never happens — it exists so such a host can
       // refuse this one case explicitly. `mcp-serve` does.
       escalation: true,
+      approvalReason: "sandbox_escalation",
     });
     if (typeof approved === "boolean" ? approved : approved.allow) {
       return settle(await execute("off"), true);

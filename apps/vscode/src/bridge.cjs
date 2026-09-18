@@ -183,6 +183,24 @@ function permissionChoices(request) {
   };
 }
 
+/** A concise explanation for approvals that the selected mode cannot bypass. */
+function permissionNotice(request) {
+  switch (request?.approvalReason) {
+    case "policy_rule":
+      return "A matching permission rule requires this approval, even in Auto mode.";
+    case "hook":
+      return "A project hook requires a human decision for this action.";
+    case "sandbox_escalation":
+      return "This retry will run without the configured sandbox. It is allowed once only.";
+    case "plan":
+      return "Approving this plan switches the current run from read-only planning to editing.";
+    default:
+      return request?.permission === "env"
+        ? "Auto approval does not cover external or environment actions. Review the raw command or path before allowing it."
+        : undefined;
+  }
+}
+
 /** A unified diff (as core renders previews) reduced to the lines it adds. */
 function addedLines(diff) {
   const lines = diff.split("\n");
@@ -244,6 +262,7 @@ const clip = clipToLength;
  */
 function permissionView(requestId, request, receivedAt = Date.now()) {
   const choices = permissionChoices(request);
+  const notice = permissionNotice(request);
   const plan = planPreview(request);
   const hasDiff = plan === undefined && hasDiffPreview(request);
   const stats = hasDiff ? diffStats(request.preview.diff) : { added: 0, removed: 0 };
@@ -259,6 +278,7 @@ function permissionView(requestId, request, receivedAt = Date.now()) {
         : clipLine(String(request?.description ?? "").split("\n")[0], 400),
     ...(typeof request?.command === "string" ? { command: clip(request.command, 400_000) } : {}),
     ...(typeof request?.path === "string" ? { path: clip(request.path, 4_096) } : {}),
+    ...(notice !== undefined ? { notice } : {}),
     ...(choices.allowAlways ? { rule: clip(describeRule(request.rememberRule), 4_000) } : {}),
     ...(plan !== undefined ? { plan: clip(plan, 400_000) } : {}),
     allowSession: choices.allowSession,
@@ -922,6 +942,7 @@ module.exports = {
   normalizeServerUrl,
   permissionChoices,
   permissionHunkItems,
+  permissionNotice,
   permissionResponse,
   permissionSummary,
   permissionView,

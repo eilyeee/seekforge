@@ -465,6 +465,19 @@ class ChatController {
         this.deps.log(`[permission] ${permissionSummary(message.request).replaceAll("\n", " ")}`);
         if (this.permissions.length === 1) this.showPermission();
         return;
+      case "permission.expired": {
+        if (typeof message.requestId !== "string") return;
+        const index = this.permissions.findIndex((entry) => entry.requestId === message.requestId);
+        if (index < 0) return;
+        const [expired] = this.permissions.splice(index, 1);
+        this.clearTimer(expired.timer);
+        this.notice(
+          "warn",
+          `Permission request timed out and was denied: ${clipLine(expired.request.description, 200)}`,
+        );
+        if (index === 0) this.showPermission();
+        return;
+      }
       case "question.request":
         if (typeof message.id !== "string" || typeof message.question !== "string") return;
         this.questions.push({

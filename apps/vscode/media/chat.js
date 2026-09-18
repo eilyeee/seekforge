@@ -406,8 +406,11 @@
       el("div", "card-title", `Permission needed · ${view.toolName}${view.permission ? ` (${view.permission})` : ""}`),
     );
     card.append(el("div", "card-description", view.description));
+    if (view.notice && !view.escalation) card.append(el("div", "warning", view.notice));
     if (view.escalation) {
-      card.append(el("div", "warning", "This retries the command WITHOUT the sandbox you configured."));
+      card.append(
+        el("div", "warning", "This retry will run WITHOUT the sandbox you configured. It is allowed once only."),
+      );
     }
     if (view.command !== undefined) card.append(rawBlock("Raw command", view.command));
     if (view.path !== undefined) card.append(rawBlock("Raw path", view.path));

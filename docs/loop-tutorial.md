@@ -107,7 +107,7 @@ seekforge loop "<task>" --verify "<command>" \
   [-m <model>]          # model override
 ```
 
-> ⚠️ **The loop is inherently autonomous**: every run uses
+> ⚠️ **CLI and TUI Loops are inherently autonomous**: every run uses
 > `approvalMode: "acceptEdits"` — file edits are auto-approved with no
 > per-edit prompt. Dangerous commands are still refused by the denylist, and
 > the workspace access consent gate (the same one `run` uses) still applies.
@@ -309,7 +309,9 @@ Its persisted-loop manager lists state, history, priority, resume, recovery,
 retention cleanup, and deletion. Progress streams live (one row per iteration:
 cost, tokens, duration, changed paths, failure category, verify output, and
 pass/fail). The
-toolbar's model/thinking overrides ride along, same as a normal run. If the
+toolbar's approval mode and model/thinking overrides ride along, same as a normal
+run; a Loop with Auto approval auto-runs normal inner file/command work, while
+environment actions, explicit ask rules, and sandbox escalation still ask. If the
 connection drops, the run is marked interrupted, pending prompts are
 cleared, and requests queued for the failed connection are discarded rather
 than replayed on reconnect.

@@ -106,6 +106,10 @@ export const chat = {
     "chat.permission.reviewChange": "Review change: {path}",
     "chat.permission.autoException":
       "Auto approval does not cover external or environment actions. Review the raw command or path before allowing it.",
+    "chat.permission.policyRule": "A matching permission rule requires this approval, even in Auto mode.",
+    "chat.permission.hook": "A project hook requires a human decision for this action.",
+    "chat.permission.sandboxEscalation": "This retry will run without the configured sandbox. It is allowed once only.",
+    "chat.permission.plan": "Approving this plan switches the current run from read-only planning to editing.",
 
     // QuestionModal
     "chat.question.title": "The agent has a question",
@@ -525,6 +529,10 @@ export const chat = {
     "chat.permission.rawPath": "原始路径",
     "chat.permission.reviewChange": "审查更改：{path}",
     "chat.permission.autoException": "自动审批不覆盖外部或环境操作。允许前请核对原始命令或路径。",
+    "chat.permission.policyRule": "匹配的权限规则要求人工确认，即使当前处于自动审批模式。",
+    "chat.permission.hook": "项目 Hook 要求由人工决定是否执行此操作。",
+    "chat.permission.sandboxEscalation": "这次重试会脱离已配置的沙箱运行，且只允许本次执行。",
+    "chat.permission.plan": "批准此方案会让当前运行从只读规划切换为可编辑状态。",
 
     // QuestionModal
     "chat.question.title": "代理有一个问题",

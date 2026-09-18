@@ -43,9 +43,14 @@ export const PERMISSION_LEVEL: Record<PermissionName, PermissionLevel> = {
  */
 export type ApprovalMode = "auto" | "acceptEdits" | "confirm" | "manual";
 
+/** Why an approval cannot be skipped by the selected approval mode. */
+export type PermissionPromptReason = "environment" | "policy_rule" | "hook" | "sandbox_escalation" | "plan";
+
 export type PermissionRequest = {
   toolName: string;
   permission: PermissionName;
+  /** The boundary that requires a human response, when this is not an ordinary confirmation. */
+  approvalReason?: PermissionPromptReason;
   /** Human-readable summary. UIs MUST also show the raw fields below. */
   description: string;
   /** Raw command line, when the request is about running a command. */
@@ -2289,8 +2294,9 @@ export type ClientFrame =
   | ({
       /**
        * Loop mode: run the task, then `verifyCommand`; if it fails, keep fixing
-       * and re-running until it passes — autonomously (the server forces
-       * acceptEdits), within the iteration/budget limits. Streamed back as
+       * and re-running until it passes within the iteration/budget limits.
+       * `approvalMode`, when present, applies to each inner Agent run; omitted
+       * values retain the historical `acceptEdits` default. Streamed back as
        * `loop.event` frames; the existing `cancel` frame stops it. model/
        * thinking/reasoningEffort overrides (from the run-toolbar) ride along.
        */
@@ -2321,6 +2327,8 @@ export type ClientFrame =
       /** Retries for transient agent failures. */
       maxAgentRetries?: number;
       requirementMode?: LoopRequirementMode;
+      /** Defaults to `acceptEdits` for older clients. */
+      approvalMode?: "auto" | "acceptEdits" | "confirm";
       ws?: string;
     } & RunOverrides)
   | ({
@@ -2339,6 +2347,8 @@ export type ClientFrame =
       addedVerifyRuns?: number;
       /** Approve a persisted confirm-mode requirement specification. */
       approveRequirements?: boolean;
+      /** Defaults to `acceptEdits` for older clients. */
+      approvalMode?: "auto" | "acceptEdits" | "confirm";
       ws?: string;
     } & RunOverrides)
   | { type: "subscribe"; runId: string; afterSeq?: number; ws?: string }
@@ -2374,6 +2384,8 @@ export type ServerFrame =
       runId?: string;
       seq?: number;
     })
+  /** The server denied a prompt after its response deadline elapsed. */
+  | ({ type: "permission.expired"; requestId: string } & { runId?: string; seq?: number })
   | ({
       type: "question.request";
       id: string;

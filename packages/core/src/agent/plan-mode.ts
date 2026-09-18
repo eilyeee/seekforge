@@ -68,6 +68,7 @@ export function buildExitPlanModeRequest(plan: string): PermissionRequest {
   return {
     toolName: EXIT_PLAN_MODE_TOOL,
     permission: "write",
+    approvalReason: "plan",
     description: `Leave plan mode and implement this plan (the run continues with edit permissions):\n\n${plan}`,
     preview: { path: "plan", diff: plan },
     sessionGrantable: false,

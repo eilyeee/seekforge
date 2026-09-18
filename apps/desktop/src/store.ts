@@ -830,6 +830,7 @@ export const useStore = create<AppStore>()((set, get) => {
         ...(rollbackOnRegression !== undefined ? { rollbackOnRegression } : {}),
         ...(priority !== undefined ? { priority } : {}),
         ...(requirementMode !== undefined ? { requirementMode } : {}),
+        approvalMode: tab.approvalMode,
         ...(tab.ws ? { ws: tab.ws } : {}),
         // Per-loop model/thinking overrides from the run-toolbar, same as a run.
         ...overridesOf(tab),
@@ -892,6 +893,7 @@ export const useStore = create<AppStore>()((set, get) => {
         ...(addedDurationMs !== undefined ? { addedDurationMs } : {}),
         ...(addedVerifyRuns !== undefined ? { addedVerifyRuns } : {}),
         ...(approveRequirements !== undefined ? { approveRequirements } : {}),
+        approvalMode: tab.approvalMode,
         ...(tab.ws ? { ws: tab.ws } : {}),
         ...overridesOf(tab),
       };
@@ -911,7 +913,7 @@ export const useStore = create<AppStore>()((set, get) => {
       if (tab.chat.running || !tab.chat.sessionId || !tab.planReady) return;
       const client = ensureWs(tab.tabId);
       requestNotifyPermission();
-      if (!client.send(buildExecutePlanFrame(tab.chat.sessionId, tab.ws, overridesOf(tab)))) return;
+      if (!client.send(buildExecutePlanFrame(tab.chat.sessionId, tab.approvalMode, tab.ws, overridesOf(tab)))) return;
       set((s) => ({
         tabs: updateTab(s.tabs, tab.tabId, {
           chat: { ...appendUser(tab.chat, EXECUTE_PLAN_TASK), running: true },

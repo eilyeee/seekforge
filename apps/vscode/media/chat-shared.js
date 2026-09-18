@@ -258,6 +258,7 @@
       isString(view.description, LIMITS.shortText) &&
       optional(view.command, (v) => isString(v, LIMITS.itemText)) &&
       optional(view.path, (v) => isString(v, LIMITS.pathChars)) &&
+      optional(view.notice, (v) => isString(v, LIMITS.shortText)) &&
       optional(view.rule, (v) => isString(v, LIMITS.shortText)) &&
       optional(view.plan, (v) => isString(v, LIMITS.itemText)) &&
       isBool(view.allowSession) &&

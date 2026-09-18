@@ -202,6 +202,26 @@ describe("routeFrame", () => {
     expect(next.tabs.find((t) => t.tabId === "t3")!.pendingPermission).toBeNull();
   });
 
+  it("permission.expired clears only its matching pending prompt and retains the explanation", () => {
+    let state = routeFrame(threeTabs(), "t1", {
+      type: "permission.request",
+      requestId: "p1",
+      request: { toolName: "run_command", permission: "execute", description: "run it", command: "pnpm test" },
+    });
+    state = routeFrame(state, "t1", { type: "permission.expired", requestId: "p1" });
+    const tab = state.tabs.find((t) => t.tabId === "t1")!;
+    expect(tab.pendingPermission).toBeNull();
+    expect(tab.wsError).toContain("permission_expired");
+
+    const later = routeFrame(state, "t1", {
+      type: "permission.request",
+      requestId: "p2",
+      request: { toolName: "write_file", permission: "write", description: "write it", path: "a.txt" },
+    });
+    const unchanged = routeFrame(later, "t1", { type: "permission.expired", requestId: "p1" });
+    expect(unchanged.tabs.find((t) => t.tabId === "t1")!.pendingPermission?.requestId).toBe("p2");
+  });
+
   it("idle stops the run and clears the pending permission", () => {
     let s = updateTab(threeTabs(), "t2", (tab) => ({
       chat: { ...tab.chat, running: true },

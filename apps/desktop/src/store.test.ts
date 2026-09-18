@@ -569,6 +569,7 @@ describe("store: loop mode", () => {
       rollbackOnRegression: true,
       priority: 5,
       requirementMode: "confirm",
+      approvalMode: "confirm",
     });
     const tab = activeTab(useStore.getState().tabs);
     expect(tab.chat.running).toBe(true);
@@ -629,6 +630,7 @@ describe("store: loop mode", () => {
       addedDurationMs: 5_000,
       addedVerifyRuns: 2,
       approveRequirements: true,
+      approvalMode: "confirm",
     });
     const tab = activeTab(useStore.getState().tabs);
     expect(tab.chat.running).toBe(true);

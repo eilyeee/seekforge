@@ -264,14 +264,15 @@ seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick
   Graph-owned child Loops resume only through their parent Graph. Their usage is
   excluded from totals only while that parent checkpoint is present; an orphaned
   child remains visible and countable until normal retention removes it.
-- The loop is inherently autonomous — every run uses `approvalMode: "acceptEdits"`
+- CLI/TUI Loops and legacy WebSocket clients use the `acceptEdits` default
   (file edits auto-approved). `acceptEdits` deliberately does not auto-allow
   execution, and CLI/TUI Loops answer every remaining prompt with no, so in those
   two surfaces **every non-allowlisted command and every env change is denied** —
   not just denylisted ones. Widen `commandAllowlist` if a Loop needs to run
-  something. Desktop and server Loops differ: they prompt through the normal
-  modals, so a human can approve mid-Loop.
-  `-y` just silences the "auto-approves edits" note.
+  something. Desktop sends its selected approval mode on new and resumed Loops;
+  `auto` therefore also auto-approves normal inner command work, while env,
+  explicit ask rules, and sandbox-escalation retries still require a person.
+  `-y` just silences the CLI "auto-approves edits" note.
 - `Ctrl-C` stops cooperatively (status `cancelled`). Loop orchestration state is
   saved under `.seekforge/loops/<loop-id>.json`; continue it with
   `seekforge loop-resume <loop-id>`. Session-level `resume` and `rewind` remain
@@ -717,13 +718,14 @@ Run/Stop button. Progress streams live (one row per iteration: run cost + live
 verification output + pass/fail; a status summary and loop id on `loop.done`).
 
 Wire: a `loop` WS client frame `{type:"loop", task, verifyCommand, maxIterations?,
-budget?, ws?, model?, thinking?, reasoningEffort?}` — the model/thinking
-overrides from the run-toolbar ride along, same as a normal run. The server runs
-`runAutoLoop` (acceptEdits) and streams `{type:"loop.event", event}` back, ending
-with `idle`. `cancel` stops it. Permission/question prompts during the loop's
-runs use the existing modals.
+budget?, approvalMode?, ws?, model?, thinking?, reasoningEffort?}` — the
+approval mode and model/thinking overrides from the run-toolbar ride along, same
+as a normal run. The server runs `runAutoLoop` with that approval mode (or the
+legacy `acceptEdits` default) and streams `{type:"loop.event", event}` back,
+ending with `idle`. `cancel` stops it. Permission/question prompts during the
+loop's runs use the existing modals.
 
-Resume uses `{type:"loop.resume", loopId, addedIterations?, addedBudget?, ws?,
+Resume uses `{type:"loop.resume", loopId, addedIterations?, addedBudget?, approvalMode?, ws?,
 ...overrides}` and returns the same event stream. Invalid numeric fields and Loop
 IDs are rejected at the protocol boundary.
 

@@ -340,10 +340,10 @@ edit the same workspace concurrently; read-only ask runs remain parallel.
 ### client → server
 
 ```jsonc
-{"type": "start",  "task": "...", "mode": "auto"|"edit"|"ask", "approvalMode": "auto"|"confirm", "plan": true?, "ws": "<id>"?,
+{"type": "start",  "task": "...", "mode": "auto"|"edit"|"ask", "approvalMode": "auto"|"acceptEdits"|"confirm", "plan": true?, "ws": "<id>"?,
                    "continuation": {"maxSlices": 4, "noProgressLimit": 5}?,
                    "model": "deepseek-v4-pro"?, "thinking": true?, "reasoningEffort": "low"|"medium"|"high"|"max"?}
-{"type": "send",   "sessionId": "...", "task": "...", "mode": "auto"|"edit"|"ask"?, "ws": "<id>"?,   // continue; mode overrides
+{"type": "send",   "sessionId": "...", "task": "...", "mode": "auto"|"edit"|"ask"?, "approvalMode": "auto"|"acceptEdits"|"confirm"?, "ws": "<id>"?,   // continue; mode overrides
                    "continuation": {"maxSlices": 4, "noProgressLimit": 5}?,
                    "model": "..."?, "thinking": true?, "reasoningEffort": "low"|"medium"|"high"|"max"?} // the session's own (plan -> execute)
 {"type": "permission.response", "requestId": "p1", "approved": true}
@@ -352,10 +352,10 @@ edit the same workspace concurrently; read-only ask runs remain parallel.
 {"type": "loop", "task": "...", "verifyCommand": "pnpm test", "maxIterations": 8?, "budget": 0.5?,
                  "verificationPlan": [{"id":"types","command":"pnpm typecheck","required":true,"timeoutMs":120000}]?,
                  "stablePasses": 2?, "flakyRetries": 1?, "maxNoProgressRecoveries": 1?, "rollbackOnRegression": false?,
-                 "requirementMode": "quick"|"analyze"|"confirm"?, "ws": "<id>"?,
+                 "requirementMode": "quick"|"analyze"|"confirm"?, "approvalMode": "auto"|"acceptEdits"|"confirm"?, "ws": "<id>"?,
                  "model": "..."?, "thinking": true?, "reasoningEffort": "low"|"medium"|"high"|"max"?}
                  // quick: verifier-only; analyzed modes also require acceptance evidence
-{"type": "loop.resume", "loopId": "loop-...", "addedIterations": 2?, "addedBudget": 0.25?, "approveRequirements": true?, "ws": "<id>"?}
+{"type": "loop.resume", "loopId": "loop-...", "addedIterations": 2?, "addedBudget": 0.25?, "approveRequirements": true?, "approvalMode": "auto"|"acceptEdits"|"confirm"?, "ws": "<id>"?}
 {"type": "subagent.steer", "dispatchId": "ag-1", "message": "focus on the parser tests"}
 {"type": "subagent.cancel", "dispatchId": "ag-1"}       // cancel one child; parent run continues
 {"type": "steer", "message": "also update the Chinese copy"} // redirect an ordinary chat at its next safe point
@@ -418,6 +418,7 @@ background results); beyond that the least recently used idle one is dropped.
 {"type": "run.accepted", "runId": "run-...", "status": "queued", "seq": 1}
 {"type": "event", "sessionId": "...", "event": <AgentEvent>}  // every AgentEvent, incl. session.completed/failed
 {"type": "permission.request", "requestId": "p1", "request": <PermissionRequest>}
+{"type": "permission.expired", "requestId": "p1"}                // unanswered request denied after 120 s
 {"type": "question.request", "id": "q1", "question": "...", "options": ["...", "..."], "freeText": true}  // ask_user tool; freeText optional
 {"type": "loop.event", "event": <LoopEvent>}                  // includes requirements.*, iteration.*, verify.stage.*, verify.flaky, loop.snapshot/recovery/rollback, and loop.done
 {"type": "event", "event": {"type":"notice", ...}}            // an isolated run may also report what its trace mirror could not carry over
@@ -483,23 +484,30 @@ else is dropped from the replayed event rather than failing it.
 
 Rules:
 - `start`/`send` while a run is active → `{"type":"error","code":"busy"}`.
-- `send` resumes the session with its original ask/edit mode and
-  `approvalMode: "confirm"`; an unknown session id →
+- `send` resumes the session with its original ask/edit mode. When its
+  `approvalMode` is omitted it defaults to `"confirm"`; an unknown session id →
   `{"type":"error","code":"unknown_session"}`. `mode:"auto"` resolves the
   current follow-up independently; non-mutating requests become concise ask
   runs, small changes use a focused edit profile, and substantial changes use
   the full implementation profile.
 - `permission.request` pauses the run until the matching `permission.response`
   arrives (or the socket closes, or 120 s pass without a response — both
-  treated as denied). A malformed response is `bad_frame`; if its `requestId`
+  treated as denied). A timeout also emits `permission.expired` with the same
+  request id so clients can dismiss the stale review. A malformed response is `bad_frame`; if its `requestId`
   can be recovered, the pending request is denied immediately so malformed
   `selectedHunks` can never widen a partial approval.
+- `PermissionRequest.approvalReason` identifies why this request still needs a
+  person (`environment`, `policy_rule`, `hook`, `sandbox_escalation`, or
+  `plan`). It is explanatory only: clients must still render the raw command
+  and path and may not use it to broaden an approval.
 - `permission.response.feedback` (optional, a string of at most 4000
   characters) is the user's reason for a refusal. With `approved: false` and a
   non-blank value the server answers core with `{allow: false, feedback}`, and
   core appends the (further clipped) reason to the denial the model reads; on
   an approval, or when blank, it is ignored. Older servers ignore the field and
   older clients never send it.
+- `loop` and `loop.resume` use the supplied `approvalMode` for their inner Agent
+  runs. Older clients omit it and retain the safe `acceptEdits` default.
 - `steer` queues one bounded redirect for an ordinary Agent chat and core
   applies it between provider turns. It is transient (not a second persisted
   user turn); Loop and subagent steering retain their own control frames. The

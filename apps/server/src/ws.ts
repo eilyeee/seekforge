@@ -290,6 +290,14 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     for (const settle of [...pendingQuestions.values()]) settle(DECLINED_ANSWER);
   };
 
+  const notifyPermissionExpired = (requestId: string): void => {
+    if (activeRunId && activeWorkspace) {
+      sendRun(activeRunId, activeWorkspace, { type: "permission.expired", requestId });
+    } else {
+      send({ type: "permission.expired", requestId });
+    }
+  };
+
   const confirm = (request: PermissionRequest): Promise<ConfirmResult> =>
     new Promise<ConfirmResult>((resolve) => {
       if (closed) {
@@ -303,7 +311,12 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         pending.delete(requestId);
         resolve(result);
       };
-      timer = setTimeout(() => settle(false), timeoutMs);
+      timer = setTimeout(() => {
+        if (pending.get(requestId) !== settle) return;
+        flushDeltas();
+        notifyPermissionExpired(requestId);
+        settle(false);
+      }, timeoutMs);
       pending.set(requestId, settle);
       flushDeltas(); // buffered text must render before the permission prompt
       if (activeRunId && activeWorkspace)
@@ -585,6 +598,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       rollbackOnRegression?: boolean;
       priority?: number;
       requirementMode?: "quick" | "analyze" | "confirm";
+      approvalMode: ApprovalMode;
       overrides?: RunOverrides;
       control: LoopControl;
     },
@@ -629,7 +643,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           ...(input.rollbackOnRegression !== undefined ? { rollbackOnRegression: input.rollbackOnRegression } : {}),
           ...(input.priority !== undefined ? { priority: input.priority } : {}),
           ...(input.requirementMode !== undefined ? { requirementMode: input.requirementMode } : {}),
-          approvalMode: "acceptEdits",
+          approvalMode: input.approvalMode,
           signal: runController.signal,
           onEvent: (event) => sendLoopEvent(runId, input.workspace, event),
           control: input.control,
@@ -684,6 +698,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       addedDurationMs?: number;
       addedVerifyRuns?: number;
       approveRequirements?: boolean;
+      approvalMode: ApprovalMode;
       overrides?: RunOverrides;
       control: LoopControl;
     },
@@ -709,7 +724,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           ...(input.addedDurationMs !== undefined ? { additionalDurationMs: input.addedDurationMs } : {}),
           ...(input.addedVerifyRuns !== undefined ? { additionalVerifyRuns: input.addedVerifyRuns } : {}),
           ...(input.approveRequirements !== undefined ? { approveRequirements: input.approveRequirements } : {}),
-          approvalMode: "acceptEdits",
+          approvalMode: input.approvalMode,
           signal: runController.signal,
           onEvent: (event) => sendLoopEvent(runId, input.workspace, event),
           control: input.control,
@@ -870,6 +885,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           rollbackOnRegression,
           priority,
           requirementMode,
+          approvalMode,
           ws: wsId,
         } = frame;
         const parsedOverrides = runOverrides(frame);
@@ -902,6 +918,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
                 ...(rollbackOnRegression !== undefined ? { rollbackOnRegression } : {}),
                 ...(priority !== undefined ? { priority } : {}),
                 ...(requirementMode !== undefined ? { requirementMode } : {}),
+                approvalMode: approvalMode ?? "acceptEdits",
                 ...(parsedOverrides.overrides ? { overrides: parsedOverrides.overrides } : {}),
                 control: createLoopControl(),
               },
@@ -923,6 +940,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           addedDurationMs,
           addedVerifyRuns,
           approveRequirements,
+          approvalMode,
           ws: wsId,
         } = frame;
         const parsedOverrides = runOverrides(frame);
@@ -945,6 +963,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
                 ...(addedDurationMs !== undefined ? { addedDurationMs } : {}),
                 ...(addedVerifyRuns !== undefined ? { addedVerifyRuns } : {}),
                 ...(approveRequirements !== undefined ? { approveRequirements } : {}),
+                approvalMode: approvalMode ?? "acceptEdits",
                 ...(parsedOverrides.overrides ? { overrides: parsedOverrides.overrides } : {}),
                 control: createLoopControl(),
               },

@@ -105,6 +105,7 @@ describe("loop.resume", () => {
       addedDurationMs: 30_000,
       addedVerifyRuns: 2,
       approveRequirements: true,
+      approvalMode: "confirm",
     });
     await rx.waitFor((f) => f.type === "loop.event");
     await rx.waitFor((f) => f.type === "idle");
@@ -117,7 +118,7 @@ describe("loop.resume", () => {
       additionalDurationMs: 30_000,
       additionalVerifyRuns: 2,
       approveRequirements: true,
-      approvalMode: "acceptEdits",
+      approvalMode: "confirm",
     });
   });
 
@@ -354,6 +355,7 @@ describe("loop -> loop.event -> idle", () => {
       rollbackOnRegression: false,
       priority: 3,
       requirementMode: "analyze",
+      approvalMode: "auto",
     });
 
     const start = await rx.waitFor(
@@ -398,7 +400,7 @@ describe("loop -> loop.event -> idle", () => {
       rollbackOnRegression: false,
       priority: 3,
       requirementMode: "analyze",
-      approvalMode: "acceptEdits",
+      approvalMode: "auto",
     });
   });
 

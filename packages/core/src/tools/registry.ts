@@ -256,7 +256,7 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
             answeredBy = "hook_allowed";
             return true;
           }
-          return ctx.confirm(req);
+          return ctx.confirm(hookAsk ? { ...req, approvalReason: "hook" } : req);
         };
         const policy = hookAsk
           ? { ...ctx.policy, rules: [{ action: "ask" as const, tool: call.name }, ...(ctx.policy.rules ?? [])] }

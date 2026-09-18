@@ -107,6 +107,8 @@ export type StartServerOptions = {
   port?: number;
   /** Pre-set auth token (embedding/tests); random when omitted. */
   token?: string;
+  /** Test/embedding override for the unanswered permission deadline. */
+  permissionTimeoutMs?: number;
   /** Test/embedding override for the agent assembly. Default: real DeepSeek assembly. */
   createAgent?: CreateAgentFn;
   /** Test/embedding override for the auto-loop runner. Default: real DeepSeek loop. */
@@ -383,6 +385,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
         createAgent,
         runLoop,
         resumeLoop,
+        ...(opts.permissionTimeoutMs !== undefined ? { permissionTimeoutMs: opts.permissionTimeoutMs } : {}),
         runManager,
         trackOperation: (operation) => coordinator.track(operation),
         withRepository: (workspace, operation) => coordinator.withRepository(workspace, operation),

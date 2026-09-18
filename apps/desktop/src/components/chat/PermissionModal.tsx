@@ -237,12 +237,31 @@ export function PermissionModal({ request, onRespond }: Props) {
   ) : (
     <p className="mb-3 text-sm text-secondary">{request.description}</p>
   );
-  const autoException =
-    request.permission === "env" ? (
-      <p className="mb-3 rounded-lg border border-warn/30 bg-warn/10 p-2 text-xs text-secondary">
-        {tModal("chat.permission.autoException")}
+  const approvalNotice = (() => {
+    const key =
+      request.approvalReason === "policy_rule"
+        ? "chat.permission.policyRule"
+        : request.approvalReason === "hook"
+          ? "chat.permission.hook"
+          : request.approvalReason === "sandbox_escalation"
+            ? "chat.permission.sandboxEscalation"
+            : request.approvalReason === "plan"
+              ? "chat.permission.plan"
+              : request.permission === "env"
+                ? "chat.permission.autoException"
+                : null;
+    if (key === null) return null;
+    const danger = request.approvalReason === "sandbox_escalation";
+    return (
+      <p
+        className={`mb-3 rounded-lg border p-2 text-xs text-secondary ${
+          danger ? "border-danger/40 bg-danger/10" : "border-warn/30 bg-warn/10"
+        }`}
+      >
+        {tModal(key)}
       </p>
-    ) : null;
+    );
+  })();
 
   // Plan review: the plan is the request.
   if (plan !== null) {
@@ -269,6 +288,7 @@ export function PermissionModal({ request, onRespond }: Props) {
           </>
         }
       >
+        {approvalNotice}
         <div className="max-h-[55vh] overflow-y-auto rounded-lg border border-subtle bg-surface/50 p-3 text-sm leading-relaxed text-secondary">
           <Markdown source={plan} />
         </div>
@@ -323,7 +343,7 @@ export function PermissionModal({ request, onRespond }: Props) {
         }
       >
         {description}
-        {autoException}
+        {approvalNotice}
 
         {preview && (
           <div className="mb-3 rounded-lg border border-subtle bg-surface/50 p-2">
@@ -399,7 +419,7 @@ export function PermissionModal({ request, onRespond }: Props) {
         }
       >
         {description}
-        {autoException}
+        {approvalNotice}
         <DiffBlock diff={preview.diff} />
         {reasonField(tModal("chat.permission.rejectWithReason"))}
       </Modal>
@@ -445,7 +465,7 @@ export function PermissionModal({ request, onRespond }: Props) {
       }
     >
       {description}
-      {autoException}
+      {approvalNotice}
 
       {grantable && request.rememberRule && (
         <div className="mb-3">

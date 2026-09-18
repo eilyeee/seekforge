@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
 import type { RunAgentTaskInput } from "@seekforge/core";
 import type { ConfirmResult } from "@seekforge/shared";
-import { MAX_WS_PAYLOAD_BYTES, startServer, type CreateAgentFn, type RunningServer } from "../src/index.js";
+import {
+  MAX_WS_PAYLOAD_BYTES,
+  startServer,
+  type CreateAgentFn,
+  type RunningServer,
+  type StartServerOptions,
+} from "../src/index.js";
 import { ServerCoordinator } from "../src/coordinator.js";
 import {
   collectFrames,
@@ -21,8 +27,12 @@ const TOKEN = "test-token-ws";
 let server: RunningServer | undefined;
 const sockets: WebSocket[] = [];
 
-async function boot(createAgent: CreateAgentFn, workspace = makeWorkspace()) {
-  server = await startServer({ workspace, port: 0, token: TOKEN, createAgent });
+async function boot(
+  createAgent: CreateAgentFn,
+  workspace = makeWorkspace(),
+  overrides: Pick<StartServerOptions, "permissionTimeoutMs"> = {},
+) {
+  server = await startServer({ workspace, port: 0, token: TOKEN, createAgent, ...overrides });
   return { server, workspace };
 }
 
@@ -994,6 +1004,25 @@ describe("permission bridge", () => {
     sendFrame(ws, { type: "permission.response", requestId: req.requestId, approved: true });
     await rx.waitFor((f) => f.type === "idle");
     expect(approvedSeen).toBe(true);
+  });
+
+  it("emits permission.expired and denies an unanswered request", async () => {
+    let resultSeen: ConfirmResult | undefined;
+    const { server } = await boot(
+      permissionScript((result) => (resultSeen = result)),
+      makeWorkspace(),
+      {
+        permissionTimeoutMs: 10,
+      },
+    );
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "write it", mode: "edit", approvalMode: "confirm" });
+    const request = await rx.waitFor((frame) => frame.type === "permission.request");
+    const expired = await rx.waitFor((frame) => frame.type === "permission.expired");
+    expect(expired).toMatchObject({ requestId: request.requestId });
+    await rx.waitFor((frame) => frame.type === "idle");
+    expect(resultSeen).toBe(false);
   });
 
   it("forwards remember:session as the richer confirm result", async () => {

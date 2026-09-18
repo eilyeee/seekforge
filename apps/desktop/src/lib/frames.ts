@@ -107,7 +107,12 @@ export function buildSendFrame(
   );
 }
 
-/** Continue the plan session with an edit-mode override, in the tab's workspace. */
-export function buildExecutePlanFrame(sessionId: string, ws?: string, overrides: RunOverrides = {}): ClientFrame {
-  return withWs({ type: "send", sessionId, task: EXECUTE_PLAN_TASK, mode: "edit", ...overrides }, ws);
+/** Continue the plan session with the tab's approval policy and edit-mode override. */
+export function buildExecutePlanFrame(
+  sessionId: string,
+  approvalMode: ApprovalChoice,
+  ws?: string,
+  overrides: RunOverrides = {},
+): ClientFrame {
+  return withWs({ type: "send", sessionId, task: EXECUTE_PLAN_TASK, mode: "edit", approvalMode, ...overrides }, ws);
 }

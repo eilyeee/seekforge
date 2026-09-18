@@ -54,12 +54,13 @@ describe("buildStartFrame", () => {
 });
 
 describe("buildExecutePlanFrame", () => {
-  it("continues the session in edit mode with the canned task", () => {
-    expect(buildExecutePlanFrame("s-1")).toEqual({
+  it("continues the session in edit mode with the canned task and approval policy", () => {
+    expect(buildExecutePlanFrame("s-1", "auto")).toEqual({
       type: "send",
       sessionId: "s-1",
       task: EXECUTE_PLAN_TASK,
       mode: "edit",
+      approvalMode: "auto",
     });
     expect(EXECUTE_PLAN_TASK).toBe(
       "Execute the plan you produced above, step by step. Make the changes and run the verification.",
@@ -67,8 +68,8 @@ describe("buildExecutePlanFrame", () => {
   });
 
   it("carries the tab's workspace id when present", () => {
-    expect(buildExecutePlanFrame("s-1", "ws-b")).toMatchObject({ ws: "ws-b" });
-    expect(buildExecutePlanFrame("s-1")).not.toHaveProperty("ws");
+    expect(buildExecutePlanFrame("s-1", "confirm", "ws-b")).toMatchObject({ ws: "ws-b" });
+    expect(buildExecutePlanFrame("s-1", "confirm")).not.toHaveProperty("ws");
   });
 });
 
@@ -161,7 +162,7 @@ describe("frame builders carry per-run overrides", () => {
       task: "more",
       approvalMode: "confirm",
     });
-    expect(buildExecutePlanFrame("s-1", "", { thinking: false })).toMatchObject({ thinking: false });
+    expect(buildExecutePlanFrame("s-1", "acceptEdits", "", { thinking: false })).toMatchObject({ thinking: false });
   });
 });
 

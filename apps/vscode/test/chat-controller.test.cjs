@@ -344,6 +344,20 @@ test("a permission request expires when the server would have denied it", async 
   await running;
 });
 
+test("a server permission.expired frame removes the matching review immediately", async () => {
+  const h = harness();
+  const { run, running } = await startedRun(h);
+  run.emit({ type: "permission.request", requestId: "p1", request: permissionRequest });
+  run.emit({ type: "permission.expired", requestId: "p1" });
+  h.controller.flush();
+  assert.equal(h.last("permission").pending, null);
+  assert.equal(h.controller.permissions.length, 0);
+  assert.equal(h.timers.size, 0);
+  assert.ok(h.of("upsert").some((m) => m.item.kind === "notice" && /timed out and was denied/.test(m.item.text)));
+  run.finish();
+  await running;
+});
+
 test("the review diff opens only for the request on screen", async () => {
   const reviewed = [];
   const h = harness({ reviewDiff: async (request) => reviewed.push(request) });

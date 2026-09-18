@@ -223,12 +223,12 @@ seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick
   硬预算变更仍需人工处理。
   由 Graph 持有的子 Loop 只能通过父 Graph 恢复；只有父检查点仍存在时，其用量才从总计中排除。
   孤儿子 Loop 在正常保留清理之前仍保持可见并计入总量。
-- Loop 本质上是自主运行的 —— 每次运行都使用 `approvalMode: "acceptEdits"`
+- CLI/TUI 的 Loop 以及旧版 WebSocket 客户端使用 `acceptEdits` 默认值
   （文件编辑自动批准）。`acceptEdits` 刻意不自动放行命令执行，而 CLI/TUI 的 Loop
   对剩余提示一律回答「否」，因此在这两个面上**所有非白名单命令与所有 env 变更都会被拒绝**
-  ——不只是 denylist 里的。Loop 若需要执行某条命令，请扩大 `commandAllowlist`。桌面端与
-  服务端的 Loop 不同：它们走正常的确认弹窗，人可以在 Loop 运行中批准。
-  `-y` 只是不再显示「自动批准编辑」的提示。
+  ——不只是 denylist 里的。Loop 若需要执行某条命令，请扩大 `commandAllowlist`。桌面端在新建
+  或恢复 Loop 时会发送所选审批模式；选择 `auto` 后，普通内部命令也会自动批准，但 env、明确的
+  ask 规则和脱离沙箱重试仍必须由人确认。`-y` 只会消除 CLI 的「自动批准编辑」提示。
 - `Ctrl-C` 协作式停止（状态为 `cancelled`）。Loop 编排状态保存在
   `.seekforge/loops/<loop-id>.json`；用 `seekforge loop-resume <loop-id>`
   继续。会话级的 `resume` 和 `rewind` 仍然可用于人工干预。
@@ -581,13 +581,13 @@ Vitest/Jest、Pytest 和 Cargo 的失败会被解析成有界的测试名和源�
 `loop.done` 时显示状态摘要和 loop id）。
 
 连线方式：一个 `loop` WS 客户端帧 `{type:"loop", task, verifyCommand,
-maxIterations?, budget?, ws?, model?, thinking?, reasoningEffort?}` ——
-运行工具栏中的模型/thinking 覆盖项随帧一起传递，与普通运行相同。
-服务器运行 `runAutoLoop`（acceptEdits）并把 `{type:"loop.event", event}`
-流式返回，以 `idle` 结束。`cancel` 停止它。loop 运行期间的权限/提问弹窗
-复用既有模态框。
+maxIterations?, budget?, approvalMode?, ws?, model?, thinking?, reasoningEffort?}` ——
+运行工具栏中的审批模式及模型/thinking 覆盖项随帧一起传递，与普通运行相同。
+服务器以该审批模式（旧客户端未传时保留 `acceptEdits` 默认值）运行 `runAutoLoop`，并把
+`{type:"loop.event", event}` 流式返回，以 `idle` 结束。`cancel` 停止它。loop 运行期间的
+权限/提问弹窗复用既有模态框。
 
-Resume 使用 `{type:"loop.resume", loopId, addedIterations?, addedBudget?, ws?,
+Resume 使用 `{type:"loop.resume", loopId, addedIterations?, addedBudget?, approvalMode?, ws?,
 ...overrides}`，返回相同的事件流。无效的数值字段和 Loop ID 会在协议边界被拒绝。
 
 如果桌面端连接在运行期间断开，该操作会被标记为已中断、清除各种提示，

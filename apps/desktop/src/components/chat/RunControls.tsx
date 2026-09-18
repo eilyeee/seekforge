@@ -21,7 +21,8 @@ type Props = {
  * The run-context toolbar BELOW the composer: workspace, sandbox, run mode, and
  * approval mode. (Model + thinking live in ModelBar above the input.) Approval +
  * auto/edit/ask stay changeable mid-conversation; "plan" is start-only and the
- * controls lock while a message is in flight. Dropdowns open upward.
+ * controls lock while a message is in flight. Labels keep the task-routing
+ * "Auto" distinct from permission "Auto". Dropdowns open upward.
  */
 export function RunControls({
   tab,
@@ -63,33 +64,39 @@ export function RunControls({
         <WorkspaceMenu compact />
 
         {/* Run mode: auto/edit/ask switchable mid-session; plan start-only. */}
-        <div className="flex items-center rounded-lg border border-subtle p-0.5" title={t("chat.modeTitle")}>
-          {MODES.map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              disabled={running || (mode === "plan" && inSession)}
-              title={t(`chat.mode.${mode}Hint`)}
-              onClick={() => onSetMode(mode)}
-              className={`focus-ring rounded-md px-2 py-1 text-xs font-medium transition-colors disabled:opacity-40 ${
-                tab.mode === mode ? "bg-accent-muted text-accent" : "text-secondary hover:bg-accent-muted/60"
-              }`}
-            >
-              {t(`chat.mode.${mode}`)}
-            </button>
-          ))}
+        <div className="flex items-center gap-1.5">
+          <span className="text-2xs font-medium uppercase tracking-wider text-tertiary">{t("chat.modeLabel")}</span>
+          <div className="flex items-center rounded-lg border border-subtle p-0.5" title={t("chat.modeTitle")}>
+            {MODES.map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                disabled={running || (mode === "plan" && inSession)}
+                title={t(`chat.mode.${mode}Hint`)}
+                onClick={() => onSetMode(mode)}
+                className={`focus-ring rounded-md px-2 py-1 text-xs font-medium transition-colors disabled:opacity-40 ${
+                  tab.mode === mode ? "bg-accent-muted text-accent" : "text-secondary hover:bg-accent-muted/60"
+                }`}
+              >
+                {t(`chat.mode.${mode}`)}
+              </button>
+            ))}
+          </div>
         </div>
 
-        <Select
-          up
-          value={tab.approvalMode}
-          options={approvalOptions}
-          onChange={(v) => onSetApprovalMode(v as ApprovalChoice)}
-          size="sm"
-          disabled={running}
-          title={t("chat.approvalTitle")}
-          className="w-36"
-        />
+        <div className="flex items-center gap-1.5">
+          <span className="text-2xs font-medium uppercase tracking-wider text-tertiary">{t("chat.approvalLabel")}</span>
+          <Select
+            up
+            value={tab.approvalMode}
+            options={approvalOptions}
+            onChange={(v) => onSetApprovalMode(v as ApprovalChoice)}
+            size="sm"
+            disabled={running}
+            title={t("chat.approvalTitle")}
+            className="w-36"
+          />
+        </div>
 
         <button
           type="button"

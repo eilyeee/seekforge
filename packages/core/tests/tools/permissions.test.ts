@@ -34,6 +34,7 @@ describe("ask rules and refusal feedback", () => {
     const denied = await dispatcher.execute(call("read_file", { path: "secret/a.txt" }), ctx);
     expect(denied.error?.code).toBe("denied_by_user");
     expect(requests).toHaveLength(1);
+    expect(requests[0]?.approvalReason).toBe("policy_rule");
     const other = await dispatcher.execute(call("read_file", { path: "b.txt" }), ctx);
     expect(other.ok).toBe(true);
     expect(requests).toHaveLength(1);
@@ -184,6 +185,7 @@ describe("permission flow", () => {
     expect(res.error?.code).toBe("denied_by_user");
     expect(deny.requests).toHaveLength(1);
     expect(deny.requests[0]?.permission).toBe("env");
+    expect(deny.requests[0]?.approvalReason).toBe("environment");
     expect(deny.requests[0]?.command).toBe("pnpm install left-pad");
   });
 

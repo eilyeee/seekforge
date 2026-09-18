@@ -308,6 +308,16 @@ function routeFrameContent(state: TabsState, tabId: string, frame: ServerFrame):
         pendingPermission: { requestId: frame.requestId, request: frame.request },
       });
 
+    case "permission.expired":
+      return updateTab(state, tabId, (tab) =>
+        tab.pendingPermission?.requestId === frame.requestId
+          ? {
+              pendingPermission: null,
+              wsError: "permission_expired: no response was received; the request was denied",
+            }
+          : {},
+      );
+
     case "question.request":
       return updateTab(state, tabId, {
         pendingQuestion: {
@@ -406,10 +416,13 @@ export function routeFrame(state: TabsState, tabId: string, frame: ServerFrame):
     (frame.type === "event" && (frame.event.type === "session.completed" || frame.event.type === "session.failed")) ||
     (frame.type === "loop.event" && frame.event.type === "loop.done") ||
     frame.type === "error";
+  const clearWsError = frame.type !== "permission.expired";
   return updateTab(
     routed,
     tabId,
-    terminal ? { activeRunId: null, runSeq: 0, wsError: null } : { runSeq: seq, wsError: null },
+    terminal
+      ? { activeRunId: null, runSeq: 0, wsError: null }
+      : { runSeq: seq, ...(clearWsError ? { wsError: null } : {}) },
   );
 }
 

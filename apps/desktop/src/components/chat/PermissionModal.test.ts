@@ -163,6 +163,18 @@ describe("PermissionModal — edit-review preview", () => {
     expect(joined).toContain("Allow once");
   });
 
+  it("explains forced approval and never offers a session grant for a sandbox escalation", () => {
+    const { text } = inspect({
+      ...plainReq,
+      approvalReason: "sandbox_escalation",
+      sessionGrantable: false,
+    });
+    const joined = text.join("");
+    expect(joined).toContain("without the configured sandbox");
+    expect(joined).not.toContain("Allow for session");
+    expect(joined).toContain("Allow once");
+  });
+
   it("'Allow for session' calls onRespond(true, 'session')", () => {
     const calls: Array<[boolean, "session" | "always" | undefined]> = [];
     const onRespond = (approved: boolean, remember?: "session" | "always"): void => {

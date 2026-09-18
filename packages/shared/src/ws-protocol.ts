@@ -150,6 +150,7 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
       rollbackOnRegression,
       priority,
       requirementMode,
+      approvalMode,
     } = frame;
     if (typeof task !== "string" || task.trim().length === 0) return bad("loop.task must be a non-empty string");
     if (typeof verifyCommand !== "string" || verifyCommand.trim().length === 0) {
@@ -223,6 +224,14 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
     ) {
       return bad('loop.requirementMode must be "quick", "analyze", or "confirm"');
     }
+    if (
+      approvalMode !== undefined &&
+      approvalMode !== "auto" &&
+      approvalMode !== "acceptEdits" &&
+      approvalMode !== "confirm"
+    ) {
+      return bad('loop.approvalMode must be "auto", "acceptEdits", or "confirm" when present');
+    }
     const wsError = workspaceError(frame, "loop");
     if (wsError) return bad(wsError);
     const overrides = parseOverrides(frame);
@@ -239,6 +248,7 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
       addedDurationMs,
       addedVerifyRuns,
       approveRequirements,
+      approvalMode,
     } = frame;
     if (typeof loopId !== "string" || !LOOP_ID_RE.test(loopId)) {
       return bad("loop.resume.loopId must be a safe non-empty id");
@@ -254,6 +264,14 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
     }
     if (approveRequirements !== undefined && typeof approveRequirements !== "boolean") {
       return bad("loop.resume.approveRequirements must be a boolean when present");
+    }
+    if (
+      approvalMode !== undefined &&
+      approvalMode !== "auto" &&
+      approvalMode !== "acceptEdits" &&
+      approvalMode !== "confirm"
+    ) {
+      return bad('loop.resume.approvalMode must be "auto", "acceptEdits", or "confirm" when present');
     }
     if (
       addedBudget !== undefined &&
