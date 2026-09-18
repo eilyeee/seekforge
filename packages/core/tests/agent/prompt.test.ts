@@ -32,6 +32,21 @@ describe("buildSystemPrompt: mode contracts", () => {
     expect(p).not.toContain("Mode: EDIT");
   });
 
+  it("conversation profile avoids the full investigation playbook", () => {
+    const p = buildSystemPrompt({ ...base, mode: "ask", taskProfile: "conversation" });
+    expect(p).toContain("Mode: CONVERSATION (read-only)");
+    expect(p).toContain("Answer directly and concisely");
+    expect(p).not.toContain("Never rerun an identical failing call");
+    expect(p).not.toContain("repo_map gives the structure");
+  });
+
+  it("quick edit profile requests the smallest complete change without a formal plan", () => {
+    const p = buildSystemPrompt({ ...base, mode: "edit", taskProfile: "quick-edit" });
+    expect(p).toContain("Mode: QUICK EDIT");
+    expect(p).toContain("smallest complete change");
+    expect(p).not.toContain("0. Plan:");
+  });
+
   it("includes the environment line with platform and workspace", () => {
     const p = buildSystemPrompt({ ...base, mode: "edit" });
     expect(p).toContain("/ws");

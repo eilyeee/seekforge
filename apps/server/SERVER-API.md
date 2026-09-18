@@ -340,10 +340,10 @@ edit the same workspace concurrently; read-only ask runs remain parallel.
 ### client → server
 
 ```jsonc
-{"type": "start",  "task": "...", "mode": "edit"|"ask", "approvalMode": "auto"|"confirm", "plan": true?, "ws": "<id>"?,
+{"type": "start",  "task": "...", "mode": "auto"|"edit"|"ask", "approvalMode": "auto"|"confirm", "plan": true?, "ws": "<id>"?,
                    "continuation": {"maxSlices": 4, "noProgressLimit": 5}?,
                    "model": "deepseek-v4-pro"?, "thinking": true?, "reasoningEffort": "low"|"medium"|"high"|"max"?}
-{"type": "send",   "sessionId": "...", "task": "...", "mode": "edit"?, "ws": "<id>"?,   // continue; mode overrides
+{"type": "send",   "sessionId": "...", "task": "...", "mode": "auto"|"edit"|"ask"?, "ws": "<id>"?,   // continue; mode overrides
                    "continuation": {"maxSlices": 4, "noProgressLimit": 5}?,
                    "model": "..."?, "thinking": true?, "reasoningEffort": "low"|"medium"|"high"|"max"?} // the session's own (plan -> execute)
 {"type": "permission.response", "requestId": "p1", "approved": true}
@@ -358,6 +358,7 @@ edit the same workspace concurrently; read-only ask runs remain parallel.
 {"type": "loop.resume", "loopId": "loop-...", "addedIterations": 2?, "addedBudget": 0.25?, "approveRequirements": true?, "ws": "<id>"?}
 {"type": "subagent.steer", "dispatchId": "ag-1", "message": "focus on the parser tests"}
 {"type": "subagent.cancel", "dispatchId": "ag-1"}       // cancel one child; parent run continues
+{"type": "steer", "message": "also update the Chinese copy"} // redirect an ordinary chat at its next safe point
 {"type": "loop.pause"}                                     // pause at the next safe Loop boundary
 {"type": "loop.steer", "message": "focus on parser tests"}
 {"type": "loop.control.resume"}
@@ -484,7 +485,10 @@ Rules:
 - `start`/`send` while a run is active → `{"type":"error","code":"busy"}`.
 - `send` resumes the session with its original ask/edit mode and
   `approvalMode: "confirm"`; an unknown session id →
-  `{"type":"error","code":"unknown_session"}`.
+  `{"type":"error","code":"unknown_session"}`. `mode:"auto"` resolves the
+  current follow-up independently; non-mutating requests become concise ask
+  runs, small changes use a focused edit profile, and substantial changes use
+  the full implementation profile.
 - `permission.request` pauses the run until the matching `permission.response`
   arrives (or the socket closes, or 120 s pass without a response — both
   treated as denied). A malformed response is `bad_frame`; if its `requestId`
@@ -496,9 +500,11 @@ Rules:
   core appends the (further clipped) reason to the denial the model reads; on
   an approval, or when blank, it is ignored. Older servers ignore the field and
   older clients never send it.
-- A client may queue messages typed during a run (Desktop does): it sends the
-  next one as an ordinary `send` after `idle`. The server still accepts only
-  one running session per connection; nothing about the busy rule changes.
+- `steer` queues one bounded redirect for an ordinary Agent chat and core
+  applies it between provider turns. It is transient (not a second persisted
+  user turn); Loop and subagent steering retain their own control frames. The
+  server emits a notice when it accepted the redirect. The connection still
+  accepts only one running session.
 `question.request.freeText` is optional. When present the user may type an
 answer instead of picking one of `options`; `options` is never empty, so a
 client that ignores the flag still renders an answerable prompt.

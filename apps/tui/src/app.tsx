@@ -30,6 +30,7 @@ import {
   listPlugins,
   readMcpResource,
   readSessionMeta,
+  resolveTaskExecution,
   renameSession,
   rewindSession,
   rewindSessionToTurn,
@@ -429,6 +430,7 @@ export function App({
   const loopControlsByTabRef = useRef<Map<number, { runId: number; control: LoopControl }>>(new Map());
   const pendingPermissionByTabRef = useRef<Map<number, PendingPermission>>(new Map());
   const pendingQuestionByTabRef = useRef<Map<number, PendingQuestion>>(new Map());
+  const steeringByTabRef = useRef<Map<number, string[]>>(new Map());
   // Ctrl+B run detachment: ids of runs sent to the background, their
   // controllers (aborted on quit), and the per-run id counter.
   const runIdCounterRef = useRef(0);
@@ -807,7 +809,7 @@ export function App({
     async (
       task: string,
       opts?: {
-        mode?: "ask" | "edit";
+        mode?: "auto" | "ask" | "edit";
         plan?: boolean;
         echoUser?: boolean;
         reservation?: RunReservation;
@@ -853,6 +855,8 @@ export function App({
       const ownSessionId = { current: tabChat().sessionId };
       const runModel = opts?.model ?? tabChat().model;
       const runApproval = opts?.approval ?? tabChat().approval;
+      const execution = resolveTaskExecution(task, opts?.mode ?? "auto", opts?.plan ?? false);
+      steeringByTabRef.current.set(runTabId, []);
       const startedAt = Date.now();
       const costBefore = tabChat().totalUsage.costUsd;
       if (opts?.echoUser !== false) dispatchTab({ type: "user", text: task });
@@ -960,7 +964,8 @@ export function App({
             dispatchManager,
             ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
             ...(opts?.allowedTools ? { allowedTools: opts.allowedTools } : {}),
-            mode: opts?.mode ?? "edit",
+            mode: execution.mode,
+            taskProfile: execution.profile,
             plan: opts?.plan ?? false,
             approvalMode: approvalModeFor(runApproval),
             background: bgRef.current as BackgroundTasks,
@@ -969,6 +974,11 @@ export function App({
               dispatchRun(a);
             },
             getSessionId: () => ownSessionId.current,
+            takeSteering: () => {
+              const steering = steeringByTabRef.current.get(runTabId) ?? [];
+              steeringByTabRef.current.set(runTabId, []);
+              return steering;
+            },
             ...(usageBus ? { usageBus } : {}),
             confirm: sessionConfirm,
             askUser: sessionAskUser,
@@ -1006,6 +1016,7 @@ export function App({
           dispatchTab({ type: "notice", tone: "error", text: `error: ${message}` });
         }
       } finally {
+        steeringByTabRef.current.delete(runTabId);
         releaseDispatchManager();
         // If a permission prompt was still open when the run ended, deny it.
         const stalePerm = takeRunOwned(pendingPermissionByTabRef.current, runTabId, runId);
@@ -3091,9 +3102,19 @@ export function App({
       void runBash(parsed.command, activeIdRef.current);
       return;
     }
-    // Steering: typing during a run queues the message; it is sent (in
-    // order) as soon as the current turn ends.
+    // An active ordinary chat consumes the follow-up at its next safe point;
+    // Loop control keeps its explicit next-turn queue behavior.
     if (stateRef.current.running) {
+      const activeTabId = activeIdRef.current;
+      if (!loopControlsByTabRef.current.has(activeTabId)) {
+        const steering = steeringByTabRef.current.get(activeTabId);
+        if (steering) {
+          steering.push(parsed.text);
+          dispatch({ type: "user", text: `[Steering] ${parsed.text}` });
+          dispatch({ type: "notice", text: "guidance queued for the next safe point" });
+          return;
+        }
+      }
       dispatch({ type: "queue", text: parsed.text });
       return;
     }

@@ -291,6 +291,7 @@ describe("PermissionModal — grants, reasons and plans", () => {
     expect(joined).not.toContain("Always allow");
     expect(joined).toContain("Allow once");
     expect(joined).toContain("GET https://example.com/doc");
+    expect(joined).toContain("Auto approval does not cover external or environment actions");
     expect(inspectCalls(withRule).some(([, remember]) => remember !== undefined)).toBe(false);
   });
 

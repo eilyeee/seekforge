@@ -16,10 +16,12 @@ import {
   createLoopControl,
   detectThinkingKeyword,
   readSessionMeta,
+  resolveTaskExecution,
   resolveOutputStyle,
   type DispatchManager,
   type LoopControl,
   type LoopEvent,
+  type TaskProfile,
 } from "@seekforge/core";
 import type {
   ApiErrorCode,
@@ -88,6 +90,7 @@ export type ConnectionDeps = {
 type RunInput = {
   task: string;
   mode: "ask" | "edit";
+  taskProfile?: TaskProfile;
   /** Plan flavor of ask mode (passed through to the core, not enforced here). */
   plan?: boolean;
   approvalMode: ApprovalMode;
@@ -136,6 +139,10 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
   let requestCounter = 0;
   let activeRunId: string | undefined;
   let activeWorkspace: string | undefined;
+  let activeSessionId: string | undefined;
+  // A normal chat run drains this bounded queue between provider turns. It is
+  // deliberately connection-local: a reconnect cannot redirect another user.
+  let activeSteering: string[] = [];
   // requestId -> settle(result); settling clears its timeout and unregisters.
   // The result is the core ConfirmResult so "allow for session" can grow the
   // run's session allowlist ({ allow: true, remember: "session" }).
@@ -381,6 +388,8 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           if (controller === runController) controller = undefined;
           activeRunId = undefined;
           activeWorkspace = undefined;
+          activeSessionId = undefined;
+          activeSteering = [];
           denyAllPending();
           if (!closed) send({ type: "idle" });
         }
@@ -459,16 +468,23 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         projectPath: input.workspace,
         task: expandedTask,
         mode: input.mode,
+        taskProfile: input.taskProfile,
         plan: input.plan,
         approvalMode: input.approvalMode,
         resumeSessionId: input.resumeSessionId,
         maxAutoContinuations: input.plan ? 0 : (input.continuation?.maxSlices ?? CHAT_MAX_AUTO_CONTINUATIONS + 1) - 1,
         maxNoProgressTurns: input.plan ? 0 : (input.continuation?.noProgressLimit ?? 4),
         ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
+        takeSteering: () => {
+          const steering = activeSteering;
+          activeSteering = [];
+          return steering;
+        },
         signal: runController.signal,
       })) {
         if (event.type === "session.created") {
           sessionId = event.sessionId;
+          activeSessionId = sessionId;
           if (boundSessionId === undefined) {
             boundSessionId = sessionId;
             dispatchRegistry.attach(input.workspace, sessionId, dispatchManager);
@@ -534,6 +550,8 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         }
         activeRunId = undefined;
         activeWorkspace = undefined;
+        activeSessionId = undefined;
+        activeSteering = [];
         denyAllPending();
         if (!closed) send({ type: "idle" });
       }
@@ -648,6 +666,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       if (controller === runController) controller = undefined;
       activeRunId = undefined;
       activeWorkspace = undefined;
+      activeSteering = [];
       if (activeLoopControl === input.control) activeLoopControl = undefined;
       denyAllPending();
       if (!closed) send({ type: "idle" });
@@ -753,12 +772,14 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       case "start": {
         if (running) return fail("busy", "a session is already running on this connection");
         const { task, mode, approvalMode, plan, continuation, ws: wsId } = frame;
+        const execution = resolveTaskExecution(task, mode, plan);
         const parsed = runOverrides(frame);
         // Omitted ws -> the default (first) workspace, preserving old clients.
         const workspace = deps.registry.resolve(wsId);
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
         const ledgerRun = deps.runManager.create({ workspace: workspace.path, source: "ws" });
         sendRun(ledgerRun.runId, workspace.path, { type: "run.accepted", runId: ledgerRun.runId, status: "queued" });
+        activeSteering = [];
         // plan is passed through as-is (the UI sends mode:"ask" + plan:true).
         reserve(
           ledgerRun.runId,
@@ -768,7 +789,8 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
               ledgerRun.runId,
               {
                 task,
-                mode,
+                mode: execution.mode,
+                taskProfile: execution.profile,
                 approvalMode,
                 plan,
                 ...(continuation ? { continuation } : {}),
@@ -777,7 +799,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
               },
               runController,
             ),
-          mode === "edit",
+          execution.mode === "edit",
           "agent_error",
         );
         return;
@@ -793,12 +815,14 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         // store (same predicate the REST session routes use).
         const meta = isSafeId(sessionId) ? readSessionMeta(workspace.path, sessionId) : undefined;
         if (!meta) return fail("unknown_session", `session not found: ${sessionId}`);
+        const execution = resolveTaskExecution(task, mode ?? meta.mode);
         const ledgerRun = deps.runManager.create({
           workspace: workspace.path,
           source: "ws",
           labels: { resumedSessionId: sessionId },
         });
         sendRun(ledgerRun.runId, workspace.path, { type: "run.accepted", runId: ledgerRun.runId, status: "queued" });
+        activeSteering = [];
         // A resumed session keeps its original ask/edit mode unless the frame
         // overrides it (plan -> execute). Approvals default to interactive
         // ("confirm") but the client may change them per follow-up message.
@@ -810,7 +834,8 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
               ledgerRun.runId,
               {
                 task,
-                mode: mode ?? meta.mode,
+                mode: execution.mode,
+                taskProfile: execution.profile,
                 approvalMode: (approvalMode as ApprovalMode | undefined) ?? "confirm",
                 resumeSessionId: sessionId,
                 ...(continuation ? { continuation } : {}),
@@ -819,7 +844,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
               },
               runController,
             ),
-          (mode ?? meta.mode) === "edit",
+          execution.mode === "edit",
           "agent_error",
         );
         return;
@@ -988,6 +1013,22 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         return;
       }
 
+      case "steer": {
+        if (!running || !controller || activeLoopControl) {
+          return fail("not_running", "no ordinary chat run is active");
+        }
+        if (activeSteering.length >= 16) return fail("steering_queue_full", "too many steering messages are queued");
+        activeSteering.push(frame.message.trim());
+        if (activeRunId && activeWorkspace && activeSessionId) {
+          sendRun(activeRunId, activeWorkspace, {
+            type: "event",
+            sessionId: activeSessionId,
+            event: { type: "notice", level: "info", message: "Guidance queued for the next safe point." },
+          });
+        }
+        return;
+      }
+
       case "subagent.steer": {
         const { dispatchId, message } = frame;
         if (!activeDispatchManager) {
@@ -1064,6 +1105,8 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     // dispatches. A connection-owned registry dies with the connection.
     ownDispatchRegistry?.disposeAll();
     activeLoopControl?.resume();
+    activeSessionId = undefined;
+    activeSteering = [];
     if (activeRunId && activeWorkspace) deps.runManager.cancel(activeWorkspace, activeRunId);
     else controller?.abort();
   });

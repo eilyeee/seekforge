@@ -158,6 +158,7 @@ describe("PermissionPanel — plans, session grants, reasons", () => {
     expect(text).not.toContain("allow this tool");
     expect(text).not.toContain("A always allow");
     expect(text).toContain("N or Tab deny with a reason");
+    expect(text).toContain("Auto approval still asks before external or environment actions.");
   });
 
   it("offers the tool-wide session grant for a non-command request", () => {

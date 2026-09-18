@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -105,5 +105,40 @@ describe("plan-model routing", () => {
     delete deps.providerForModel;
     await collect(createAgentCore(deps).runTask({ ...baseInput, projectPath: workspace, mode: "ask", plan: true }));
     expect(defaultProvider.chats).toBe(1);
+  });
+
+  it("routes an interactive implementation plan to Pro when Flash is the default", async () => {
+    const { deps, defaultProvider, planProvider, requestedModels } = makeDeps();
+    delete deps.planModel;
+    await collect(
+      createAgentCore(deps).runTask({
+        ...baseInput,
+        projectPath: workspace,
+        mode: "ask",
+        plan: true,
+        taskProfile: "implementation",
+      }),
+    );
+    expect(requestedModels).toEqual(["deepseek-v4-pro"]);
+    expect(planProvider.chats).toBe(1);
+    expect(defaultProvider.chats).toBe(0);
+  });
+
+  it("announces a manifest-derived verification command for an interactive implementation", async () => {
+    writeFileSync(join(workspace, "package.json"), JSON.stringify({ scripts: { test: "vitest run" } }));
+    const { deps } = makeDeps();
+    const events = await collect(
+      createAgentCore(deps).runTask({
+        ...baseInput,
+        projectPath: workspace,
+        mode: "edit",
+        taskProfile: "implementation",
+      }),
+    );
+    expect(events).toContainEqual({
+      type: "notice",
+      level: "info",
+      message: "Automatically selected verification command: npm test",
+    });
   });
 });

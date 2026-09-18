@@ -151,6 +151,7 @@ describe("start -> events -> idle", () => {
         seenInput = {
           projectPath: input.projectPath,
           mode: input.mode,
+          taskProfile: input.taskProfile,
           approvalMode: input.approvalMode,
           task: input.task,
         };
@@ -163,7 +164,7 @@ describe("start -> events -> idle", () => {
     );
     const { ws, rx } = await open(server.port);
 
-    sendFrame(ws, { type: "start", task: "say hello", mode: "edit", approvalMode: "auto" });
+    sendFrame(ws, { type: "start", task: "say hello", mode: "auto", approvalMode: "auto" });
 
     const created = await rx.waitFor((f) => f.type === "event");
     expect(created).toMatchObject({
@@ -183,7 +184,8 @@ describe("start -> events -> idle", () => {
 
     expect(seenInput).toEqual({
       projectPath: workspace,
-      mode: "edit",
+      mode: "ask",
+      taskProfile: "conversation",
       approvalMode: "auto",
       task: "say hello",
     });
@@ -191,6 +193,36 @@ describe("start -> events -> idle", () => {
     // The model.delta frames are server-level events carrying the session id.
     const delta = rx.frames.find((f) => f.type === "event" && (f.event as { type: string }).type === "model.delta");
     expect(delta).toMatchObject({ sessionId: "fake-1", event: { type: "model.delta", chunk: "hello" } });
+  });
+
+  it("delivers ordinary chat steering at the next core safe point", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let steering: string[] | undefined;
+    const { server } = await boot(
+      fakeAgentFactory(async function* (_opts, input) {
+        yield { type: "session.created", sessionId: "steer-1" };
+        await gate;
+        steering = input.takeSteering?.();
+        yield { type: "session.completed", report: emptyReport() };
+      }),
+    );
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "fix the typo", mode: "auto", approvalMode: "auto" });
+    await rx.waitFor((f) => f.type === "event" && (f.event as { type: string }).type === "session.created");
+    sendFrame(ws, { type: "steer", message: "also update the Chinese copy" });
+    await rx.waitFor(
+      (f) =>
+        f.type === "event" &&
+        (f.event as { type?: string; message?: string }).message === "Guidance queued for the next safe point.",
+    );
+    release();
+    await rx.waitFor((f) => f.type === "idle");
+
+    expect(steering).toEqual(["also update the Chinese copy"]);
   });
 
   it("send resumes an existing session with its original mode", async () => {

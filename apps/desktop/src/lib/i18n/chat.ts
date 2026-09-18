@@ -92,6 +92,8 @@ export const chat = {
     "chat.permission.rawCommand": "raw command",
     "chat.permission.rawPath": "raw path",
     "chat.permission.reviewChange": "Review change: {path}",
+    "chat.permission.autoException":
+      "Auto approval does not cover external or environment actions. Review the raw command or path before allowing it.",
 
     // QuestionModal
     "chat.question.title": "The agent has a question",
@@ -498,6 +500,7 @@ export const chat = {
     "chat.permission.rawCommand": "原始命令",
     "chat.permission.rawPath": "原始路径",
     "chat.permission.reviewChange": "审查更改：{path}",
+    "chat.permission.autoException": "自动审批不覆盖外部或环境操作。允许前请核对原始命令或路径。",
 
     // QuestionModal
     "chat.question.title": "代理有一个问题",

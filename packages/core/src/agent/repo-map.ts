@@ -97,6 +97,35 @@ const MAX_SYMBOLS_PER_FILE = 8;
 
 type CodeFile = { rel: string; depth: number; size: number };
 
+type ScanFingerprint = {
+  path: string;
+  kind: "directory" | "file";
+  dev: string;
+  ino: string;
+  size: string;
+  mtimeNs: string;
+  ctimeNs: string;
+};
+
+type WalkResult = { files: CodeFile[]; dirCounts: Map<string, number>; fingerprints: ScanFingerprint[] };
+
+function fingerprint(entryPath: string, kind: ScanFingerprint["kind"]): ScanFingerprint | undefined {
+  try {
+    const stat = fs.lstatSync(entryPath, { bigint: true });
+    return {
+      path: entryPath,
+      kind,
+      dev: stat.dev.toString(),
+      ino: stat.ino.toString(),
+      size: stat.size.toString(),
+      mtimeNs: stat.mtimeNs.toString(),
+      ctimeNs: stat.ctimeNs.toString(),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function isCode(name: string): boolean {
   const dot = name.lastIndexOf(".");
   return dot >= 0 && CODE_EXTS.has(name.slice(dot + 1).toLowerCase());
@@ -125,12 +154,15 @@ function resolveSubtree(root: string, sub: string): ResolvedSubtree | null {
 }
 
 /** Walk a directory collecting code files (rel to root) and per-dir counts. */
-function walk(root: string, start: string): { files: CodeFile[]; dirCounts: Map<string, number> } {
+function walk(root: string, start: string): WalkResult {
   const files: CodeFile[] = [];
   const dirCounts = new Map<string, number>();
+  const fingerprints: ScanFingerprint[] = [];
   const stack: string[] = [start];
   while (stack.length > 0) {
     const dir = stack.pop()!;
+    const dirFingerprint = fingerprint(dir, "directory");
+    if (dirFingerprint) fingerprints.push(dirFingerprint);
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -144,12 +176,10 @@ function walk(root: string, start: string): { files: CodeFile[]; dirCounts: Map<
       } else if (e.isFile() && isCode(e.name)) {
         const abs = path.join(dir, e.name);
         const rel = path.relative(root, abs);
-        let size = 0;
-        try {
-          size = fs.statSync(abs).size;
-        } catch {
-          continue;
-        }
+        const fileFingerprint = fingerprint(abs, "file");
+        if (!fileFingerprint) continue;
+        fingerprints.push(fileFingerprint);
+        const size = Number(fileFingerprint.size);
         files.push({ rel, depth: rel.split(path.sep).length, size });
         // credit every ancestor directory (relative to root) with this file.
         let d = path.dirname(rel);
@@ -164,7 +194,7 @@ function walk(root: string, start: string): { files: CodeFile[]; dirCounts: Map<
       }
     }
   }
-  return { files, dirCounts };
+  return { files, dirCounts, fingerprints };
 }
 
 /** Regex symbol outline — the dependency-free floor backend. */
@@ -549,9 +579,61 @@ export function scanExtensions(scan: SubtreeScan): string[] {
 /** A single tree scan, shareable across the prompt-injection builders below. */
 export type RepoScan = { files: CodeFile[]; dirCounts: Map<string, number> };
 
+type CachedRepoScan = { scan: RepoScan; fingerprints: ScanFingerprint[] };
+
+const REPO_SCAN_CACHE_LIMIT = 8;
+const repoScanCache = new Map<string, CachedRepoScan>();
+
+function fingerprintMatches(snapshot: ScanFingerprint): boolean {
+  const current = fingerprint(snapshot.path, snapshot.kind);
+  return (
+    current !== undefined &&
+    current.dev === snapshot.dev &&
+    current.ino === snapshot.ino &&
+    current.size === snapshot.size &&
+    current.mtimeNs === snapshot.mtimeNs &&
+    current.ctimeNs === snapshot.ctimeNs
+  );
+}
+
+function cacheRepoScan(root: string, entry: CachedRepoScan): void {
+  repoScanCache.delete(root);
+  repoScanCache.set(root, entry);
+  while (repoScanCache.size > REPO_SCAN_CACHE_LIMIT) {
+    const oldest = repoScanCache.keys().next().value as string | undefined;
+    if (oldest === undefined) return;
+    repoScanCache.delete(oldest);
+  }
+}
+
 /** Walk the tree once; pass the result to both builders to avoid a double walk. */
 export function scanRepo(root: string): RepoScan {
-  return walk(root, root);
+  const { files, dirCounts } = walk(root, root);
+  return { files, dirCounts };
+}
+
+/**
+ * Reuse a full-repository scan while every walked directory and code file has
+ * the same identity and metadata. Directories are fingerprinted as well as
+ * code files, so additions/removals invalidate the cache without a second
+ * recursive walk. This is intentionally process-local and bounded.
+ */
+export function scanRepoCached(root: string): RepoScan {
+  let canonicalRoot: string;
+  try {
+    canonicalRoot = fs.realpathSync.native(root);
+  } catch {
+    return scanRepo(root);
+  }
+  const cached = repoScanCache.get(canonicalRoot);
+  if (cached?.fingerprints.every(fingerprintMatches)) {
+    cacheRepoScan(canonicalRoot, cached);
+    return cached.scan;
+  }
+  const { files, dirCounts, fingerprints } = walk(canonicalRoot, canonicalRoot);
+  const scan = { files, dirCounts };
+  cacheRepoScan(canonicalRoot, { scan, fingerprints });
+  return scan;
 }
 
 /**

@@ -13,6 +13,7 @@ import {
   lazyFileGraph,
   OUTLINE_PREFIX,
   scanRepo,
+  scanRepoCached,
   symbolBackends,
   type SymbolBackend,
 } from "../../src/agent/repo-map.js";
@@ -155,6 +156,20 @@ describe("buildRepoMap", () => {
     } finally {
       symbolBackends.shift();
     }
+  });
+
+  it("reuses an unchanged repository scan and invalidates it for a changed file or directory", () => {
+    const first = scanRepoCached(root);
+    expect(scanRepoCached(root)).toBe(first);
+
+    writeFileSync(join(root, "src/api/user.js"), "export function changed(){}\n");
+    const afterEdit = scanRepoCached(root);
+    expect(afterEdit).not.toBe(first);
+
+    writeFileSync(join(root, "src/api/new.ts"), "export const added = true;\n");
+    const afterAdd = scanRepoCached(root);
+    expect(afterAdd).not.toBe(afterEdit);
+    expect(afterAdd.files.map((file) => file.rel)).toContain("src/api/new.ts");
   });
 });
 

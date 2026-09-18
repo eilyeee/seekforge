@@ -4,11 +4,18 @@
 
 import type { AgentEvent, ApprovalMode } from "@seekforge/shared";
 import type { SessionLease } from "./session-lease.js";
+import type { TaskProfile } from "./task-profile.js";
 
 export type RunAgentTaskInput = {
   projectPath: string;
   task: string;
   mode: "ask" | "edit";
+  /**
+   * Interactive task profile selected by the host. It only narrows prompt and
+   * tool exposure; the established ask/edit permission boundary remains the
+   * authority for every call.
+   */
+  taskProfile?: TaskProfile;
   /** Plan flavor: read-only investigation producing an implementation plan. */
   plan?: boolean;
   approvalMode: ApprovalMode;
@@ -31,6 +38,12 @@ export type RunAgentTaskInput = {
   /** Cooperative cancellation (Ctrl+C). Checked between turns and tool calls. */
   signal?: AbortSignal;
   /**
+   * Interactive follow-up messages, drained at the next safe point between
+   * provider turns. They are transient so a redirect never creates another
+   * persisted user turn in the session trace.
+   */
+  takeSteering?: () => string[];
+  /**
    * Internal: replaces buildSystemPrompt entirely (used by dispatch_agent to
    * give nested subagent runs their own prompt). Not part of the public API.
    */
@@ -42,6 +55,13 @@ export type RunAgentTaskInput = {
   /** Internal: permits this run while its owner holds the workspace idle guard. */
   workspaceGuard?: SessionLease;
 };
+
+export type { RequestedTaskMode, TaskExecution, TaskProfile } from "./task-profile.js";
+export {
+  allowedToolsForTaskProfile,
+  resolveTaskExecution,
+  toolsForTaskProfile,
+} from "./task-profile.js";
 
 export interface AgentCore {
   runTask(input: RunAgentTaskInput): AsyncIterable<AgentEvent>;

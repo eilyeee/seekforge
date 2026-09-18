@@ -65,6 +65,16 @@ and runs in a fixed order:
    next attempt can follow it. It is guidance in a tool result, not an
    instruction channel: §5 still applies.
 
+### Why `auto` can still ask
+
+`auto` means normal L1 writes and L2 commands do not stop for confirmation; it
+does **not** mean “run every tool.” L3 `env` actions — network access,
+dependency/environment changes, browser actions, and external effects such as
+`git push` — still require a fresh human confirmation every time. A matching
+`ask` rule also deliberately overrides `auto`. Desktop and TUI label these
+exceptions in both the auto-mode control and the L3 prompt, while still showing
+the raw command or path being approved.
+
 ### Boundary matching (no prefix smuggling)
 
 Rule matching lives in `packages/core/src/tools/rule-match.ts`. Its one

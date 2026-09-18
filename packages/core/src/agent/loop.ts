@@ -17,6 +17,7 @@ import { asAdaptiveToolDispatcher } from "../mcp/adaptive.js";
 import {
   assertAutoCompactThreshold,
   assertModelContextWindows,
+  DEFAULT_MODEL,
   resolveContextWindow,
   type ChatProvider,
   type RetryInfo,
@@ -100,7 +101,7 @@ import {
   commandResultSatisfiesGate,
   selectAutoGate,
 } from "./loop-logic.js";
-import { buildRelevantFiles, buildRepoOverview, lazyFileGraph, scanRepo } from "./repo-map.js";
+import { buildRelevantFiles, buildRepoOverview, lazyFileGraph, scanRepoCached } from "./repo-map.js";
 import type { PlanItem } from "../tools/builtins/plan.js";
 import {
   buildHookContext,
@@ -117,6 +118,8 @@ import {
 } from "../hooks/index.js";
 import { classifyAgentError } from "./errors.js";
 import { buildSystemPrompt } from "./prompt.js";
+import { discoverLoopVerificationPlan } from "./loop-verification-plan.js";
+import { allowedToolsForTaskProfile, type TaskProfile } from "./task-profile.js";
 import { buildCommandRoster, loadUserCommands } from "./commands.js";
 import { type ClaudeCompat, createRuleActivation, loadProjectRules, RULE_TRIGGER_TOOLS } from "./rules.js";
 import { openSessionFileLedger, saveSessionFileLedger } from "./session-file-ledger.js";
@@ -443,9 +446,24 @@ export type AgentCoreDeps = {
 };
 
 const OUTPUT_RESERVE_TOKENS = 8192;
+const DEFAULT_COMPLEX_TASK_MODEL = "deepseek-v4-pro";
 
 /** Default `autoCompactThreshold`: compact at 90% of the context budget. */
 export const DEFAULT_AUTO_COMPACT_THRESHOLD = 0.9;
+
+/**
+ * Choose one deterministic, manifest-derived final gate for an ordinary chat
+ * edit. The Loop discovery code deliberately emits only fixed ecosystem
+ * commands / recognized script names, never manifest-provided shell text.
+ */
+function discoverChatVerificationCommand(workspace: string): string | undefined {
+  try {
+    const stages = discoverLoopVerificationPlan(workspace).stages;
+    return stages.find((stage) => stage.id === "test")?.command ?? stages[0]?.command;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Turn counts (remaining) at which the loop nudges the model to wrap up.
@@ -586,6 +604,21 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
 
   return {
     async *runTask(input: RunAgentTaskInput): AsyncIterable<AgentEvent> {
+      // A task profile is supplied only by interactive chat adapters. Keeping
+      // the default broad preserves the established SDK/CLI behavior.
+      const interactiveProfile = input.taskProfile !== undefined;
+      const taskProfile: TaskProfile = input.taskProfile ?? (input.mode === "ask" ? "inspection" : "implementation");
+      const profileTools = interactiveProfile
+        ? allowedToolsForTaskProfile(taskProfile, deps.allowedTools)
+        : deps.allowedTools;
+      // A plan is an inspection profile, but it must still offer its explicit
+      // read-only-to-edit handoff tool. This only adds the synthetic tool when
+      // the host did not already impose an explicit allow-list.
+      const profileAllowedTools =
+        input.plan === true && deps.allowedTools === undefined && profileTools !== undefined
+          ? [...profileTools, EXIT_PLAN_MODE_TOOL]
+          : profileTools;
+      const configuredVerifyCommand = deps.verifyCommand?.trim() || undefined;
       const maxAutoContinuations = input.maxAutoContinuations ?? 0;
       if (!Number.isSafeInteger(maxAutoContinuations) || maxAutoContinuations < 0) {
         throw new RangeError("maxAutoContinuations must be a non-negative safe integer");
@@ -662,6 +695,24 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           observeSessionEvent(e, { sessionId, depth, task: input.task, resumed: resuming });
           return e;
         };
+        // Chat adapters request an implementation profile only for tasks that
+        // deserve a full loop. Discover a safe, fixed verification command for
+        // those tasks; direct callers retain their explicit configuration.
+        const automaticVerifyCommand =
+          interactiveProfile &&
+          taskProfile === "implementation" &&
+          input.mode === "edit" &&
+          configuredVerifyCommand === undefined
+            ? discoverChatVerificationCommand(input.projectPath)
+            : undefined;
+        const verifyCommand = configuredVerifyCommand ?? automaticVerifyCommand;
+        if (automaticVerifyCommand) {
+          yield emit({
+            type: "notice",
+            level: "info",
+            message: `Automatically selected verification command: ${automaticVerifyCommand}`,
+          });
+        }
 
         // Surface what hooks address to the user (systemMessage, and
         // stopReason when continue is false) as notices. Used at the
@@ -670,15 +721,33 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           for (const message of hookNotices(outcomes)) yield emit({ type: "notice", level: "info", message });
         }
 
-        // Plan-model routing: a plan run thinks on deps.planModel (e.g. /plan
-        // on v4-pro) while regular runs keep the default provider. Run-local —
-        // resuming the session in execute mode goes back to deps.provider.
-        // `let` so escalateOnFailure can swap in the stronger planModel provider
-        // mid-run once the model is clearly stuck (see the turn loop below).
+        // A substantial interactive implementation gets a stronger plan route
+        // and failure fallback when the configured default is Flash. Explicit
+        // routing settings keep their existing behavior, and non-interactive
+        // callers are unchanged.
+        const automaticComplexModel =
+          interactiveProfile && taskProfile === "implementation" && deps.provider.model === DEFAULT_MODEL
+            ? DEFAULT_COMPLEX_TASK_MODEL
+            : undefined;
+        const routedPlanModel = deps.planModel ?? automaticComplexModel;
+        const providerForRoutedModel = (model: string): ChatProvider | undefined =>
+          model === automaticComplexModel
+            ? deps.providerForModel?.(model, { thinking: true, reasoningEffort: "high" })
+            : deps.providerForModel?.(model);
+        // Plan-model routing: a plan run thinks on the configured plan model,
+        // or the automatic complex-task model. Run-local — resuming in execute
+        // mode returns to the configured default provider.
         let provider =
-          input.plan === true && deps.planModel !== undefined
-            ? (deps.providerForModel?.(deps.planModel) ?? deps.provider)
+          input.plan === true && routedPlanModel !== undefined
+            ? (providerForRoutedModel(routedPlanModel) ?? deps.provider)
             : deps.provider;
+        if (input.plan === true && routedPlanModel === automaticComplexModel && provider !== deps.provider) {
+          yield emit({
+            type: "notice",
+            level: "info",
+            message: `Using ${routedPlanModel} for this implementation plan.`,
+          });
+        }
         // A plan run (read-only ask mode) may leave plan mode through
         // exit_plan_mode; approval switches THIS run to edit mode.
         let planMode = input.plan === true && input.mode === "ask";
@@ -728,7 +797,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         // One tree scan shared by both prompt-injection builders below — avoids
         // walking the repo twice on every top-level run. undefined off the top
         // level (these hints are top-level only).
-        const repoScan = depth === 0 ? scanRepo(input.projectPath) : undefined;
+        const repoScan = depth === 0 ? scanRepoCached(input.projectPath) : undefined;
         // …and ONE dependency graph shared the same way: each builder used to
         // rebuild it internally (readFileSync + outline + identifier counts over
         // up to 600 files — twice per run, i.e. twice per TUI/REPL turn). Lazy
@@ -886,7 +955,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         const skillListing =
           skillsInjected &&
           deps.dispatcher.list().some((tool) => tool.name === INVOKE_SKILL_TOOL) &&
-          (!deps.allowedTools || deps.allowedTools.includes(INVOKE_SKILL_TOOL))
+          (!profileAllowedTools || profileAllowedTools.includes(INVOKE_SKILL_TOOL))
             ? buildSkillListing(invocableSkills(runSkills(), input.projectPath), {
                 preloaded: new Set(skillSelections.map((selection) => selection.skill.id)),
               })
@@ -917,6 +986,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               workspace: input.projectPath,
               mode,
               plan,
+              taskProfile,
               projectRules: projectRules?.text,
               memoryBrief: memoryFor(input.task),
               skillBrief: buildSkillBrief(skillSelections, deps.skillBriefMaxChars),
@@ -1039,7 +1109,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             commandAllowlist: deps.commandAllowlist ?? [],
             sessionAllowlist,
             ...(deps.permissionRules ? { rules: deps.permissionRules } : {}),
-            ...(deps.allowedTools ? { allowedTools: deps.allowedTools } : {}),
+            ...(profileAllowedTools ? { allowedTools: profileAllowedTools } : {}),
           },
           confirm: confirmWithNotify,
           log: (entry) => {
@@ -1120,7 +1190,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             : depth > 0 && deps._reportToParent
               ? [buildAgentReportToolDefinition()]
               : [];
-        const allowedToolSet = deps.allowedTools ? new Set(deps.allowedTools) : undefined;
+        const allowedToolSet = profileAllowedTools ? new Set(profileAllowedTools) : undefined;
         let exitPlanModeOffered = planMode && (!allowedToolSet || allowedToolSet.has(EXIT_PLAN_MODE_TOOL));
         // An adaptive dispatcher (MCP registry) can change its catalog mid-run and
         // defer schemas; an exact allowedTools list is already a fixed catalog.
@@ -1363,11 +1433,11 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             // A running subagent receives steering only at this safe point,
             // between provider turns. These messages are transient and therefore
             // do not violate the trace's one-user-message-per-run invariant.
-            const steering = deps._takeSubagentSteering?.() ?? [];
+            const steering = [...(input.takeSteering?.() ?? []), ...(deps._takeSubagentSteering?.() ?? [])];
             if (steering.length > 0) {
               messages.push({
                 role: "user",
-                content: `[parent steering]\n${steering.map((message) => `- ${message}`).join("\n")}`,
+                content: `[user steering]\n${steering.map((message) => `- ${message}`).join("\n")}`,
               });
             }
 
@@ -1593,7 +1663,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 planItems: lastPlanItems,
                 changedFiles: changedFiles.size,
                 workspaceMutations: workspaceMutationCount,
-                verifyCommand: deps.verifyCommand,
+                verifyCommand,
                 verifyRanSinceEdit,
                 lintCommand: deps.lintCommand,
                 lintRanSinceEdit,
@@ -1620,7 +1690,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 // Auto verify/lint executes at the same orchestration point as
                 // the nudge and feeds the classified result back transiently.
                 const autoGate = selectAutoGate(nudge.kind, {
-                  verifyCommand: deps.verifyCommand,
+                  verifyCommand,
                   lintCommand: deps.lintCommand,
                   autoVerify: deps.autoVerify !== false,
                   autoLint: deps.autoLint !== false,
@@ -1985,7 +2055,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               if (tc.name === "run_command" && result.meta?.command) {
                 commandsRun.push(result.meta.command);
                 // Only a successful foreground invocation satisfies either gate.
-                if (commandResultSatisfiesGate(result, deps.verifyCommand)) verifyRanSinceEdit = true;
+                if (commandResultSatisfiesGate(result, verifyCommand)) verifyRanSinceEdit = true;
                 if (commandResultSatisfiesGate(result, deps.lintCommand)) lintRanSinceEdit = true;
               }
               // Track the latest published plan for the finalize completeness check
@@ -2129,13 +2199,13 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             // deps). Pairs with the reflection nudge above.
             if (
               stuck &&
-              deps.escalateOnFailure &&
+              (deps.escalateOnFailure ?? automaticComplexModel !== undefined) &&
               !escalated &&
-              deps.planModel !== undefined &&
+              routedPlanModel !== undefined &&
               deps.providerForModel !== undefined
             ) {
-              const stronger = deps.providerForModel(deps.planModel);
-              if (stronger !== provider) {
+              const stronger = providerForRoutedModel(routedPlanModel);
+              if (stronger !== undefined && stronger !== provider) {
                 provider = stronger;
                 escalated = true;
                 // TRANSIENT (pushed, not traced), like the reflection/wrap-up
@@ -2144,7 +2214,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 // one-user-message-per-run invariant that backtrack/resume rely on.
                 messages.push({
                   role: "user",
-                  content: `[harness] Escalated to ${deps.planModel} for the rest of this run.`,
+                  content: `[harness] Escalated to ${routedPlanModel} for the rest of this run.`,
                 });
               }
             }
@@ -2236,7 +2306,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               skillSelections.map((selection) => selection.skill.id),
               {
                 success: true,
-                ...(deps.verifyCommand ? { verified: workspaceMutationCount === 0 || verifyRanSinceEdit } : {}),
+                ...(verifyCommand ? { verified: workspaceMutationCount === 0 || verifyRanSinceEdit } : {}),
                 turns: turnsUsed,
                 toolCalls: toolCallCount,
                 costUsd: usage.costUsd,

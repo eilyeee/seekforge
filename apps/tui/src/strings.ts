@@ -86,6 +86,7 @@ const EN: Record<string, string> = {
   "permission.command": "command:",
   "permission.path": "path:",
   "permission.allowOnce": "y allow once",
+  "permission.autoException": "Auto approval still asks before external or environment actions.",
   "permission.allowSession": "a allow similar commands this session",
   "permission.allowAlways": "A always allow, saved as",
   "permission.saved": "saved permission rule:",
@@ -275,14 +276,14 @@ const EN: Record<string, string> = {
   "action.toggle-thinking": "toggle thinking mode",
 
   // ── Mode line under the composer ────────────────────────────────────────
-  "mode.autoApprove": "⏵⏵ auto-approve on",
+  "mode.autoApprove": "⏵⏵ auto-approve on · external/env still asks",
   "mode.acceptEdits": "⏵ accept-edits on",
   "mode.plan": "⏸ plan mode on",
   "mode.cycleHint": "(shift+tab to cycle)",
 
   // ── Composer placeholders (app-level; integrator adopts) ───────────────
   "composer.idle": "Ask SeekForge to do something…  (/ commands · @ files · # remember · ! shell)",
-  "composer.running": "working… type to queue a follow-up · Esc cancels · ! runs shell",
+  "composer.running": "working… type to redirect at next safe point · Esc cancels · ! runs shell",
   "composer.permissionWait": "answer the permission prompt above (y · a · any other key denies)",
 
   // ── Rotating tips (render-helpers TIPS) ────────────────────────────────
@@ -438,6 +439,7 @@ const ZH_CN: Record<string, string> = {
   "permission.command": "命令:",
   "permission.path": "路径:",
   "permission.allowOnce": "y 允许一次",
+  "permission.autoException": "自动审批仍会在外部或环境操作前请求确认。",
   "permission.allowSession": "a 本会话允许同类命令",
   "permission.allowAlways": "A 始终允许，将写入规则",
   "permission.saved": "已保存授权规则:",
@@ -617,13 +619,13 @@ const ZH_CN: Record<string, string> = {
   "action.model-picker": "打开模型选择器",
   "action.toggle-thinking": "切换思考模式",
 
-  "mode.autoApprove": "⏵⏵ 自动批准已开启",
+  "mode.autoApprove": "⏵⏵ 自动批准已开启 · 外部/环境操作仍需确认",
   "mode.acceptEdits": "⏵ 自动接受编辑已开启",
   "mode.plan": "⏸ 计划模式已开启",
   "mode.cycleHint": "(shift+tab 切换)",
 
   "composer.idle": "让 SeekForge 做点什么…  (/ 命令 · @ 文件 · # 记忆 · ! shell)",
-  "composer.running": "处理中… 输入可排队后续消息 · Esc 取消 · ! 运行 shell",
+  "composer.running": "处理中… 输入会在下一个安全点重定向 · Esc 取消 · ! 运行 shell",
   "composer.permissionWait": "请回答上方的授权提示（y · a · 其他键拒绝）",
 
   "tips.0": "输入 @ 将文件附加到消息",

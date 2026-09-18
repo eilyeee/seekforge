@@ -219,6 +219,11 @@ seekforge config set model claude-opus-5
 > 比全部内置工具加起来还多的定义 token，这应当是一件看得见的事，而不是每回合悄悄
 > 交的税。
 
+> **交互式 Auto 路由。** Desktop 与 TUI 在 `auto` 请求开始前只选择一次稳定目录：普通
+> 对话使用精简只读 profile；小修改使用聚焦编辑 profile；较大的实现使用完整目录、重复失败后
+> 自动切换的较强 fallback 以及安全的 manifest 派生验证门。显式选择 Ask、Edit 或 Plan 始终优先。进程内
+> 的仓库扫描缓存会在对话回合间复用未变化的目录/文件元数据，并在相关变化后失效。
+
 > **图像。** 在该 provider 上截图会直接进入主模型：`browser_screenshot` 会把 PNG
 > 附到产生它的那条工具结果上，agent 可以直接「看」页面，而不必再借另一个模型转述。
 > 协议无法携带图像的 provider 会在结果文本里说明，而不是悄悄丢掉；在那些 provider

@@ -2246,7 +2246,8 @@ export type ClientFrame =
   | ({
       type: "start";
       task: string;
-      mode: "edit" | "ask";
+      /** "auto" lets the server select a safe ask/edit profile from the task. */
+      mode: "auto" | "edit" | "ask";
       approvalMode: "auto" | "acceptEdits" | "confirm";
       plan?: boolean;
       continuation?: ChatContinuationPolicy;
@@ -2257,8 +2258,8 @@ export type ClientFrame =
       type: "send";
       sessionId: string;
       task: string;
-      /** edit/ask switchable per follow-up; absent keeps the session's mode. */
-      mode?: "edit" | "ask";
+      /** auto/edit/ask switchable per follow-up; absent keeps the session's mode. */
+      mode?: "auto" | "edit" | "ask";
       /** Approval mode can change between turns; absent defaults to "confirm". */
       approvalMode?: "auto" | "acceptEdits" | "confirm";
       continuation?: ChatContinuationPolicy;
@@ -2343,6 +2344,8 @@ export type ClientFrame =
   | { type: "subscribe"; runId: string; afterSeq?: number; ws?: string }
   | { type: "subagent.cancel"; dispatchId: string }
   | { type: "subagent.steer"; dispatchId: string; message: string }
+  /** Redirect the active ordinary chat run at its next safe point. */
+  | { type: "steer"; message: string }
   | { type: "loop.pause" }
   | { type: "loop.control.resume" }
   | { type: "loop.steer"; message: string }

@@ -10,7 +10,7 @@ import { emptyLoopProgress, reduceLoopEvent, type LoopProgress } from "./loop";
 import type { ConnState, ServerFrame } from "./ws-types";
 
 /** Mode selector for the NEXT start frame ("plan" = ask mode + plan flag). */
-export type StartMode = "edit" | "plan" | "ask";
+export type StartMode = "auto" | "edit" | "plan" | "ask";
 
 /** Approval selector for the NEXT start frame (maps to the run's approvalMode). */
 export type ApprovalChoice = "confirm" | "acceptEdits" | "auto";
@@ -28,10 +28,8 @@ export type PendingQuestion = {
 };
 
 /**
- * A message typed while a run was active. Core has no public mid-run steering
- * for a top-level run (only nested subagents take guidance between turns), so
- * a queued message is delivered as the next turn once the run ends — the same
- * contract as the TUI's queue.
+ * A message deliberately queued for a later turn (Loop runs cannot take normal
+ * chat steering). Ordinary chat follow-ups are redirected at a safe point.
  */
 export type QueuedMessage = { id: number; text: string };
 
@@ -89,7 +87,7 @@ export type ChatTab = {
   /** Last protocol-level WS error ({"type":"error"} frame) on this tab. */
   wsError: string | null;
   mode: StartMode;
-  /** Approval mode for the next start ("confirm" prompts; "auto" never does). */
+  /** Approval mode for the next start; auto still confirms env/external actions. */
   approvalMode: ApprovalChoice;
   /** The current run was started with plan: true. */
   planPending: boolean;
@@ -166,7 +164,7 @@ function makeTab(tabId: string, ws = ""): ChatTab {
     pendingPermission: null,
     pendingQuestion: null,
     wsError: null,
-    mode: "edit",
+    mode: "auto",
     approvalMode: "confirm",
     planPending: false,
     planReady: false,

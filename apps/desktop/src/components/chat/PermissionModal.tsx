@@ -237,6 +237,12 @@ export function PermissionModal({ request, onRespond }: Props) {
   ) : (
     <p className="mb-3 text-sm text-secondary">{request.description}</p>
   );
+  const autoException =
+    request.permission === "env" ? (
+      <p className="mb-3 rounded-lg border border-warn/30 bg-warn/10 p-2 text-xs text-secondary">
+        {tModal("chat.permission.autoException")}
+      </p>
+    ) : null;
 
   // Plan review: the plan is the request.
   if (plan !== null) {
@@ -317,6 +323,7 @@ export function PermissionModal({ request, onRespond }: Props) {
         }
       >
         {description}
+        {autoException}
 
         {preview && (
           <div className="mb-3 rounded-lg border border-subtle bg-surface/50 p-2">
@@ -392,6 +399,7 @@ export function PermissionModal({ request, onRespond }: Props) {
         }
       >
         {description}
+        {autoException}
         <DiffBlock diff={preview.diff} />
         {reasonField(tModal("chat.permission.rejectWithReason"))}
       </Modal>
@@ -437,6 +445,7 @@ export function PermissionModal({ request, onRespond }: Props) {
       }
     >
       {description}
+      {autoException}
 
       {grantable && request.rememberRule && (
         <div className="mb-3">

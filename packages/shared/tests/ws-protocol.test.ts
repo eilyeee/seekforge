@@ -49,6 +49,7 @@ const validFrames = [
   { type: "question.answer", id: "q1", answer: "yes" },
   { type: "subagent.cancel", dispatchId: "ag-1" },
   { type: "subagent.steer", dispatchId: "ag-2", message: "focus on tests" },
+  { type: "steer", message: "use the existing parser instead" },
   { type: "loop.pause" },
   { type: "loop.control.resume" },
   { type: "loop.steer", message: "focus on the parser" },
@@ -90,6 +91,7 @@ const invalidFrames = [
   { type: "subagent.cancel", dispatchId: "../ag-1" },
   { type: "subagent.steer", dispatchId: "ag-1", message: "" },
   { type: "loop.steer", message: "" },
+  { type: "steer", message: "" },
   { type: "subscribe", runId: "../run-1" },
   { type: "unknown" },
 ] as const;
@@ -115,6 +117,17 @@ describe("WS client protocol decoder", () => {
     expect(
       parseClientFrame({ type: "start", task: "go", mode: "ask", approvalMode: "confirm", reasoningEffort }, limits),
     ).toMatchObject({ ok: true, frame: { reasoningEffort } });
+  });
+
+  it("accepts auto task routing for starts and follow-ups", () => {
+    expect(
+      parseClientFrame({ type: "start", task: "what is this?", mode: "auto", approvalMode: "confirm" }, limits),
+    ).toMatchObject({
+      ok: true,
+    });
+    expect(parseClientFrame({ type: "send", sessionId: "s1", task: "fix it", mode: "auto" }, limits)).toMatchObject({
+      ok: true,
+    });
   });
 
   it("rejects every malformed optional override", () => {
@@ -189,5 +202,10 @@ describe("WS client protocol decoder", () => {
     expect(
       parseClientFrame({ type: "loop.steer", message: "four" }, { ...limits, maxSteerMessageLength: 3 }),
     ).toMatchObject({ ok: false });
+    expect(parseClientFrame({ type: "steer", message: "four" }, { ...limits, maxSteerMessageLength: 3 })).toMatchObject(
+      {
+        ok: false,
+      },
+    );
   });
 });

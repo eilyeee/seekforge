@@ -5,6 +5,7 @@ import {
   type DispatchManager,
   type McpRegistry,
   type PluginContributions,
+  type TaskProfile,
 } from "@seekforge/core";
 import type { ApprovalMode, ConfirmResult, PermissionRequest, PermissionRule } from "@seekforge/shared";
 import type { TuiConfig } from "../config.js";
@@ -56,6 +57,10 @@ export type RunSessionDeps = {
   appendSystemPrompt?: string;
   /** Exact tool gate for this run (a custom command's `allowed-tools`). */
   allowedTools?: string[];
+  /** Interactive routing profile; narrows prompt/tool exposure for this turn. */
+  taskProfile?: TaskProfile;
+  /** Follow-up input drained between provider turns. */
+  takeSteering?: () => string[];
 };
 
 /**
@@ -111,10 +116,12 @@ export async function runSession(task: string, signal: AbortSignal, deps: RunSes
       projectPath: deps.projectPath,
       task: expandFileRefs(task, deps.projectPath),
       mode: deps.mode,
+      taskProfile: deps.taskProfile,
       plan: deps.plan,
       approvalMode: deps.approvalMode,
       resumeSessionId: deps.getSessionId(),
       ...(deps.appendSystemPrompt ? { appendSystemPrompt: deps.appendSystemPrompt } : {}),
+      ...(deps.takeSteering ? { takeSteering: deps.takeSteering } : {}),
       signal,
     })) {
       buffered.dispatch({ type: "event", event });

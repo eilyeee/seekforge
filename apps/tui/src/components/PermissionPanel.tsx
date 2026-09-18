@@ -72,6 +72,7 @@ export function PermissionPanel({
             [{request.permission}] {request.toolName}
           </Text>
         </Text>
+        {request.permission === "env" ? <Text color="yellow">{t("permission.autoException")}</Text> : null}
         {hunks.map((hunk) => {
           const selected = hunkSelection?.includes(hunk.index) ?? true;
           return (
@@ -106,6 +107,7 @@ export function PermissionPanel({
             [{request.permission}] {request.toolName}
           </Text>
         </Text>
+        {request.permission === "env" ? <Text color="yellow">{t("permission.autoException")}</Text> : null}
         <DiffCard path={body.path} lines={body.lines} maxLines={PERMISSION_BODY_HEIGHT} offset={scroll} />
         <Text dimColor>
           {t("permission.applyChange")} · {t("permission.denyReason")}
@@ -124,6 +126,7 @@ export function PermissionPanel({
           [{request.permission}] {request.toolName}
         </Text>
       </Text>
+      {request.permission === "env" ? <Text color="yellow">{t("permission.autoException")}</Text> : null}
       {request.command ? (
         <Text>
           <Text dimColor>{t("permission.command")} </Text>

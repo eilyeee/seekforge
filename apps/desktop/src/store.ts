@@ -222,10 +222,7 @@ type AppStore = {
   truncateAtItem: (tabId: string, sessionId: string, itemId: number) => void;
   /** Sends a chat task; returns false when the socket rejected it (offline). */
   sendTask: (task: string) => boolean;
-  /**
-   * Queues a message on the active tab while its run is active; it is sent as
-   * the next turn when the run ends. False when the queue is full.
-   */
+  /** Redirects an ordinary active run; Loop messages remain queued for its next turn. */
   queueMessage: (text: string) => boolean;
   editQueuedMessage: (id: number, text: string) => void;
   removeQueuedMessage: (id: number) => void;
@@ -733,6 +730,16 @@ export const useStore = create<AppStore>()((set, get) => {
 
     queueMessage: (text) => {
       const tabId = get().tabs.activeTabId;
+      const tab = activeTab(get().tabs);
+      const steering = text.trim();
+      if (tab.chat.running && !tab.loopRunning && !tab.pendingPermission && !tab.pendingQuestion && steering !== "") {
+        const client = ensureWs(tabId);
+        if (!client.send({ type: "steer", message: steering })) return false;
+        set((s) => ({
+          tabs: updateTab(s.tabs, tabId, (current) => ({ chat: appendUser(current.chat, steering), wsError: null })),
+        }));
+        return true;
+      }
       const result = enqueueMessage(get().tabs, tabId, text);
       if (!result.queued) return false;
       set({ tabs: result.state });

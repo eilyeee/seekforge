@@ -243,6 +243,14 @@ What differs from the OpenAI-compatible presets:
 > builtin combined, and that should be a visible event rather than a silent
 > per-turn tax.
 
+> **Interactive Auto routing.** Desktop and TUI select that stable catalog once
+> at the start of an `auto` request: ordinary conversation gets a concise,
+> read-only profile; a small change gets a focused edit profile; a substantial
+> implementation gets the full catalog, an automatic stronger fallback after a
+> safe manifest-derived verification gate. Explicit Ask, Edit, and Plan choices
+> still win. A process-local repo scan cache reuses unchanged directory/file
+> metadata between chat turns and invalidates on a relevant change.
+
 > **Images.** On this provider a screenshot goes straight to the model:
 > `browser_screenshot` attaches the PNG to the tool result that produced it, so
 > the agent can look at the page instead of describing it through a second

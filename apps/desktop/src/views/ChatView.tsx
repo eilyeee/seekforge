@@ -307,8 +307,8 @@ export function ChatView() {
         .catch((err) => showToast(err instanceof Error ? err.message : String(err)));
       return;
     }
-    // While a run is active the message waits in the tab's queue and goes out
-    // as the next turn; a full queue keeps the draft.
+    // An ordinary active chat receives this as a safe-point redirect. Loop
+    // runs retain their explicit next-turn queue; a rejected queue keeps draft.
     if (tab.chat.running) {
       if (queueMessage(task)) setDraft("");
       else showToast(t("chat.queue.full"));

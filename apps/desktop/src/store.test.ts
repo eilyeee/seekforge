@@ -850,7 +850,7 @@ describe("store: queued messages", () => {
     sent.length = 0;
   });
 
-  it("queues while a run is active and sends the oldest as the next turn after idle", () => {
+  it("redirects an ordinary active chat at its next safe point", () => {
     expect(useStore.getState().sendTask("first")).toBe(true);
     lastHandlers!.onFrame({ type: "run.accepted", runId: "run-q", status: "queued", seq: 1 });
     lastHandlers!.onFrame({
@@ -863,43 +863,18 @@ describe("store: queued messages", () => {
     expect(useStore.getState().queueMessage("  second  ")).toBe(true);
     expect(useStore.getState().queueMessage("third")).toBe(true);
     expect(useStore.getState().queueMessage("   ")).toBe(false);
-    let tab = activeTab(useStore.getState().tabs);
-    expect(tab.queue.map((m) => m.text)).toEqual(["second", "third"]);
-    expect(sent.filter((f) => f.type === "start" || f.type === "send")).toHaveLength(1);
-
-    // Edit and drop entries while waiting.
-    const [second, third] = tab.queue;
-    useStore.getState().editQueuedMessage(second!.id, "second, edited");
-    useStore.getState().removeQueuedMessage(third!.id);
-
-    lastHandlers!.onFrame({
-      type: "event",
-      runId: "run-q",
-      seq: 3,
-      sessionId: "sq",
-      event: {
-        type: "session.completed",
-        report: {
-          summary: "ok",
-          changedFiles: [],
-          commandsRun: [],
-          verification: "",
-          usage: { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 },
-        },
-      },
-    });
-    // A terminal event alone is not enough: the server is still busy until idle.
-    expect(sent.filter((f) => f.type === "send")).toHaveLength(0);
-    lastHandlers!.onFrame({ type: "idle" });
-    const follow = sent.filter((f) => f.type === "send");
-    expect(follow).toEqual([expect.objectContaining({ type: "send", sessionId: "sq", task: "second, edited" })]);
-    tab = activeTab(useStore.getState().tabs);
+    expect(sent.filter((f) => f.type === "steer")).toEqual([
+      { type: "steer", message: "second" },
+      { type: "steer", message: "third" },
+    ]);
+    const tab = activeTab(useStore.getState().tabs);
     expect(tab.queue).toEqual([]);
-    expect(tab.chat.running).toBe(true);
+    expect(tab.chat.items.map((item) => item.kind === "user" && item.text)).toContain("second");
   });
 
   it("keeps a message queued when it cannot be sent, and sends it after reconnecting", () => {
     useStore.getState().sendTask("first");
+    useStore.setState((s) => ({ tabs: updateTab(s.tabs, "t1", { loopRunning: true }) }));
     useStore.getState().queueMessage("later");
     acceptSend = false;
     lastHandlers!.onFrame({ type: "idle" });
@@ -913,6 +888,7 @@ describe("store: queued messages", () => {
 
   it("holds the queue when the run it followed is interrupted by a lost connection", () => {
     useStore.getState().sendTask("first");
+    useStore.setState((s) => ({ tabs: updateTab(s.tabs, "t1", { loopRunning: true }) }));
     useStore.getState().queueMessage("later");
     lastHandlers!.onState("disconnected");
     expect(activeTab(useStore.getState().tabs)).toMatchObject({ queuePaused: true });
@@ -925,18 +901,19 @@ describe("store: queued messages", () => {
 
   it("does not drain while a permission prompt is open", () => {
     useStore.getState().sendTask("first");
-    useStore.getState().queueMessage("later");
     lastHandlers!.onFrame({
       type: "permission.request",
       requestId: "p9",
       request: { toolName: "run_command", permission: "execute", description: "run", command: "ls" },
     });
+    useStore.getState().queueMessage("later");
     expect(activeTab(useStore.getState().tabs).queue).toHaveLength(1);
     expect(sent.filter((f) => "task" in f && f.task === "later")).toHaveLength(0);
   });
 
   it("caps the queue", () => {
     useStore.getState().sendTask("first");
+    useStore.setState((s) => ({ tabs: updateTab(s.tabs, "t1", { loopRunning: true }) }));
     for (let i = 0; i < 20; i++) expect(useStore.getState().queueMessage(`m${i}`)).toBe(true);
     expect(useStore.getState().queueMessage("overflow")).toBe(false);
   });

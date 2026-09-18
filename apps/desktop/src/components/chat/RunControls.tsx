@@ -4,7 +4,7 @@ import { WorkspaceMenu } from "../WorkspaceMenu";
 import type { ApprovalChoice, ChatTab, ContinuationPreset, StartMode } from "../../store";
 import type { ServerConfig } from "../../types";
 
-const MODES: StartMode[] = ["edit", "ask", "plan"];
+const MODES: StartMode[] = ["auto", "edit", "ask", "plan"];
 type Sandbox = "off" | "read-only" | "workspace-write" | "restricted";
 
 type Props = {
@@ -19,7 +19,7 @@ type Props = {
 /**
  * The run-context toolbar BELOW the composer: workspace, sandbox, run mode, and
  * approval mode. (Model + thinking live in ModelBar above the input.) Approval +
- * edit/ask stay changeable mid-conversation; "plan" is start-only and the
+ * auto/edit/ask stay changeable mid-conversation; "plan" is start-only and the
  * controls lock while a message is in flight. Dropdowns open upward.
  */
 export function RunControls({
@@ -82,7 +82,7 @@ export function RunControls({
         className="w-32"
       />
 
-      {/* Run mode: segmented (edit/ask switchable mid-session; plan start-only). */}
+      {/* Run mode: auto/edit/ask switchable mid-session; plan start-only. */}
       <div className="flex items-center rounded-lg border border-subtle p-0.5" title={t("chat.modeTitle")}>
         {MODES.map((mode) => (
           <button

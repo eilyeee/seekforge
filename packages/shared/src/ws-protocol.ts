@@ -90,7 +90,9 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
   if (type === "start") {
     const { task, mode, approvalMode, plan } = frame;
     if (typeof task !== "string" || task.trim().length === 0) return bad("start.task must be a non-empty string");
-    if (mode !== "edit" && mode !== "ask") return bad('start.mode must be "edit" or "ask"');
+    if (mode !== "auto" && mode !== "edit" && mode !== "ask") {
+      return bad('start.mode must be "auto", "edit", or "ask"');
+    }
     if (approvalMode !== "auto" && approvalMode !== "acceptEdits" && approvalMode !== "confirm") {
       return bad('start.approvalMode must be "auto", "acceptEdits", or "confirm"');
     }
@@ -109,8 +111,8 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
     if (typeof sessionId !== "string" || typeof task !== "string" || task.trim().length === 0) {
       return bad("send needs sessionId and a non-empty task");
     }
-    if (mode !== undefined && mode !== "edit" && mode !== "ask") {
-      return bad('send.mode must be "edit" or "ask" when present');
+    if (mode !== undefined && mode !== "auto" && mode !== "edit" && mode !== "ask") {
+      return bad('send.mode must be "auto", "edit", or "ask" when present');
     }
     if (
       approvalMode !== undefined &&
@@ -327,13 +329,13 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
     return { ok: true, frame: frame as ClientFrame };
   }
 
-  if (type === "loop.pause" || type === "loop.control.resume" || type === "loop.steer") {
-    const allowed = type === "loop.steer" ? new Set(["type", "message"]) : new Set(["type"]);
+  if (type === "loop.pause" || type === "loop.control.resume" || type === "loop.steer" || type === "steer") {
+    const allowed = type === "loop.steer" || type === "steer" ? new Set(["type", "message"]) : new Set(["type"]);
     if (Object.keys(frame).some((key) => !allowed.has(key))) return bad(`${type} contains unsupported fields`);
-    if (type === "loop.steer") {
+    if (type === "loop.steer" || type === "steer") {
       const message = frame["message"];
       if (typeof message !== "string" || message.trim().length === 0 || message.length > limits.maxSteerMessageLength) {
-        return bad(`loop.steer.message must contain 1-${limits.maxSteerMessageLength} characters`);
+        return bad(`${type}.message must contain 1-${limits.maxSteerMessageLength} characters`);
       }
     }
     return { ok: true, frame: frame as ClientFrame };
