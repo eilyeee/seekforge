@@ -550,7 +550,9 @@ export const api = {
       "GET",
       withWorkspace(`/api/diff${staged ? "?staged=1" : ""}`, ws),
     ),
-  config: (ws?: string) => request<ServerConfig>("GET", withWorkspace("/api/config", ws)),
+  /** Effective config by default; Settings passes a layer scope to edit durable values without shadowing. */
+  config: (ws?: string, scope?: "global" | "project") =>
+    request<ServerConfig>("GET", withWorkspace(`/api/config${scope ? `?scope=${scope}` : ""}`, ws)),
   setConfig: (key: ConfigKey, value: unknown, global?: boolean, ws?: string) =>
     request<ServerConfig>("PUT", withWorkspace("/api/config", ws), {
       key,

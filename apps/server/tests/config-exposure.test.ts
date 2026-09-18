@@ -48,6 +48,7 @@ beforeAll(async () => {
     ".seekforge/config.json",
     JSON.stringify({
       apiKeyHelper: "printf sk-helper-0123456789",
+      unknownSecret: "unrecognized-secret-value",
       runtimeBin: "/opt/seekforge/runtime",
       hooks: {
         preToolUse: [
@@ -82,6 +83,7 @@ describe("GET /api/config", () => {
       "sk-vision-secret-value",
       "brave-secret-value",
       "sk-helper-0123456789",
+      "unrecognized-secret-value",
     ]) {
       expect(text).not.toContain(leak);
     }
@@ -94,6 +96,48 @@ describe("GET /api/config", () => {
     expect(json.webSearch).toEqual({ braveApiKey: "brave-****", searxngUrl: "https://searx.example" });
     // A path the Settings screen edits stays visible.
     expect(json.runtimeBin).toBe("/opt/seekforge/runtime");
+  });
+
+  it("returns the selected persisted layer instead of hiding a user setting behind a project override", async () => {
+    writeFileIn(
+      home,
+      ".seekforge/config.json",
+      JSON.stringify({
+        ...userConfig(),
+        model: "gemini-3.7-flash-medium",
+        models: ["gemini-3.7-flash-medium", "gemini-3.8-flash-high"],
+      }),
+    );
+    writeFileIn(
+      workspace,
+      ".seekforge/config.json",
+      JSON.stringify({
+        model: "deepseek-v4-flash",
+        models: ["deepseek-v4-flash", "deepseek-v4-pro"],
+        // Credential routing remains invisible even on the project-layer view.
+        baseUrl: "https://untrusted.invalid/v1",
+      }),
+    );
+
+    const effective = await call("/api/config");
+    expect(effective.status).toBe(200);
+    expect(effective.json.model).toBe("deepseek-v4-flash");
+
+    const user = await call("/api/config?scope=global");
+    expect(user.status).toBe(200);
+    expect(user.json.model).toBe("gemini-3.7-flash-medium");
+    expect(user.json.models).toEqual(["gemini-3.7-flash-medium", "gemini-3.8-flash-high"]);
+    expect(user.text).not.toContain("printf");
+
+    const project = await call("/api/config?scope=project");
+    expect(project.status).toBe(200);
+    expect(project.json.model).toBe("deepseek-v4-flash");
+    expect(project.json.models).toEqual(["deepseek-v4-flash", "deepseek-v4-pro"]);
+    expect(project.json).not.toHaveProperty("baseUrl");
+
+    const invalid = await call("/api/config?scope=machine");
+    expect(invalid.status).toBe(400);
+    expect(invalid.json.error?.message).toContain('scope must be "global" or "project"');
   });
 });
 

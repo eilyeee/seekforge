@@ -1219,7 +1219,10 @@ export function SettingsView() {
     setApiKey("");
     resetSaveStates();
     api
-      .config()
+      // The settings scope edits one persisted layer. Loading the effective
+      // merged config here made a project override look like a user setting had
+      // been lost after relaunch.
+      .config(request.workspaceId, global ? "global" : "project")
       .then((config) => {
         if (!requests.isCurrent(request)) return;
         const list = config.models ?? [];
@@ -1259,8 +1262,8 @@ export function SettingsView() {
       .finally(() => {
         if (requests.isCurrent(request)) setLoading(false);
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requests]);
+    // `beginLatest` binds a rapid User ⇄ Project toggle to the latest fetch.
+  }, [global, requests, ws]);
 
   return (
     <div className="flex h-full flex-col">

@@ -581,25 +581,54 @@ function maskSecret(value: string): string {
   return `${value.slice(0, 6)}****`;
 }
 
+/** Config fields that are safe to return from the authenticated Settings API. */
+const CONFIG_RESPONSE_KEYS = [
+  "model",
+  "baseUrl",
+  "provider",
+  "runtimeBin",
+  "commandAllowlist",
+  "models",
+  "modelPricing",
+  "inlineImages",
+  "sandbox",
+  "sandboxNetwork",
+  "additionalDirectories",
+  "compaction",
+  "autoCompactThreshold",
+  "modelContextWindows",
+  "thinking",
+  "reasoningEffort",
+  "planModel",
+  "escalateOnFailure",
+  "memoryAutoApproveConfidence",
+  "memoryMaintenance",
+  "editFormat",
+  "claudeCompat",
+  "browserProfile",
+  "visionModel",
+  "webSearch",
+  "claudeUserSkills",
+  "mcpToolSearchThreshold",
+  "runRetentionMaxCount",
+  "runRetentionMaxAgeDays",
+] as const satisfies readonly (keyof ServerConfig)[];
+
 /**
  * Merged config for transport (GET /api/config). Nothing that is a secret or
- * runs a command leaves the process:
- * - `mcpServers` (entries may carry secret env values; GET /api/mcp exposes a
- *   sanitized view), `hooks` (commands and HTTP headers; GET /api/hooks is the
- *   editor's own route) and `lspServers` (commands and env) are omitted;
- * - `apiKeyHelper` (a command line) is omitted; only the key it produced is
- *   reported, masked like any other key;
+ * runs a command leaves the process. This is an allowlist rather than a small
+ * denylist, so an unknown future or user-defined config key cannot leak:
+ * - MCP/hook/LSP definitions and `apiKeyHelper` may carry commands or secrets;
+ * - `lintCommand` is a command line rather than Settings data;
  * - `apiKey`, `visionModel.apiKey` and `webSearch.braveApiKey` are masked.
  * `runtimeBin` stays: it is a local path the Settings screen itself edits.
  */
-export function maskedConfig(workspace: string): Record<string, unknown> {
-  const {
-    mcpServers: _mcpServers,
-    hooks: _hooks,
-    lspServers: _lspServers,
-    apiKeyHelper: _apiKeyHelper,
-    ...merged
-  } = loadConfig(workspace);
+function maskedConfigValue(config: ServerConfig): Record<string, unknown> {
+  const merged: Record<string, unknown> = {};
+  for (const key of CONFIG_RESPONSE_KEYS) {
+    const value = config[key];
+    if (value !== undefined) merged[key] = value;
+  }
   const visionModel: unknown = merged.visionModel;
   const webSearch: unknown = merged.webSearch;
   return {
@@ -620,18 +649,45 @@ export function maskedConfig(workspace: string): Record<string, unknown> {
           },
         }
       : {}),
-    apiKey: merged.apiKey ? maskSecret(merged.apiKey) : undefined,
+    apiKey: config.apiKey ? maskSecret(config.apiKey) : undefined,
     // Selectable model list: the user's configured ids, or core's non-deprecated
     // defaults so the picker is never empty.
-    models: merged.models && merged.models.length > 0 ? merged.models : DEFAULT_MODEL_LIST,
+    models: config.models && config.models.length > 0 ? config.models : DEFAULT_MODEL_LIST,
     // Engine knobs are always present (with their effective defaults) so the
     // UI can render the sandbox badge / thinking controls without guessing.
-    sandbox: merged.sandbox ?? "off",
-    compaction: merged.compaction ?? "mechanical",
-    thinking: merged.thinking ?? false,
-    reasoningEffort: merged.reasoningEffort ?? null,
-    memoryMaintenance: resolveMemoryMaintenanceConfig(merged.memoryMaintenance),
+    sandbox: config.sandbox ?? "off",
+    compaction: config.compaction ?? "mechanical",
+    thinking: config.thinking ?? false,
+    reasoningEffort: config.reasoningEffort ?? null,
+    memoryMaintenance: resolveMemoryMaintenanceConfig(config.memoryMaintenance),
   };
+}
+
+/** Effective config for consumers that need the values a new run will use. */
+export function maskedConfig(workspace: string): Record<string, unknown> {
+  return maskedConfigValue(loadConfig(workspace));
+}
+
+/**
+ * One persisted layer for the Settings editor. This deliberately does not
+ * merge higher-precedence repository settings or environment overrides: a
+ * screen editing the user layer must show what is actually stored there, not a
+ * project value that would make a durable user edit look as though it vanished.
+ */
+export function maskedConfigLayer(workspace: string, scope: "global" | "project"): Record<string, unknown> {
+  if (scope === "global") {
+    return maskedConfigValue(readJson(join(seekforgeHome(), ".seekforge", "config.json")));
+  }
+  try {
+    const raw = readProjectFile(workspace, ".seekforge/config.json", MAX_CONFIG_FILE_BYTES);
+    const project = raw === undefined ? {} : (parseConfigDoc(raw) as ServerConfig);
+    // A repository layer is untrusted even when it is displayed in Settings.
+    return maskedConfigValue(sanitizeProjectConfig(project) as ServerConfig);
+  } catch {
+    // Match the effective loader: a missing, malformed, or unsafe project
+    // config is absent rather than a reason to expose its raw contents.
+    return maskedConfigValue({});
+  }
 }
 
 /** Server/Desktop config mutation boundary. Throws ConfigValueError on bad input. */

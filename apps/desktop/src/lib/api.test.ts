@@ -57,6 +57,21 @@ describe("tab-scoped home requests", () => {
       "/api/agents?ws=tab-workspace",
     ]);
   });
+
+  it("reads a selected settings layer in the tab workspace", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(
+        async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+      );
+
+    await api.config("tab-workspace", "global");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/config?scope=global&ws=tab-workspace",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
 });
 
 describe("integration request shapes", () => {

@@ -41,6 +41,7 @@ import {
   listPermissionRules,
   loadConfig,
   maskedConfig,
+  maskedConfigLayer,
   mutatePermissionRules,
   parsePermissionRuleInput,
   readProjectFile,
@@ -1071,6 +1072,13 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
   }
 
   if (method === "GET" && path === "/api/config") {
+    const scope = url.searchParams.get("scope");
+    if (scope === "global" || scope === "project") {
+      return sendJson(res, 200, maskedConfigLayer(workspace, scope));
+    }
+    if (scope !== null) {
+      return sendApiError(res, 400, "bad_request", 'scope must be "global" or "project"');
+    }
     return sendJson(res, 200, maskedConfig(workspace));
   }
 
