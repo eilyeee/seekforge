@@ -20,6 +20,8 @@ import {
 import { RunControls } from "../components/chat/RunControls";
 import { TabBar } from "../components/chat/TabBar";
 import { UsageFooter } from "../components/chat/UsageFooter";
+import { RunStatus } from "../components/chat/RunStatus";
+import { isNearTranscriptEnd } from "../lib/chat-scroll";
 import { useT } from "../lib/i18n";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { RewindWarnings } from "../components/RewindWarnings";
@@ -276,23 +278,49 @@ export function ChatView() {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollPos = useRef(new Map<string, number>());
+  const followingByTab = useRef(new Map<string, boolean>());
   const prevTabId = useRef(tab.tabId);
+  const [unseenActivity, setUnseenActivity] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     connect();
   }, [connect, tab.tabId]);
 
-  // Follow the stream, but restore the saved scroll position on tab switch.
+  // Follow live output only while the reader stays at the transcript end. A
+  // person inspecting a prior diff/tool result owns their scroll position.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     if (prevTabId.current !== tab.tabId) {
       prevTabId.current = tab.tabId;
       el.scrollTop = scrollPos.current.get(tab.tabId) ?? el.scrollHeight;
+      const following = isNearTranscriptEnd(el);
+      followingByTab.current.set(tab.tabId, following);
+      setUnseenActivity((current) => {
+        const unseen = !following && tab.chat.running;
+        return current[tab.tabId] === unseen ? current : { ...current, [tab.tabId]: unseen };
+      });
     } else {
-      el.scrollTop = el.scrollHeight;
+      const following = followingByTab.current.get(tab.tabId) ?? true;
+      if (following) {
+        el.scrollTop = el.scrollHeight;
+        setUnseenActivity((current) => (current[tab.tabId] ? { ...current, [tab.tabId]: false } : current));
+      } else if (tab.chat.running) {
+        setUnseenActivity((current) => (current[tab.tabId] ? current : { ...current, [tab.tabId]: true }));
+      } else {
+        setUnseenActivity((current) => (current[tab.tabId] ? { ...current, [tab.tabId]: false } : current));
+      }
     }
-  }, [tab.tabId, tab.chat.items]);
+  }, [tab.chat.items, tab.chat.running, tab.tabId]);
+
+  const followLatest = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    scrollPos.current.set(tab.tabId, el.scrollTop);
+    followingByTab.current.set(tab.tabId, true);
+    setUnseenActivity((current) => (current[tab.tabId] ? { ...current, [tab.tabId]: false } : current));
+  };
 
   const submit = (task: string) => {
     if (!task) return;
@@ -492,37 +520,56 @@ export function ChatView() {
         onSteer={steerLoop}
       />
 
-      <div
-        ref={scrollRef}
-        onScroll={(e) => scrollPos.current.set(tab.tabId, e.currentTarget.scrollTop)}
-        className="min-h-0 flex-1 overflow-y-auto px-4 py-6"
-      >
-        {/* Codex-style centered conversation column. */}
-        <div className="mx-auto w-full max-w-3xl">
-          {tab.chat.items.length === 0 ? (
-            <HomeWelcome onQuickAction={setDraft} onNavigate={setView} workspaceId={tab.ws} />
-          ) : (
-            <ChatItems
-              items={tab.chat.items}
-              onSubagentSteer={steerSubagent}
-              onSubagentCancel={cancelSubagent}
-              onBacktrack={
-                tab.chat.sessionId && !tab.chat.running
-                  ? (itemId) => {
-                      setRestoreFiles(false);
-                      setBacktrackError(null);
-                      setBacktrackTarget({
-                        tabId: tab.tabId,
-                        sessionId: tab.chat.sessionId!,
-                        workspaceId: tab.ws,
-                        itemId,
-                      });
-                    }
-                  : undefined
-              }
-            />
-          )}
+      <div className="relative min-h-0 flex-1">
+        <div
+          ref={scrollRef}
+          onScroll={(event) => {
+            const el = event.currentTarget;
+            scrollPos.current.set(tab.tabId, el.scrollTop);
+            const following = isNearTranscriptEnd(el);
+            followingByTab.current.set(tab.tabId, following);
+            if (following)
+              setUnseenActivity((current) => (current[tab.tabId] ? { ...current, [tab.tabId]: false } : current));
+          }}
+          className="h-full overflow-y-auto px-4 py-6"
+        >
+          {/* Codex-style centered conversation column. */}
+          <div className="mx-auto w-full max-w-3xl">
+            {tab.chat.items.length === 0 ? (
+              <HomeWelcome onQuickAction={setDraft} onNavigate={setView} workspaceId={tab.ws} />
+            ) : (
+              <ChatItems
+                items={tab.chat.items}
+                onReviewChanges={() => setView("diff")}
+                onSubagentSteer={steerSubagent}
+                onSubagentCancel={cancelSubagent}
+                onBacktrack={
+                  tab.chat.sessionId && !tab.chat.running
+                    ? (itemId) => {
+                        setRestoreFiles(false);
+                        setBacktrackError(null);
+                        setBacktrackTarget({
+                          tabId: tab.tabId,
+                          sessionId: tab.chat.sessionId!,
+                          workspaceId: tab.ws,
+                          itemId,
+                        });
+                      }
+                    : undefined
+                }
+              />
+            )}
+          </div>
         </div>
+        {unseenActivity[tab.tabId] && (
+          <button
+            type="button"
+            onClick={followLatest}
+            className="focus-ring absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-accent/30 bg-surface-raised px-3 py-1.5 text-xs font-medium text-accent shadow-lg hover:bg-accent-muted"
+          >
+            {t("chat.runStatus.latest")}
+          </button>
+        )}
       </div>
 
       {backtrackError && (
@@ -562,6 +609,7 @@ export function ChatView() {
           by a panel above it growing. */}
       <div className="shrink-0 border-t border-subtle">
         <div className="mx-auto w-full max-w-3xl">
+          {tab.chat.running && <RunStatus items={tab.chat.items} />}
           <ModelBar
             tab={tab}
             config={config}
@@ -585,7 +633,7 @@ export function ChatView() {
             value={draft}
             onChange={setDraft}
             onSend={submit}
-            // Stays usable during a run: messages queue for the next turn.
+            // Normal chats accept guidance at a safe point; Loops queue it for their next turn.
             disabled={false}
             queueing={tab.chat.running}
             // Gate sending (button + Enter) while the socket isn't connected so

@@ -349,11 +349,13 @@ function ItemView({
   onBacktrack,
   onSubagentSteer,
   onSubagentCancel,
+  onReviewChanges,
 }: {
   item: ChatItem;
   onBacktrack?: (itemId: number) => void;
   onSubagentSteer?: (dispatchId: string, message: string) => void;
   onSubagentCancel?: (dispatchId: string) => void;
+  onReviewChanges?: () => void;
 }) {
   const t = useT();
   switch (item.kind) {
@@ -474,6 +476,12 @@ function ItemView({
             </span>
           </div>
           <div className="mt-1.5 font-mono text-tertiary">{item.report.verification}</div>
+          {item.report.changedFiles.length > 0 && onReviewChanges && (
+            <Button size="sm" variant="ghost" className="mt-2" onClick={onReviewChanges}>
+              {t("chat.reviewChanges")}
+              <IconArrowRight size={13} />
+            </Button>
+          )}
         </div>
       );
     case "failed": {
@@ -504,6 +512,7 @@ function TaskBlock({
   onBacktrack,
   onSubagentSteer,
   onSubagentCancel,
+  onReviewChanges,
 }: {
   group: ChatTaskGroup;
   latest: boolean;
@@ -511,6 +520,7 @@ function TaskBlock({
   onBacktrack?: (itemId: number) => void;
   onSubagentSteer?: (dispatchId: string, message: string) => void;
   onSubagentCancel?: (dispatchId: string) => void;
+  onReviewChanges?: () => void;
 }) {
   const t = useT();
   const [open, setOpen] = useState(latest);
@@ -524,7 +534,13 @@ function TaskBlock({
     return (
       <>
         {group.items.map((item) => (
-          <ItemView key={item.id} item={item} onSubagentSteer={onSubagentSteer} onSubagentCancel={onSubagentCancel} />
+          <ItemView
+            key={item.id}
+            item={item}
+            onSubagentSteer={onSubagentSteer}
+            onSubagentCancel={onSubagentCancel}
+            onReviewChanges={onReviewChanges}
+          />
         ))}
       </>
     );
@@ -565,7 +581,13 @@ function TaskBlock({
       {open && (
         <div className="mt-4 space-y-4 pl-2">
           {group.items.map((item) => (
-            <ItemView key={item.id} item={item} onSubagentSteer={onSubagentSteer} onSubagentCancel={onSubagentCancel} />
+            <ItemView
+              key={item.id}
+              item={item}
+              onSubagentSteer={onSubagentSteer}
+              onSubagentCancel={onSubagentCancel}
+              onReviewChanges={onReviewChanges}
+            />
           ))}
         </div>
       )}
@@ -583,12 +605,15 @@ export function ChatItems({
   onBacktrack,
   onSubagentSteer,
   onSubagentCancel,
+  onReviewChanges,
   historicalStatus,
 }: {
   items: ChatItem[];
   onBacktrack?: (itemId: number) => void;
   onSubagentSteer?: (dispatchId: string, message: string) => void;
   onSubagentCancel?: (dispatchId: string) => void;
+  /** Opens a review of workspace changes from a completed task. */
+  onReviewChanges?: () => void;
   /** Session metadata supplies terminal state when a read-only transcript has no final report event. */
   historicalStatus?: "completed" | "failed";
 }) {
@@ -605,6 +630,7 @@ export function ChatItems({
           onBacktrack={group.user && group.user.id !== firstUserId ? onBacktrack : undefined}
           onSubagentSteer={onSubagentSteer}
           onSubagentCancel={onSubagentCancel}
+          onReviewChanges={onReviewChanges}
         />
       ))}
     </div>

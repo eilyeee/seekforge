@@ -5,9 +5,9 @@
 export const workbench = {
   en: {
     // ── Message queue ─────────────────────────────────────────────
-    "chat.composer.queue": "Queue message",
-    "chat.composer.queueHint": "Enter queues · sent when the run ends",
-    "chat.composerQueuePlaceholder": "A run is active — type a follow-up; it is sent when the run ends",
+    "chat.composer.queue": "Send guidance",
+    "chat.composer.queueHint": "Enter sends guidance at the next safe point",
+    "chat.composerQueuePlaceholder": "The agent is working — add guidance to change direction at its next safe point",
     "chat.queue.label": "Queued messages",
     "chat.queue.title": "Queued ({count})",
     "chat.queue.hint": "Sent one per turn, oldest first, once the current run ends.",
@@ -195,9 +195,9 @@ export const workbench = {
   },
   zh: {
     // ── 消息队列 ──────────────────────────────────────────────────
-    "chat.composer.queue": "加入队列",
-    "chat.composer.queueHint": "Enter 加入队列 · 运行结束后发送",
-    "chat.composerQueuePlaceholder": "正在运行——可以继续输入，运行结束后自动发送",
+    "chat.composer.queue": "发送指引",
+    "chat.composer.queueHint": "Enter 会在下一个安全点发送指引",
+    "chat.composerQueuePlaceholder": "Agent 正在执行——可添加指引以在下一个安全点调整方向",
     "chat.queue.label": "排队中的消息",
     "chat.queue.title": "排队中（{count}）",
     "chat.queue.hint": "当前运行结束后按顺序发送，每轮一条。",

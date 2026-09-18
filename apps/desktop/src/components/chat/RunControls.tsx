@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { useT } from "../../lib/i18n";
-import { Select, IconShield, type SelectOption } from "../ui";
+import { IconChevron, IconSettings, IconShield, Select, type SelectOption } from "../ui";
 import { WorkspaceMenu } from "../WorkspaceMenu";
 import type { ApprovalChoice, ChatTab, ContinuationPreset, StartMode } from "../../store";
 import type { ServerConfig } from "../../types";
@@ -31,6 +32,7 @@ export function RunControls({
   onSetContinuationPreset,
 }: Props) {
   const t = useT();
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const running = tab.chat.running;
   const inSession = !!tab.chat.sessionId;
 
@@ -56,60 +58,77 @@ export function RunControls({
   ];
 
   return (
-    <div className="flex flex-wrap items-center gap-2 border-t border-subtle bg-surface-raised/40 px-4 py-2">
-      <WorkspaceMenu compact />
+    <div className="border-t border-subtle bg-surface-raised/40 px-4 py-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <WorkspaceMenu compact />
 
-      <Select
-        up
-        value={sandbox}
-        options={sandboxOptions}
-        onChange={(v) => onSetSandbox(v === "project" ? null : (v as Sandbox))}
-        size="sm"
-        disabled={running}
-        leading={<IconShield size={14} />}
-        title={t("chat.sandboxTitle")}
-        className="w-36"
-      />
+        {/* Run mode: auto/edit/ask switchable mid-session; plan start-only. */}
+        <div className="flex items-center rounded-lg border border-subtle p-0.5" title={t("chat.modeTitle")}>
+          {MODES.map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              disabled={running || (mode === "plan" && inSession)}
+              title={t(`chat.mode.${mode}Hint`)}
+              onClick={() => onSetMode(mode)}
+              className={`focus-ring rounded-md px-2 py-1 text-xs font-medium transition-colors disabled:opacity-40 ${
+                tab.mode === mode ? "bg-accent-muted text-accent" : "text-secondary hover:bg-accent-muted/60"
+              }`}
+            >
+              {t(`chat.mode.${mode}`)}
+            </button>
+          ))}
+        </div>
 
-      <Select
-        up
-        value={tab.continuationPreset}
-        options={continuationOptions}
-        onChange={(value) => onSetContinuationPreset(value as ContinuationPreset)}
-        size="sm"
-        disabled={running || tab.mode === "plan"}
-        title={t("chat.continuation.title")}
-        className="w-32"
-      />
+        <Select
+          up
+          value={tab.approvalMode}
+          options={approvalOptions}
+          onChange={(v) => onSetApprovalMode(v as ApprovalChoice)}
+          size="sm"
+          disabled={running}
+          title={t("chat.approvalTitle")}
+          className="w-36"
+        />
 
-      {/* Run mode: auto/edit/ask switchable mid-session; plan start-only. */}
-      <div className="flex items-center rounded-lg border border-subtle p-0.5" title={t("chat.modeTitle")}>
-        {MODES.map((mode) => (
-          <button
-            key={mode}
-            type="button"
-            disabled={running || (mode === "plan" && inSession)}
-            title={t(`chat.mode.${mode}Hint`)}
-            onClick={() => onSetMode(mode)}
-            className={`focus-ring rounded-md px-2 py-1 text-xs font-medium transition-colors disabled:opacity-40 ${
-              tab.mode === mode ? "bg-accent-muted text-accent" : "text-secondary hover:bg-accent-muted/60"
-            }`}
-          >
-            {t(`chat.mode.${mode}`)}
-          </button>
-        ))}
+        <button
+          type="button"
+          onClick={() => setAdvancedOpen((value) => !value)}
+          aria-expanded={advancedOpen}
+          title={t(advancedOpen ? "chat.runSettings.hide" : "chat.runSettings.show")}
+          className="focus-ring ml-auto inline-flex items-center gap-1 rounded-lg border border-subtle px-2 py-1 text-xs text-secondary hover:bg-surface-overlay hover:text-primary"
+        >
+          <IconSettings size={13} />
+          <span className="hidden sm:inline">{t("chat.runSettings.label")}</span>
+          <IconChevron size={13} className={advancedOpen ? "rotate-90" : ""} />
+        </button>
       </div>
+      {advancedOpen && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-subtle pt-2">
+          <Select
+            up
+            value={sandbox}
+            options={sandboxOptions}
+            onChange={(v) => onSetSandbox(v === "project" ? null : (v as Sandbox))}
+            size="sm"
+            disabled={running}
+            leading={<IconShield size={14} />}
+            title={t("chat.sandboxTitle")}
+            className="w-36"
+          />
 
-      <Select
-        up
-        value={tab.approvalMode}
-        options={approvalOptions}
-        onChange={(v) => onSetApprovalMode(v as ApprovalChoice)}
-        size="sm"
-        disabled={running}
-        title={t("chat.approvalTitle")}
-        className="w-36"
-      />
+          <Select
+            up
+            value={tab.continuationPreset}
+            options={continuationOptions}
+            onChange={(value) => onSetContinuationPreset(value as ContinuationPreset)}
+            size="sm"
+            disabled={running || tab.mode === "plan"}
+            title={t("chat.continuation.title")}
+            className="w-32"
+          />
+        </div>
+      )}
     </div>
   );
 }

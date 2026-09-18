@@ -45,8 +45,8 @@ export type ComposerProps = {
   sendBlocked?: boolean;
   sendBlockedHint?: string;
   /**
-   * A run is active: sending queues the message for the next turn instead.
-   * Only the send affordance changes; the parent decides what "send" does.
+   * A run is active: sending is guidance for the next safe point. Loops may
+   * still queue it for their next turn; the parent owns that distinction.
    */
   queueing?: boolean;
   placeholder: string;

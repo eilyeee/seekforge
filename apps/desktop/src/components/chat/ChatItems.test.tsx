@@ -48,6 +48,26 @@ describe("ChatItems task disclosure", () => {
     // developer's system language rather than the component's behavior.
     expect(html).toContain(t("chat.task.completed"));
   });
+
+  it("offers a review handoff only when a completed task changed files", () => {
+    const items: ChatItem[] = [
+      { kind: "user", id: 1, text: "change a file" },
+      {
+        kind: "report",
+        id: 2,
+        report: {
+          summary: "done",
+          changedFiles: ["src/example.ts"],
+          commandsRun: [],
+          verification: "tests passed",
+          usage: { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 },
+        },
+      },
+    ];
+
+    const html = renderToStaticMarkup(createElement(ChatItems, { items, onReviewChanges: () => {} }));
+    expect(html).toContain(t("chat.reviewChanges"));
+  });
 });
 
 describe("ChatItems subagent card", () => {
